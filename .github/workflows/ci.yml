@@ -199,8 +199,39 @@ jobs:
           fi
           printf '{"schemaVersion": 1, "label": "coverage", "message": "%s%%", "color": "%s"}\n' \
             "$total" "$color" > coverage-badge.json
-          blob=$(git hash-object -w coverage-badge.json)
-          tree=$(printf '100644 blob %s\tcoverage.json\n' "$blob" | git mktree)
+          # The repo is private, so shields.io cannot read the endpoint JSON;
+          # render the SVG ourselves and let GitHub serve it with viewer auth.
+          # The JSON stays published for shields if the repo ever goes public.
+          case "$color" in
+            brightgreen) hex="#4c1" ;;
+            green) hex="#97ca00" ;;
+            yellowgreen) hex="#a4a61d" ;;
+            *) hex="#fe7d37" ;;
+          esac
+          message="${total}%"
+          label_width=61
+          message_width=$(( ${#message} * 7 + 14 ))
+          total_width=$(( label_width + message_width ))
+          message_center=$(( (label_width * 10) + (message_width * 5) ))
+          message_length=$(( (message_width - 10) * 10 ))
+          {
+            printf '<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="20" role="img" aria-label="coverage: %s">\n' "$total_width" "$message"
+            printf '<linearGradient id="s" x2="0" y2="100%%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>\n'
+            printf '<clipPath id="r"><rect width="%s" height="20" rx="3" fill="#fff"/></clipPath>\n' "$total_width"
+            printf '<g clip-path="url(#r)"><rect width="%s" height="20" fill="#555"/>' "$label_width"
+            printf '<rect x="%s" width="%s" height="20" fill="%s"/>' "$label_width" "$message_width" "$hex"
+            printf '<rect width="%s" height="20" fill="url(#s)"/></g>\n' "$total_width"
+            printf '<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="110" text-rendering="geometricPrecision">\n'
+            printf '<text x="315" y="140" transform="scale(.1)" fill="#010101" fill-opacity=".3" textLength="510">coverage</text>\n'
+            printf '<text x="315" y="130" transform="scale(.1)" textLength="510">coverage</text>\n'
+            printf '<text x="%s" y="140" transform="scale(.1)" fill="#010101" fill-opacity=".3" textLength="%s">%s</text>\n' "$message_center" "$message_length" "$message"
+            printf '<text x="%s" y="130" transform="scale(.1)" textLength="%s">%s</text>\n' "$message_center" "$message_length" "$message"
+            printf '</g>\n</svg>\n'
+          } > coverage-badge.svg
+          json_blob=$(git hash-object -w coverage-badge.json)
+          svg_blob=$(git hash-object -w coverage-badge.svg)
+          tree=$(printf '100644 blob %s\tcoverage.json\n100644 blob %s\tcoverage.svg\n' \
+            "$json_blob" "$svg_blob" | git mktree)
           commit=$(git commit-tree "$tree" -m "Update coverage badge to ${total}%")
           git push --force origin "$commit:refs/heads/badges"
       - name: Comment combined report on the pull request
