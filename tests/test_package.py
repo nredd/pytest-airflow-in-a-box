@@ -9,7 +9,7 @@ from importlib.metadata import entry_points, version
 import pytest
 
 import pytest_airflow_in_a_box
-from pytest_airflow_in_a_box import __version__
+from pytest_airflow_in_a_box import __version__, _compat, fixtures, plugin
 
 
 def test_version_matches_distribution_metadata() -> None:
@@ -20,6 +20,19 @@ def test_version_matches_distribution_metadata() -> None:
 def test_public_surface_is_explicit() -> None:
     """Expose only the intentionally supported package symbols."""
     assert pytest_airflow_in_a_box.__all__ == ("__version__",)
+    assert fixtures.__all__ == ("full_dag_bag", "session")
+    assert plugin.__all__ == ("full_dag_bag", "get_bootstrap_state", "session")
+    assert _compat.__all__ == (
+        "AirflowCapabilities",
+        "AirflowCompatibilityError",
+        "DagBagConstructionError",
+        "DagBagLocation",
+        "DatabaseInitializationError",
+        "TaskInstanceRunner",
+        "build_dag_bag",
+        "initialize_database",
+        "resolve_capabilities",
+    )
 
 
 def test_pytest_entry_point_loads_plugin() -> None:

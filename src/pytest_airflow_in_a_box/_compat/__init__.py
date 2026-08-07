@@ -17,6 +17,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     TaskInstanceRunner,
     resolve_capabilities,
 )
+from pytest_airflow_in_a_box._compat.dagbag import DagBagConstructionError, build_dag_bag
 from pytest_airflow_in_a_box._compat.database import (
     DatabaseInitializationError,
     initialize_database,
@@ -25,9 +26,11 @@ from pytest_airflow_in_a_box._compat.database import (
 __all__ = (
     "AirflowCapabilities",
     "AirflowCompatibilityError",
+    "DagBagConstructionError",
     "DagBagLocation",
     "DatabaseInitializationError",
     "TaskInstanceRunner",
+    "build_dag_bag",
     "initialize_database",
     "resolve_capabilities",
 )

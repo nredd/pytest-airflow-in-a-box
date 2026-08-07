@@ -22,8 +22,9 @@ from pytest_airflow_in_a_box.bootstrap import (
     load_initial_state,
     validate_configure,
 )
+from pytest_airflow_in_a_box.fixtures import full_dag_bag, session
 
-__all__ = ("get_bootstrap_state",)
+__all__ = ("full_dag_bag", "get_bootstrap_state", "session")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -34,6 +35,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     """
 
     group = parser.getgroup("airflow-in-a-box")
+    group.addoption(
+        "--dag-folder",
+        action="store",
+        default=None,
+        dest="dag_folder",
+        metavar="PATH",
+        help="Parse Dags from PATH for the full_dag_bag fixture.",
+    )
     group.addoption(
         "--airflow-home",
         action="store",
@@ -50,6 +59,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Allow an explicit Airflow storage base on a network filesystem.",
     )
     parser.addini("airflow_home", "Base directory for isolated Airflow run storage.", default="")
+    parser.addini(
+        "airflow_dags_folder",
+        "Directory parsed by the full_dag_bag fixture.",
+        default="",
+    )
     parser.addini(
         "allow_network_airflow_home",
         "Allow explicit Airflow storage on a network filesystem.",
