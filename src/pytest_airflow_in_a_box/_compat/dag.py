@@ -9,13 +9,17 @@ References:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
+    from airflow.models.dagrun import DagRun
+    from airflow.models.taskinstance import TaskInstance
     from airflow.sdk import DAG
     from sqlalchemy.orm import Session
 
@@ -30,6 +34,14 @@ class DagCleanupError(RuntimeError):
     """Report failure to remove fixture-owned Airflow Dag metadata."""
 
 
+class DagRunCreationError(RuntimeError):
+    """Report failure to create fixture-owned Airflow DagRun metadata."""
+
+
+class TaskInstanceCreationError(RuntimeError):
+    """Report failure to select or refresh fixture-owned task-instance metadata."""
+
+
 @dataclass
 class DagPersistenceRecord:
     """Track the exact resources created by one successful Dag context.
@@ -39,12 +51,16 @@ class DagPersistenceRecord:
         bundle_name: str identifying its isolated bundle row.
         session: sqlalchemy.orm.Session used to persist and inspect metadata.
         bundle_created: bool indicating whether this fixture inserted the bundle row.
+        dag_run_ids: set[int] containing exact fixture-owned DagRun primary keys.
+        task_instance_keys: set[tuple[str, str, str, int]] containing owned task identities.
     """
 
     dag_id: str
     bundle_name: str
     session: Session
     bundle_created: bool = False
+    dag_run_ids: set[int] = field(default_factory=set)
+    task_instance_keys: set[tuple[str, str, str, int]] = field(default_factory=set)
 
 
 def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
@@ -255,6 +271,198 @@ def persist_dag(
         ) from error
 
 
+def create_dag_run(
+    scheduler_dag: Any,
+    authoring_dag: DAG,
+    record: DagPersistenceRecord,
+    *,
+    run_id: str,
+    logical_date: datetime | None,
+    run_after: datetime | None,
+    start_date: datetime | None,
+    dag_run_kwargs: dict[str, Any],
+) -> DagRun:
+    """Create a DagRun through the persisted scheduler Dag contract.
+
+    Parameters:
+        scheduler_dag: pytest_airflow_in_a_box.types.SerializedDag persisted for scheduling.
+        authoring_dag: airflow.sdk.DAG containing executable task objects.
+        record: DagPersistenceRecord receiving exact metadata ownership.
+        run_id: str containing the validated collision-safe run identifier.
+        logical_date: datetime.datetime | None overriding the current UTC logical date.
+        run_after: datetime.datetime | None overriding the current UTC run-after date.
+        start_date: datetime.datetime | None overriding the current UTC start date.
+        dag_run_kwargs: dict[str, Any] forwarded to Airflow's scheduler Dag.
+
+    Returns:
+        airflow.models.dagrun.DagRun committed with verified task instances.
+
+    Raises:
+        DagRunCreationError: Airflow cannot create or verify the DagRun metadata.
+    """
+
+    from airflow.models.dag_version import DagVersion
+    from airflow.sdk.timezone import coerce_datetime, convert_to_utc, utcnow
+    from airflow.utils.state import DagRunState
+    from airflow.utils.types import DagRunTriggeredByType, DagRunType
+
+    operation = "resolving UTC dates"
+    try:
+        now = utcnow()
+        resolved_logical_date = convert_to_utc(coerce_datetime(logical_date or now))
+        resolved_run_after = convert_to_utc(coerce_datetime(run_after or now))
+        resolved_start_date = convert_to_utc(coerce_datetime(start_date or now))
+        operation = "loading the current DagVersion"
+        dag_version: Any = DagVersion.get_latest_version(record.dag_id, session=record.session)
+        if dag_version is None:
+            raise RuntimeError(
+                f"Airflow did not return a current DagVersion for '{record.dag_id}'"
+            )
+
+        kwargs = dict(dag_run_kwargs)
+        if "data_interval" not in kwargs:
+            kwargs["data_interval"] = scheduler_dag.timetable.infer_manual_data_interval(
+                run_after=resolved_logical_date
+            )
+        kwargs.setdefault("run_type", DagRunType.MANUAL)
+        kwargs.setdefault("triggered_by", DagRunTriggeredByType.TEST)
+        kwargs.setdefault("state", DagRunState.RUNNING)
+        operation = "calling the persisted scheduler Dag's create_dagrun"
+        dag_run: Any = scheduler_dag.create_dagrun(
+            run_id=run_id,
+            logical_date=resolved_logical_date,
+            run_after=resolved_run_after,
+            start_date=resolved_start_date,
+            session=record.session,
+            **kwargs,
+        )
+        if dag_run.created_dag_version_id != dag_version.id:
+            raise RuntimeError(
+                f"DagRun '{run_id}' linked DagVersion '{dag_run.created_dag_version_id}', "
+                f"expected current version '{dag_version.id}'"
+            )
+        operation = "verifying task-instance integrity"
+        dag_run.verify_integrity(session=record.session, dag_version_id=dag_version.id)
+        capabilities = resolve_capabilities()
+        task_instances: list[Any] = dag_run.get_task_instances(session=record.session)
+        operation = "refreshing task instances from authoring tasks"
+        for ti in task_instances:
+            task = authoring_dag.get_task(str(ti.task_id))
+            if capabilities.refresh_from_task_supports_dag_run:
+                _refresh_from_task(ti, task, dag_run)
+            else:
+                _refresh_from_task(ti, task)
+        operation = "committing DagRun and task-instance metadata"
+        record.session.commit()
+        record.dag_run_ids.add(dag_run.id)
+        record.task_instance_keys |= {
+            (str(ti.dag_id), str(ti.run_id), str(ti.task_id), ti.map_index)
+            for ti in task_instances
+        }
+        return dag_run
+    except Exception as error:
+        record.session.rollback()
+        raise DagRunCreationError(
+            f"Could not create Airflow DagRun '{run_id}' for Dag '{record.dag_id}' while "
+            f"{operation}: {error}"
+        ) from error
+
+
+def select_task_instance(
+    authoring_dag: DAG,
+    dag_run: DagRun,
+    record: DagPersistenceRecord,
+    *,
+    task_id: str,
+    map_index: int,
+) -> TaskInstance:
+    """Select and refresh one fixture-owned task instance.
+
+    Parameters:
+        authoring_dag: airflow.sdk.DAG containing executable task objects.
+        dag_run: airflow.models.dagrun.DagRun created by this fixture record.
+        record: DagPersistenceRecord containing ownership and session state.
+        task_id: str identifying the requested task.
+        map_index: int identifying the requested mapped task instance.
+
+    Returns:
+        airflow.models.taskinstance.TaskInstance refreshed from the authoring task.
+
+    Raises:
+        ValueError: The DagRun is not owned or the task selection is unavailable.
+        TaskInstanceCreationError: Airflow cannot query or refresh task-instance metadata.
+    """
+
+    available_task_ids = sorted(authoring_dag.task_dict)
+    if dag_run.id not in record.dag_run_ids:
+        raise ValueError(
+            f"DagRun '{dag_run.run_id}' is not owned by `dag_maker` for Dag '{record.dag_id}'"
+        )
+    if task_id not in authoring_dag.task_dict:
+        raise ValueError(
+            f"Task '{task_id}' is absent from Dag '{record.dag_id}'; available task IDs: "
+            f"{available_task_ids}"
+        )
+
+    operation = "selecting task-instance metadata"
+    try:
+        ti = dag_run.get_task_instance(
+            task_id=task_id,
+            map_index=map_index,
+            session=record.session,
+        )
+        if ti is None:
+            available_instances = sorted(
+                (candidate.task_id, candidate.map_index)
+                for candidate in dag_run.get_task_instances(session=record.session)
+            )
+            raise ValueError(
+                f"Task instance '{task_id}' with map index '{map_index}' is absent from DagRun "
+                f"'{dag_run.run_id}'; available instances: {available_instances}"
+            )
+        operation = "refreshing the task instance from its authoring task"
+        task = authoring_dag.get_task(task_id)
+        if resolve_capabilities().refresh_from_task_supports_dag_run:
+            _refresh_from_task(ti, task, dag_run)
+        else:
+            _refresh_from_task(ti, task)
+        operation = "committing refreshed task-instance metadata"
+        record.session.commit()
+        selected: Any = ti
+        record.task_instance_keys.add(
+            (
+                str(selected.dag_id),
+                str(selected.run_id),
+                str(selected.task_id),
+                selected.map_index,
+            )
+        )
+        return ti
+    except ValueError:
+        raise
+    except Exception as error:
+        record.session.rollback()
+        raise TaskInstanceCreationError(
+            f"Could not create task instance '{task_id}' with map index '{map_index}' for "
+            f"DagRun '{dag_run.run_id}' while {operation}: {error}"
+        ) from error
+
+
+def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
+    """Cross Airflow's authoring/scheduler operator typing boundary.
+
+    Parameters:
+        ti: Any containing an ORM TaskInstance.
+        task: Any containing an authoring or serialized operator.
+        dag_run: Any containing an optional DagRun for mutation hooks.
+    """
+
+    if dag_run is None:
+        ti.refresh_from_task(task)
+    else:
+        ti.refresh_from_task(task, dag_run=dag_run)
+
+
 def _cleanup_dag(record: DagPersistenceRecord) -> None:
     """Delete only metadata carrying this record's Dag and bundle identities.
 
@@ -266,11 +474,17 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
     from airflow.models.dag_version import DagVersion
     from airflow.models.dagbundle import DagBundleModel
     from airflow.models.dagcode import DagCode
+    from airflow.models.dagrun import DagRun
     from airflow.models.serialized_dag import SerializedDagModel
     from sqlalchemy import delete, func, select
 
     session = record.session
     session.rollback()
+    for dag_run_id in record.dag_run_ids:
+        dag_run = session.get(DagRun, dag_run_id)
+        if dag_run is not None:
+            session.delete(dag_run)
+    session.flush()
     version_ids = list(
         session.scalars(
             select(DagVersion.id).where(
@@ -329,9 +543,13 @@ __all__ = (
     "DagCleanupError",
     "DagPersistenceError",
     "DagPersistenceRecord",
+    "DagRunCreationError",
+    "TaskInstanceCreationError",
     "build_dag",
     "cleanup_dag",
+    "create_dag_run",
     "ensure_dag_absent",
     "open_dag_session",
     "persist_dag",
+    "select_task_instance",
 )

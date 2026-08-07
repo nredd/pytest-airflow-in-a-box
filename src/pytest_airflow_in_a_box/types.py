@@ -11,6 +11,10 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
+    from airflow.models.dagrun import DagRun
+    from airflow.models.taskinstance import TaskInstance
     from airflow.sdk import DAG
     from sqlalchemy.orm import Session
 
@@ -66,6 +70,41 @@ class DagMaker(Protocol):
         Returns:
             contextlib.AbstractContextManager[airflow.sdk.DAG] yielding the mutable authoring Dag.
         """
+
+    def create_dagrun(
+        self,
+        *,
+        run_id: str | None = None,
+        logical_date: datetime | None = None,
+        run_after: datetime | None = None,
+        start_date: datetime | None = None,
+        **dag_run_kwargs: Any,
+    ) -> DagRun:
+        """Create and own one persisted running manual DagRun."""
+
+    def create_ti(
+        self,
+        task_id: str,
+        dag_run: DagRun | None = None,
+        *,
+        dag_run_kwargs: dict[str, Any] | None = None,
+        map_index: int = -1,
+    ) -> TaskInstance:
+        """Select and refresh one task instance, creating its DagRun when omitted."""
+
+    def run_ti(
+        self,
+        task_id: str,
+        dag_run: DagRun | None = None,
+        *,
+        dag_run_kwargs: dict[str, Any] | None = None,
+        map_index: int = -1,
+        ignore_depends_on_past: bool = False,
+        ignore_task_deps: bool = False,
+        ignore_ti_state: bool = False,
+        mark_success: bool = False,
+    ) -> TaskInstance:
+        """Create and execute one task instance through the compatibility shim."""
 
 
 __all__ = ("DagMaker", "SerializedDag")

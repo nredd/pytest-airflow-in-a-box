@@ -4,8 +4,8 @@
 Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
 small, typed testing surface.
 
-The repository is in its initial scaffold phase. The package auto-registers with pytest, but the
-Airflow bootstrap and fixtures described in the project plan are not implemented yet.
+The package auto-registers with pytest, creates an isolated metadata database, and provides typed
+fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 
 ## Requirements
 
@@ -45,10 +45,35 @@ act pull_request
 
 `act` cannot reproduce native macOS or Windows behavior.
 
-## Status
+## Task execution
 
-The public Python surface currently contains only `pytest_airflow_in_a_box.__version__`. APIs are
-added only when their implementation and Airflow compatibility tests land.
+```python
+from airflow.sdk import task
+from airflow.utils.state import TaskInstanceState
+
+from pytest_airflow_in_a_box.taskinstance import ordered_task_instances
+
+
+def test_task(dag_maker):
+    with dag_maker() as dag:
+
+        @task
+        def answer():
+            return 42
+
+        answer()
+
+    dag_run = dag_maker.create_dagrun()
+    ti = dag_maker.run_ti("answer", dag_run)
+
+    assert ti.state == TaskInstanceState.SUCCESS
+    assert ti.xcom_pull(task_ids="answer", session=dag_maker.session) == 42
+    assert ordered_task_instances(dag_run, dag, session=dag_maker.session) == [ti]
+```
+
+Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `run_task_instance`,
+`ordered_task_instances`, and `TaskResolutionError`. The `DagMaker` protocol additionally exposes
+`create_dagrun`, `create_ti`, and `run_ti`.
 
 ## License
 
