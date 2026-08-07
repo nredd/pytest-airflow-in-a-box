@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -73,7 +73,7 @@ jobs:
             python-version: "3.12"
             os: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
@@ -101,7 +101,7 @@ jobs:
     timeout-minutes: 40
     container: python:3.12-alpine
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install build prerequisites
         run: apk add --no-cache build-base curl git libffi-dev
       - name: Install uv
