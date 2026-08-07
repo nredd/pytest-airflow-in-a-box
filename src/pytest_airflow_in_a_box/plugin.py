@@ -28,6 +28,7 @@ from pytest_airflow_in_a_box.logging import (
     _uninstall_dict_config_interceptor,
 )
 from pytest_airflow_in_a_box.markers import register_markers
+from pytest_airflow_in_a_box.reporting import configure_reporting
 
 __all__ = ("dag_maker", "full_dag_bag", "get_bootstrap_state", "session")
 
@@ -93,8 +94,12 @@ def pytest_load_initial_conftests(
     early_config.stash[STATE_KEY] = load_initial_state(early_config, args)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Register markers and validate xdist state after workerinput is available.
+    """Register markers, validate xdist state, and scope worker report artifacts.
+
+    Runs ``tryfirst`` so worker artifact paths are rewritten before pytest's
+    logging plugin reads the ``log_file`` option during its own configuration.
 
     Parameters:
         config: pytest.Config for the active test session.
@@ -102,6 +107,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
     register_markers(config)
     validate_configure(config)
+    configure_reporting(config)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
