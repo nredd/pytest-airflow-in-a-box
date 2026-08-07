@@ -59,11 +59,15 @@ the record:
 - **All plugin-exercising `pytester` self-tests must use `runpytest_subprocess`:** the outer test
   session has already imported Airflow, and `load_initial_state` correctly refuses to bootstrap
   in-process after that. In-process pytester is unusable in this repo's own suite.
-- **The 100 % branch-coverage gate is currently unenforceable as configured** — the Windows
-  `windll` branch is unreachable on every CI platform, subprocess pytester children are unmeasured,
-  and the CI matrix runs plain `pytest` without coverage. Resolved for now by lowering
-  `fail_under` to the measured 90 % floor; restore with platform-conditional exclusions plus
-  coverage-in-CI wiring later. TODO(redd).
+- **The 100 % branch-coverage gate was unenforceable as configured** — the Windows `windll`
+  branch is unreachable on every CI platform, subprocess pytester children were unmeasured, and
+  the CI matrix ran plain `pytest` without coverage. Resolved 2026-08-07: subprocess measurement
+  via `coverage.process_startup` (`parallel`/`relative_files`/`sigterm` +
+  `scripts/install_coverage_pth.py`) lifted the local single-platform floor to 94.84 (gate 94),
+  and a fan-in CI `Coverage` job combines data files from all ten legs into a cross-platform
+  union measured at 95.31 (gate 95). The remaining ~5 % is untested error paths (bootstrap
+  payload validation raises, API-server failure branches, storage-ladder fallbacks) plus the
+  POSIX-dead Windows drive probe — closable with targeted tests, not exclusions. TODO(redd).
 - **The API server is per-worker and lazy, not controller-owned.** The plan folded a single
   controller-started server into bootstrap `pytest_sessionstart`. Implemented instead as a lazy
   session-scoped fixture: each process starts its own `airflow api-server --apps core` on a
