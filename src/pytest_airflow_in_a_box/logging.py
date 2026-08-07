@@ -1,9 +1,14 @@
-"""Preserve pytest logging handlers across stdlib logging reconfiguration.
+"""Preserve and capture test-visible logging.
+
+Covers stdlib logging (handlers preserved across ``dictConfig`` calls) and
+structlog (a pass-through capture processor), because Airflow 3 emits most of
+its records through structlog where plain ``caplog`` cannot see them.
 
 References:
     https://docs.python.org/3/library/logging.config.html#logging.config.dictConfig
     https://docs.pytest.org/en/stable/how-to/logging.html
     https://docs.pytest.org/en/stable/reference/reference.html#envvar-PYTEST_CURRENT_TEST
+    https://www.structlog.org/en/stable/processors.html
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import logging.config as logging_config
 import os
 import re
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, MutableMapping
 from typing import Any, Protocol, cast
 
 _DictConfig = Callable[[dict[str, Any]], None]
@@ -51,6 +56,65 @@ class TestContextFilter(stdlib_logging.Filter):
         record.__dict__["worker_id"] = os.environ.get("PYTEST_XDIST_WORKER", "master")
         record.__dict__["test_name"] = test_name
         return True
+
+
+class StructlogCapture:
+    """Record every structlog event while passing it through unchanged."""
+
+    def __init__(self) -> None:
+        """Create an empty capture."""
+
+        self.entries: list[dict[str, Any]] = []
+
+    def __call__(
+        self,
+        logger: object,
+        method_name: str,
+        event_dict: MutableMapping[str, Any],
+    ) -> MutableMapping[str, Any]:
+        """Record one event and hand it to the next processor unchanged.
+
+        Parameters:
+            logger: object containing the wrapped structlog logger.
+            method_name: str naming the invoked logger method.
+            event_dict: MutableMapping[str, Any] containing the structlog event.
+
+        Returns:
+            MutableMapping[str, Any] containing the unmodified event.
+        """
+
+        del logger
+        self.entries.append({**event_dict, "log_level": method_name})
+        return event_dict
+
+    def __contains__(self, target: object) -> bool:
+        """Probe captured events by name or by key-value subset.
+
+        Parameters:
+            target: object containing an event name or an event subset mapping.
+
+        Returns:
+            bool indicating whether any captured event matches.
+
+        Raises:
+            TypeError: The probe is neither a string nor a mapping.
+        """
+
+        if isinstance(target, str):
+            return any(entry.get("event") == target for entry in self.entries)
+        if isinstance(target, dict):
+            return any(target.items() <= entry.items() for entry in self.entries)
+        raise TypeError(f"Unsupported membership probe type: '{type(target).__name__}'")
+
+    @property
+    def text(self) -> str:
+        """Join captured event names for substring assertions.
+
+        Returns:
+            str containing newline-joined event names.
+        """
+
+        return "\n".join(str(entry.get("event", "")) for entry in self.entries)
 
 
 def _is_pytest_handler(handler: stdlib_logging.Handler) -> bool:
@@ -170,4 +234,4 @@ def _uninstall_dict_config_interceptor() -> None:
         _INSTALLED = False
 
 
-__all__ = ("TestContextFilter", "ensure_handlers")
+__all__ = ("StructlogCapture", "TestContextFilter", "ensure_handlers")

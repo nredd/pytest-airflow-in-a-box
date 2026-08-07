@@ -42,10 +42,16 @@ def test_public_surface_is_explicit() -> None:
         "prune_duplicate_items",
     )
     assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
-    assert fixtures.__all__ == ("dag_maker", "full_dag_bag", "session")
-    assert logging.__all__ == ("TestContextFilter", "ensure_handlers")
+    assert fixtures.__all__ == ("cap_structlog", "dag_maker", "full_dag_bag", "session")
+    assert logging.__all__ == ("StructlogCapture", "TestContextFilter", "ensure_handlers")
     assert markers.__all__ == ("MarkedNode", "read_bool_marker", "register_markers")
-    assert plugin.__all__ == ("dag_maker", "full_dag_bag", "get_bootstrap_state", "session")
+    assert plugin.__all__ == (
+        "cap_structlog",
+        "dag_maker",
+        "full_dag_bag",
+        "get_bootstrap_state",
+        "session",
+    )
     assert reporting.__all__ == (
         "configure_reporting",
         "worker_coverage_file",

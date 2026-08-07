@@ -58,6 +58,61 @@ def test_context_filter_uses_stable_defaults(monkeypatch: pytest.MonkeyPatch) ->
     assert record.__dict__["test_name"] == "unknown"
 
 
+def test_structlog_capture_passes_events_through_unchanged() -> None:
+    """Return the exact event object while recording an enriched copy."""
+
+    capture = logging_support.StructlogCapture()
+    event = {"event": "probe", "key": 1}
+
+    returned = capture(object(), "warning", event)
+
+    assert returned is event
+    assert event == {"event": "probe", "key": 1}
+    assert capture.entries == [{"event": "probe", "key": 1, "log_level": "warning"}]
+
+
+def test_structlog_capture_membership_by_event_name() -> None:
+    """Match string probes against captured event names only."""
+
+    capture = logging_support.StructlogCapture()
+    capture(object(), "info", {"event": "present", "detail": "ignored"})
+
+    assert "present" in capture
+    assert "absent" not in capture
+
+
+def test_structlog_capture_membership_by_subset() -> None:
+    """Match mapping probes as key-value subsets of any captured event."""
+
+    capture = logging_support.StructlogCapture()
+    capture(object(), "info", {"event": "probe", "key": 1, "extra": [1, 2]})
+
+    assert {"key": 1} in capture
+    assert {"event": "probe", "extra": [1, 2]} in capture
+    assert {"key": 2} not in capture
+    assert {"missing": 1} not in capture
+
+
+def test_structlog_capture_rejects_other_probe_types() -> None:
+    """Reject probes that are neither strings nor mappings."""
+
+    capture = logging_support.StructlogCapture()
+
+    with pytest.raises(TypeError, match="Unsupported membership probe type: 'int'"):
+        _ = 7 in capture
+
+
+def test_structlog_capture_text_joins_event_names() -> None:
+    """Join event names, tolerating events without a name."""
+
+    capture = logging_support.StructlogCapture()
+    capture(object(), "info", {"event": "first"})
+    capture(object(), "info", {"unnamed": True})
+    capture(object(), "info", {"event": "last"})
+
+    assert capture.text == "first\n\nlast"
+
+
 def test_ensure_handlers_is_selective_and_idempotent() -> None:
     """Attach one filter to pytest handlers without restoring application handlers."""
 
