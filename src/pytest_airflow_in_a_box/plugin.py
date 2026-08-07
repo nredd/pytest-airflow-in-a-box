@@ -28,7 +28,13 @@ from pytest_airflow_in_a_box.collection import (
     collect_dag_file,
     prune_duplicate_items,
 )
-from pytest_airflow_in_a_box.fixtures import cap_structlog, dag_maker, full_dag_bag, session
+from pytest_airflow_in_a_box.fixtures import (
+    cap_structlog,
+    dag_maker,
+    full_dag_bag,
+    run_task,
+    session,
+)
 from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
@@ -36,7 +42,14 @@ from pytest_airflow_in_a_box.logging import (
 from pytest_airflow_in_a_box.markers import register_markers
 from pytest_airflow_in_a_box.reporting import configure_reporting
 
-__all__ = ("cap_structlog", "dag_maker", "full_dag_bag", "get_bootstrap_state", "session")
+__all__ = (
+    "cap_structlog",
+    "dag_maker",
+    "full_dag_bag",
+    "get_bootstrap_state",
+    "run_task",
+    "session",
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

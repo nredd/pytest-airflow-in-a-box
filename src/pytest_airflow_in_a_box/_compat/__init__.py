@@ -27,6 +27,11 @@ from pytest_airflow_in_a_box._compat.db import (
     clear_tables,
     implied_groups,
 )
+from pytest_airflow_in_a_box._compat.in_process import (
+    FakeSupervisorComms,
+    InProcessRunResult,
+    run_task_in_process,
+)
 
 __all__ = (
     "AirflowCapabilities",
@@ -35,10 +40,13 @@ __all__ = (
     "DagBagLocation",
     "DatabaseCleanupError",
     "DatabaseInitializationError",
+    "FakeSupervisorComms",
+    "InProcessRunResult",
     "TaskInstanceRunner",
     "build_dag_bag",
     "clear_tables",
     "implied_groups",
     "initialize_database",
     "resolve_capabilities",
+    "run_task_in_process",
 )

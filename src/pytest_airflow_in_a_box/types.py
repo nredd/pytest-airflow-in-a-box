@@ -107,4 +107,64 @@ class DagMaker(Protocol):
         """Create and execute one task instance through the compatibility shim."""
 
 
-__all__ = ("DagMaker", "SerializedDag")
+class TaskRunResult(Protocol):
+    """Outcome of one DB-free in-process task execution."""
+
+    @property
+    def state(self) -> Any:
+        """Return the terminal ``TaskInstanceState``."""
+
+    @property
+    def msg(self) -> Any | None:
+        """Return the final supervisor message, when produced."""
+
+    @property
+    def error(self) -> BaseException | None:
+        """Return the exception raised by the task, when it failed."""
+
+    @property
+    def xcoms(self) -> dict[str, Any]:
+        """Return XCom values present after execution."""
+
+    @property
+    def sent(self) -> tuple[Any, ...]:
+        """Return every supervisor message in send order."""
+
+
+class RunTask(Protocol):
+    """Execute one operator in process without a metadata database."""
+
+    def __call__(
+        self,
+        task: Any,
+        *,
+        dag_id: str | None = None,
+        run_id: str = "in-process-test",
+        logical_date: datetime | None = None,
+        params: dict[str, Any] | None = None,
+        xcoms: dict[str, Any] | None = None,
+        variables: dict[str, str] | None = None,
+        connections: dict[str, dict[str, Any]] | None = None,
+        map_index: int = -1,
+    ) -> TaskRunResult:
+        """Execute one operator with seeded fake supervisor state.
+
+        Parameters:
+            task: Any containing the Airflow operator or bound TaskFlow task.
+            dag_id: str | None overriding the Dag identifier, or ``None`` to
+                read it from the task's bound Dag.
+            run_id: str identifying the synthetic manual run.
+            logical_date: datetime | None pinning the run's logical date.
+            params: dict[str, Any] | None overriding declared Dag params.
+            xcoms: dict[str, Any] | None seeding XCom values by key.
+            variables: dict[str, str] | None seeding Variable values by key.
+            connections: dict[str, dict[str, Any]] | None seeding connection
+                fields by connection id.
+            map_index: int selecting the mapped task index.
+
+        Returns:
+            TaskRunResult containing terminal state, error, and XCom values.
+        """
+
+
+__all__ = ("DagMaker", "RunTask", "SerializedDag", "TaskRunResult")
