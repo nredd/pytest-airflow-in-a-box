@@ -28,6 +28,11 @@ from pytest_airflow_in_a_box.collection import (
     collect_dag_file,
     prune_duplicate_items,
 )
+from pytest_airflow_in_a_box.defaults import (
+    apply_filterwarnings,
+    apply_option_defaults,
+    register_ini_defaults,
+)
 from pytest_airflow_in_a_box.fixtures import (
     cap_structlog,
     dag_maker,
@@ -52,8 +57,12 @@ __all__ = (
 )
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register bootstrap options before pytest's early command-line parse.
+
+    Runs ``trylast`` so re-registered builtin ini defaults land after
+    pytest's own registrations; the last registration for a name wins.
 
     Parameters:
         parser: pytest.Parser receiving command-line and ini options.
@@ -108,6 +117,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type="bool",
         default=False,
     )
+    register_ini_defaults(parser)
 
 
 def pytest_load_initial_conftests(
@@ -140,6 +150,8 @@ def pytest_configure(config: pytest.Config) -> None:
     register_markers(config)
     validate_configure(config)
     configure_reporting(config)
+    apply_option_defaults(config)
+    apply_filterwarnings(config)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
