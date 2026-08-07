@@ -171,6 +171,8 @@ def test_properties_require_factory_progress(dag_maker: DagMaker) -> None:
     with pytest.raises(RuntimeError, match="has not entered a Dag context"):
         _ = dag_maker.session
     assert dag_maker.serialized_dag is None
+    with pytest.raises(RuntimeError, match="has not persisted a Dag"):
+        dag_maker.create_dagrun()
 
 
 def test_context_cannot_exit_before_entry(dag_maker: DagMaker) -> None:
@@ -338,6 +340,7 @@ def test_cleanup_accepts_missing_owned_rows() -> None:
         bundle_name="missing_cleanup_bundle",
         session=session,
     )
+    record.dag_run_ids.add(-1)
 
     dag_compat.cleanup_dag(record)
 
@@ -349,8 +352,9 @@ def test_factory_cleanup_continues_after_one_failure(monkeypatch: pytest.MonkeyP
     first = dag_compat.DagPersistenceRecord("first", "first_bundle", session)
     second = dag_compat.DagPersistenceRecord("second", "second_bundle", session)
     factory = _DagFactory("node", __file__, "master", serialized=False)
-    factory._finish(first, None)
-    factory._finish(second, None)
+    scheduler_dag: Any = object()
+    factory._finish(first, scheduler_dag, None)
+    factory._finish(second, scheduler_dag, None)
     attempted: list[str] = []
 
     def cleanup(record: dag_compat.DagPersistenceRecord) -> None:
