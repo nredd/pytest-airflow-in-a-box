@@ -75,6 +75,101 @@ Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `run_task_in
 `ordered_task_instances`, and `TaskResolutionError`. The `DagMaker` protocol additionally exposes
 `create_dagrun`, `create_ti`, and `run_ti`.
 
+## DB-free task execution
+
+`run_task` executes one operator through the Task SDK in process, with no metadata database. XCom,
+Variable, and Connection traffic is answered from seeded dictionaries; unseeded lookups fail
+exactly like a live deployment.
+
+```python
+def test_operator(run_task):
+    result = run_task(
+        my_operator,
+        variables={"answer": "42"},
+        connections={"db": {"conn_type": "postgres", "host": "example.com"}},
+    )
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert result.xcoms["return_value"] == "expected"
+```
+
+## Structlog capture
+
+Airflow 3 logs through structlog, where pytest's builtin `caplog` cannot see records. The
+`cap_structlog` fixture records every event emitted during the test:
+
+```python
+def test_logging(cap_structlog, dag_maker):
+    ...
+    assert "task_event" in cap_structlog
+    assert {"answer": 42, "log_level": "warning"} in cap_structlog
+```
+
+## Dag-file collection
+
+Point the collector at a directory of real Dag files and every `*.py` file below it is collected
+as a `dag-import` test item that fails on import errors or a Dag-free file. Off unless configured:
+
+```console
+pytest --collect-dag-folder=dags/
+```
+
+or persistently via the `airflow_collect_dags_folder` ini option. Collected items are auto-marked
+`db_test`; files also matching `test_*.py` naming are deduplicated against pytest's default Python
+collector.
+
+## Database cleanup
+
+`clear_db` is a registry-driven whole-database reset for serial setup and teardown contexts:
+
+```python
+from pytest_airflow_in_a_box.db import TableGroup, clear_db
+
+clear_db()  # every group
+clear_db(tables={TableGroup.VARIABLES})  # one group
+```
+
+Requesting a group also clears the groups whose rows reference it (`RUNS` clears task instances
+and XCom rows), and clearing `CONNECTIONS` recreates Airflow's default connections.
+
+## Live REST API
+
+`api_client` lazily starts one isolated `airflow api-server` per test process on a loopback
+ephemeral port and returns a typed client authenticated through SimpleAuthManager:
+
+```python
+import pytest
+
+
+@pytest.mark.api_test
+def test_api(api_client, dag_maker):
+    with dag_maker(dag_id="visible"):
+        ...
+
+    response = api_client.get("/api/v2/dags/visible")
+
+    assert response.status == 200
+    assert response.body["dag_id"] == "visible"
+```
+
+## Markers
+
+- `db_test`: requires the isolated metadata database
+- `api_test`: requires the isolated REST API server
+- `compat`: end-user tests exercised across the version matrix
+- `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
+- `environment(name)`: run only when the named environment's sentinel path exists, configured via
+  the `airflow_environments` ini line list (`lab = /opt/lab/sentinel`)
+
+## Defaults
+
+The plugin needs zero ini configuration. It applies `--tb=short`, `-ra`, `--durations=20`, and
+failed-only `tmp_path` retention, but only where the user has not chosen a value -- explicit flags
+and ini settings always win. Warning filters silence traced third-party deprecation noise
+(`flask_appbuilder`, `flask_sqlalchemy`, `starlette`) while keeping Airflow's own deprecation
+warnings visible, and promote pytest's collection and unraisable warnings to errors. User-supplied
+`filterwarnings` lines take precedence.
+
 ## License
 
 Apache License 2.0. See `LICENSE`, `NOTICE`, and `PROVENANCE.md`.
