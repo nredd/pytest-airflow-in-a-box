@@ -22,15 +22,23 @@ from pytest_airflow_in_a_box._compat.database import (
     DatabaseInitializationError,
     initialize_database,
 )
+from pytest_airflow_in_a_box._compat.db import (
+    DatabaseCleanupError,
+    clear_tables,
+    implied_groups,
+)
 
 __all__ = (
     "AirflowCapabilities",
     "AirflowCompatibilityError",
     "DagBagConstructionError",
     "DagBagLocation",
+    "DatabaseCleanupError",
     "DatabaseInitializationError",
     "TaskInstanceRunner",
     "build_dag_bag",
+    "clear_tables",
+    "implied_groups",
     "initialize_database",
     "resolve_capabilities",
 )
