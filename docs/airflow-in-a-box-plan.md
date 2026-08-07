@@ -3,6 +3,63 @@
 _Canonical implementation plan. Imported from an internal source revision and revised on 2026-08-07
 to remove environment-specific details and incorporate bootstrap validation findings._
 
+## Status (2026-08-07)
+
+Build order steps 1–9 are implemented and tested; see § Corrections below for where the
+implementation deviated from this plan and why.
+
+- **Done:** scaffold; `storage/locate.py` (+ Darwin `statfs` probe, a plan gap); `storage/sqlite.py`;
+  `bootstrap.py`; `_compat/` capabilities; logging's 3 layers + `StructlogCapture`; `reporting.py`;
+  `collection.py` (+ `--collect-dag-folder`/`airflow_collect_dags_folder`, double-collection guard);
+  `db.py`/`_compat/db.py` (`TableGroup`, `clear_db`, implied-group expansion);
+  fixtures `session`, `dag_maker` (with `create_dagrun`/`create_ti`/`run_ti`), `full_dag_bag`,
+  `cap_structlog`, `run_task` (`_compat/in_process.py`); markers; `defaults.py`
+  (zero-ini defaults + narrowed `filterwarnings`); self-tests green serial and `-n auto`.
+- **Remaining:** step 10 (`api_test` fixture + typed client, incl. the bootstrap-owned server
+  start), the env-sentinel marker from step 11, step 13 (bundled `tests/dags/` corpus + the
+  8-test end-user compat suite), README docs for the new public surface.
+
+## Corrections from implementation (2026-08-07)
+
+Claims in this plan that implementation falsified, kept here so the sections below read against
+the record:
+
+- **`reporting.py` is smaller than planned.** pytest core already skips junitxml on xdist workers
+  (`_pytest/junitxml.py` guards on `workerinput`); the real collisions are `--log-file` (no core
+  guard — workers race on one file) and externally orchestrated `COVERAGE_FILE`. Both are rewritten
+  per-worker; nothing else.
+- **`caplog` is NOT overridden.** The builtin fixture's constructor is `_ispytest`-private, so a
+  same-named override cannot delegate and would silently change stdlib capture semantics. Shipped
+  `cap_structlog` (upstream's name) as a separate fixture instead.
+- **`filterwarnings` precedence runs the other way.** pytest applies ini lines in order and each
+  `warnings.filterwarnings` call prepends, so *later* lines win. The plan said "user-supplied
+  filters still take precedence" of appended plugin lines — wrong. The plugin *prepends* its five
+  filters so user ini lines, applied later, win. Verified with a downgrade test.
+- **`-rasl` → `-ra`.** `l` is not a pytest 9 report character (`getreportopt` ignores it).
+- **`config.inicfg` is deprecated (pytest 9, removed in 10).** The `tmp_path_retention_*` defaults
+  are re-registered via `parser.addini` in a `trylast` `pytest_addoption` (last registration wins)
+  instead of `inicfg.setdefault` in `pytest_load_initial_conftests`.
+- **The Task SDK surface is uniform across 3.1.8/3.2.2/3.3.0** — `run(ti, context, log)` returning
+  the 3-tuple, `CommsDecoder.send`, and `RuntimeTaskInstance.bundle_instance` *required on all
+  three* (not 3.2/3.3 churn as assumed). `bundle_instance` is only touched by the unused `parse`
+  path, so `model_construct` omits it. No new capability entries were needed for `run_task`.
+- **`ti.xcom_pull` sends `GetXComSequenceSlice`,** not `GetXCom` — the fake answers both.
+- **Unseeded Variable/Connection requests must answer with the protocol's `ErrorResponse`,** not a
+  raised exception: the SDK's secrets-backend loop swallows exceptions from `send` and raises its
+  own not-found error, so a raised `TaskRunError` never reached the user. The seeding hint travels
+  in `ErrorResponse.detail` instead; `TaskRunError` was dropped.
+- **The Darwin storage gap was real and load-bearing.** This plan's network-FS detection was
+  Linux-only + "conservatively network" elsewhere, which made *every* macOS host take the loud
+  writable-fallback path and rejected explicit `--airflow-home`. Fixed with a Darwin `statfs(2)`
+  probe (`f_fstypename` + `MNT_LOCAL`, `statfs$INODE64` preferred for Intel).
+- **All plugin-exercising `pytester` self-tests must use `runpytest_subprocess`:** the outer test
+  session has already imported Airflow, and `load_initial_state` correctly refuses to bootstrap
+  in-process after that. In-process pytester is unusable in this repo's own suite.
+- **The 100 % branch-coverage gate is currently unenforceable as configured** — the Windows
+  `windll` branch is unreachable on every CI platform, subprocess pytester children are unmeasured,
+  and the CI matrix runs plain `pytest` without coverage. Needs a decision: platform-conditional
+  exclusions plus coverage-in-CI wiring, or a lowered/scoped gate. TODO(redd).
+
 ## Context
 
 Airflow's own test harness (`devel-common`/`tests_common`) is explicitly, permanently internal —

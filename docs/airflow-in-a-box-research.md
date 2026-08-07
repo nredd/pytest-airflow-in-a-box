@@ -1462,3 +1462,88 @@ No private-fork-only code, hostnames, paths, credentials, test data, or reposito
 Public Airflow imports replace private facades, and examples are newly authored. The
 `run_task_instance()`/`ordered_task_instances()` shim is vendored from the public Apache Airflow
 source with its license header, modification notice, source path, and exact commit recorded.
+
+## 23. Implementation findings (2026-08-07, build-order steps 6–9)
+
+Empirical results from implementing reporting, collection, `clear_db`, `cap_structlog`,
+`run_task`, and the zero-ini defaults. Everything below was verified against installed
+Airflow 3.3.0 plus `uv run --isolated --with apache-airflow-core=={3.1.8,3.2.2}` probes.
+
+### Task SDK in-process execution (`run_task`)
+
+- The runner surface is **uniform across 3.1.8/3.2.2/3.3.0**: `task_runner.run(ti, context, log)`
+  returns `(TaskInstanceState, ToSupervisor | None, BaseException | None)`; `CommsDecoder.send`
+  exists on all three (no `send_request`/`get_message` legacy shape anywhere in the certified set);
+  `TIRunContext` requires exactly `dag_run` + `max_tries`. No new capability entries were needed.
+- `RuntimeTaskInstance.bundle_instance` is **required on all three releases** (not new churn), but
+  is only consumed by the `parse()`/bundle path — `run()` and `get_template_context()` never touch
+  it, so `model_construct` simply omits it for DB-free execution.
+- `SUPERVISOR_COMMS` is an *unset module annotation* until the supervisor assigns it (all three
+  releases) — install/restore must handle the attribute-absent case with a sentinel + `delattr`.
+- `ti.xcom_pull` sends **`GetXComSequenceSlice`** (present since 3.1.8), not `GetXCom`; a fake
+  supervisor must answer it with `XComSequenceSliceResult(root=[...])`.
+- **Raising from `send` for unseeded state does not work**: the SDK's secrets-backend resolution
+  loop (`BaseHook.get_connection` et al.) swallows backend exceptions and raises its own
+  `AirflowNotFoundException`, so a custom exception never reaches the user. The protocol-faithful
+  answer — `ErrorResponse(error=ErrorType.CONNECTION_NOT_FOUND, detail={"hint": ...})` — makes the
+  task fail exactly like a live deployment, with the seeding hint preserved in `detail`.
+- `params` delivered as the synthetic DagRun's `conf` flow through `process_params` and are
+  validated against declared Dag params exactly like a triggered run — no separate params plumbing.
+- The 3.1.8 `DagRun` DTO additionally requires `start_date` (3.2+ relaxed it); always passing it
+  is compatible with all three.
+- `uuid6` is importable on all three certified releases (task-sdk dependency) — safe to use for
+  `id`/`dag_version_id` without declaring it.
+
+### `clear_db` registry
+
+- Every registry spec resolves identically on 3.1.8 and 3.3.0, including
+  `airflow.models.xcom.XComModel` (already present in 3.1 — the "3.1 may differ" risk was empty)
+  and the three asset association `Table` objects (`association_table` == `dagrun_asset_event`,
+  `alias_association_table`, `asset_alias_asset_event_association_table`).
+- `dagrun_asset_event` must be a member of **both** the `runs` and `assets` groups: its rows must
+  go when either side goes, and SQLite autoincrement id reuse would otherwise re-associate a new
+  DagRun with a stale asset event. Repeated deletes are idempotent.
+- The tuned SQLite profile does not enable `PRAGMA foreign_keys`, so implied-group expansion in
+  code (`runs → task_instances → xcom`, `dags → serialized_dags → runs`, `bundles → dags`) is what
+  prevents orphans — `serialized_dags` implies `runs` because `TaskInstance.dag_version_id` and
+  `DagRun.created_dag_version_id` reference `dag_version`.
+- Out of v1 scope and documented as such: triggers, deadlines, and the newer partition tables
+  (`asset_partition_dag_run`, `partitioned_asset_key_log` — 3.3-only).
+
+### pytest 9 specifics (defaults, reporting, self-tests)
+
+- pytest core already guards junitxml on xdist workers; `_pytest.logging` has **no** such guard —
+  per-worker `--log-file` suffixing is the plugin's job. pytest-cov manages its own parallel data
+  files; only externally orchestrated `COVERAGE_FILE` needs worker suffixing.
+- `filterwarnings` ini lines: later lines win (each application prepends to the warnings module's
+  filter list). Plugin defaults must be **prepended** for user ini lines to keep precedence.
+- `-r` report characters on 9.1: default `fE`; `l` is not a valid character (`getreportopt`
+  appends it inertly). `a` expands to `sxXEf`.
+- `config.inicfg` is deprecated (`PytestRemovedIn10Warning`). Overriding another plugin's ini
+  *default* is done by re-registering the key with `parser.addini` from a `trylast`
+  `pytest_addoption` — the last registration wins and user ini values still override defaults.
+- `Pytester.parseconfig`/`runpytest_inprocess` are unusable for anything that exercises this
+  plugin from inside its own suite: the outer session has imported Airflow, and
+  `load_initial_state` refuses to bootstrap after that. Subprocess pytester everywhere; its
+  children are invisible to coverage.
+- A serial pytester child inherits the outer worker's `PYTEST_XDIST_WORKER` under `-n auto`;
+  self-tests asserting worker identity must scrub it.
+
+### macOS storage detection (plan gap, fixed)
+
+`/proc/mounts` + Linux statfs magics cover only Linux; the plan treated all of macOS as
+"conservatively network", which sent every macOS host through the loud writable-fallback path and
+rejected explicit `--airflow-home` bases. Darwin `statfs(2)` provides `f_fstypename` (feeds the
+same name classifier as the mount table) and the kernel `MNT_LOCAL` flag (authoritative fallback
+for unknown names). The `statfs$INODE64` symbol must be preferred when present — Intel macOS keeps
+the legacy pre-10.6 layout under the plain symbol; Apple silicon only ships the 64-bit-inode
+layout. `afpfs`/`webdav` joined the network type set. Unprobeable paths stay conservatively
+network.
+
+### Coverage gate reality check
+
+`fail_under = 100` with branch coverage is currently unenforceable: the Windows `windll` branch is
+unreachable on every CI platform, the Darwin probe is unreachable on Linux CI (and vice versa),
+subprocess pytester children are unmeasured, and the CI matrix runs plain `pytest` with no
+coverage step at all. Resolving this needs platform-conditional exclusions plus coverage wiring in
+CI, or a scoped gate — deferred, tracked in the plan's Corrections section.
