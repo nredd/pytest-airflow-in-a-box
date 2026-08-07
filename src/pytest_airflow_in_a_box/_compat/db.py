@@ -3,13 +3,17 @@
 The registry lists every clearable table group in one global foreign-key-safe
 delete order. SQLite foreign keys are not enforced by the tuned test database,
 so referencing groups are expanded through ``implied_groups`` instead of
-relying on cascades. The ``dagrun_asset_event`` association table appears in
-both the ``runs`` and ``assets`` groups deliberately: its rows must go when
-either side goes, and repeated deletes are idempotent.
+relying on cascades. Association tables appear in every group that owns one of
+their sides deliberately: their rows must go when either side goes, and
+repeated deletes are idempotent. Specs in ``_OPTIONAL_SPECS`` exist only on
+some certified releases (asset partition tables arrived in 3.2, the
+``asset_trigger`` association left after 3.1) and are skipped where absent;
+the compat suite pins expected presence per release.
 
-Out of v1 scope: triggers, deadlines, and Airflow-internal bookkeeping tables;
-clearing ``dags`` without ``assets`` leaves asset definitions and their Dag
-reference rows in place.
+Out of scope: ``deadline_alert`` definitions (user configuration, like asset
+definitions) and Airflow-internal bookkeeping tables; clearing ``dags``
+without ``assets`` leaves asset definitions and their Dag reference rows in
+place.
 
 References:
     https://airflow.apache.org/docs/apache-airflow/stable/database-erd-ref.html
@@ -39,10 +43,12 @@ _TABLE_REGISTRY: tuple[tuple[str, tuple[ModelSpec, ...]], ...] = (
             ("airflow.models.taskinstance", "TaskInstance"),
         ),
     ),
+    ("deadlines", (("airflow.models.deadline", "Deadline"),)),
     (
         "runs",
         (
             ("airflow.models.asset", "association_table"),
+            ("airflow.models.asset", "AssetPartitionDagRun"),
             ("airflow.models.dagrun", "DagRun"),
         ),
     ),
@@ -57,8 +63,11 @@ _TABLE_REGISTRY: tuple[tuple[str, tuple[ModelSpec, ...]], ...] = (
     (
         "assets",
         (
+            ("airflow.models.asset", "PartitionedAssetKeyLog"),
+            ("airflow.models.asset", "AssetPartitionDagRun"),
             ("airflow.models.asset", "asset_alias_asset_event_association_table"),
             ("airflow.models.asset", "association_table"),
+            ("airflow.models.asset", "asset_trigger_association_table"),
             ("airflow.models.asset", "AssetDagRunQueue"),
             ("airflow.models.asset", "AssetEvent"),
             ("airflow.models.asset", "TaskOutletAssetReference"),
@@ -67,6 +76,13 @@ _TABLE_REGISTRY: tuple[tuple[str, tuple[ModelSpec, ...]], ...] = (
             ("airflow.models.asset", "alias_association_table"),
             ("airflow.models.asset", "AssetAliasModel"),
             ("airflow.models.asset", "AssetModel"),
+        ),
+    ),
+    (
+        "triggers",
+        (
+            ("airflow.models.asset", "asset_trigger_association_table"),
+            ("airflow.models.trigger", "Trigger"),
         ),
     ),
     (
@@ -90,9 +106,20 @@ _IMPLIED: dict[str, tuple[str, ...]] = {
     "bundles": ("dags",),
     "dags": ("serialized_dags", "runs"),
     "serialized_dags": ("runs",),
-    "runs": ("task_instances",),
+    "runs": ("deadlines", "task_instances"),
     "task_instances": ("xcom",),
+    "triggers": ("task_instances",),
 }
+
+# Present only on some certified releases; skipped where unresolvable and
+# pinned per release by the compat suite.
+_OPTIONAL_SPECS: frozenset[ModelSpec] = frozenset(
+    {
+        ("airflow.models.asset", "AssetPartitionDagRun"),
+        ("airflow.models.asset", "PartitionedAssetKeyLog"),
+        ("airflow.models.asset", "asset_trigger_association_table"),
+    }
+)
 
 REGISTRY_GROUPS: tuple[str, ...] = tuple(group for group, _specs in _TABLE_REGISTRY)
 
@@ -178,7 +205,16 @@ def clear_tables(groups: Collection[str]) -> None:
                 if group not in requested:
                     continue
                 for spec in specs:
-                    session.execute(delete(_resolve_spec(spec)))
+                    if spec in _OPTIONAL_SPECS:
+                        try:
+                            target = _resolve_spec(spec)
+                        except (ImportError, AttributeError):
+                            # Absent on this release; presence per certified
+                            # release is pinned by the compat suite.
+                            continue
+                    else:
+                        target = _resolve_spec(spec)
+                    session.execute(delete(target))
             if "connections" in requested:
                 _restore_default_connections(session)
     except Exception as error:

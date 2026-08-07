@@ -58,10 +58,17 @@ def _insert_rows() -> None:
 def test_implied_groups_expands_transitively() -> None:
     """Expand implied groups transitively and keep registry delete order."""
 
-    assert compat_db.implied_groups(("runs",)) == ("xcom", "task_instances", "runs")
+    assert compat_db.implied_groups(("runs",)) == (
+        "xcom",
+        "task_instances",
+        "deadlines",
+        "runs",
+    )
+    assert compat_db.implied_groups(("triggers",)) == ("xcom", "task_instances", "triggers")
     assert compat_db.implied_groups(("bundles",)) == (
         "xcom",
         "task_instances",
+        "deadlines",
         "runs",
         "serialized_dags",
         "dags",
@@ -134,6 +141,22 @@ def test_clear_db_scoped_selection_leaves_other_groups() -> None:
         assert connection_count == 1
     finally:
         clear_db(tables={TableGroup.LOGS, TableGroup.CONNECTIONS})
+
+
+def test_clear_db_triggers_clears_referencing_task_instances() -> None:
+    """Clear trigger rows plus the task instances that reference them."""
+
+    # Deferred so trigger construction happens after bootstrap.
+    from airflow.models.trigger import Trigger
+
+    with create_session() as session:
+        session.add(Trigger(classpath="tests.fake.Trigger", kwargs={}))
+    assert _count(Trigger) >= 1
+
+    clear_db(tables={TableGroup.TRIGGERS})
+
+    assert _count(Trigger) == 0
+    assert _count(TaskInstance) == 0
 
 
 @SERIAL_ONLY
