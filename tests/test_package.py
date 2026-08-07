@@ -12,10 +12,13 @@ import pytest_airflow_in_a_box
 from pytest_airflow_in_a_box import (
     __version__,
     _compat,
+    collection,
+    db,
     fixtures,
     logging,
     markers,
     plugin,
+    reporting,
     taskinstance,
     types,
 )
@@ -29,10 +32,25 @@ def test_version_matches_distribution_metadata() -> None:
 def test_public_surface_is_explicit() -> None:
     """Expose only the intentionally supported package symbols."""
     assert pytest_airflow_in_a_box.__all__ == ("__version__",)
+    assert collection.__all__ == (
+        "DagFile",
+        "DagFileImportError",
+        "DagImportItem",
+        "collect_dag_file",
+        "collection_folder",
+        "format_import_errors",
+        "prune_duplicate_items",
+    )
+    assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
     assert fixtures.__all__ == ("dag_maker", "full_dag_bag", "session")
     assert logging.__all__ == ("TestContextFilter", "ensure_handlers")
     assert markers.__all__ == ("MarkedNode", "read_bool_marker", "register_markers")
     assert plugin.__all__ == ("dag_maker", "full_dag_bag", "get_bootstrap_state", "session")
+    assert reporting.__all__ == (
+        "configure_reporting",
+        "worker_coverage_file",
+        "worker_suffixed_path",
+    )
     assert taskinstance.__all__ == (
         "TaskResolutionError",
         "ordered_task_instances",
@@ -44,9 +62,12 @@ def test_public_surface_is_explicit() -> None:
         "AirflowCompatibilityError",
         "DagBagConstructionError",
         "DagBagLocation",
+        "DatabaseCleanupError",
         "DatabaseInitializationError",
         "TaskInstanceRunner",
         "build_dag_bag",
+        "clear_tables",
+        "implied_groups",
         "initialize_database",
         "resolve_capabilities",
     )
