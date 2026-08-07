@@ -59,7 +59,7 @@ target-version = "py310"
 line-length = 99
 unsafe-fixes = true
 # Canonical imported records are immutable inputs, including their Python fences.
-extend-exclude = ["docs/airflow-in-a-box-plan.md", "docs/airflow-in-a-box-research.md"]
+extend-exclude = ["docs/PLAN.md", "docs/RESEARCH.md"]
 
 [tool.ruff.analyze]
 detect-string-imports = true
