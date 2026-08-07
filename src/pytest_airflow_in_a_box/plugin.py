@@ -9,8 +9,11 @@ References:
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
+from pytest_airflow_in_a_box._compat import initialize_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
     XdistNode,
@@ -78,6 +81,19 @@ def pytest_configure(config: pytest.Config) -> None:
         config: pytest.Config for the active test session.
     """
     validate_configure(config)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Initialize metadata in the serial process or xdist controller only.
+
+    Parameters:
+        session: pytest.Session whose configuration contains bootstrap state.
+    """
+
+    state = get_bootstrap_state(session.config)
+    if state.owner_pid == os.getpid():
+        initialize_database()
 
 
 @pytest.hookimpl(optionalhook=True)

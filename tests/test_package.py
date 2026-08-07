@@ -51,6 +51,6 @@ def test_pytest_auto_loads_entry_point(pytester: pytest.Pytester) -> None:
         """
     )
 
-    result = pytester.runpytest_inprocess("-q")
+    result = pytester.runpytest_subprocess("-q")
 
     result.assert_outcomes(passed=1)

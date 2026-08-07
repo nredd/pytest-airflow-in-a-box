@@ -17,11 +17,17 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     TaskInstanceRunner,
     resolve_capabilities,
 )
+from pytest_airflow_in_a_box._compat.database import (
+    DatabaseInitializationError,
+    initialize_database,
+)
 
 __all__ = (
     "AirflowCapabilities",
     "AirflowCompatibilityError",
     "DagBagLocation",
+    "DatabaseInitializationError",
     "TaskInstanceRunner",
+    "initialize_database",
     "resolve_capabilities",
 )

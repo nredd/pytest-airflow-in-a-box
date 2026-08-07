@@ -27,6 +27,7 @@ def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
         f"""
         import json
         import os
+        import sqlite3
         from pathlib import Path
 
         from pytest_airflow_in_a_box.plugin import get_bootstrap_state
@@ -40,7 +41,19 @@ def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
             assert state.password_file.is_file()
             assert state.config_path.is_file()
             assert (state.root / "config" / "airflow_local_settings.py").is_file()
-            assert not state.database_path.exists()
+            assert state.database_path.is_file()
+            with sqlite3.connect(state.database_path) as connection:
+                tables = {{
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }}
+                revision = connection.execute(
+                    "SELECT version_num FROM alembic_version"
+                ).fetchone()
+            assert "dag" in tables
+            assert revision is not None and revision[0]
             Path({str(record_path)!r}).write_text(
                 json.dumps(state.to_payload()), encoding="utf-8"
             )

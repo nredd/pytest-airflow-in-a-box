@@ -20,6 +20,7 @@ from pytest_airflow_in_a_box.storage.sqlite import (
     PragmaProfile,
     calculate_profile,
     create_metadata_engine,
+    install_legacy_sqlite_listener,
     write_local_settings,
 )
 
@@ -31,6 +32,7 @@ __all__ = (
     "StorageReason",
     "calculate_profile",
     "create_metadata_engine",
+    "install_legacy_sqlite_listener",
     "is_network_filesystem",
     "locate_storage",
     "parse_proc_mounts",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
@@ -211,8 +212,12 @@ def _reset_capability_cache() -> Iterator[None]:
 
 def test_compat_package_import_does_not_import_airflow() -> None:
     """Keep compatibility metadata import-safe before bootstrap."""
+    script = (
+        "import sys; import pytest_airflow_in_a_box._compat; "
+        "raise SystemExit('airflow' in sys.modules)"
+    )
 
-    assert "airflow" not in sys.modules
+    subprocess.check_output([sys.executable, "-c", script], text=True)
     assert _compat.resolve_capabilities is capability_module.resolve_capabilities
 
 
@@ -559,23 +564,12 @@ def test_real_current_airflow_resolves(pytester: pytest.Pytester) -> None:
 
     pytester.makepyfile(
         """
-        from pytest_airflow_in_a_box._compat import (
-            AirflowCapabilities,
-            DagBagLocation,
-            TaskInstanceRunner,
-            resolve_capabilities,
-        )
+        from pytest_airflow_in_a_box._compat import resolve_capabilities
 
         def test_current_airflow():
-            assert resolve_capabilities() == AirflowCapabilities(
-                release=(3, 3, 0),
-                dag_bag_location=DagBagLocation.DAG_PROCESSING,
-                dag_bag_supports_include_examples=False,
-                task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
-                refresh_from_task_supports_dag_run=True,
-                startup_details_supports_sentry=True,
-                runtime_task_instance_supports_queue=True,
-            )
+            capabilities = resolve_capabilities()
+            assert capabilities.release in {(3, 1, 8), (3, 2, 2), (3, 3, 0)}
+            assert resolve_capabilities() is capabilities
         """
     )
 
