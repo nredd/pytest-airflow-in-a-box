@@ -226,9 +226,14 @@ def test_interceptor_installation_is_idempotent_and_restorable() -> None:
         logging_support._install_dict_config_interceptor()
 
 
-def test_consumer_dict_config_keeps_caplog_capture(pytester: pytest.Pytester) -> None:
+def test_consumer_dict_config_keeps_caplog_capture(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Preserve per-test caplog and pytest's log file through root replacement."""
 
+    # The serial child run must not inherit an outer xdist worker identity.
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     log_path = pytester.path / "consumer.log"
     pytester.makeini(f"[pytest]\nlog_file = {log_path}\nlog_file_level = WARNING\n")
     pytester.makeconftest(
