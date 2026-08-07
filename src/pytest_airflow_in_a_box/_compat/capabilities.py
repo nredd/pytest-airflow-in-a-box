@@ -20,7 +20,13 @@ from typing import NoReturn
 
 Release = tuple[int, int, int]
 
-SUPPORTED_RELEASES: tuple[Release, ...] = ((3, 1, 8), (3, 2, 2), (3, 3, 0))
+SUPPORTED_RELEASES: tuple[Release, ...] = (
+    (3, 1, 0),
+    (3, 1, 8),
+    (3, 2, 0),
+    (3, 2, 2),
+    (3, 3, 0),
+)
 SUPPORTED_VERSIONS = tuple(
     ".".join(str(part) for part in release) for release in SUPPORTED_RELEASES
 )
@@ -81,6 +87,15 @@ class AirflowCapabilities:
 
 
 _CERTIFIED_CAPABILITIES = {
+    (3, 1, 0): AirflowCapabilities(
+        release=(3, 1, 0),
+        dag_bag_location=DagBagLocation.MODELS,
+        dag_bag_supports_include_examples=True,
+        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+        refresh_from_task_supports_dag_run=False,
+        startup_details_supports_sentry=False,
+        runtime_task_instance_supports_queue=False,
+    ),
     (3, 1, 8): AirflowCapabilities(
         release=(3, 1, 8),
         dag_bag_location=DagBagLocation.MODELS,
@@ -88,6 +103,15 @@ _CERTIFIED_CAPABILITIES = {
         task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
         refresh_from_task_supports_dag_run=False,
         startup_details_supports_sentry=False,
+        runtime_task_instance_supports_queue=False,
+    ),
+    (3, 2, 0): AirflowCapabilities(
+        release=(3, 2, 0),
+        dag_bag_location=DagBagLocation.DAG_PROCESSING,
+        dag_bag_supports_include_examples=True,
+        task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+        refresh_from_task_supports_dag_run=False,
+        startup_details_supports_sentry=True,
         runtime_task_instance_supports_queue=False,
     ),
     (3, 2, 2): AirflowCapabilities(
@@ -110,7 +134,9 @@ _CERTIFIED_CAPABILITIES = {
     ),
 }
 _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
+    (3, 1, 0): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (3, 1, 8): _SerializedDagLocation.SERIALIZED_OBJECTS,
+    (3, 2, 0): _SerializedDagLocation.DEFINITIONS,
     (3, 2, 2): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
 }
