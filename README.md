@@ -1,7 +1,7 @@
 # pytest-airflow-in-a-box
 
 [![CI](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml/badge.svg)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
-[![coverage](https://github.com/nredd/pytest-airflow-in-a-box/raw/badges/coverage.svg)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/nredd/pytest-airflow-in-a-box/badges/coverage.json)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
 Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
