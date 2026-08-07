@@ -30,7 +30,7 @@ from typing import Any
 
 import pytest
 
-from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
+from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
 
 LOGGER = logging.getLogger(__name__)
 
@@ -279,9 +279,11 @@ def _log_tail(log_path: Any) -> str:
         return f"<no server log available: {error}>"
 
 
-@pytest.fixture(scope="session")
-def api_server_url(pytestconfig: pytest.Config) -> Iterator[str]:
-    """Start one isolated Airflow API server for this process's session.
+def _launch_api_server(state: BootstrapState) -> Iterator[str]:
+    """Start, hand over, and finally stop one isolated Airflow API server.
+
+    Parameters:
+        state: BootstrapState providing the run's log directory.
 
     Yields:
         str containing the server's loopback base URL.
@@ -290,7 +292,6 @@ def api_server_url(pytestconfig: pytest.Config) -> Iterator[str]:
         ApiServerError: The server exited early or never became responsive.
     """
 
-    state = get_bootstrap_state(pytestconfig)
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     log_path = state.logs_folder / f"api-server-{port}.log"
@@ -334,6 +335,20 @@ def api_server_url(pytestconfig: pytest.Config) -> Iterator[str]:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+
+
+@pytest.fixture(scope="session")
+def api_server_url(pytestconfig: pytest.Config) -> Iterator[str]:
+    """Start one isolated Airflow API server for this process's session.
+
+    Yields:
+        str containing the server's loopback base URL.
+
+    Raises:
+        ApiServerError: The server exited early or never became responsive.
+    """
+
+    yield from _launch_api_server(get_bootstrap_state(pytestconfig))
 
 
 @pytest.fixture(scope="session")

@@ -5,6 +5,8 @@ from __future__ import annotations
 import stat
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -412,3 +414,438 @@ def test_each_call_creates_a_unique_directory(tmp_path: Path) -> None:
     assert first.path.is_dir()
     assert second.path.is_dir()
     assert first.path.name.startswith("pytest-airflow-in-a-box-")
+
+
+def test_read_mounts_tolerates_missing_proc_mounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return no mounts when the Linux mount table cannot be read."""
+    monkeypatch.setattr(locate_module, "PROC_MOUNTS_PATH", Path("/nonexistent-proc/mounts"))
+
+    assert locate_module._read_mounts(None, "linux") == ()
+
+
+class _FakeStatfsFunction:
+    """Callable statfs double accepting ctypes attribute assignment."""
+
+    def __init__(self, fill: Any) -> None:
+        """Store the struct-filling callable.
+
+        Parameters:
+            fill: Any invoked with the encoded path and byref wrapper.
+        """
+
+        self.fill = fill
+
+    def __call__(self, path: bytes, result_ref: Any) -> int:
+        """Delegate to the struct-filling callable.
+
+        Parameters:
+            path: bytes containing the encoded probe path.
+            result_ref: Any containing the ctypes byref wrapper.
+
+        Returns:
+            int containing the configured statfs result.
+        """
+
+        return int(self.fill(path, result_ref))
+
+
+class _FakeLinuxLibc:
+    """Scriptable libc double for the Linux statfs probe."""
+
+    def __init__(self, *, result: int, f_type: int) -> None:
+        """Configure the fake statfs call.
+
+        Parameters:
+            result: int returned by the statfs call.
+            f_type: int written into ``f_type``.
+        """
+
+        self.result = result
+        self.f_type = f_type
+
+    def __getattr__(self, name: str) -> Any:
+        """Resolve the statfs symbol.
+
+        Parameters:
+            name: str containing the requested symbol name.
+
+        Returns:
+            Any containing the fake statfs callable.
+        """
+
+        if name == "statfs":
+            return _FakeStatfsFunction(self._fill)
+        raise AttributeError(name)
+
+    def _fill(self, _path: bytes, result_ref: Any) -> int:
+        """Fill the caller's struct and report the configured result.
+
+        Parameters:
+            _path: bytes containing the encoded probe path.
+            result_ref: Any containing the ctypes byref wrapper.
+
+        Returns:
+            int containing the configured statfs result.
+        """
+
+        result_ref._obj.f_type = self.f_type
+        return self.result
+
+
+@pytest.mark.parametrize(
+    ("libc", "expected"),
+    [
+        (_FakeLinuxLibc(result=-1, f_type=0), None),
+        (_FakeLinuxLibc(result=0, f_type=0x6969), 0x6969),
+        (_FakeLinuxLibc(result=0, f_type=-1), 0xFFFFFFFF),
+    ],
+)
+def test_linux_statfs_magic_with_fake_libc(
+    monkeypatch: pytest.MonkeyPatch,
+    libc: Any,
+    expected: object,
+) -> None:
+    """Cover the failure return and the unsigned magic normalization."""
+    monkeypatch.setattr(locate_module.ctypes, "CDLL", lambda *_a, **_k: libc)
+
+    assert locate_module._linux_statfs_magic(Path("/probe")) == expected
+
+
+class _FakeDarwinLibc:
+    """Scriptable libc double for the Darwin statfs probe."""
+
+    def __init__(self, *, result: int, fstypename: bytes, flags: int, inode64: bool) -> None:
+        """Configure the fake statfs call.
+
+        Parameters:
+            result: int returned by the statfs call.
+            fstypename: bytes written into ``f_fstypename``.
+            flags: int written into ``f_flags``.
+            inode64: bool exposing the ``statfs$INODE64`` symbol.
+        """
+
+        self.result = result
+        self.fstypename = fstypename
+        self.flags = flags
+        self.inode64 = inode64
+
+    def __getitem__(self, name: str) -> Any:
+        """Resolve the 64-bit-inode symbol when configured.
+
+        Parameters:
+            name: str containing the requested symbol name.
+
+        Returns:
+            Any containing the fake statfs callable.
+
+        Raises:
+            AttributeError: The symbol is not exposed.
+        """
+
+        if name == "statfs$INODE64" and self.inode64:
+            return _FakeStatfsFunction(self._fill)
+        raise AttributeError(name)
+
+    def __getattr__(self, name: str) -> Any:
+        """Resolve the plain statfs symbol.
+
+        Parameters:
+            name: str containing the requested symbol name.
+
+        Returns:
+            Any containing the fake statfs callable.
+        """
+
+        if name == "statfs":
+            return _FakeStatfsFunction(self._fill)
+        raise AttributeError(name)
+
+    def _fill(self, _path: bytes, result_ref: Any) -> int:
+        """Fill the caller's struct and report the configured result.
+
+        Parameters:
+            _path: bytes containing the encoded probe path.
+            result_ref: Any containing the ctypes byref wrapper.
+
+        Returns:
+            int containing the configured statfs result.
+        """
+
+        structure = result_ref._obj
+        structure.f_fstypename = self.fstypename
+        structure.f_flags = self.flags
+        return self.result
+
+
+@pytest.mark.parametrize(
+    ("libc", "expected"),
+    [
+        (_FakeDarwinLibc(result=-1, fstypename=b"apfs", flags=0x1000, inode64=True), None),
+        (_FakeDarwinLibc(result=0, fstypename=b"", flags=0x1000, inode64=True), None),
+        (
+            _FakeDarwinLibc(result=0, fstypename=b"apfs", flags=0x1000, inode64=True),
+            locate_module.DarwinFilesystem(filesystem_type="apfs", local_flag=True),
+        ),
+        (
+            _FakeDarwinLibc(result=0, fstypename=b"nfs", flags=0, inode64=False),
+            locate_module.DarwinFilesystem(filesystem_type="nfs", local_flag=False),
+        ),
+    ],
+)
+def test_darwin_statfs_paths_with_fake_libc(
+    monkeypatch: pytest.MonkeyPatch,
+    libc: Any,
+    expected: object,
+) -> None:
+    """Cover both symbol branches plus failure and empty-name returns."""
+    monkeypatch.setattr(locate_module.ctypes, "CDLL", lambda *_a, **_k: libc)
+
+    assert locate_module._darwin_statfs(Path("/probe")) == expected
+
+
+class _FakeWindowsPath:
+    """Path double carrying a Windows drive on POSIX."""
+
+    def __init__(self, value: str, drive: str) -> None:
+        """Store the rendered value and drive.
+
+        Parameters:
+            value: str returned by ``str()``.
+            drive: str containing the Windows drive.
+        """
+
+        self.value = value
+        self.drive = drive
+
+    def __str__(self) -> str:
+        """Render the fake path.
+
+        Returns:
+            str containing the rendered value.
+        """
+
+        return self.value
+
+
+def test_windows_drive_probe_with_fake_windll(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Classify fixed, remote, and unknown drives through a fake windll."""
+    monkeypatch.setattr(locate_module.os, "name", "nt")
+    path: Any = _FakeWindowsPath("C:/data", "C:")
+
+    monkeypatch.delattr(locate_module.ctypes, "windll", raising=False)
+    assert locate_module._windows_path_is_network(path) is True
+
+    class _Kernel32:
+        def __init__(self, drive_type: int) -> None:
+            self.drive_type = drive_type
+
+        def GetDriveTypeW(self, _root: str) -> int:
+            return self.drive_type
+
+    monkeypatch.setattr(
+        locate_module.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=_Kernel32(3)),
+        raising=False,
+    )
+    assert locate_module._windows_path_is_network(path) is False
+
+    monkeypatch.setattr(
+        locate_module.ctypes,
+        "windll",
+        SimpleNamespace(kernel32=_Kernel32(4)),
+        raising=False,
+    )
+    assert locate_module._windows_path_is_network(path) is True
+
+
+def test_explicit_run_directory_creation_failure_is_wrapped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Name the explicit base when its run directory cannot be created."""
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+
+    def fail_mkdtemp(**_kwargs: Any) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(locate_module.tempfile, "mkdtemp", fail_mkdtemp)
+
+    with pytest.raises(OSError, match="below explicit path"):
+        locate_storage(
+            explicit,
+            mounts_text=_mount(explicit, "xfs"),
+            platform_name="linux",
+        )
+
+
+def test_shared_memory_branches_and_candidate_dedupe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Select tmpfs shared memory, tolerate its failures, and dedupe bases."""
+    shm = tmp_path / "shm"
+    temp = tmp_path / "temp"
+    shm.mkdir()
+    temp.mkdir()
+    mounts = "\n".join((_mount(shm, "tmpfs"), _mount(temp, "xfs")))
+    monkeypatch.setattr(locate_module, "SHARED_MEMORY_PATH", shm)
+    monkeypatch.setattr(locate_module.tempfile, "gettempdir", lambda: str(temp))
+
+    selected = locate_storage(
+        candidate=temp,
+        mounts_text=mounts,
+        platform_name="linux",
+        minimum_shared_memory_bytes=0,
+    )
+    assert selected.reason is StorageReason.CALLER_TEMP
+
+    no_candidate = locate_storage(
+        mounts_text=mounts,
+        platform_name="linux",
+        minimum_shared_memory_bytes=0,
+    )
+    assert no_candidate.reason is StorageReason.SHARED_MEMORY
+
+    monkeypatch.setattr(
+        locate_module, "_free_bytes", lambda _path: (_ for _ in ()).throw(OSError())
+    )
+    sized_out = locate_storage(
+        mounts_text=mounts,
+        platform_name="linux",
+        minimum_shared_memory_bytes=0,
+    )
+    assert sized_out.reason is StorageReason.SYSTEM_TEMP
+
+    duplicate = locate_storage(
+        candidate=temp,
+        mounts_text="\n".join((_mount(shm, "nfs"), _mount(temp, "xfs"))),
+        platform_name="linux",
+        minimum_shared_memory_bytes=0,
+    )
+    assert duplicate.reason is StorageReason.CALLER_TEMP
+
+
+def test_exhausted_storage_raises_after_fallback_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Warn, retry every network fallback, and finally raise."""
+    base = tmp_path / "network-base"
+    base.mkdir()
+    mounts = _mount(tmp_path, "nfs")
+    monkeypatch.setattr(locate_module, "SHARED_MEMORY_PATH", tmp_path / "no-shm")
+    monkeypatch.setattr(locate_module.tempfile, "gettempdir", lambda: str(base))
+
+    def fail_mkdtemp(**_kwargs: Any) -> str:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(locate_module.tempfile, "mkdtemp", fail_mkdtemp)
+
+    with (
+        pytest.warns(StorageFallbackWarning),
+        pytest.raises(OSError, match="No writable storage directory is available"),
+    ):
+        locate_storage(
+            candidate=base,
+            mounts_text=mounts,
+            platform_name="linux",
+        )
+
+
+def test_local_candidate_creation_failure_falls_through(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip a local candidate whose run directory cannot be created."""
+    candidate = tmp_path / "candidate"
+    temp = tmp_path / "temp"
+    candidate.mkdir()
+    temp.mkdir()
+    mounts = "\n".join((_mount(candidate, "xfs"), _mount(temp, "xfs")))
+    monkeypatch.setattr(locate_module, "SHARED_MEMORY_PATH", tmp_path / "no-shm")
+    monkeypatch.setattr(locate_module.tempfile, "gettempdir", lambda: str(temp))
+    real_mkdtemp = locate_module.tempfile.mkdtemp
+
+    def flaky_mkdtemp(**kwargs: Any) -> str:
+        if Path(str(kwargs.get("dir", ""))).resolve() == candidate.resolve():
+            raise OSError("candidate refused")
+        return real_mkdtemp(**kwargs)
+
+    monkeypatch.setattr(locate_module.tempfile, "mkdtemp", flaky_mkdtemp)
+
+    selected = locate_storage(
+        candidate=candidate,
+        mounts_text=mounts,
+        platform_name="linux",
+    )
+
+    assert selected.reason is StorageReason.SYSTEM_TEMP
+
+
+def test_unc_paths_are_always_network() -> None:
+    """Classify UNC paths as network before any drive inspection."""
+    unc: Any = _FakeWindowsPath("//server/share", "")
+
+    assert locate_module._windows_path_is_network(unc) is True
+
+
+def test_windows_platform_inspection_uses_the_drive_probe(tmp_path: Path) -> None:
+    """Route win32 classification through the Windows drive probe."""
+    assert is_network_filesystem(tmp_path, mounts_text="", platform_name="win32")
+
+
+def test_unknown_platform_is_conservatively_network(tmp_path: Path) -> None:
+    """Assume network semantics on platforms without an inspector."""
+    assert is_network_filesystem(tmp_path, mounts_text="", platform_name="sunos5")
+
+
+def test_shared_memory_creation_failure_falls_through(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fall to the system temp when the tmpfs run directory cannot be made."""
+    shm = tmp_path / "shm"
+    temp = tmp_path / "temp"
+    shm.mkdir()
+    temp.mkdir()
+    mounts = "\n".join((_mount(shm, "tmpfs"), _mount(temp, "xfs")))
+    monkeypatch.setattr(locate_module, "SHARED_MEMORY_PATH", shm)
+    monkeypatch.setattr(locate_module.tempfile, "gettempdir", lambda: str(temp))
+    real_mkdtemp = locate_module.tempfile.mkdtemp
+
+    def flaky_mkdtemp(**kwargs: Any) -> str:
+        if Path(str(kwargs.get("dir", ""))).resolve() == shm.resolve():
+            raise OSError("tmpfs refused")
+        return real_mkdtemp(**kwargs)
+
+    monkeypatch.setattr(locate_module.tempfile, "mkdtemp", flaky_mkdtemp)
+
+    selected = locate_storage(
+        mounts_text=mounts,
+        platform_name="linux",
+        minimum_shared_memory_bytes=0,
+    )
+
+    assert selected.reason is StorageReason.SYSTEM_TEMP
+
+
+def test_unrecognized_statfs_magic_is_conservatively_network(tmp_path: Path) -> None:
+    """Assume network semantics for a magic in neither classification set."""
+    assert is_network_filesystem(
+        tmp_path,
+        mounts_text="",
+        platform_name="linux",
+        statfs_reader=lambda _path: 0x0BADF00D,
+    )
+
+
+def test_failed_statfs_probe_is_conservatively_network(tmp_path: Path) -> None:
+    """Assume network semantics when the Linux probe returns nothing."""
+    assert is_network_filesystem(
+        tmp_path,
+        mounts_text="",
+        platform_name="linux",
+        statfs_reader=_unknown_statfs,
+    )

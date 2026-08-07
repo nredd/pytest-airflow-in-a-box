@@ -98,3 +98,17 @@ def test_sqlite_url_rejects_relative_path() -> None:
 
     with pytest.raises(ValueError, match="`database_path` must be absolute"):
         sqlite_url(Path("airflow.db"))
+
+
+def test_write_airflow_config_requires_a_jwt_secret(tmp_path: Path) -> None:
+    """Reject an empty JWT secret before writing configuration."""
+
+    with pytest.raises(ValueError, match="`jwt_secret` must not be empty"):
+        write_airflow_config(
+            tmp_path / "airflow.cfg",
+            dags_folder=tmp_path / "dags",
+            logs_folder=tmp_path / "logs",
+            database_path=tmp_path / "airflow.db",
+            password_file=tmp_path / "passwords.json",
+            jwt_secret="",
+        )

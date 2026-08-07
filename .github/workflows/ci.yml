@@ -169,13 +169,13 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
       - name: Combine and report
-        # Cross-platform union measured at 95.31 on 2026-08-07; the remaining
-        # gap is untested error paths plus the POSIX-dead Windows drive probe.
+        # Every leg runs the full suite with fake-libc/windll probes, so the
+        # union carries the same 100 bar as the local gate.
         run: |
           set -euo pipefail
           uv run coverage combine
           uv run coverage xml
-          uv run coverage report --fail-under=95 | tee coverage-report.txt
+          uv run coverage report --fail-under=100 | tee coverage-report.txt
       - name: Upload combined report
         uses: actions/upload-artifact@v4
         with:
