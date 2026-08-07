@@ -34,6 +34,8 @@ from pytest_airflow_in_a_box.defaults import (
     register_ini_defaults,
 )
 from pytest_airflow_in_a_box.fixtures import (
+    api_client,
+    api_server_url,
     cap_structlog,
     dag_maker,
     full_dag_bag,
@@ -48,6 +50,8 @@ from pytest_airflow_in_a_box.markers import register_markers
 from pytest_airflow_in_a_box.reporting import configure_reporting
 
 __all__ = (
+    "api_client",
+    "api_server_url",
     "cap_structlog",
     "dag_maker",
     "full_dag_bag",
