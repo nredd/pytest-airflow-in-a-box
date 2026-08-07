@@ -243,8 +243,24 @@ def test_legacy_listener_scopes_real_sqlite_engines_to_configured_path(
     other_engine.dispose()
 
 
-def test_legacy_listener_is_noop_after_airflow_3_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Leave the class-level event registry unchanged for the supported 3.2+ hook."""
+def test_legacy_listener_supports_airflow_3_2_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use the path-scoped fallback for Airflow 3.2.0's unreliable engine hook."""
+
+    database_path = tmp_path / "metadata.db"
+    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.2.0")
+    monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
+
+    install_legacy_sqlite_listener()
+
+    listener = sqlite._LEGACY_SQLITE_LISTENER
+    assert listener is not None
+    assert event.contains(Engine, "connect", listener)
+
+
+def test_legacy_listener_is_noop_after_airflow_3_2_0(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave the class-level event registry unchanged where the engine hook is reliable."""
 
     monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.2.2")
     monkeypatch.delenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, raising=False)

@@ -287,20 +287,21 @@ def _apply_legacy_pragmas(
 
 
 def install_legacy_sqlite_listener() -> None:
-    """Install Airflow 3.1's process-global, path-scoped SQLite tuning fallback.
+    """Install a process-global, path-scoped SQLite tuning fallback.
 
-    Airflow 3.1 imports ``airflow_local_settings.py`` before creating its metadata
-    engine but does not support the ``create_metadata_engine`` override added in 3.2.
+    Airflow 3.1 and 3.2.0 import ``airflow_local_settings.py`` before creating the
+    metadata engine but do not apply the ``create_metadata_engine`` override reliably.
 
     Raises:
-        ValueError: Airflow 3.1 has an invalid configured database URL or SQLite path.
+        ValueError: Airflow has an invalid configured database URL or SQLite path.
     """
 
     try:
         installed_version = metadata.version(AIRFLOW_CORE_DISTRIBUTION)
     except metadata.PackageNotFoundError:
         return
-    if not installed_version.startswith("3.1."):
+    uses_fallback = installed_version.startswith(("3.1.", "3.2.0"))
+    if not uses_fallback:
         return
 
     global _LEGACY_SQLITE_LISTENER

@@ -143,7 +143,7 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
 
     modules = _base_modules()
     generic_class = type("GenericGeneratedSymbol", (), {})
-    generated_fields = ("queue",) if release == (3, 3, 0) else ()
+    generated_fields = ("queue",) if release[:2] == (3, 3) else ()
     modules["airflow.sdk.api.datamodels._generated"] = SimpleNamespace(
         DagRun=generic_class,
         DagRunState=generic_class,
@@ -151,16 +151,16 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
         TaskInstanceState=generic_class,
         TIRunContext=generic_class,
     )
-    sentry_fields = ("sentry_integration",) if release != (3, 1, 8) else ()
+    sentry_fields = ("sentry_integration",) if release[:2] != (3, 1) else ()
     modules["airflow.sdk.execution_time.comms"].StartupDetails = _model(*sentry_fields)
 
-    if release == (3, 1, 8):
+    if release[:2] == (3, 1):
         modules["airflow.models.dagbag"] = SimpleNamespace(DagBag=_OldDagBag)
         modules["airflow.models.taskinstance"] = SimpleNamespace(TaskInstance=_LegacyTaskInstance)
         modules["airflow.serialization.serialized_objects"].SerializedDAG = generic_class
     else:
-        dag_bag = _NewDagBag if release == (3, 2, 2) else _NewestDagBag
-        task_instance = _SdkTaskInstance if release == (3, 2, 2) else _DagRunAwareTaskInstance
+        dag_bag = _NewDagBag if release[:2] == (3, 2) else _NewestDagBag
+        task_instance = _SdkTaskInstance if release[:2] == (3, 2) else _DagRunAwareTaskInstance
         modules["airflow.dag_processing.dagbag"] = SimpleNamespace(DagBag=dag_bag)
         modules["airflow.models.taskinstance"] = SimpleNamespace(TaskInstance=task_instance)
         modules["airflow.serialization.definitions.dag"] = SimpleNamespace(
@@ -225,6 +225,19 @@ def test_compat_package_import_does_not_import_airflow() -> None:
     ("version", "release", "expected"),
     [
         (
+            "3.1.0",
+            (3, 1, 0),
+            AirflowCapabilities(
+                release=(3, 1, 0),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
             "3.1.8",
             (3, 1, 8),
             AirflowCapabilities(
@@ -234,6 +247,19 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.2.0",
+            (3, 2, 0),
+            AirflowCapabilities(
+                release=(3, 2, 0),
+                dag_bag_location=DagBagLocation.DAG_PROCESSING,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=True,
                 runtime_task_instance_supports_queue=False,
             ),
         ),
@@ -289,7 +315,7 @@ def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: s
 
     message = str(caught.value)
     assert f"installed version '{version}'" in message
-    assert "3.1.8, 3.2.2, 3.3.0" in message
+    assert "3.1.0, 3.1.8, 3.2.0, 3.2.2, 3.3.0" in message
     assert isinstance(caught.value.__cause__, ValueError)
 
 
@@ -418,7 +444,9 @@ def test_rejects_vendor_contract_mismatch(
         capability_module.resolve_capabilities()
 
     assert caught.value.__cause__ is not None
-    assert "supported `apache-airflow-core` versions: 3.1.8, 3.2.2, 3.3.0" in str(caught.value)
+    assert "supported `apache-airflow-core` versions: 3.1.0, 3.1.8, 3.2.0, 3.2.2, 3.3.0" in str(
+        caught.value
+    )
 
 
 def test_non_callable_run_task_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -568,7 +596,13 @@ def test_real_current_airflow_resolves(pytester: pytest.Pytester) -> None:
 
         def test_current_airflow():
             capabilities = resolve_capabilities()
-            assert capabilities.release in {(3, 1, 8), (3, 2, 2), (3, 3, 0)}
+            assert capabilities.release in {
+                (3, 1, 0),
+                (3, 1, 8),
+                (3, 2, 0),
+                (3, 2, 2),
+                (3, 3, 0),
+            }
             assert resolve_capabilities() is capabilities
         """
     )
