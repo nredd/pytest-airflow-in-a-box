@@ -125,8 +125,8 @@ collector.
 ```python
 from pytest_airflow_in_a_box.db import TableGroup, clear_db
 
-clear_db()                                  # every group
-clear_db(tables={TableGroup.VARIABLES})     # one group
+clear_db()  # every group
+clear_db(tables={TableGroup.VARIABLES})  # one group
 ```
 
 Requesting a group also clears the groups whose rows reference it (`RUNS` clears task instances
