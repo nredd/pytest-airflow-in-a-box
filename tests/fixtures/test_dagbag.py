@@ -122,24 +122,35 @@ def test_cli_dag_folder_wins_over_ini(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
 
 
-def test_build_dag_bag_rejects_missing_folder(tmp_path: Path) -> None:
-    """Resolve and name a missing Dag directory before constructing a DagBag."""
+def test_build_dag_bag_rejects_missing_location(tmp_path: Path) -> None:
+    """Resolve and name a missing Dag location before constructing a DagBag."""
 
     missing = tmp_path / "missing"
 
     with pytest.raises(FileNotFoundError) as caught:
         build_dag_bag(missing)
 
-    assert str(caught.value) == f"Dag folder does not exist: '{missing.resolve()}'"
+    assert str(caught.value) == f"Dag location does not exist: '{missing.resolve()}'"
 
 
-def test_build_dag_bag_rejects_file(tmp_path: Path) -> None:
-    """Resolve and name a non-directory Dag path before constructing a DagBag."""
+def test_build_dag_bag_parses_single_file(pytester: pytest.Pytester) -> None:
+    """Parse exactly one Dag file when the location is a file, not a directory."""
 
-    dag_file = tmp_path / "dag.py"
-    dag_file.write_text("", encoding="utf-8")
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    _write_dag_file(dag_folder / "target.py", "target")
+    _write_dag_file(dag_folder / "sibling.py", "sibling")
+    pytester.makepyfile(
+        """
+        from pytest_airflow_in_a_box._compat import build_dag_bag
 
-    with pytest.raises(ValueError, match="Dag folder is not a directory") as caught:
-        build_dag_bag(dag_file)
+        def test_single_file():
+            dag_bag = build_dag_bag("dags/target.py")
+            assert set(dag_bag.dags) == {"target"}
+            assert dag_bag.import_errors == {}
+        """
+    )
 
-    assert str(caught.value) == f"Dag folder is not a directory: '{dag_file.resolve()}'"
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=1)

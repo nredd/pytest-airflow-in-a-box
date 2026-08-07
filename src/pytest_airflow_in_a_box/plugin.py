@@ -10,6 +10,7 @@ References:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,11 @@ from pytest_airflow_in_a_box.bootstrap import (
     get_bootstrap_state,
     load_initial_state,
     validate_configure,
+)
+from pytest_airflow_in_a_box.collection import (
+    DagFile,
+    collect_dag_file,
+    prune_duplicate_items,
 )
 from pytest_airflow_in_a_box.fixtures import dag_maker, full_dag_bag, session
 from pytest_airflow_in_a_box.logging import (
@@ -65,9 +71,22 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Allow an explicit Airflow storage base on a network filesystem.",
     )
     parser.addini("airflow_home", "Base directory for isolated Airflow run storage.", default="")
+    group.addoption(
+        "--collect-dag-folder",
+        action="store",
+        default=None,
+        dest="collect_dag_folder",
+        metavar="PATH",
+        help="Collect Dag files below PATH as import-check test items.",
+    )
     parser.addini(
         "airflow_dags_folder",
         "Directory parsed by the full_dag_bag fixture.",
+        default="",
+    )
+    parser.addini(
+        "airflow_collect_dags_folder",
+        "Directory whose Dag files are collected as import-check test items.",
         default="",
     )
     parser.addini(
@@ -133,6 +152,33 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     state = get_bootstrap_state(session.config)
     if state.owner_pid == os.getpid():
         initialize_database()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> DagFile | None:
+    """Collect one file below the opt-in Dag collection directory.
+
+    Parameters:
+        file_path: pathlib.Path visited by pytest's collection walk.
+        parent: pytest.Collector owning the new file node.
+
+    Returns:
+        DagFile | None containing the collector for an eligible Dag file.
+    """
+
+    return collect_dag_file(file_path, parent)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Drop default-collector items that duplicate Dag-file collection.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+        items: list[pytest.Item] mutated to exclude duplicate items.
+    """
+
+    prune_duplicate_items(config, items)
 
 
 @pytest.hookimpl(optionalhook=True)

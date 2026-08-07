@@ -64,26 +64,26 @@ def _build_dag_processing_dag_bag(path: Path, *, include_examples: bool) -> DagB
 
 
 def build_dag_bag(path: str | Path) -> DagBag:
-    """Validate a Dag directory and parse it with the certified Airflow interface.
+    """Validate a Dag location and parse it with the certified Airflow interface.
 
     Parameters:
-        path: str | pathlib.Path naming an existing Dag directory.
+        path: str | pathlib.Path naming an existing Dag directory or Dag file.
 
     Returns:
         airflow.models.dagbag.DagBag containing parsed Dags and import errors.
 
     Raises:
-        FileNotFoundError: The resolved Dag folder does not exist.
-        ValueError: The resolved Dag folder is not a directory.
+        FileNotFoundError: The resolved Dag location does not exist.
+        ValueError: The resolved Dag location is neither a directory nor a file.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
         DagBagConstructionError: Airflow cannot construct the Dag bag.
     """
 
     resolved_path = Path(str(path)).resolve()
     if not resolved_path.exists():
-        raise FileNotFoundError(f"Dag folder does not exist: '{resolved_path}'")
-    if not resolved_path.is_dir():
-        raise ValueError(f"Dag folder is not a directory: '{resolved_path}'")
+        raise FileNotFoundError(f"Dag location does not exist: '{resolved_path}'")
+    if not resolved_path.is_dir() and not resolved_path.is_file():
+        raise ValueError(f"Dag location is neither a directory nor a file: '{resolved_path}'")
 
     capabilities = resolve_capabilities()
     try:
