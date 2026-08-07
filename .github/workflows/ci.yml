@@ -92,8 +92,20 @@ jobs:
             --constraint airflow-constraints.txt \
             --editable . \
             "apache-airflow-core==${AIRFLOW_VERSION}"
+          uv pip install --python .venv-ci/bin/python coverage
+          .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests
-        run: .venv-ci/bin/python -m pytest -v
+        env:
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage
+        run: .venv-ci/bin/python -m coverage run -m pytest -v
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
 
   musl:
     name: alpine-musl / Airflow 3.3.0 / Python 3.12
@@ -119,5 +131,48 @@ jobs:
             --constraint airflow-constraints.txt \
             --editable . \
             "apache-airflow-core==${AIRFLOW_VERSION}"
+          uv pip install --python .venv-ci/bin/python coverage
+          .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests
-        run: .venv-ci/bin/python -m pytest -v
+        env:
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage
+        run: .venv-ci/bin/python -m coverage run -m pytest -v
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-alpine-musl-3.3.0-3.12
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [test, musl]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/0.12.2/install.sh | sh
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Download coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+      - name: Combine and report
+        run: |
+          uv run coverage combine
+          uv run coverage xml
+          uv run coverage report --fail-under=90
+      - name: Upload combined report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-combined
+          path: coverage.xml
+          if-no-files-found: error

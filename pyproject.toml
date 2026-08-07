@@ -107,11 +107,25 @@ python-version = "3.10"
 [tool.coverage.run]
 branch = true
 source = ["pytest_airflow_in_a_box"]
+# Subprocess pytester runs are measured through `coverage.process_startup`
+# (COVERAGE_PROCESS_START + the .pth installed by scripts/install_coverage_pth.py),
+# so every process writes its own suffixed data file and runs end with a combine.
+parallel = true
+relative_files = true
+sigterm = true
+
+[tool.coverage.paths]
+source = [
+    "src/pytest_airflow_in_a_box",
+    "*/src/pytest_airflow_in_a_box",
+    "*/site-packages/pytest_airflow_in_a_box",
+]
 
 [tool.coverage.report]
-# 100 is unreachable on any single platform: Darwin/Linux/Windows probe branches
-# are mutually exclusive and subprocess pytester children are unmeasured. 90 is
-# the measured macOS floor; raise it as platform-conditional exclusions land.
-fail_under = 90
+# Single-platform floor: Darwin/Linux/Windows probe branches are mutually
+# exclusive, so 100 is only reachable on the CI combine job's cross-platform
+# union (gated separately in ci.yml). Measured macOS floor with subprocess
+# measurement: 94.84.
+fail_under = 94
 show_missing = true
 skip_covered = true
