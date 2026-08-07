@@ -18,10 +18,19 @@ where the implementation deviated from this plan and why.
   (zero-ini defaults + narrowed `filterwarnings`); bundled `tests/dags/` corpus + the 8-test
   end-user compat suite; README covering the full public surface; self-tests green serial and
   `-n auto`; CI green across Linux ×7, macOS, Linux ARM, and Alpine musl.
-- **Remaining (post-v1 candidates):** pinned-`Param` Dag collection cases; `run_task`
-  `finalize()`/callback dispatch; triggers/deadlines/partition tables in the `clear_db` registry;
-  Windows platform-independent CI leg; coverage-in-CI wiring and gate restoration (gate lowered to
-  the measured 90 % floor meanwhile); PyPI release mechanics.
+- **Also done (post-v1 batch, later 2026-08-07):** pinned-`Param` Dag collection cases
+  (`PYTEST_DAG_CASES`); `run_task(run_callbacks=True)` via `task_runner.finalize`;
+  triggers/deadlines/partition tables in the `clear_db` registry; coverage-in-CI wiring with the
+  gate restored to 100 locally and on the CI union.
+- **Explicitly rejected:** Windows CI leg (Windows is unsupported; the `windll` branch is covered
+  through a fake probe).
+- **Remaining work is tracked as GitHub issues, not here:** Postgres tier
+  ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)), end-user compat-suite
+  expansion ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)), unified
+  `airflow_config()`/`conf_vars` ([#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)),
+  PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)), and
+  `cap_structlog` reconfiguration survival
+  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)).
 
 ## Corrections from implementation (2026-08-07)
 
