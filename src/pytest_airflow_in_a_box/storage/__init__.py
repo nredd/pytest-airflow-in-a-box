@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 from pytest_airflow_in_a_box.storage.locate import (
+    DarwinFilesystem,
     Mount,
     StorageFallbackWarning,
     StorageLocation,
@@ -25,6 +26,7 @@ from pytest_airflow_in_a_box.storage.sqlite import (
 )
 
 __all__ = (
+    "DarwinFilesystem",
     "Mount",
     "PragmaProfile",
     "StorageFallbackWarning",

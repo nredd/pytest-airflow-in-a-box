@@ -3,6 +3,7 @@
 References:
     https://man7.org/linux/man-pages/man5/proc_mounts.5.html
     https://man7.org/linux/man-pages/man2/statfs.2.html
+    https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/statfs.2.html
     https://docs.python.org/3/library/tempfile.html#tempfile.mkdtemp
 """
 
@@ -42,7 +43,7 @@ PROC_MOUNTS_PATH = Path("/proc/mounts")
 
 PROC_MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
 NETWORK_FILESYSTEM_TYPES = frozenset(
-    {"9p", "afs", "ceph", "cifs", "fuse.sshfs", "gpfs", "lustre", "nfs", "nfs4"}
+    {"9p", "afpfs", "afs", "ceph", "cifs", "fuse.sshfs", "gpfs", "lustre", "nfs", "nfs4", "webdav"}
 )
 LOCAL_FILESYSTEM_TYPES = frozenset(
     {
@@ -89,6 +90,7 @@ LOCAL_STATFS_MAGICS = frozenset(
     }
 )
 TMPFS_MAGIC = 0x01021994
+DARWIN_MNT_LOCAL = 0x00001000
 
 
 class StorageReason(StrEnum):
@@ -168,7 +170,45 @@ class _LinuxStatfs(ctypes.Structure):
     ]
 
 
+class _DarwinStatfs(ctypes.Structure):
+    """Darwin 64-bit-inode ``struct statfs`` storage used by the libc call."""
+
+    _fields_ = [
+        ("f_bsize", ctypes.c_uint32),
+        ("f_iosize", ctypes.c_int32),
+        ("f_blocks", ctypes.c_uint64),
+        ("f_bfree", ctypes.c_uint64),
+        ("f_bavail", ctypes.c_uint64),
+        ("f_files", ctypes.c_uint64),
+        ("f_ffree", ctypes.c_uint64),
+        ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32),
+        ("f_type", ctypes.c_uint32),
+        ("f_flags", ctypes.c_uint32),
+        ("f_fssubtype", ctypes.c_uint32),
+        ("f_fstypename", ctypes.c_char * 16),
+        ("f_mntonname", ctypes.c_char * 1024),
+        ("f_mntfromname", ctypes.c_char * 1024),
+        ("f_flags_ext", ctypes.c_uint32),
+        ("f_reserved", ctypes.c_uint32 * 7),
+    ]
+
+
+@dataclass(frozen=True)
+class DarwinFilesystem:
+    """Darwin ``statfs(2)`` classification inputs.
+
+    Parameters:
+        filesystem_type: str containing the reported ``f_fstypename``.
+        local_flag: bool containing the kernel ``MNT_LOCAL`` mount flag.
+    """
+
+    filesystem_type: str
+    local_flag: bool
+
+
 StatfsReader = Callable[[Path], int | None]
+DarwinStatfsReader = Callable[[Path], DarwinFilesystem | None]
 
 
 def _decode_mount_path(value: str) -> str:
@@ -286,6 +326,40 @@ def _linux_statfs_magic(path: Path) -> int | None:
     return int(result.f_type) & 0xFFFFFFFF
 
 
+def _darwin_statfs(path: Path) -> DarwinFilesystem | None:
+    """Read the Darwin filesystem type name and locality flag via ``statfs(2)``.
+
+    Intel macOS exposes the legacy pre-10.6 layout under the plain ``statfs``
+    symbol, so the 64-bit-inode ``statfs$INODE64`` symbol must win when present;
+    Apple silicon only ships the 64-bit-inode layout under the plain name.
+
+    Parameters:
+        path: pathlib.Path to inspect.
+
+    Returns:
+        DarwinFilesystem | None containing the reported classification inputs, or
+        ``None`` when libc cannot inspect the path.
+    """
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        statfs = libc["statfs$INODE64"]
+    except (AttributeError, KeyError):
+        statfs = libc.statfs
+    statfs.argtypes = [ctypes.c_char_p, ctypes.POINTER(_DarwinStatfs)]
+    statfs.restype = ctypes.c_int
+    result = _DarwinStatfs()
+    if statfs(os.fsencode(path), ctypes.byref(result)) != 0:
+        return None
+    filesystem_type = bytes(result.f_fstypename).split(b"\x00", 1)[0]
+    if not filesystem_type:
+        return None
+    return DarwinFilesystem(
+        filesystem_type=filesystem_type.decode("ascii", "replace").lower(),
+        local_flag=bool(int(result.f_flags) & DARWIN_MNT_LOCAL),
+    )
+
+
 def _windows_path_is_network(path: Path) -> bool:
     """Classify a Windows path without assuming unknown drives are local.
 
@@ -313,6 +387,7 @@ def _inspect_filesystem(
     mounts: Sequence[Mount],
     platform_name: str,
     statfs_reader: StatfsReader | None,
+    darwin_statfs_reader: DarwinStatfsReader | None,
 ) -> _FilesystemInfo:
     """Combine mount data and platform-specific filesystem inspection.
 
@@ -321,6 +396,7 @@ def _inspect_filesystem(
         mounts: Sequence[Mount] containing parsed mount entries.
         platform_name: str identifying the target platform.
         statfs_reader: StatfsReader | None overriding the Linux libc probe.
+        darwin_statfs_reader: DarwinStatfsReader | None overriding the Darwin libc probe.
 
     Returns:
         _FilesystemInfo containing type, magic, and network classification.
@@ -346,6 +422,16 @@ def _inspect_filesystem(
                 return _FilesystemInfo(filesystem_type, normalized_magic, False)
         return _FilesystemInfo(filesystem_type, magic, True)
 
+    if platform_name.startswith("darwin"):
+        darwin_reader = darwin_statfs_reader or _darwin_statfs
+        darwin_info = darwin_reader(resolved)
+        if darwin_info is None:
+            return _FilesystemInfo(filesystem_type, None, True)
+        darwin_classification = _filesystem_type_is_network(darwin_info.filesystem_type)
+        if darwin_classification is None:
+            darwin_classification = not darwin_info.local_flag
+        return _FilesystemInfo(darwin_info.filesystem_type, None, darwin_classification)
+
     if platform_name.startswith("win"):
         return _FilesystemInfo(filesystem_type, None, _windows_path_is_network(resolved))
     return _FilesystemInfo(filesystem_type, None, True)
@@ -357,16 +443,20 @@ def is_network_filesystem(
     mounts_text: str | None = None,
     platform_name: str | None = None,
     statfs_reader: StatfsReader | None = None,
+    darwin_statfs_reader: DarwinStatfsReader | None = None,
 ) -> bool:
     """Determine whether a path has network filesystem semantics.
 
-    Unknown macOS and Windows filesystems are conservatively treated as network-backed.
+    macOS classification uses the Darwin ``statfs(2)`` type name and ``MNT_LOCAL``
+    flag. Unprobeable macOS paths and unknown Windows drives are conservatively
+    treated as network-backed.
 
     Parameters:
         path: pathlib.Path to inspect.
         mounts_text: str | None containing an injectable proc mount table.
         platform_name: str | None overriding ``sys.platform`` for deterministic tests.
         statfs_reader: StatfsReader | None overriding the Linux libc probe.
+        darwin_statfs_reader: DarwinStatfsReader | None overriding the Darwin libc probe.
 
     Returns:
         bool indicating whether network semantics were detected or must be assumed.
@@ -374,7 +464,9 @@ def is_network_filesystem(
 
     selected_platform = platform_name or sys.platform
     mounts = _read_mounts(mounts_text, selected_platform)
-    return _inspect_filesystem(path, mounts, selected_platform, statfs_reader).network
+    return _inspect_filesystem(
+        path, mounts, selected_platform, statfs_reader, darwin_statfs_reader
+    ).network
 
 
 def _is_writable_directory(path: Path) -> bool:
@@ -460,6 +552,7 @@ def locate_storage(
     mounts_text: str | None = None,
     platform_name: str | None = None,
     statfs_reader: StatfsReader | None = None,
+    darwin_statfs_reader: DarwinStatfsReader | None = None,
 ) -> StorageLocation:
     """Select a storage base and create a unique directory for one run.
 
@@ -476,6 +569,7 @@ def locate_storage(
         mounts_text: str | None containing an injectable proc mount table.
         platform_name: str | None overriding ``sys.platform`` for deterministic tests.
         statfs_reader: StatfsReader | None overriding the Linux libc probe.
+        darwin_statfs_reader: DarwinStatfsReader | None overriding the Darwin libc probe.
 
     Returns:
         StorageLocation containing the new path and its selection metadata.
@@ -495,7 +589,9 @@ def locate_storage(
     if explicit is not None:
         explicit_path = _validate_explicit_path(explicit)
         mounts = _read_mounts(mounts_text, selected_platform)
-        info = _inspect_filesystem(explicit_path, mounts, selected_platform, statfs_reader)
+        info = _inspect_filesystem(
+            explicit_path, mounts, selected_platform, statfs_reader, darwin_statfs_reader
+        )
         if info.network and not allow_network:
             raise ValueError(
                 "Explicit storage path is on a network or unknown filesystem; pass "
@@ -528,7 +624,9 @@ def locate_storage(
         if resolved in seen_bases or not _is_writable_directory(resolved):
             return None
         seen_bases.add(resolved)
-        info = _inspect_filesystem(resolved, mounts, selected_platform, statfs_reader)
+        info = _inspect_filesystem(
+            resolved, mounts, selected_platform, statfs_reader, darwin_statfs_reader
+        )
         if info.network:
             fallback_bases.append(resolved)
             return None
@@ -545,7 +643,7 @@ def locate_storage(
     shared_memory_path = SHARED_MEMORY_PATH.resolve()
     if not selected_platform.startswith("win") and _is_writable_directory(shared_memory_path):
         shared_info = _inspect_filesystem(
-            shared_memory_path, mounts, selected_platform, statfs_reader
+            shared_memory_path, mounts, selected_platform, statfs_reader, darwin_statfs_reader
         )
         is_memory_filesystem = (
             shared_info.filesystem_type == "tmpfs" or shared_info.magic == TMPFS_MAGIC
@@ -589,6 +687,7 @@ def locate_storage(
 
 
 __all__ = (
+    "DarwinFilesystem",
     "Mount",
     "StorageFallbackWarning",
     "StorageLocation",
