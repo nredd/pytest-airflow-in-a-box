@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import sqlite3
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine as sqlalchemy_create_engine
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
 from pytest_airflow_in_a_box.storage import sqlite
@@ -15,10 +18,20 @@ from pytest_airflow_in_a_box.storage.sqlite import (
     PragmaProfile,
     calculate_profile,
     create_metadata_engine,
+    install_legacy_sqlite_listener,
     write_local_settings,
 )
 
 MIB = 1024 * 1024
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_sqlite_listener() -> Iterator[None]:
+    """Prevent the process-global SQLAlchemy listener from leaking between tests."""
+
+    sqlite._reset_legacy_sqlite_listener_for_testing()
+    yield
+    sqlite._reset_legacy_sqlite_listener_for_testing()
 
 
 def test_calculate_profile_scales_low_resource_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,6 +182,186 @@ def test_non_sqlite_engine_delegates_without_listener(monkeypatch: pytest.Monkey
     delegated_engine.dispose()
 
 
+def test_legacy_listener_installation_is_idempotent_and_ignores_other_dbapi_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Install one Engine listener for Airflow 3.1 and ignore non-SQLite connections."""
+
+    database_path = tmp_path / "metadata.db"
+    requested_distributions: list[str] = []
+
+    def installed_version(distribution: str) -> str:
+        """Record the package metadata lookup and select the legacy Airflow release."""
+
+        requested_distributions.append(distribution)
+        return "3.1.8"
+
+    monkeypatch.setattr(sqlite.metadata, "version", installed_version)
+    monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
+
+    install_legacy_sqlite_listener()
+    listener = sqlite._LEGACY_SQLITE_LISTENER
+    install_legacy_sqlite_listener()
+
+    assert requested_distributions == ["apache-airflow-core", "apache-airflow-core"]
+    assert listener is not None
+    assert sqlite._LEGACY_SQLITE_LISTENER is listener
+    assert event.contains(Engine, "connect", listener)
+    listener(object(), object())
+
+
+def test_legacy_listener_scopes_real_sqlite_engines_to_configured_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tune the configured SQLite file without changing a separate SQLite engine."""
+
+    target_path = tmp_path / "target.db"
+    other_path = tmp_path / "other.db"
+    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{target_path}")
+    install_legacy_sqlite_listener()
+    target_engine = sqlalchemy_create_engine(f"sqlite:///{target_path}")
+    other_engine = sqlalchemy_create_engine(f"sqlite:///{other_path}")
+
+    with target_engine.connect() as connection:
+        target_values = (
+            connection.exec_driver_sql("PRAGMA journal_mode").scalar_one(),
+            connection.exec_driver_sql("PRAGMA temp_store").scalar_one(),
+            connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one(),
+        )
+    with other_engine.connect() as connection:
+        other_values = (
+            connection.exec_driver_sql("PRAGMA journal_mode").scalar_one(),
+            connection.exec_driver_sql("PRAGMA temp_store").scalar_one(),
+            connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one(),
+        )
+
+    assert target_values == ("wal", 2, 30_000)
+    assert other_values != target_values
+    assert other_values[0] == "delete"
+    target_engine.dispose()
+    other_engine.dispose()
+
+
+def test_legacy_listener_is_noop_after_airflow_3_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave the class-level event registry unchanged for the supported 3.2+ hook."""
+
+    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.2.2")
+    monkeypatch.delenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, raising=False)
+
+    install_legacy_sqlite_listener()
+
+    assert sqlite._LEGACY_SQLITE_LISTENER is None
+
+
+def test_legacy_listener_is_noop_without_airflow_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid global installation when the Airflow distribution is unavailable."""
+
+    def missing_distribution(distribution: str) -> str:
+        """Simulate an environment without the Airflow core distribution."""
+
+        raise sqlite.metadata.PackageNotFoundError(distribution)
+
+    monkeypatch.setattr(sqlite.metadata, "version", missing_distribution)
+
+    install_legacy_sqlite_listener()
+
+    assert sqlite._LEGACY_SQLITE_LISTENER is None
+
+
+@pytest.mark.parametrize(
+    ("sql_alchemy_conn", "message"),
+    [
+        (None, "must contain a database URL: 'None'"),
+        ("not a URL", "invalid database URL: 'not a URL'"),
+        ("sqlite://", "must select a SQLite file: 'sqlite://'"),
+        ("sqlite:///:memory:", "must select a SQLite file: 'sqlite:///:memory:'"),
+        (
+            "sqlite:///relative.db",
+            "must select an absolute SQLite path: 'relative.db' from 'sqlite:///relative.db'",
+        ),
+    ],
+)
+def test_legacy_listener_rejects_invalid_database_urls(
+    sql_alchemy_conn: str | None, message: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wrap missing and malformed Airflow database values in semantic errors."""
+
+    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    if sql_alchemy_conn is None:
+        monkeypatch.delenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, raising=False)
+    else:
+        monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, sql_alchemy_conn)
+
+    with pytest.raises(ValueError, match=message):
+        install_legacy_sqlite_listener()
+
+    assert sqlite._LEGACY_SQLITE_LISTENER is None
+
+
+def test_legacy_listener_wraps_invalid_sqlite_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Name the configured URL and path when filesystem resolution fails."""
+
+    database_path = tmp_path / "invalid.db"
+
+    class InvalidPath:
+        """Represent an absolute path that cannot be resolved."""
+
+        def is_absolute(self) -> bool:
+            """Report the configured path as absolute."""
+
+            return True
+
+        def resolve(self) -> Path:
+            """Simulate an invalid filesystem path."""
+
+            raise OSError("invalid path")
+
+    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
+    monkeypatch.setattr(sqlite, "Path", lambda _value: InvalidPath())
+
+    with pytest.raises(ValueError, match="invalid SQLite path") as error:
+        install_legacy_sqlite_listener()
+    assert str(error.value) == (
+        f"`{sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE}` contains an invalid SQLite path: "
+        f"'{database_path}' from 'sqlite:///{database_path}'"
+    )
+
+
+def test_legacy_listener_ignores_a_configured_non_sqlite_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip registration when Airflow 3.1 is configured for another database backend."""
+
+    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setenv(
+        sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE,
+        "postgresql://user:password@database/airflow",
+    )
+
+    install_legacy_sqlite_listener()
+
+    assert sqlite._LEGACY_SQLITE_LISTENER is None
+
+
+def test_sqlite_main_path_handles_memory_and_invalid_database_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Treat absent or unresolvable main database paths as outside the listener scope."""
+
+    with sqlite3.connect(":memory:") as connection:
+        assert sqlite._sqlite_main_path(connection) is None
+
+    monkeypatch.setattr(sqlite, "Path", lambda _value: Path("/invalid\x00path"))
+    with sqlite3.connect(tmp_path / "metadata.db") as connection:
+        assert sqlite._sqlite_main_path(connection) is None
+
+
 @pytest.mark.parametrize(
     ("profile", "message"),
     [
@@ -196,7 +389,7 @@ def test_invalid_profiles_are_rejected(profile: PragmaProfile, message: str) -> 
 def test_write_local_settings_is_deterministic_and_importable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Write stable ASCII source exporting only the metadata-engine override."""
+    """Write stable ASCII source that installs fallback and exports the engine hook."""
 
     settings_path = tmp_path / "config" / "airflow_local_settings.py"
     write_local_settings(settings_path)
@@ -212,6 +405,7 @@ def test_write_local_settings_is_deterministic_and_importable(
     local_settings = importlib.import_module("airflow_local_settings")
     assert local_settings.__all__ == ("create_metadata_engine",)
     assert local_settings.create_metadata_engine is create_metadata_engine
+    assert local_settings.install_legacy_sqlite_listener is install_legacy_sqlite_listener
     monkeypatch.delitem(sys.modules, "airflow_local_settings")
 
 
