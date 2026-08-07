@@ -14,6 +14,7 @@ from pytest_airflow_in_a_box import (
     _compat,
     collection,
     db,
+    defaults,
     fixtures,
     logging,
     markers,
@@ -42,6 +43,15 @@ def test_public_surface_is_explicit() -> None:
         "prune_duplicate_items",
     )
     assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
+    assert defaults.__all__ == (
+        "FILTERWARNINGS",
+        "INI_DEFAULTS",
+        "OPTION_DEFAULTS",
+        "OptionDefault",
+        "apply_filterwarnings",
+        "apply_option_defaults",
+        "register_ini_defaults",
+    )
     assert fixtures.__all__ == (
         "cap_structlog",
         "dag_maker",
