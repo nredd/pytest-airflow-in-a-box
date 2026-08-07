@@ -62,7 +62,13 @@ def test_public_surface_is_explicit() -> None:
         "session",
     )
     assert logging.__all__ == ("StructlogCapture", "TestContextFilter", "ensure_handlers")
-    assert markers.__all__ == ("MarkedNode", "read_bool_marker", "register_markers")
+    assert markers.__all__ == (
+        "MarkedNode",
+        "apply_environment_gate",
+        "environment_sentinels",
+        "read_bool_marker",
+        "register_markers",
+    )
     assert plugin.__all__ == (
         "api_client",
         "api_server_url",
