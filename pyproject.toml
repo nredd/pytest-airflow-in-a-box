@@ -1,0 +1,114 @@
+[build-system]
+requires = ["uv_build>=0.9,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "pytest-airflow-in-a-box"
+version = "0.1.0"
+description = "Pytest infrastructure for testing Apache Airflow DAGs without a live deployment"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["airflow", "dag", "pytest", "testing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Apache Airflow",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "apache-airflow-core>=3.1,<4",
+    "apache-airflow-providers-sqlite",
+    "pytest>=9.1",
+    "pytest-timeout>=2.4",
+    "pytest-xdist>=3.8",
+]
+
+[project.urls]
+Changelog = "https://github.com/nredd/pytest-airflow-in-a-box/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/nredd/pytest-airflow-in-a-box#readme"
+Issues = "https://github.com/nredd/pytest-airflow-in-a-box/issues"
+Repository = "https://github.com/nredd/pytest-airflow-in-a-box"
+
+[project.entry-points.pytest11]
+pytest_airflow_in_a_box = "pytest_airflow_in_a_box.plugin"
+
+[dependency-groups]
+dev = [
+    "build==1.5.0",
+    "prek==0.4.12",
+    "pytest-cov==7.1.0",
+    "ruff==0.16.1",
+    "ty==0.0.69",
+    "uv==0.12.2",
+    "uv-build==0.12.2",
+]
+
+[tool.ruff]
+required-version = "==0.16.1"
+target-version = "py310"
+line-length = 99
+unsafe-fixes = true
+# Canonical imported records are immutable inputs, including their Python fences.
+extend-exclude = ["docs/airflow-in-a-box-plan.md", "docs/airflow-in-a-box-research.md"]
+
+[tool.ruff.analyze]
+detect-string-imports = true
+
+[tool.ruff.lint]
+select = [
+    "AIR",
+    "ARG",
+    "B",
+    "C4",
+    "DTZ",
+    "E",
+    "F",
+    "I",
+    "PGH",
+    "PIE",
+    "PT",
+    "PTH",
+    "RET",
+    "RUF",
+    "SIM",
+    "T20",
+    "TID",
+    "UP",
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.ty]
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.ty.analysis]
+respect-type-ignore-comments = false
+
+[tool.ty.src]
+include = ["src", "tests", "scripts"]
+
+[tool.ty.environment]
+python-version = "3.10"
+
+[tool.coverage.run]
+branch = true
+source = ["pytest_airflow_in_a_box"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
