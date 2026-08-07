@@ -32,6 +32,7 @@ from pytest_airflow_in_a_box._compat.in_process import (
     InProcessRunResult,
     run_task_in_process,
 )
+from pytest_airflow_in_a_box._compat.params import ParamsCaseError, validate_dag_params
 
 __all__ = (
     "AirflowCapabilities",
@@ -42,6 +43,7 @@ __all__ = (
     "DatabaseInitializationError",
     "FakeSupervisorComms",
     "InProcessRunResult",
+    "ParamsCaseError",
     "TaskInstanceRunner",
     "build_dag_bag",
     "clear_tables",
@@ -49,4 +51,5 @@ __all__ = (
     "initialize_database",
     "resolve_capabilities",
     "run_task_in_process",
+    "validate_dag_params",
 )

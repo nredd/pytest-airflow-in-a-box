@@ -121,6 +121,18 @@ or persistently via the `airflow_collect_dags_folder` ini option. Collected item
 `db_test`; files also matching `test_*.py` naming are deduplicated against pytest's default Python
 collector.
 
+A Dag file may pin param cases through a module-level literal, read without importing the file:
+
+```python
+PYTEST_DAG_CASES = {
+    "dev": {"environment": "dev"},
+    "prod": {"environment": "prod"},
+}
+```
+
+Each case collects as a sibling `dag-params[...]` item that validates the pinned values against
+every Dag the file declares -- undeclared keys and schema violations fail the case.
+
 ## Database cleanup
 
 `clear_db` is a registry-driven whole-database reset for serial setup and teardown contexts:

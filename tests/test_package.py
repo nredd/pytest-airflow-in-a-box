@@ -34,13 +34,16 @@ def test_public_surface_is_explicit() -> None:
     """Expose only the intentionally supported package symbols."""
     assert pytest_airflow_in_a_box.__all__ == ("__version__",)
     assert collection.__all__ == (
+        "DagCasesDeclarationError",
         "DagFile",
         "DagFileImportError",
         "DagImportItem",
+        "DagParamsCaseItem",
         "collect_dag_file",
         "collection_folder",
         "format_import_errors",
         "prune_duplicate_items",
+        "read_declared_cases",
     )
     assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
     assert defaults.__all__ == (
@@ -99,6 +102,7 @@ def test_public_surface_is_explicit() -> None:
         "DatabaseInitializationError",
         "FakeSupervisorComms",
         "InProcessRunResult",
+        "ParamsCaseError",
         "TaskInstanceRunner",
         "build_dag_bag",
         "clear_tables",
@@ -106,6 +110,7 @@ def test_public_surface_is_explicit() -> None:
         "initialize_database",
         "resolve_capabilities",
         "run_task_in_process",
+        "validate_dag_params",
     )
 
 

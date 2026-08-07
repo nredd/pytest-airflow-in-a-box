@@ -320,7 +320,7 @@ def test_missing_folder_fails_collection_loudly(pytester: pytest.Pytester) -> No
 def test_foreign_runtest_errors_keep_standard_reporting(pytester: pytest.Pytester) -> None:
     """Delegate non-import failures to pytest's standard failure representation."""
 
-    _write_dags(pytester, my_dag=VALID_DAG)
+    _write_dags(pytester, my_dag=VALID_DAG + 'PYTEST_DAG_CASES = {"case": {}}\n')
     pytester.makeconftest(
         """
         import pytest_airflow_in_a_box.collection as collection
@@ -336,5 +336,147 @@ def test_foreign_runtest_errors_keep_standard_reporting(pytester: pytest.Pyteste
 
     result = pytester.runpytest_subprocess("-q", "--collect-dag-folder=dags")
 
-    result.assert_outcomes(failed=1)
+    result.assert_outcomes(failed=2)
     result.stdout.fnmatch_lines(["*RuntimeError*unexpected parser failure*"])
+
+
+PARAMS_DAG = """
+from airflow.sdk import DAG, Param
+
+PYTEST_DAG_CASES = {
+    "valid": {"environment": "dev"},
+    "wrong_type": {"environment": 7},
+    "unknown_key": {"env": "dev"},
+}
+
+with DAG(
+    dag_id="parameterized",
+    schedule=None,
+    params={"environment": Param("dev", type="string")},
+):
+    pass
+"""
+
+
+def test_read_declared_cases_variants(tmp_path: Path) -> None:
+    """Read plain, annotated, absent, and last-wins declarations."""
+
+    plain = tmp_path / "plain.py"
+    plain.write_text('PYTEST_DAG_CASES = {"a": {"k": 1}}\n', encoding="utf-8")
+    assert collection.read_declared_cases(plain) == {"a": {"k": 1}}
+
+    annotated = tmp_path / "annotated.py"
+    annotated.write_text(
+        'PYTEST_DAG_CASES: dict = {"b": {}}\nOTHER = 1\n',
+        encoding="utf-8",
+    )
+    assert collection.read_declared_cases(annotated) == {"b": {}}
+
+    absent = tmp_path / "absent.py"
+    absent.write_text("VALUE = 1\n", encoding="utf-8")
+    assert collection.read_declared_cases(absent) == {}
+
+    last_wins = tmp_path / "last_wins.py"
+    last_wins.write_text(
+        'PYTEST_DAG_CASES = {"first": {}}\nPYTEST_DAG_CASES = {"second": {}}\n',
+        encoding="utf-8",
+    )
+    assert collection.read_declared_cases(last_wins) == {"second": {}}
+
+    unparsable = tmp_path / "unparsable.py"
+    unparsable.write_text("def broken(:\n", encoding="utf-8")
+    assert collection.read_declared_cases(unparsable) == {}
+
+
+@pytest.mark.parametrize(
+    ("source", "match"),
+    [
+        ("PYTEST_DAG_CASES = build_cases()\n", "must be a literal mapping"),
+        ("PYTEST_DAG_CASES = [1]\n", "must map case names to param mappings"),
+        ('PYTEST_DAG_CASES = {"": {}}\n', "must be non-empty strings"),
+        ("PYTEST_DAG_CASES = {7: {}}\n", "must be non-empty strings"),
+        ('PYTEST_DAG_CASES = {"case": [1]}\n', "must map param names to values"),
+        ('PYTEST_DAG_CASES = {"case": {7: 1}}\n', "must map param names to values"),
+    ],
+)
+def test_read_declared_cases_rejects_malformed_declarations(
+    tmp_path: Path,
+    source: str,
+    match: str,
+) -> None:
+    """Reject non-literal and mis-shaped case declarations."""
+
+    path = tmp_path / "malformed.py"
+    path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(collection.DagCasesDeclarationError, match=match):
+        collection.read_declared_cases(path)
+
+
+def test_validate_dag_params_unit() -> None:
+    """Accept declared params, reject unknown keys and schema violations."""
+
+    # Deferred so param construction happens after bootstrap.
+    from airflow.sdk import DAG, Param
+
+    from pytest_airflow_in_a_box._compat import ParamsCaseError, validate_dag_params
+
+    declared_params: Any = {"environment": Param("dev", type="string")}
+    with DAG(dag_id="params_unit", schedule=None, params=declared_params) as dag:
+        pass
+
+    validate_dag_params(dag, {"environment": "prod"})
+    validate_dag_params(dag, {})
+
+    with pytest.raises(ParamsCaseError, match="declares no params `env`"):
+        validate_dag_params(dag, {"env": "dev"})
+    with pytest.raises(ParamsCaseError, match="rejected the pinned params"):
+        validate_dag_params(dag, {"environment": 7})
+
+
+def test_declared_cases_collect_and_validate(pytester: pytest.Pytester) -> None:
+    """Collect one sibling item per case and validate each pinned conf."""
+
+    _write_dags(pytester, parameterized=PARAMS_DAG)
+
+    result = pytester.runpytest_subprocess("-v", "--collect-dag-folder=dags")
+
+    result.assert_outcomes(passed=2, failed=2)
+    result.stdout.fnmatch_lines(
+        [
+            "*dags/parameterized.py::dag-import*PASSED*",
+            "*dags/parameterized.py::dag-params?valid?*PASSED*",
+            "*dags/parameterized.py::dag-params?wrong_type?*FAILED*",
+            "*dags/parameterized.py::dag-params?unknown_key?*FAILED*",
+        ]
+    )
+    result.stdout.fnmatch_lines(["*declares no params `env`*"])
+
+
+def test_malformed_declaration_fails_collection(pytester: pytest.Pytester) -> None:
+    """Report a malformed case declaration as a collection error."""
+
+    _write_dags(
+        pytester,
+        parameterized="PYTEST_DAG_CASES = build()\n",
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--collect-dag-folder=dags")
+
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(["*must be a literal mapping*"])
+
+
+def test_declared_cases_fail_on_broken_and_dag_free_files(pytester: pytest.Pytester) -> None:
+    """Fail case items when their file cannot import or defines no Dags."""
+
+    _write_dags(
+        pytester,
+        broken_with_cases='PYTEST_DAG_CASES = {"case": {}}\nraise RuntimeError("boom")\n',
+        empty_with_cases='PYTEST_DAG_CASES = {"case": {}}\nVALUE = 1\n',
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--collect-dag-folder=dags")
+
+    result.assert_outcomes(failed=4)
+    result.stdout.fnmatch_lines(["*boom*", "*defines no Dags*"])
