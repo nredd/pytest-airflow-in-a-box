@@ -46,7 +46,7 @@ from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
 )
-from pytest_airflow_in_a_box.markers import register_markers
+from pytest_airflow_in_a_box.markers import apply_environment_gate, register_markers
 from pytest_airflow_in_a_box.reporting import configure_reporting
 
 __all__ = (
@@ -114,6 +114,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "airflow_collect_dags_folder",
         "Directory whose Dag files are collected as import-check test items.",
         default="",
+    )
+    parser.addini(
+        "airflow_environments",
+        "Test environment sentinel paths as `name = path` lines.",
+        type="linelist",
+        default=[],
     )
     parser.addini(
         "allow_network_airflow_home",
@@ -208,6 +214,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     """
 
     prune_duplicate_items(config, items)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Gate tests declaring a required real environment.
+
+    Parameters:
+        item: pytest.Item about to enter its setup phase.
+    """
+
+    apply_environment_gate(item)
 
 
 @pytest.hookimpl(optionalhook=True)
