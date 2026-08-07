@@ -100,7 +100,7 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: .venv-ci/bin/python -m coverage run -m pytest -v
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}
           path: .coverage.*
@@ -139,7 +139,7 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: .venv-ci/bin/python -m coverage run -m pytest -v
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-alpine-musl-3.3.0-3.12
           path: .coverage.*
@@ -177,7 +177,7 @@ jobs:
           uv run coverage xml
           uv run coverage report --fail-under=100 | tee coverage-report.txt
       - name: Upload combined report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-combined
           path: coverage.xml
