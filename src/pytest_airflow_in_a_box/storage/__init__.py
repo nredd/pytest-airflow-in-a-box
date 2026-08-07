@@ -16,13 +16,23 @@ from pytest_airflow_in_a_box.storage.locate import (
     locate_storage,
     parse_proc_mounts,
 )
+from pytest_airflow_in_a_box.storage.sqlite import (
+    PragmaProfile,
+    calculate_profile,
+    create_metadata_engine,
+    write_local_settings,
+)
 
 __all__ = (
     "Mount",
+    "PragmaProfile",
     "StorageFallbackWarning",
     "StorageLocation",
     "StorageReason",
+    "calculate_profile",
+    "create_metadata_engine",
     "is_network_filesystem",
     "locate_storage",
     "parse_proc_mounts",
+    "write_local_settings",
 )

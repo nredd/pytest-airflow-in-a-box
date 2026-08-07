@@ -24,7 +24,7 @@ from pytest_airflow_in_a_box.airflow_cfg import (
     sqlite_url,
     write_airflow_config,
 )
-from pytest_airflow_in_a_box.storage import locate_storage
+from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
 
 STATE_VERSION = 1
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
@@ -241,12 +241,14 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         network_storage=_require_bool(payload, "network_storage"),
     )
     if validate_files:
+        local_settings_path = state.root / "config" / "airflow_local_settings.py"
         stale = (
             not state.root.is_dir()
             or not state.dags_folder.is_dir()
             or not state.logs_folder.is_dir()
             or not state.password_file.is_file()
             or not state.config_path.is_file()
+            or not local_settings_path.is_file()
         )
         if stale:
             raise ValueError(
@@ -445,10 +447,12 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         database_path = root / "airflow.db"
         password_file = root / "simple_auth_manager_passwords.json"
         config_path = root / "airflow.cfg"
+        local_settings_path = root / "config" / "airflow_local_settings.py"
         dags_folder.mkdir()
         logs_folder.mkdir()
         password_file.write_text(PASSWORDS, encoding="utf-8")
         password_file.chmod(0o600)
+        write_local_settings(local_settings_path)
         state = BootstrapState(
             version=STATE_VERSION,
             owner_pid=os.getpid(),

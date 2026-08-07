@@ -11,6 +11,14 @@ from pytest_airflow_in_a_box.bootstrap import STATE_ENVIRONMENT_VARIABLE
 from pytest_airflow_in_a_box.storage import locate_storage
 
 
+@pytest.fixture(autouse=True)
+def _isolate_nested_pytest_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent an outer xdist worker identity from leaking into pytester subprocesses."""
+
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
+
+
 def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
     """Create complete serial state and remove its owned tree at unconfigure."""
 
@@ -31,6 +39,7 @@ def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
             assert state.logs_folder.is_dir()
             assert state.password_file.is_file()
             assert state.config_path.is_file()
+            assert (state.root / "config" / "airflow_local_settings.py").is_file()
             assert not state.database_path.exists()
             Path({str(record_path)!r}).write_text(
                 json.dumps(state.to_payload()), encoding="utf-8"
@@ -67,6 +76,42 @@ def test_airflow_environment_precedes_conftest_import(pytester: pytest.Pytester)
 
     result.assert_outcomes(passed=1)
     assert marker_path.read_text(encoding="utf-8")
+
+
+def test_airflow_metadata_engine_receives_sqlite_pragmas(pytester: pytest.Pytester) -> None:
+    """Load the generated override through Airflow and tune its actual metadata engine."""
+
+    pytester.makepyfile(
+        """
+        from airflow import settings
+        from pytest_airflow_in_a_box.storage import calculate_profile
+
+        def test_metadata_engine():
+            profile = calculate_profile()
+            with settings.engine.connect() as connection:
+                values = {
+                    name: connection.exec_driver_sql(f"PRAGMA {name}").scalar_one()
+                    for name in (
+                        "journal_mode", "synchronous", "temp_store", "mmap_size",
+                        "cache_size", "busy_timeout", "page_size", "locking_mode",
+                    )
+                }
+            assert values == {
+                "journal_mode": "wal",
+                "synchronous": 0,
+                "temp_store": 2,
+                "mmap_size": profile.mmap_size,
+                "cache_size": profile.cache_size,
+                "busy_timeout": 30000,
+                "page_size": 8192,
+                "locking_mode": "normal",
+            }
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=1)
 
 
 def test_explicit_local_base_gets_unique_owned_child(pytester: pytest.Pytester) -> None:
@@ -134,6 +179,39 @@ def test_stale_inherited_state_fails_loudly(
         "database_path": str(missing / "airflow.db"),
         "password_file": str(missing / "passwords.json"),
         "config_path": str(missing / "airflow.cfg"),
+        "jwt_secret": "secret",
+        "storage_reason": "system-temp",
+        "network_storage": False,
+    }
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    monkeypatch.setenv(STATE_ENVIRONMENT_VARIABLE, json.dumps(payload))
+    pytester.makepyfile("def test_never_runs():\n    assert False\n")
+
+    result = pytester.runpytest_subprocess("-q")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*Bootstrap state is stale*"])
+
+
+def test_inherited_state_requires_derived_local_settings(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject inherited state missing its derivable local-settings artifact."""
+
+    root = pytester.path / "inherited-root"
+    (root / "dags").mkdir(parents=True)
+    (root / "logs").mkdir()
+    (root / "passwords.json").write_text("{}", encoding="utf-8")
+    (root / "airflow.cfg").write_text("", encoding="utf-8")
+    payload = {
+        "version": 1,
+        "owner_pid": 1,
+        "root": str(root),
+        "dags_folder": str(root / "dags"),
+        "logs_folder": str(root / "logs"),
+        "database_path": str(root / "airflow.db"),
+        "password_file": str(root / "passwords.json"),
+        "config_path": str(root / "airflow.cfg"),
         "jwt_secret": "secret",
         "storage_reason": "system-temp",
         "network_storage": False,
