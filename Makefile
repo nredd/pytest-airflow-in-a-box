@@ -29,8 +29,7 @@ lock:  ## Verify the dependency lock is current
 build:  ## Build the source and wheel distributions
 	uv run python -m build --installer uv
 
-clean:  ## Remove generated development artifacts
-	rm -rf .coverage .pytest_cache .ruff_cache .tox .venv-ci dist build
-	find . -type d -name __pycache__ -exec rm -rf {} +
+clean:  ## Remove every git-ignored file and directory
+	git clean -fdX
 
 all: format lint type test lock build  ## Run the complete development pipeline
