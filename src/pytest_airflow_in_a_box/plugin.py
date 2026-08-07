@@ -23,6 +23,10 @@ from pytest_airflow_in_a_box.bootstrap import (
     validate_configure,
 )
 from pytest_airflow_in_a_box.fixtures import full_dag_bag, session
+from pytest_airflow_in_a_box.logging import (
+    _install_dict_config_interceptor,
+    _uninstall_dict_config_interceptor,
+)
 
 __all__ = ("full_dag_bag", "get_bootstrap_state", "session")
 
@@ -94,17 +98,30 @@ def pytest_configure(config: pytest.Config) -> None:
     Parameters:
         config: pytest.Config for the active test session.
     """
+
     validate_configure(config)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Restore process-global logging state when pytest shuts down.
+
+    Parameters:
+        config: pytest.Config for the completed test session.
+    """
+
+    del config
+    _uninstall_dict_config_interceptor()
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Initialize metadata in the serial process or xdist controller only.
+    """Install logging protection and initialize controller-owned metadata.
 
     Parameters:
         session: pytest.Session whose configuration contains bootstrap state.
     """
 
+    _install_dict_config_interceptor()
     state = get_bootstrap_state(session.config)
     if state.owner_pid == os.getpid():
         initialize_database()
