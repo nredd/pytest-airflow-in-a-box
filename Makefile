@@ -15,8 +15,11 @@ lint:  ## Lint and fix code with ruff
 type:  ## Type check source, tests, and scripts with ty
 	uv run ty check
 
-test:  ## Run tests with complete branch coverage
-	uv run coverage run -m pytest -v
+test:  ## Run tests with branch coverage, subprocess runs included
+	uv run python scripts/install_coverage_pth.py
+	COVERAGE_PROCESS_START=$(CURDIR)/pyproject.toml COVERAGE_FILE=$(CURDIR)/.coverage \
+		uv run coverage run -m pytest -v
+	uv run coverage combine
 	uv run coverage report
 
 lock:  ## Verify the dependency lock is current
