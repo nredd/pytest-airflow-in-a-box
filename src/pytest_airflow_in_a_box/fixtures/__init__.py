@@ -6,7 +6,8 @@ References:
 
 from __future__ import annotations
 
+from pytest_airflow_in_a_box.fixtures.dag import dag_maker
 from pytest_airflow_in_a_box.fixtures.dagbag import full_dag_bag
 from pytest_airflow_in_a_box.fixtures.session import session
 
-__all__ = ("full_dag_bag", "session")
+__all__ = ("dag_maker", "full_dag_bag", "session")
