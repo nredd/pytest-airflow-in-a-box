@@ -146,6 +146,7 @@ class RunTask(Protocol):
         variables: dict[str, str] | None = None,
         connections: dict[str, dict[str, Any]] | None = None,
         map_index: int = -1,
+        run_callbacks: bool = False,
     ) -> TaskRunResult:
         """Execute one operator with seeded fake supervisor state.
 
@@ -161,6 +162,8 @@ class RunTask(Protocol):
             connections: dict[str, dict[str, Any]] | None seeding connection
                 fields by connection id.
             map_index: int selecting the mapped task index.
+            run_callbacks: bool dispatching task callbacks and listeners after
+                execution.
 
         Returns:
             TaskRunResult containing terminal state, error, and XCom values.

@@ -4,8 +4,9 @@ The Task SDK normally executes under a supervisor process connected through
 ``SUPERVISOR_COMMS``. Substituting an in-memory, protocol-conformant fake for
 the supervisor lets ``task_runner.run`` execute real operator code with XCom,
 Variable, and Connection traffic answered from seeded dictionaries. The
-``parse``/bundle path is never used, so ``bundle_instance`` stays unset;
-``finalize`` (callback dispatch) is deliberately out of v1 scope.
+``parse``/bundle path is never used, so ``bundle_instance`` stays unset.
+``task_runner.finalize`` -- task-level callback and listener dispatch -- runs
+only on request, because callbacks are side effects most tests do not want.
 
 References:
     https://airflow.apache.org/docs/task-sdk/stable/
@@ -166,6 +167,7 @@ def run_task_in_process(
     params: dict[str, Any] | None = None,
     comms: FakeSupervisorComms | None = None,
     map_index: int = -1,
+    run_callbacks: bool = False,
 ) -> InProcessRunResult:
     """Execute one operator through ``task_runner.run`` with fake supervision.
 
@@ -181,6 +183,8 @@ def run_task_in_process(
         params: dict[str, Any] | None overriding declared Dag params.
         comms: FakeSupervisorComms | None carrying seeded supervisor state.
         map_index: int selecting the mapped task index.
+        run_callbacks: bool dispatching task callbacks and listeners through
+            ``task_runner.finalize`` after execution.
 
     Returns:
         InProcessRunResult containing terminal state, error, and XCom values.
@@ -256,6 +260,8 @@ def run_task_in_process(
         context = runtime_ti.get_template_context()
         log = structlog.get_logger("pytest_airflow_in_a_box.run_task")
         state, msg, error = task_runner.run(runtime_ti, context, log)
+        if run_callbacks:
+            task_runner.finalize(runtime_ti, state, context, log, error)
     finally:
         if previous_comms is absent:
             del task_runner.SUPERVISOR_COMMS

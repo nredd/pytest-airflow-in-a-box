@@ -82,7 +82,8 @@ Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `run_task_in
 
 `run_task` executes one operator through the Task SDK in process, with no metadata database. XCom,
 Variable, and Connection traffic is answered from seeded dictionaries; unseeded lookups fail
-exactly like a live deployment.
+exactly like a live deployment. Task callbacks and listeners stay silent unless the call passes
+`run_callbacks=True`.
 
 ```python
 def test_operator(run_task):

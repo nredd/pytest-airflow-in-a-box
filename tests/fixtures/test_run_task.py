@@ -6,7 +6,7 @@ References:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from airflow.sdk import DAG, BaseHook, BaseOperator, Variable
 from airflow.utils.state import TaskInstanceState
@@ -152,3 +152,78 @@ def test_run_task_records_supervisor_traffic_in_order(run_task: RunTask) -> None
     names = [type(msg).__name__ for msg in result.sent]
     assert names.index("GetVariable") < names.index("SetXCom")
     assert names[-1] == "SucceedTask"
+
+
+class CallbackOperator(BaseOperator):
+    """Record task callback invocations in process memory."""
+
+    invocations: ClassVar[list[str]] = []
+
+    def __init__(self, *, fail: bool = False, **kwargs: Any) -> None:
+        """Configure the failure mode and register recording callbacks.
+
+        Parameters:
+            fail: bool raising from ``execute`` when true.
+            kwargs: Any forwarded to ``BaseOperator``.
+        """
+
+        super().__init__(
+            on_success_callback=[lambda _context: type(self).invocations.append("success")],
+            on_failure_callback=[lambda _context: type(self).invocations.append("failure")],
+            **kwargs,
+        )
+        self.fail = fail
+
+    def execute(self, context: Any) -> str:
+        """Return or raise per configuration.
+
+        Parameters:
+            context: Any containing the task execution context.
+
+        Returns:
+            str containing a benign value.
+
+        Raises:
+            ValueError: The operator is configured to fail.
+        """
+
+        del context
+        if self.fail:
+            raise ValueError("configured failure")
+        return "done"
+
+
+def test_run_task_skips_callbacks_by_default(run_task: RunTask) -> None:
+    """Leave task callbacks undispatched unless requested."""
+
+    CallbackOperator.invocations = []
+    operator = _build(CallbackOperator, "run_task_no_callbacks")
+
+    result = run_task(operator)
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert CallbackOperator.invocations == []
+
+
+def test_run_task_dispatches_success_callbacks(run_task: RunTask) -> None:
+    """Invoke success callbacks through the SDK finalize path."""
+
+    CallbackOperator.invocations = []
+    operator = _build(CallbackOperator, "run_task_success_callbacks")
+
+    result = run_task(operator, run_callbacks=True)
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert CallbackOperator.invocations == ["success"]
+
+
+def test_run_task_dispatches_failure_callbacks(run_task: RunTask) -> None:
+    """Invoke failure callbacks through the SDK finalize path."""
+
+    CallbackOperator.invocations = []
+    operator = _build(CallbackOperator, "run_task_failure_callbacks", fail=True)
+
+    result = run_task(operator, run_callbacks=True)
+
+    assert result.state == TaskInstanceState.FAILED
+    assert CallbackOperator.invocations == ["failure"]
