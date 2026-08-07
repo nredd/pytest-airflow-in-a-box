@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -130,12 +131,74 @@ def test_linux_statfs_magic_detects_local_filesystem(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("platform_name", ["darwin", "win32"])
-def test_non_linux_unknown_filesystems_are_conservatively_network(
-    tmp_path: Path, platform_name: str
+def test_windows_unknown_filesystems_are_conservatively_network(tmp_path: Path) -> None:
+    """Avoid silently treating unknown Windows storage as local."""
+    assert is_network_filesystem(tmp_path, mounts_text="", platform_name="win32")
+
+
+def _failed_darwin_statfs(path: Path) -> None:
+    """Return no Darwin filesystem data for deterministic conservative tests."""
+    del path
+
+
+def test_darwin_unprobeable_path_is_conservatively_network(tmp_path: Path) -> None:
+    """Avoid treating macOS storage as local when the statfs probe fails."""
+    assert is_network_filesystem(
+        tmp_path,
+        mounts_text="",
+        platform_name="darwin",
+        darwin_statfs_reader=_failed_darwin_statfs,
+    )
+
+
+@pytest.mark.parametrize(
+    ("filesystem_type", "local_flag", "expected"),
+    [
+        ("apfs", True, False),
+        ("hfs", True, False),
+        ("nfs", True, True),
+        ("smbfs", False, True),
+        ("webdav", False, True),
+        ("afpfs", False, True),
+        ("weirdfs", True, False),
+        ("weirdfs", False, True),
+    ],
+)
+def test_darwin_statfs_classifies_by_type_then_local_flag(
+    tmp_path: Path,
+    filesystem_type: str,
+    local_flag: bool,
+    expected: bool,
 ) -> None:
-    """Avoid silently treating unknown macOS or Windows storage as local."""
-    assert is_network_filesystem(tmp_path, mounts_text="", platform_name=platform_name)
+    """Classify known Darwin type names first and defer to ``MNT_LOCAL`` otherwise."""
+    reader_calls: list[Path] = []
+
+    def reader(path: Path) -> locate_module.DarwinFilesystem:
+        reader_calls.append(path)
+        return locate_module.DarwinFilesystem(
+            filesystem_type=filesystem_type, local_flag=local_flag
+        )
+
+    assert (
+        is_network_filesystem(
+            tmp_path,
+            mounts_text="",
+            platform_name="darwin",
+            darwin_statfs_reader=reader,
+        )
+        is expected
+    )
+    assert reader_calls == [tmp_path.resolve()]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("darwin"), reason="requires a Darwin libc")
+def test_darwin_statfs_probes_the_root_filesystem() -> None:
+    """Report a local, named filesystem for the macOS root through real libc."""
+    probed = locate_module._darwin_statfs(Path("/"))
+
+    assert probed is not None
+    assert probed.filesystem_type
+    assert probed.local_flag
 
 
 @pytest.mark.parametrize("platform_name", ["darwin", "win32"])
