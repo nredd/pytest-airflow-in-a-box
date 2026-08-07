@@ -42,7 +42,13 @@ def test_public_surface_is_explicit() -> None:
         "prune_duplicate_items",
     )
     assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
-    assert fixtures.__all__ == ("cap_structlog", "dag_maker", "full_dag_bag", "session")
+    assert fixtures.__all__ == (
+        "cap_structlog",
+        "dag_maker",
+        "full_dag_bag",
+        "run_task",
+        "session",
+    )
     assert logging.__all__ == ("StructlogCapture", "TestContextFilter", "ensure_handlers")
     assert markers.__all__ == ("MarkedNode", "read_bool_marker", "register_markers")
     assert plugin.__all__ == (
@@ -50,6 +56,7 @@ def test_public_surface_is_explicit() -> None:
         "dag_maker",
         "full_dag_bag",
         "get_bootstrap_state",
+        "run_task",
         "session",
     )
     assert reporting.__all__ == (
@@ -62,7 +69,7 @@ def test_public_surface_is_explicit() -> None:
         "ordered_task_instances",
         "run_task_instance",
     )
-    assert types.__all__ == ("DagMaker", "SerializedDag")
+    assert types.__all__ == ("DagMaker", "RunTask", "SerializedDag", "TaskRunResult")
     assert _compat.__all__ == (
         "AirflowCapabilities",
         "AirflowCompatibilityError",
@@ -70,12 +77,15 @@ def test_public_surface_is_explicit() -> None:
         "DagBagLocation",
         "DatabaseCleanupError",
         "DatabaseInitializationError",
+        "FakeSupervisorComms",
+        "InProcessRunResult",
         "TaskInstanceRunner",
         "build_dag_bag",
         "clear_tables",
         "implied_groups",
         "initialize_database",
         "resolve_capabilities",
+        "run_task_in_process",
     )
 
 
