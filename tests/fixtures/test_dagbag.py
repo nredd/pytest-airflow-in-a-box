@@ -8,11 +8,13 @@ References:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from pytest_airflow_in_a_box._compat import build_dag_bag
+from pytest_airflow_in_a_box.fixtures import dagbag as fixtures_dagbag
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box._compat.dagbag import DagBag
@@ -154,3 +156,26 @@ def test_build_dag_bag_parses_single_file(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest_subprocess("-q")
 
     result.assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize(
+    ("option_value", "ini_value", "match"),
+    [
+        (7, "", "`--dag-folder` must be a path string"),
+        (None, 7, "`airflow_dags_folder` must be a path string"),
+    ],
+)
+def test_dag_folder_rejects_non_string_configuration(
+    option_value: object,
+    ini_value: object,
+    match: str,
+) -> None:
+    """Reject non-string option and ini Dag folder values."""
+
+    config: Any = SimpleNamespace(
+        getoption=lambda _name: option_value,
+        getini=lambda _name: ini_value,
+    )
+
+    with pytest.raises(pytest.UsageError, match=match):
+        fixtures_dagbag._dag_folder(config)

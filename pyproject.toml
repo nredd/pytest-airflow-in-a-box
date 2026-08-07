@@ -122,10 +122,8 @@ source = [
 ]
 
 [tool.coverage.report]
-# Single-platform floor: Darwin/Linux/Windows probe branches are mutually
-# exclusive, so 100 is only reachable on the CI combine job's cross-platform
-# union (gated separately in ci.yml). Measured macOS floor with subprocess
-# measurement: 94.84.
-fail_under = 94
+# Full bar restored 2026-08-07: subprocess measurement plus fake-libc/windll
+# probes made every platform branch reachable on any single platform.
+fail_under = 100
 show_missing = true
 skip_covered = true
