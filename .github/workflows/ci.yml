@@ -166,10 +166,12 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
       - name: Combine and report
+        # Cross-platform union measured at 95.31 on 2026-08-07; the remaining
+        # gap is untested error paths plus the POSIX-dead Windows drive probe.
         run: |
           uv run coverage combine
           uv run coverage xml
-          uv run coverage report --fail-under=90
+          uv run coverage report --fail-under=95
       - name: Upload combined report
         uses: actions/upload-artifact@v4
         with:
