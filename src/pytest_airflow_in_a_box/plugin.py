@@ -27,6 +27,7 @@ from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
 )
+from pytest_airflow_in_a_box.markers import register_markers
 
 __all__ = ("full_dag_bag", "get_bootstrap_state", "session")
 
@@ -93,12 +94,13 @@ def pytest_load_initial_conftests(
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Validate xdist state after workerinput becomes available.
+    """Register markers and validate xdist state after workerinput is available.
 
     Parameters:
         config: pytest.Config for the active test session.
     """
 
+    register_markers(config)
     validate_configure(config)
 
 
