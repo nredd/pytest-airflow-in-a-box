@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/0.12.2/install.sh | sh
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Check lockfile
+        run: uv lock --check
+      - name: Check formatting
+        run: uv run ruff format --check .
+      - name: Lint
+        run: uv run ruff check .
+      - name: Type check
+        run: uv run ty check
+      - name: Check repository hooks
+        run: uv run prek run --all-files
+      - name: Build distributions
+        run: uv run python -m build --installer uv
+
+  test:
+    name: Airflow ${{ matrix.airflow-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        airflow-version: ["3.1.8", "3.2.2", "3.3.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/0.12.2/install.sh | sh
+      - name: Create constrained environment
+        env:
+          AIRFLOW_VERSION: ${{ matrix.airflow-version }}
+        run: |
+          uv venv --python "$PYTHON_VERSION" .venv-ci
+          curl --fail --location --silent --show-error \
+            "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
+            --output airflow-constraints.txt
+          uv pip install --python .venv-ci/bin/python \
+            --constraint airflow-constraints.txt \
+            --editable . \
+            "apache-airflow-core==${AIRFLOW_VERSION}"
+      - name: Run tests
+        run: .venv-ci/bin/python -m pytest -v

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environments
+.venv/
+.venv-ci/
+
+# Test and analysis output
+.coverage
+.coverage.*
+.pytest_cache/
+.ruff_cache/
+.ty/
+coverage.xml
+htmlcov/
+
+# Build output
+build/
+dist/
+
+# Airflow test state
+airflow.cfg
+airflow.db
+logs/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
