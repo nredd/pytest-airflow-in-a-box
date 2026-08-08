@@ -26,6 +26,51 @@ def test_cap_structlog_records_events(cap_structlog: StructlogCapture) -> None:
     assert "fixture_event" in cap_structlog.text
 
 
+def test_cap_structlog_survives_and_restores_mid_test_reconfigure(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep capturing after consumer reconfiguration, then restore its chain."""
+
+    # The serial child run must not inherit an outer xdist worker identity.
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    pytester.makepyfile(
+        """
+        import structlog
+
+        from pytest_airflow_in_a_box.logging import StructlogCapture
+
+        _REPLACEMENT = [structlog.processors.KeyValueRenderer()]
+
+
+        def test_configure_mid_test(cap_structlog):
+            structlog.configure(processors=list(_REPLACEMENT))
+            structlog.get_logger("consumer").info("after_configure")
+
+            assert "after_configure" in cap_structlog
+
+
+        def test_configure_once_mid_test(cap_structlog):
+            structlog.reset_defaults()
+            structlog.configure_once(processors=list(_REPLACEMENT))
+            structlog.get_logger("consumer").info("after_configure_once")
+
+            assert "after_configure_once" in cap_structlog
+
+
+        def test_teardown_restored_reconfigured_chain_minus_capture():
+            processors = structlog.get_config()["processors"]
+
+            assert not any(isinstance(item, StructlogCapture) for item in processors)
+            assert [type(item) for item in processors] == [type(item) for item in _REPLACEMENT]
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=3)
+
+
 def test_capture_restores_exact_configuration() -> None:
     """Install the capture before the renderer and restore the prior chain."""
 

@@ -5,9 +5,13 @@ Airflow 3 emits most of its records through structlog, where pytest's builtin
 untouched: pytest's ``caplog`` constructor is private, so a same-named override
 could not delegate to it and would silently change stdlib capture semantics.
 
-Known limit: code that reconfigures structlog mid-test replaces the capture
-processor, and bound loggers created before the fixture keep their frozen
-processor chain.
+Mid-test ``structlog.configure``/``configure_once`` calls are intercepted so the
+capture processor survives reconfiguration; teardown restores the exact
+callables and re-applies whatever chain the test left behind, minus capture.
+
+Known limit: bound loggers created before the fixture keep their frozen
+processor chain (mitigated for new loggers by disabling
+``cache_logger_on_first_use`` while installed).
 
 References:
     https://www.structlog.org/en/stable/configuration.html
@@ -20,32 +24,26 @@ from collections.abc import Iterator
 
 import pytest
 
-from pytest_airflow_in_a_box.logging import StructlogCapture
+from pytest_airflow_in_a_box.logging import (
+    StructlogCapture,
+    _install_structlog_capture_interceptor,
+    _uninstall_structlog_capture_interceptor,
+)
 
 
 def _capture_structlog() -> Iterator[StructlogCapture]:
-    """Install a capture processor and restore the exact prior configuration.
+    """Install a capture processor and restore the reconfigured chain.
 
     Yields:
         StructlogCapture recording every event emitted while installed.
     """
 
-    # Deferred to preserve bootstrap safety; structlog arrives with Airflow.
-    import structlog
-
     capture = StructlogCapture()
-    saved = structlog.get_config()
-    processors = [*saved["processors"]]
-    if processors:
-        # The final processor renders the event; capture must run before it.
-        processors.insert(len(processors) - 1, capture)
-    else:
-        processors = [capture]
-    structlog.configure(processors=processors, cache_logger_on_first_use=False)
+    _install_structlog_capture_interceptor(capture)
     try:
         yield capture
     finally:
-        structlog.configure(**saved)
+        _uninstall_structlog_capture_interceptor(capture)
 
 
 @pytest.fixture

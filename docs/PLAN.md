@@ -27,9 +27,7 @@ where the implementation deviated from this plan and why.
 - **Remaining work is tracked as GitHub issues, not here:** Postgres tier
   ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)), end-user compat-suite
   expansion ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)),
-  PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)), and
-  `cap_structlog` reconfiguration survival
-  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)).
+  and PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)).
 - **Also done (2026-08-08):** the unified `airflow_config()` context manager plus a deprecated
   `conf_vars` alias (`config.py`, [#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)),
   closing the last § UNIFY -- config/env item.
