@@ -5,14 +5,6 @@ from __future__ import annotations
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _isolate_nested_xdist_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent an outer worker identity from leaking into nested pytest processes."""
-
-    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
-    monkeypatch.delenv("PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE", raising=False)
-
-
 def test_plugin_is_inert_without_airflow_tests(pytester: pytest.Pytester) -> None:
     """Never import Airflow or create the metadata database on a non-Airflow run."""
 
