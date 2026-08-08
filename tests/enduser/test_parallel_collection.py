@@ -63,7 +63,7 @@ def test_full_dag_bag_is_identical_on_every_worker(pytester: pytest.Pytester) ->
     pytester.makepyfile(test_dag_bag_first=source, test_dag_bag_second=source)
 
     result = pytester.runpytest_subprocess(
-        "-q", "-n", "2", "--dist=loadfile", "--dag-folder", str(CORPUS)
+        "-q", "-n", "2", "--dist=loadfile", f"--dag-folder={CORPUS}"
     )
 
     result.assert_outcomes(passed=2)

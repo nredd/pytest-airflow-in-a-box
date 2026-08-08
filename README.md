@@ -16,6 +16,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 ## Requirements
 
 - CPython 3.10 through 3.14
+- pytest 8 or newer
 - Apache Airflow 3.1 or newer, below 4
 - Linux or macOS for Airflow-backed tests
 
@@ -35,6 +36,12 @@ uv add --dev pytest-airflow-in-a-box
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
+
+The bundled pytest plugins are intentional runtime dependencies. `pytest-xdist` is part of the
+supported execution model: controller bootstrap state and worker-scoped artifacts are coordinated
+for parallel runs. `pytest-timeout` backs up Airflow's per-file Dag parse watchdog with a deadline
+for the complete bundled integrity smoke item, so a hang outside the per-file parser boundary
+cannot wedge the test session.
 
 The plugin is inert on runs without Airflow-facing tests: session startup only prepares a
 disposable run directory and `AIRFLOW__*` environment variables. Airflow itself is imported and

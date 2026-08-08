@@ -44,6 +44,9 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- Widened the supported pytest range from 9.1+ to 8+, with the exact 8.0.0 floor exercised in CI.
+  `pytest-timeout` remains a required dependency because it bounds the complete bundled Dag
+  integrity smoke item in addition to Airflow's per-file parse timeout.
 - Metadata database initialization is now lazy: it moved from session start to the first test
   that requires the database (a `db_test`/`api_test` marker or a database-backed plugin fixture),
   coordinated across `pytest-xdist` workers by an advisory lock plus ready sentinel in the run

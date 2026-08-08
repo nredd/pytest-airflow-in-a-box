@@ -1066,7 +1066,7 @@ plugin into an early-warning system for version breakage rather than a mute butt
 |---|---|---|
 | `ty` | `==0.0.69` | released 2026-08-06; pre-1.0, exact-pin and bump deliberately |
 | `ruff` | `==0.16.1` | 2026-07-30 |
-| `pytest` | `>=9.1` | 9.1.1 current |
+| `pytest` | `>=8` | 8.0.0 certified floor; 9.1.1 current |
 | `pytest-xdist` | `>=3.8` | 3.8.0 |
 | `pytest-timeout` | `>=2.4` | 2.4.0 |
 
@@ -1607,13 +1607,15 @@ that complaint maps onto an existing surface here (`run_task_instance`, the tune
    breaking packaging change: drop Airflow from base dependencies entirely (the pytest-django
    pattern — the framework is the user's pin, not the plugin's) and offer `[airflow2]` /
    `[airflow3]` convenience extras.
-2. **Airflow 2.11's published constraints pin the pytest family at 8.x**, while the plugin's
-   floor is pytest `>=9.1`. Installing under unfiltered constraints hard-fails resolution. The
-   working pattern (used by the planned CI legs and documented for users) is: install Airflow
-   under constraints with the pytest-family lines stripped, then install the plugin in a
-   second resolver pass. Whether pytest 9.1's pluggy floor coexists with 2.11's frozen
-   dependency tree *at runtime* is the existential unknown that the design's Phase 1a spike
-   answers before anything else gets built.
+2. **Airflow 2.11's published constraints pin the pytest family at 8.x.** The initial design kept
+   a pytest `>=9.1` floor and treated that conflict as an existential Phase 1a risk. The follow-up
+   public-API audit in #28 found no 9-only use: `StashKey`, pathlib collection hooks, typed public
+   nodes, and the parser/configuration APIs used here all exist in pytest 8.0. The floor is now
+   `pytest>=8`, backed by an exact 8.0.0 CI leg; pytest 10 readiness is unchanged because the
+   implementation already avoids the deprecated `config.inicfg` surface. Pytest 8 performs root
+   discovery before auto-loaded plugins register custom options, so the cross-root `pytester`
+   corpus runs use `--dag-folder=PATH` rather than separate option/value tokens; this keeps the
+   absolute Dag path out of pytest's initial collection-path candidates.
 
 The "isolate what breaks on 3" ask that accompanies migrations was also settled: it cannot be
 an in-run switch (one environment holds exactly one Airflow) and is instead a two-run
