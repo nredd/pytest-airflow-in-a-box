@@ -48,6 +48,7 @@ from pytest_airflow_in_a_box.logging import (
 )
 from pytest_airflow_in_a_box.markers import apply_environment_gate, register_markers
 from pytest_airflow_in_a_box.reporting import configure_reporting
+from pytest_airflow_in_a_box.smoke import collect_smoke_items
 
 __all__ = (
     "api_client",
@@ -124,6 +125,46 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         "allow_network_airflow_home",
         "Allow explicit Airflow storage on a network filesystem.",
+        type="bool",
+        default=False,
+    )
+    group.addoption(
+        "--airflow-smoke",
+        action="store_true",
+        default=None,
+        dest="airflow_smoke",
+        help="Enable the bundled opt-in `smoke` test catalog.",
+    )
+    parser.addini(
+        "airflow_smoke",
+        "Enable the bundled opt-in `smoke` test catalog.",
+        type="bool",
+        default=False,
+    )
+    parser.addini(
+        "airflow_dag_parse_timeout",
+        "Per-file Dag parse timeout in seconds for the smoke integrity test.",
+        default="30",
+    )
+    parser.addini(
+        "airflow_dag_parse_slowpoke_ratio",
+        "Fraction of the parse timeout above which a file is a slowpoke.",
+        default="0.75",
+    )
+    parser.addini(
+        "airflow_dag_id_pattern",
+        "Regex every collected dag_id must match, checked by the smoke catalog.",
+        default="",
+    )
+    parser.addini(
+        "airflow_required_dag_tags",
+        "Tags every collected Dag must carry, checked by the smoke catalog.",
+        type="linelist",
+        default=[],
+    )
+    parser.addini(
+        "airflow_forbid_default_owner",
+        "Fail Dags whose tasks are owned by the stock `airflow` owner.",
         type="bool",
         default=False,
     )
@@ -205,15 +246,21 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> DagFile | 
 
 
 @pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Drop default-collector items that duplicate Dag-file collection.
+def pytest_collection_modifyitems(
+    session: pytest.Session,
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Drop duplicate Dag-file items and append the bundled smoke catalog.
 
     Parameters:
+        session: pytest.Session that owns the synthetic smoke collector.
         config: pytest.Config containing plugin options and ini values.
-        items: list[pytest.Item] mutated to exclude duplicate items.
+        items: list[pytest.Item] mutated to exclude duplicates and include smoke items.
     """
 
     prune_duplicate_items(config, items)
+    collect_smoke_items(session, config, items)
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
