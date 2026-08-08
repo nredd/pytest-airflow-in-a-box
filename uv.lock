@@ -2196,7 +2196,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "apache-airflow-core", specifier = ">=3.1,<4" },
-    { name = "apache-airflow-providers-sqlite" },
+    { name = "apache-airflow-providers-sqlite", specifier = ">=4.1,<5" },
     { name = "pytest", specifier = ">=9.1" },
     { name = "pytest-timeout", specifier = ">=2.4" },
     { name = "pytest-xdist", specifier = ">=3.8" },

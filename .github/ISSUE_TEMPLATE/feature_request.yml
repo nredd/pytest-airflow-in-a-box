@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a new fixture, marker, option, or capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you unable to do today, and how are you working around it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API
+      description: Sketch the fixture/marker/option signature and a short usage example.
+      render: python
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
