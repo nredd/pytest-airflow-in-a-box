@@ -8,6 +8,7 @@ jobs:
     name: >-
       ${{ matrix.os || 'ubuntu-latest' }} /
       Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
+      ${{ matrix.pytest-args }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
@@ -40,10 +41,14 @@ jobs:
             python-version: "3.12"
           - airflow-version: "3.3.0"
             python-version: "3.12"
-          # The one leg closing PLAN.md's outer-suite xdist verification: latest
-          # Airflow x latest CPython runs the whole outer suite parallel. Pinned
-          # to `-n 4` (the runner's vCPU count) for reproducibility; the nested
-          # `-n auto` compat scenario covers real per-host core-count variance.
+          - airflow-version: "3.3.0"
+            python-version: "3.14"
+          # The one leg closing PLAN.md's outer-suite xdist verification: a
+          # deliberate duplicate of the latest Airflow x latest CPython leg
+          # running the whole outer suite parallel, kept separate so the serial
+          # leg's signal stays unburied. Pinned to `-n 4` (the runner's vCPU
+          # count) for reproducibility; the nested `-n auto` compat scenario
+          # covers real per-host core-count variance.
           - airflow-version: "3.3.0"
             python-version: "3.14"
             pytest-args: "-n 4"
@@ -83,7 +88,7 @@ jobs:
       - name: Upload coverage data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}
+          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}
           path: .coverage.*
           include-hidden-files: true
           if-no-files-found: error
