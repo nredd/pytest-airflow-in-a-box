@@ -29,6 +29,8 @@ References:
 
 from __future__ import annotations
 
+import asyncio
+from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
@@ -275,6 +277,44 @@ def _run_sdk_task_instance(
     return ti
 
 
+def _resume_deferred_task_instance(ti: TaskInstance, session: Session | None) -> None:
+    """Run one persisted trigger event and submit it to the deferred task instance."""
+
+    if session is None:
+        raise RuntimeError("Trigger execution requires a persisted task instance session")
+
+    from airflow.models.trigger import Trigger
+
+    try:
+        module_loading: Any = import_module("airflow.sdk._shared.module_loading")
+    except ImportError:
+        module_loading = import_module("airflow.utils.module_loading")
+
+    _refresh_task_instance(ti, session)
+    trigger_id = ti.trigger_id
+    if trigger_id is None:
+        raise RuntimeError(f"Deferred task instance '{ti.task_id}' has no persisted trigger")
+    trigger_row = session.get(Trigger, trigger_id)
+    if trigger_row is None:
+        raise RuntimeError(
+            f"Deferred task instance '{ti.task_id}' trigger '{trigger_id}' is absent"
+        )
+    trigger = module_loading.import_string(str(trigger_row.classpath))(**trigger_row.kwargs)
+
+    async def first_event() -> Any:
+        try:
+            async for event in trigger.run():
+                return event
+            raise RuntimeError(f"Trigger '{trigger_row.classpath}' completed without an event")
+        finally:
+            await trigger.cleanup()
+
+    event = asyncio.run(first_event())
+    Trigger.submit_event(trigger_id, event, session=session)
+    session.commit()
+    _refresh_task_instance(ti, session)
+
+
 def run_task_instance(
     ti: TaskInstance,
     task: Operator | None = None,
@@ -283,6 +323,7 @@ def run_task_instance(
     ignore_task_deps: bool = False,
     ignore_ti_state: bool = False,
     mark_success: bool = False,
+    run_triggerer: bool = False,
     session: Session | None = None,
 ) -> TaskInstance:
     """Run one persisted task instance through the certified Airflow entry point.
@@ -294,6 +335,7 @@ def run_task_instance(
         ignore_task_deps: bool controlling task-specific dependencies.
         ignore_ti_state: bool controlling existing task-instance state checks.
         mark_success: bool marking success without executing the task body.
+        run_triggerer: bool running one persisted trigger event and resuming a deferred task.
         session: sqlalchemy.orm.Session | None used for metadata operations.
 
     Returns:
@@ -315,8 +357,21 @@ def run_task_instance(
         "session": session,
     }
     if capabilities.task_instance_runner is TaskInstanceRunner.LEGACY_RUN:
-        return _run_legacy_task_instance(ti, resolved_task, **arguments)
-    return _run_sdk_task_instance(ti, resolved_task, **arguments)
+        result = _run_legacy_task_instance(ti, resolved_task, **arguments)
+    else:
+        result = _run_sdk_task_instance(ti, resolved_task, **arguments)
+    if not run_triggerer:
+        return result
+
+    from airflow.utils.state import TaskInstanceState
+
+    if result.state != TaskInstanceState.DEFERRED:
+        return result
+    _resume_deferred_task_instance(result, session)
+    arguments["ignore_ti_state"] = True
+    if capabilities.task_instance_runner is TaskInstanceRunner.LEGACY_RUN:
+        return _run_legacy_task_instance(result, resolved_task, **arguments)
+    return _run_sdk_task_instance(result, resolved_task, **arguments)
 
 
 def ordered_task_instances(

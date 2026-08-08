@@ -16,10 +16,35 @@ All notable changes to this project will be documented in this file. The format 
 - `config.env_var_name()` and `config.ENV_VAR_PREFIX`, which reproduce Airflow's
   `AIRFLOW__SECTION__KEY` name mangling without importing Airflow.
 
+- Consumer-style compatibility coverage for operators, TaskFlow mapping and branching, hooks,
+  connections, provider SQL, sensors, deferral, callbacks, retries, assets, provider-shaped
+  packages, Dag collection, and REST API CRUD.
+- On-demand mapped task-instance expansion through `dag_maker.create_ti` and `run_ti`.
+- Inline persisted-trigger execution and deferred-task resumption through
+  `dag_maker.run_ti(..., run_triggerer=True)`.
+- Synthetic attempt selection and retry callback behavior through `run_task(..., try_number=...)`.
+- Widened the certified compatibility matrix to cover every non-yanked patch release
+  across the 3.1.x and 3.2.x lines: `3.1.1`, `3.1.2`, `3.1.3`, `3.1.5`, `3.1.6`, `3.1.7`,
+  and `3.2.1`. Each was verified to expose an identical private-API surface to its
+  bracketing certified release before being added ([#15](https://github.com/nredd/pytest-airflow-in-a-box/issues/15)).
+- Split the CI compat matrix into a reusable `.github/workflows/compat.yml` workflow so
+  branch-protection rules can require one stable `Coverage` check regardless of how many
+  Airflow/Python legs the matrix grows to.
+
 ### Deprecated
 
 - `config.conf_vars()`, an alias provided under the name public Airflow documentation teaches. It
   emits a `DeprecationWarning`; use `config.airflow_config()` instead.
+
+### Changed
+
+- DB-free task context now includes a logical data interval and accepts active asset
+  inlet/outlet validation.
+- Airflow 2.x remains unsupported: it predates the Task SDK, DAG bundles/versions, and the
+  `airflow.sdk` authoring package this plugin's compatibility layer depends on, and ships
+  under a different distribution name (`apache-airflow` rather than `apache-airflow-core`).
+  Supporting it would require a parallel, DB-backed `_compat` implementation rather than an
+  incremental addition to the current one.
 
 ## [0.1.2] - 2026-08-07
 

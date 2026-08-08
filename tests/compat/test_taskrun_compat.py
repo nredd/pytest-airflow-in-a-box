@@ -86,6 +86,19 @@ class _TaskInstance:
         return True
 
 
+class _EmptyTrigger:
+    """Complete without emitting a trigger event."""
+
+    cleaned = False
+
+    async def run(self):
+        if False:
+            yield None
+
+    async def cleanup(self) -> None:
+        type(self).cleaned = True
+
+
 def _capabilities(
     runner: TaskInstanceRunner,
     *,
@@ -388,6 +401,113 @@ def test_sdk_result_error_is_propagated_after_refresh(monkeypatch: pytest.Monkey
     assert caught.value is failure
     assert session.expirations == 1
     assert ti.refreshes == 1
+
+
+def test_run_triggerer_returns_a_non_deferred_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leave a terminal task alone when trigger execution was requested."""
+
+    ti: Any = _TaskInstance()
+    ti.state = TaskInstanceState.SUCCESS
+    monkeypatch.setattr(
+        taskrun,
+        "resolve_capabilities",
+        lambda: _capabilities(TaskInstanceRunner.LEGACY_RUN),
+    )
+
+    task: Any = object()
+    result = run_task_instance(ti, task, run_triggerer=True)
+
+    assert result is ti
+
+
+def test_legacy_run_triggerer_resumes_a_deferred_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resume through the legacy runner after submitting one trigger event."""
+
+    ti: Any = _TaskInstance()
+    states = iter([TaskInstanceState.DEFERRED, TaskInstanceState.SUCCESS])
+
+    def run(**kwargs: Any) -> None:
+        ti.run_kwargs = kwargs
+        ti.state = next(states)
+
+    ti.run = run
+    resumed: list[Any] = []
+    monkeypatch.setattr(
+        taskrun,
+        "resolve_capabilities",
+        lambda: _capabilities(TaskInstanceRunner.LEGACY_RUN),
+    )
+    monkeypatch.setattr(
+        taskrun,
+        "_resume_deferred_task_instance",
+        lambda instance, session: resumed.append((instance, session)),
+    )
+    session: Any = _Session()
+
+    task: Any = object()
+    result = run_task_instance(ti, task, run_triggerer=True, session=session)
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert resumed == [(ti, session)]
+    assert ti.run_kwargs["ignore_ti_state"] is True
+
+
+def test_resume_deferred_requires_a_session() -> None:
+    """Reject trigger execution detached from persisted metadata."""
+
+    ti: Any = _TaskInstance()
+    with pytest.raises(RuntimeError, match="requires a persisted task instance session"):
+        taskrun._resume_deferred_task_instance(ti, None)
+
+
+def test_resume_deferred_requires_a_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a deferred task whose trigger relationship is missing."""
+
+    import sys
+    from types import ModuleType
+
+    ti: Any = _TaskInstance()
+    ti.trigger_id = None
+    session: Any = _Session()
+    legacy_module: Any = ModuleType("airflow.utils.module_loading")
+    legacy_module.import_string = lambda _path: None
+    monkeypatch.setitem(sys.modules, "airflow.sdk._shared.module_loading", None)
+    monkeypatch.setitem(sys.modules, "airflow.utils.module_loading", legacy_module)
+
+    with pytest.raises(RuntimeError, match="has no persisted trigger"):
+        taskrun._resume_deferred_task_instance(ti, session)
+
+
+def test_resume_deferred_requires_the_trigger_row() -> None:
+    """Report a trigger identifier with no metadata row."""
+
+    ti: Any = _TaskInstance()
+    ti.trigger_id = 7
+    session: Any = SimpleNamespace(
+        expire_all=lambda: None,
+        get=lambda _model, _identity: None,
+    )
+
+    with pytest.raises(RuntimeError, match="trigger '7' is absent"):
+        taskrun._resume_deferred_task_instance(ti, session)
+
+
+def test_resume_deferred_requires_one_event() -> None:
+    """Report a trigger that finishes without yielding an event."""
+
+    ti: Any = _TaskInstance()
+    ti.trigger_id = 8
+    row = SimpleNamespace(classpath=f"{__name__}._EmptyTrigger", kwargs={})
+    session: Any = SimpleNamespace(
+        expire_all=lambda: None,
+        get=lambda _model, _identity: row,
+    )
+    _EmptyTrigger.cleaned = False
+
+    with pytest.raises(RuntimeError, match="completed without an event"):
+        taskrun._resume_deferred_task_instance(ti, session)
+
+    assert _EmptyTrigger.cleaned is True
 
 
 def test_missing_task_resolution_retains_cause() -> None:

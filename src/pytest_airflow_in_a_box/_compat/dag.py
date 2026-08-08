@@ -448,6 +448,18 @@ def select_task_instance(
         ) from error
 
 
+def expand_mapped_task_instances(task: Any, run_id: str, session: Session) -> None:
+    """Expand a persisted mapped task for one DagRun when mapping applies."""
+
+    if not getattr(task, "is_mapped", False):
+        return
+
+    from airflow.models.taskmap import TaskMap
+
+    TaskMap.expand_mapped_task(task, run_id, session=session)
+    session.commit()
+
+
 def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
     """Cross Airflow's authoring/scheduler operator typing boundary.
 
@@ -549,6 +561,7 @@ __all__ = (
     "cleanup_dag",
     "create_dag_run",
     "ensure_dag_absent",
+    "expand_mapped_task_instances",
     "open_dag_session",
     "persist_dag",
     "select_task_instance",
