@@ -1,0 +1,195 @@
+name: Airflow canary
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: airflow-canary
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  compat:
+    name: Latest Airflow / Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      airflow-version: ${{ steps.resolve.outputs.airflow-version }}
+      constraints-complete: ${{ steps.constraints.outputs.complete }}
+      environment-complete: ${{ steps.environment.outputs.complete }}
+      install-complete: ${{ steps.install.outputs.complete }}
+      resolve-complete: ${{ steps.resolve.outputs.complete }}
+      setup-complete: ${{ steps.setup.outputs.complete }}
+      test-complete: ${{ steps.test.outputs.complete }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install uv
+        id: setup
+        run: |
+          curl -LsSf https://astral.sh/uv/0.12.2/install.sh | sh
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Resolve newest supported Airflow release
+        id: resolve
+        run: |
+          set -euo pipefail
+          uv venv --python "$PYTHON_VERSION" .venv-resolve
+          uv pip install --python .venv-resolve/bin/python --no-deps \
+            "apache-airflow-core>=3.1,<4"
+          airflow_version=$(
+            .venv-resolve/bin/python -c \
+              'from importlib.metadata import version; print(version("apache-airflow-core"))'
+          )
+          printf 'airflow-version=%s\n' "$airflow_version" >> "$GITHUB_OUTPUT"
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Download matching Airflow constraints
+        id: constraints
+        env:
+          AIRFLOW_VERSION: ${{ steps.resolve.outputs.airflow-version }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
+            --output airflow-constraints.txt
+          # Airflow's constraints pin transitive dependencies but not core itself.
+          printf '\napache-airflow-core==%s\n' "$AIRFLOW_VERSION" >> airflow-constraints.txt
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Create constrained environment
+        id: install
+        run: |
+          set -euo pipefail
+          uv venv --python "$PYTHON_VERSION" .venv-ci
+          uv pip install --python .venv-ci/bin/python \
+            --constraint airflow-constraints.txt \
+            --editable . \
+            apache-airflow-core
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Record resolved package set
+        id: environment
+        run: |
+          uv pip freeze --python .venv-ci/bin/python > resolved-packages.txt
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Upload resolved package set
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: airflow-canary-environment
+          path: resolved-packages.txt
+          retention-days: 7
+          if-no-files-found: error
+      - name: Run compatibility suite
+        id: test
+        run: |
+          .venv-ci/bin/python -m pytest -v -m compat
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+
+  report:
+    name: Report failure
+    if: ${{ always() && needs.compat.result == 'failure' }}
+    needs: compat
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download resolved package set
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: airflow-canary-environment
+      - name: Record diagnostics
+        id: diagnostics
+        env:
+          AIRFLOW_VERSION: ${{ needs.compat.outputs.airflow-version || 'unresolved' }}
+          CONSTRAINTS_COMPLETE: ${{ needs.compat.outputs.constraints-complete }}
+          ENVIRONMENT_COMPLETE: ${{ needs.compat.outputs.environment-complete }}
+          INSTALL_COMPLETE: ${{ needs.compat.outputs.install-complete }}
+          RESOLVE_COMPLETE: ${{ needs.compat.outputs.resolve-complete }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          SETUP_COMPLETE: ${{ needs.compat.outputs.setup-complete }}
+          TEST_COMPLETE: ${{ needs.compat.outputs.test-complete }}
+        run: |
+          set -euo pipefail
+          if [ "$SETUP_COMPLETE" != true ]; then
+            failure_stage=workflow-infrastructure
+          elif [ "$RESOLVE_COMPLETE" != true ]; then
+            failure_stage=resolution
+          elif [ "$CONSTRAINTS_COMPLETE" != true ]; then
+            failure_stage=constraints-download
+          elif [ "$INSTALL_COMPLETE" != true ]; then
+            failure_stage=installation
+          elif [ "$ENVIRONMENT_COMPLETE" != true ]; then
+            failure_stage=environment-capture
+          elif [ "$TEST_COMPLETE" != true ]; then
+            failure_stage=compatibility-suite
+          else
+            failure_stage=workflow-infrastructure
+          fi
+          printf 'failure-stage=%s\n' "$failure_stage" >> "$GITHUB_OUTPUT"
+
+          if [ ! -f resolved-packages.txt ]; then
+            printf '%s\n' 'No environment was available.' > resolved-packages.txt
+          fi
+
+          {
+            printf 'Airflow canary failed during `%s`.\n\n' "$failure_stage"
+            printf -- '- Airflow core: `%s`\n' "$AIRFLOW_VERSION"
+            printf -- '- Python: `%s`\n' "$PYTHON_VERSION"
+            printf -- '- Runner: `%s` / `%s`\n' "$RUNNER_OS" "$RUNNER_ARCH"
+            printf -- '- Workflow run: %s\n\n' "$RUN_URL"
+            printf '%s\n' 'Resolved package set:' '```text'
+            cat resolved-packages.txt
+            printf '%s\n' '```'
+          } > canary-report.md
+      - name: Upload failure diagnostics
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: airflow-canary-${{ needs.compat.outputs.airflow-version || 'unresolved' }}-python-${{ env.PYTHON_VERSION }}
+          path: |
+            canary-report.md
+            resolved-packages.txt
+          if-no-files-found: error
+      - name: File compatibility issue
+        env:
+          AIRFLOW_VERSION: ${{ needs.compat.outputs.airflow-version || 'unresolved' }}
+          FAILURE_STAGE: ${{ steps.diagnostics.outputs.failure-stage }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          marker="<!-- airflow-canary:${AIRFLOW_VERSION}:python-${PYTHON_VERSION} -->"
+          issue_title="Airflow canary failed: ${AIRFLOW_VERSION} / Python ${PYTHON_VERSION} (${FAILURE_STAGE})"
+          {
+            printf '%s\n\n' "$marker"
+            cat canary-report.md
+            printf '\nThis issue was created automatically by the weekly Airflow canary.\n'
+          } > issue-body.md
+
+          existing_issue=$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&per_page=100" |
+              jq --raw-output --slurp --arg marker "$marker" \
+                '[.[][] | select(.pull_request == null) | select(.body != null and (.body | contains($marker)))][0].number // empty'
+          )
+          if [ -n "$existing_issue" ]; then
+            gh issue edit "$existing_issue" --repo "$GITHUB_REPOSITORY" \
+              --title "$issue_title" --body-file issue-body.md
+            printf 'Updated open canary issue: #%s\n' "$existing_issue"
+            exit 0
+          fi
+
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$issue_title" \
+            --body-file issue-body.md \
+            --label ci
