@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import build_dag_bag
+from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 
 if TYPE_CHECKING:
@@ -56,6 +56,7 @@ def full_dag_bag(pytestconfig: pytest.Config) -> DagBag:
         airflow.models.dagbag.DagBag containing parsed Dags and import errors.
     """
 
+    ensure_database(get_bootstrap_state(pytestconfig).root)
     return build_dag_bag(_dag_folder(pytestconfig))
 
 

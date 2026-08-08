@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from pytest_airflow_in_a_box._compat import ensure_database
 from pytest_airflow_in_a_box._compat.dag import (
     DagCleanupError,
     DagPersistenceRecord,
@@ -29,6 +30,7 @@ from pytest_airflow_in_a_box._compat.dag import (
     select_task_instance,
 )
 from pytest_airflow_in_a_box._compat.taskrun import run_task_instance
+from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.markers import read_bool_marker
 from pytest_airflow_in_a_box.types import DagMaker, SerializedDag
 
@@ -525,6 +527,7 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
         pytest_airflow_in_a_box.types.DagMaker creating SDK Dag contexts.
     """
 
+    ensure_database(get_bootstrap_state(request.config).root)
     marker_default = read_bool_marker(request.node, "need_serialized_dag", default=False)
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
     fileloc = str(Path(str(request.node.path)).resolve())

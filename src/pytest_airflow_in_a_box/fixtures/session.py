@@ -12,17 +12,25 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from pytest_airflow_in_a_box._compat import ensure_database
+from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
 @pytest.fixture
-def session() -> Iterator[Session]:
+def session(pytestconfig: pytest.Config) -> Iterator[Session]:
     """Yield an Airflow metadata session and roll back test changes.
+
+    Parameters:
+        pytestconfig: pytest.Config carrying the session's bootstrap state.
 
     Yields:
         sqlalchemy.orm.Session connected to the isolated metadata database.
     """
+
+    ensure_database(get_bootstrap_state(pytestconfig).root)
 
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     from airflow.utils.session import create_session

@@ -9,12 +9,11 @@ References:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import initialize_database
+from pytest_airflow_in_a_box._compat import ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
     XdistNode,
@@ -34,6 +33,7 @@ from pytest_airflow_in_a_box.defaults import (
     register_ini_defaults,
 )
 from pytest_airflow_in_a_box.fixtures import (
+    DATABASE_FIXTURE_NAMES,
     api_client,
     api_server_url,
     cap_structlog,
@@ -46,7 +46,11 @@ from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
 )
-from pytest_airflow_in_a_box.markers import apply_environment_gate, register_markers
+from pytest_airflow_in_a_box.markers import (
+    DATABASE_MARKER_NAMES,
+    apply_environment_gate,
+    register_markers,
+)
 from pytest_airflow_in_a_box.reporting import configure_reporting
 from pytest_airflow_in_a_box.smoke import collect_smoke_items
 
@@ -232,16 +236,18 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Install logging protection and initialize controller-owned metadata.
+    """Install logging protection before any test or plugin configures logging.
+
+    Database initialization is deliberately absent: it is deferred to the first
+    test that requires the metadata database (see ``pytest_runtest_setup``), so
+    sessions without Airflow-facing tests never import Airflow.
 
     Parameters:
-        session: pytest.Session whose configuration contains bootstrap state.
+        session: pytest.Session about to start collecting and running tests.
     """
 
+    del session
     _install_dict_config_interceptor()
-    state = get_bootstrap_state(session.config)
-    if state.owner_pid == os.getpid():
-        initialize_database()
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -277,14 +283,76 @@ def pytest_collection_modifyitems(
     collect_smoke_items(session, config, items)
 
 
+def _requires_database(item: pytest.Item) -> bool:
+    """Report whether one collected test declares or implies metadata database use.
+
+    Parameters:
+        item: pytest.Item inspected for database markers and fixture usage.
+
+    Returns:
+        bool reporting whether the item requires the metadata database.
+    """
+
+    if any(item.get_closest_marker(name) is not None for name in DATABASE_MARKER_NAMES):
+        return True
+    fixturenames: tuple[str, ...] = tuple(getattr(item, "fixturenames", ()))
+    return not DATABASE_FIXTURE_NAMES.isdisjoint(fixturenames)
+
+
+def _requires_database_at_collection(item: pytest.Item) -> bool:
+    """Report whether one collected item will reach its setup phase needing the database.
+
+    Parameters:
+        item: pytest.Item surviving deselection at the end of collection.
+
+    Returns:
+        bool reporting whether the item requires the metadata database.
+    """
+
+    if not _requires_database(item):
+        return False
+    try:
+        apply_environment_gate(item)
+    except pytest.skip.Exception:
+        return False
+    except pytest.UsageError:
+        # A malformed or unknown environment marker must fail at setup, not
+        # abort collection; the database still initializes for the run.
+        return True
+    return True
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Initialize the database when the surviving collection requires it.
+
+    Runs after deselection so `pytest -k unrelated` stays free, and before the
+    run phase so per-test budgets (e.g. ``pytest-timeout`` on smoke items)
+    never absorb the one-time migration cost. Environment-gated items that
+    will skip do not trigger initialization.
+
+    Parameters:
+        session: pytest.Session whose deselected item list is final.
+    """
+
+    if any(_requires_database_at_collection(item) for item in session.items):
+        ensure_database(get_bootstrap_state(session.config).root)
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Gate tests declaring a required real environment.
+    """Gate environment-marked tests, then lazily initialize the database.
+
+    The environment gate runs first so a skipped test never pays the Airflow
+    import and migration cost. The database check is a safety net for items
+    injected after collection; ordinary runs initialize during
+    ``pytest_collection_finish``.
 
     Parameters:
         item: pytest.Item about to enter its setup phase.
     """
 
     apply_environment_gate(item)
+    if _requires_database(item):
+        ensure_database(get_bootstrap_state(item.config).root)
 
 
 @pytest.hookimpl(optionalhook=True)
