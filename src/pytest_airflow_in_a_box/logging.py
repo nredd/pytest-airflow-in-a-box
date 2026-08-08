@@ -234,4 +234,131 @@ def _uninstall_dict_config_interceptor() -> None:
         _INSTALLED = False
 
 
+_StructlogConfigure = Callable[..., None]
+_StructlogCaptureCallback = Callable[[StructlogCapture], None]
+
+
+class _StructlogModule(Protocol):
+    """Typed mutable surface for the structlog configuration module."""
+
+    configure: _StructlogConfigure
+    configure_once: _StructlogConfigure
+
+
+_ADD_STRUCTLOG_CAPTURE: _StructlogCaptureCallback | None = None
+_REMOVE_STRUCTLOG_CAPTURE: _StructlogCaptureCallback | None = None
+
+
+def _with_captures(
+    processors: Iterable[Any],
+    captures: Iterable[StructlogCapture],
+) -> list[Any]:
+    """Insert active capture processors immediately before the final processor.
+
+    Parameters:
+        processors: Iterable[Any] containing a structlog processor chain.
+        captures: Iterable[StructlogCapture] containing active captures.
+
+    Returns:
+        list[Any] containing the chain with each active capture inserted once.
+    """
+
+    active = tuple(captures)
+    chain = [item for item in processors if not any(item is capture for capture in active)]
+    if not chain:
+        return [*active]
+    return [*chain[:-1], *active, chain[-1]]
+
+
+def _install_structlog_capture_interceptor(capture: StructlogCapture) -> None:
+    """Install a capture processor and intercept mid-test reconfiguration.
+
+    Parameters:
+        capture: StructlogCapture recording every event emitted while installed.
+    """
+
+    global _ADD_STRUCTLOG_CAPTURE, _REMOVE_STRUCTLOG_CAPTURE
+
+    with _LOCK:
+        if _ADD_STRUCTLOG_CAPTURE is not None:
+            _ADD_STRUCTLOG_CAPTURE(capture)
+            return
+
+        # Deferred to preserve bootstrap safety; structlog arrives with Airflow.
+        import structlog
+
+        module = cast(_StructlogModule, structlog)
+        saved = structlog.get_config()
+        real_configure: _StructlogConfigure = module.configure
+        real_configure_once: _StructlogConfigure = module.configure_once
+        captures: list[StructlogCapture] = [capture]
+
+        def _intercept_configure(*args: Any, **kwargs: Any) -> None:
+            with _LOCK:
+                real_configure(*args, **kwargs)
+                real_configure(
+                    processors=_with_captures(structlog.get_config()["processors"], captures)
+                )
+
+        def _intercept_configure_once(*args: Any, **kwargs: Any) -> None:
+            with _LOCK:
+                real_configure_once(*args, **kwargs)
+                real_configure(
+                    processors=_with_captures(structlog.get_config()["processors"], captures)
+                )
+
+        def _add_capture(new_capture: StructlogCapture) -> None:
+            if any(item is new_capture for item in captures):
+                return
+            captures.append(new_capture)
+            real_configure(
+                processors=_with_captures(structlog.get_config()["processors"], captures)
+            )
+
+        def _remove_capture(old_capture: StructlogCapture) -> None:
+            global _ADD_STRUCTLOG_CAPTURE, _REMOVE_STRUCTLOG_CAPTURE
+
+            remaining = [item for item in captures if item is not old_capture]
+            if len(remaining) == len(captures):
+                return
+            captures[:] = remaining
+            current_processors = [
+                item for item in structlog.get_config()["processors"] if item is not old_capture
+            ]
+            if captures:
+                real_configure(processors=_with_captures(current_processors, captures))
+                return
+
+            module.configure = real_configure
+            module.configure_once = real_configure_once
+            _ADD_STRUCTLOG_CAPTURE = None
+            _REMOVE_STRUCTLOG_CAPTURE = None
+            real_configure(
+                processors=current_processors,
+                cache_logger_on_first_use=saved["cache_logger_on_first_use"],
+            )
+
+        module.configure = _intercept_configure
+        module.configure_once = _intercept_configure_once
+        _ADD_STRUCTLOG_CAPTURE = _add_capture
+        _REMOVE_STRUCTLOG_CAPTURE = _remove_capture
+        real_configure(
+            processors=_with_captures(saved["processors"], captures),
+            cache_logger_on_first_use=False,
+        )
+
+
+def _uninstall_structlog_capture_interceptor(capture: StructlogCapture) -> None:
+    """Remove one capture and restore structlog after the final capture exits.
+
+    Parameters:
+        capture: StructlogCapture to remove from the active processor chain.
+    """
+
+    with _LOCK:
+        if _REMOVE_STRUCTLOG_CAPTURE is None:
+            return
+        _REMOVE_STRUCTLOG_CAPTURE(capture)
+
+
 __all__ = ("StructlogCapture", "TestContextFilter", "ensure_handlers")
