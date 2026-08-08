@@ -154,8 +154,7 @@ def test_with_overrides():
 
 
 @airflow_config({("core", "dagbag_import_timeout"): "120"})
-def test_decorated():
-    ...
+def test_decorated(): ...
 ```
 
 Every name is restored exactly on exit, and a name that was absent beforehand is deleted rather
