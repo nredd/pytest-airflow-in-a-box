@@ -13,15 +13,16 @@ from typing import Protocol
 import pytest
 
 MARKER_DESCRIPTIONS = (
-    "api_test: require the isolated Airflow REST API server",
+    "api_test: require the isolated Airflow REST API server (triggers lazy database init)",
     "compat: exercise the public plugin surface across certified runtimes",
-    "db_test: require the isolated Airflow metadata database",
+    "db_test: require the isolated Airflow metadata database (triggers lazy database init)",
     "environment(name): run only when the named environment's sentinel path exists",
     "need_serialized_dag([enabled]): request serialized Dag behavior",
     "postgres: require a provisioned Postgres metadata database",
     "smoke: run a bundled zero-boilerplate check (opt in with airflow_smoke)",
 )
 
+DATABASE_MARKER_NAMES = ("api_test", "db_test")
 ENVIRONMENT_MARKER_NAME = "environment"
 _ENVIRONMENTS_KEY = pytest.StashKey[dict[str, Path]]()
 

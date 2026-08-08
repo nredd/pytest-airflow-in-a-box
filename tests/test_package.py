@@ -113,6 +113,7 @@ def test_public_surface_is_explicit() -> None:
         "TaskInstanceRunner",
         "build_dag_bag",
         "clear_tables",
+        "ensure_database",
         "implied_groups",
         "initialize_database",
         "resolve_capabilities",

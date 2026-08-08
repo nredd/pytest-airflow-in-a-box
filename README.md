@@ -36,6 +36,20 @@ uv add --dev pytest-airflow-in-a-box
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
 
+The plugin is inert on runs without Airflow-facing tests: session startup only prepares a
+disposable run directory and `AIRFLOW__*` environment variables. Airflow itself is imported and
+the metadata database migrated lazily, on the first test that carries a `db_test`/`api_test`
+marker or uses a database-backed plugin fixture. A `pytest -k unrelated` run in a shared venv
+never pays the Airflow import or migration cost. Tests that touch the metadata database directly
+(their own `create_session` calls, for example) without a plugin fixture must carry `db_test` to
+trigger initialization.
+
+To disable the plugin entirely for a run:
+
+```console
+pytest -p no:pytest_airflow_in_a_box
+```
+
 ## Database backends
 
 The metadata database defaults to a tuned, WAL-mode SQLite file created per run -- fast and
@@ -300,8 +314,8 @@ def test_api(api_client, dag_maker):
 
 ## Markers
 
-- `db_test`: requires the isolated metadata database
-- `api_test`: requires the isolated REST API server
+- `db_test`: requires the isolated metadata database (triggers its lazy initialization)
+- `api_test`: requires the isolated REST API server (triggers lazy database initialization)
 - `postgres`: requires a provisioned Postgres metadata database (the `postgres` extra plus Docker)
 - `compat`: end-user tests exercised across the version matrix
 - `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`

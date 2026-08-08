@@ -30,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from pytest_airflow_in_a_box._compat import ensure_database
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
 
 LOGGER = logging.getLogger(__name__)
@@ -348,7 +349,9 @@ def api_server_url(pytestconfig: pytest.Config) -> Iterator[str]:
         ApiServerError: The server exited early or never became responsive.
     """
 
-    yield from _launch_api_server(get_bootstrap_state(pytestconfig))
+    state = get_bootstrap_state(pytestconfig)
+    ensure_database(state.root)
+    yield from _launch_api_server(state)
 
 
 @pytest.fixture(scope="session")

@@ -20,6 +20,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
 from pytest_airflow_in_a_box._compat.dagbag import DagBagConstructionError, build_dag_bag
 from pytest_airflow_in_a_box._compat.database import (
     DatabaseInitializationError,
+    ensure_database,
     initialize_database,
 )
 from pytest_airflow_in_a_box._compat.db import (
@@ -47,6 +48,7 @@ __all__ = (
     "TaskInstanceRunner",
     "build_dag_bag",
     "clear_tables",
+    "ensure_database",
     "implied_groups",
     "initialize_database",
     "resolve_capabilities",
