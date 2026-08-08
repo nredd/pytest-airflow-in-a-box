@@ -80,14 +80,18 @@ def test_task(dag_maker):
 
 Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `run_task_instance`,
 `ordered_task_instances`, and `TaskResolutionError`. The `DagMaker` protocol additionally exposes
-`create_dagrun`, `create_ti`, and `run_ti`.
+`create_dagrun`, `create_ti`, and `run_ti`. Passing `map_index` expands a mapped task on demand;
+upstream-XCom mapping works after its producer has run in the same DagRun. Passing
+`run_triggerer=True` runs the persisted trigger event and resumes a deferred task inline.
 
 ## DB-free task execution
 
 `run_task` executes one operator through the Task SDK in process, with no metadata database. XCom,
 Variable, and Connection traffic is answered from seeded dictionaries; unseeded lookups fail
 exactly like a live deployment. Task callbacks and listeners stay silent unless the call passes
-`run_callbacks=True`.
+`run_callbacks=True`. `try_number` selects the synthetic attempt; operator retry configuration
+determines whether a failure reaches `UP_FOR_RETRY` and its retry callback. Asset inlet/outlet
+validation is accepted as active in this deployment-free path.
 
 ```python
 def test_operator(run_task):
@@ -180,6 +184,15 @@ def test_api(api_client, dag_maker):
 - `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
 - `environment(name)`: run only when the named environment's sentinel path exists, configured via
   the `airflow_environments` ini line list (`lab = /opt/lab/sentinel`)
+
+## Compatibility suite
+
+The repository's `tests/enduser/` suite is a sanitized consumer-style catalog run on every
+certified matrix leg. It covers custom operators, TaskFlow and mapping, hooks and connections,
+SQLite provider SQL, sensors, deferral, callbacks and retries, assets, provider-shaped packages,
+DagBag/collection, logging, xdist, and REST API CRUD. The provider-shaped corpus verifies user
+package composition and execution; registering a real provider distribution entry point remains
+out of scope because that is Airflow's packaging surface rather than this plugin's test surface.
 
 ## Defaults
 
