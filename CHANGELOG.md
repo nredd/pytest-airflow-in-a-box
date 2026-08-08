@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ## Unreleased
 
-## [0.1.1] - 2026-08-07
+## [0.1.2] - 2026-08-07
 
 ### Added
 
@@ -28,5 +28,5 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.1.1
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.1.2
