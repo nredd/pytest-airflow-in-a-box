@@ -72,6 +72,9 @@ the record:
 - **`config.inicfg` is deprecated (pytest 9, removed in 10).** The `tmp_path_retention_*` defaults
   are re-registered via `parser.addini` in a `trylast` `pytest_addoption` (last registration wins)
   instead of `inicfg.setdefault` in `pytest_load_initial_conftests`.
+- **The pytest floor is 8, not 9.1.** A follow-up public-API audit found no 9-only use, and an exact
+  pytest 8.0.0 CI leg now certifies the real floor. Avoiding `config.inicfg` remains correct on both
+  versions and preserves pytest 10 readiness.
 - **The Task SDK surface is uniform across 3.1.8/3.2.2/3.3.0** — `run(ti, context, log)` returning
   the 3-tuple, `CommsDecoder.send`, and `RuntimeTaskInstance.bundle_instance` *required on all
   three* (not 3.2/3.3 churn as assumed). `bundle_instance` is only touched by the unused `parse`
@@ -900,17 +903,15 @@ before `configure_orm()` on 2.11. `initdb()` exists on 2.x and stays the init ca
 Certify the latest 2.11.x patch only -- 2.11 is upstream's designated bridge release and the
 official migration guidance is "get to latest 2.11 first." Latest 2.10.x is an explicit
 stretch, nothing older (EOL, outside the migration story). Python intersection: 3.10-3.12
-(2.x never supported 3.13). Three new CI legs; constraints files exist for 2.11 BUT pin the
-pytest family at 8.x, so the CI (and documented user) install pattern is: install Airflow
-under filtered constraints (pytest family stripped), then the plugin in a second resolver
-pass. Tracked as its own decision issue.
+(2.x never supported 3.13). Three new CI legs; constraints files exist for 2.11 and pin the pytest
+family at 8.x. The plugin's pytest floor was widened to 8 after a public-API audit, and an exact
+8.0.0 CI leg certifies that family independently of the future Airflow 2.x tier.
 
 ### Existential risks, resolved by a Phase 1a spike before anything else
 
-- pytest 9.1 + its pluggy floor coexisting with 2.11's frozen dependency tree at runtime --
-  if genuinely incompatible, stop and reassess; nothing else is worth building. Do NOT lower
-  the pytest floor: the defaults/reporting code targets pytest 9 semantics, and a dual-pytest
-  matrix doubles certification for zero migration value.
+- pytest 8 compatibility is resolved independently: the defaults/reporting code uses public APIs
+  available in 8.0, while its `config.inicfg` avoidance also remains ready for pytest 10. The
+  future 2.11 spike must still verify the complete frozen dependency tree at runtime.
 - `unit_test_mode`/`load_test_config` vs env-var precedence (above).
 - SQLAlchemy 1.4 (2.x pins `<2.0`): `session.scalars`/`session.scalar(select())` need
   >=1.4.24; audit the five call sites in `_compat/dag.py`/`_compat/taskrun.py`.
