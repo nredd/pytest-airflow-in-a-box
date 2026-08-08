@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install uv
@@ -73,8 +73,8 @@ jobs:
             python-version: "3.12"
             os: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install uv
@@ -100,7 +100,7 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: .venv-ci/bin/python -m coverage run -m pytest -v
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}
           path: .coverage.*
@@ -113,7 +113,7 @@ jobs:
     timeout-minutes: 40
     container: python:3.12-alpine
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install build prerequisites
         run: apk add --no-cache build-base curl git libffi-dev
       - name: Install uv
@@ -139,7 +139,7 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: .venv-ci/bin/python -m coverage run -m pytest -v
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-alpine-musl-3.3.0-3.12
           path: .coverage.*
@@ -155,8 +155,8 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install uv
@@ -164,7 +164,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
       - name: Download coverage data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: coverage-*
           merge-multiple: true
@@ -177,7 +177,7 @@ jobs:
           uv run coverage xml
           uv run coverage report --fail-under=100 | tee coverage-report.txt
       - name: Upload combined report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-combined
           path: coverage.xml

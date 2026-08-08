@@ -24,10 +24,11 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
 ]
 dependencies = [
     "apache-airflow-core>=3.1,<4",
-    "apache-airflow-providers-sqlite",
+    "apache-airflow-providers-sqlite>=4.1,<5",
     "pytest>=9.1",
     "pytest-timeout>=2.4",
     "pytest-xdist>=3.8",
@@ -36,6 +37,7 @@ dependencies = [
 [project.urls]
 Changelog = "https://github.com/nredd/pytest-airflow-in-a-box/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/nredd/pytest-airflow-in-a-box#readme"
+Homepage = "https://github.com/nredd/pytest-airflow-in-a-box"
 Issues = "https://github.com/nredd/pytest-airflow-in-a-box/issues"
 Repository = "https://github.com/nredd/pytest-airflow-in-a-box"
 
@@ -58,8 +60,6 @@ required-version = "==0.16.1"
 target-version = "py310"
 line-length = 99
 unsafe-fixes = true
-# Canonical imported records are immutable inputs, including their Python fences.
-extend-exclude = ["docs/PLAN.md", "docs/RESEARCH.md"]
 
 [tool.ruff.analyze]
 detect-string-imports = true

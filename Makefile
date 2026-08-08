@@ -1,4 +1,4 @@
-.PHONY: help install format lint type test lock build clean all
+.PHONY: help install format lint type test lock build dist release clean all
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -28,6 +28,28 @@ lock:  ## Verify the dependency lock is current
 
 build:  ## Build the source and wheel distributions
 	uv run python -m build --installer uv
+
+dist:  ## Build a clean sdist + wheel and validate them with twine
+	rm -rf dist
+	uv run python -m build --installer uv
+	uvx twine@7.0.0 check --strict dist/*
+
+release:  ## Tag the current version and print the gh release command (does not publish)
+	@pyproject_version="$$(uv version --short)"; \
+	init_version="$$(sed -n 's/^__version__ = "\(.*\)"$$/\1/p' src/pytest_airflow_in_a_box/__init__.py)"; \
+	if [ "$$pyproject_version" != "$$init_version" ]; then \
+		echo "version mismatch: pyproject.toml=$$pyproject_version __init__.py=$$init_version" >&2; \
+		exit 1; \
+	fi; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "working tree is not clean" >&2; \
+		exit 1; \
+	fi; \
+	tag="v$$pyproject_version"; \
+	git tag -a "$$tag" -m "$$tag"; \
+	git push origin "$$tag"; \
+	echo "Tag $$tag pushed. Publish with:"; \
+	echo "  gh release create $$tag --title $$tag --generate-notes"
 
 clean:  ## Remove every git-ignored file and directory
 	git clean -fdX

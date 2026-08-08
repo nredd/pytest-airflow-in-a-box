@@ -1,0 +1,18 @@
+name: Question
+description: Usage question that isn't a bug report or a feature request.
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do, and what have the README and CHANGELOG not answered?
+    validations:
+      required: true
+  - type: input
+    id: airflow-version
+    attributes:
+      label: Apache Airflow version (if relevant)
+      placeholder: "3.2.2"
+    validations:
+      required: false

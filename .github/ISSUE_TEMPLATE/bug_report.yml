@@ -1,0 +1,54 @@
+name: Bug report
+description: Something isn't working the way the docs say it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: >-
+        A minimal Dag/test/conftest that reproduces the issue, or the exact `pytest` invocation
+        and output.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: pytest-airflow-in-a-box version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: airflow-version
+    attributes:
+      label: Apache Airflow version
+      placeholder: "3.2.2"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.12"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15, Ubuntu 24.04, Alpine (musl), ..."
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Relevant `pytest.ini`/`pyproject.toml` settings, CI logs, etc.

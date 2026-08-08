@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file. The format 
 
 ## Unreleased
 
+## [0.1.0] - 2026-08-07
+
 ### Added
 
-- Initial package, pytest entry point, development tooling, CI, and repository policy scaffold.
+- `pytest11` autoregistration via a single installable package -- no `conftest.py` wiring required.
+- Isolated bootstrap: a disposable, per-run Airflow metadata database and `AIRFLOW_HOME`, with
+  automatic network-filesystem detection so state never lands on NFS/SMB by accident.
+- Fixtures: `session`, `dag_maker`, `full_dag_bag`, `run_task`, `cap_structlog`, `api_server_url`,
+  `api_client`.
+- Markers: `db_test`, `api_test`, `compat`, `need_serialized_dag`, `environment`.
+- CLI options: `--airflow-home`, `--allow-network-airflow-home`, `--collect-dag-folder`.
+- Ini options: `airflow_home`, `airflow_dags_folder`, `airflow_collect_dags_folder`,
+  `airflow_environments`, `allow_network_airflow_home`.
+- Opt-in Dag-file collection as import-check test items, deduplicated against pytest's default
+  Python test discovery.
+- Modules: `db`, `taskinstance`, `types`, `collection`, `logging`, `reporting`.
+- `pytest-xdist` support, including worker-suffixed report artifacts and coordinated database
+  setup/teardown across workers.
+- Zero-ini defaults: sane `--tb`/`-ra`/`--durations`/`tmp_path` retention and warning-filter
+  behavior out of the box, always overridable by explicit user configuration.
+- Verified support matrix across supported Python and Apache Airflow versions (see README).
+
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.1.0
