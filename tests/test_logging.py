@@ -226,6 +226,74 @@ def test_interceptor_installation_is_idempotent_and_restorable() -> None:
         logging_support._install_dict_config_interceptor()
 
 
+def test_structlog_interceptor_installation_is_idempotent_and_restorable() -> None:
+    """Install once and restore the exact process-global callables once."""
+
+    import structlog
+
+    installed_configure = structlog.configure
+    installed_configure_once = structlog.configure_once
+    capture = logging_support.StructlogCapture()
+    try:
+        logging_support._install_structlog_capture_interceptor(capture)
+        assert structlog.configure is not installed_configure
+        assert structlog.configure_once is not installed_configure_once
+        first_configure = structlog.configure
+        first_configure_once = structlog.configure_once
+
+        logging_support._install_structlog_capture_interceptor(capture)
+        assert structlog.configure is first_configure
+        assert structlog.configure_once is first_configure_once
+
+        logging_support._uninstall_structlog_capture_interceptor(capture)
+        assert structlog.configure is installed_configure
+        assert structlog.configure_once is installed_configure_once
+        logging_support._uninstall_structlog_capture_interceptor(capture)
+        assert structlog.configure is installed_configure
+        assert structlog.configure_once is installed_configure_once
+    finally:
+        logging_support._uninstall_structlog_capture_interceptor(capture)
+
+
+def test_structlog_interceptor_supports_nested_captures() -> None:
+    """Keep nested captures independent until the final capture exits."""
+
+    import structlog
+
+    installed_configure = structlog.configure
+    installed_configure_once = structlog.configure_once
+    outer = logging_support.StructlogCapture()
+    inner = logging_support.StructlogCapture()
+    try:
+        logging_support._install_structlog_capture_interceptor(outer)
+        intercepted_configure = structlog.configure
+        intercepted_configure_once = structlog.configure_once
+        logging_support._install_structlog_capture_interceptor(inner)
+
+        processors = structlog.get_config()["processors"]
+        assert sum(item is outer for item in processors) == 1
+        assert sum(item is inner for item in processors) == 1
+
+        logging_support._uninstall_structlog_capture_interceptor(
+            logging_support.StructlogCapture()
+        )
+        assert structlog.configure is intercepted_configure
+
+        logging_support._uninstall_structlog_capture_interceptor(outer)
+        processors = structlog.get_config()["processors"]
+        assert not any(item is outer for item in processors)
+        assert sum(item is inner for item in processors) == 1
+        assert structlog.configure is intercepted_configure
+        assert structlog.configure_once is intercepted_configure_once
+
+        logging_support._uninstall_structlog_capture_interceptor(inner)
+        assert structlog.configure is installed_configure
+        assert structlog.configure_once is installed_configure_once
+    finally:
+        logging_support._uninstall_structlog_capture_interceptor(outer)
+        logging_support._uninstall_structlog_capture_interceptor(inner)
+
+
 def test_consumer_dict_config_keeps_caplog_capture(
     pytester: pytest.Pytester,
     monkeypatch: pytest.MonkeyPatch,
