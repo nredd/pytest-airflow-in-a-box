@@ -3,7 +3,7 @@
 _Canonical implementation plan. Imported from an internal source revision and revised on 2026-08-07
 to remove environment-specific details and incorporate bootstrap validation findings._
 
-## Status (2026-08-07, second revision)
+## Status (2026-08-07, third revision)
 
 Every numbered build-order step (1–13) is implemented and tested; see § Corrections below for
 where the implementation deviated from this plan and why.
@@ -24,19 +24,33 @@ where the implementation deviated from this plan and why.
   gate restored to 100 locally and on the CI union.
 - **Explicitly rejected:** Windows CI leg (Windows is unsupported; the `windll` branch is covered
   through a fake probe).
-- **Postgres tier shipped** ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)):
+- **Also done (2026-08-07, later):** the unified `airflow_config()` context manager plus a
+  deprecated `conf_vars` alias (`config.py`,
+  [#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)), closing the last
+  § UNIFY -- config/env item; the end-user compat suite expanded from the 8-test v1 set to
+  37 tests across 12 modules covering the full artifact catalog
+  ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6),
+  [#18](https://github.com/nredd/pytest-airflow-in-a-box/pull/18)); the certified matrix
+  widened to every non-yanked 3.1.x/3.2.x patch release -- 16 legs plus musl
+  ([#15](https://github.com/nredd/pytest-airflow-in-a-box/issues/15),
+  [#19](https://github.com/nredd/pytest-airflow-in-a-box/pull/19)); the bundled
+  zero-boilerplate smoke catalog -- 8 check item classes behind `--airflow-smoke` with 4 new
+  ini options ([#10](https://github.com/nredd/pytest-airflow-in-a-box/issues/10),
+  [#20](https://github.com/nredd/pytest-airflow-in-a-box/pull/20)); `cap_structlog` surviving
+  mid-test structlog reconfiguration
+  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9),
+  [#22](https://github.com/nredd/pytest-airflow-in-a-box/pull/22)); PyPI trusted publishing
+  with build provenance, released through v0.1.2
+  ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)).
+- **Postgres tier shipped** ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5),
+  PR [#23](https://github.com/nredd/pytest-airflow-in-a-box/pull/23)):
   opt-in `--airflow-db-backend=postgres` / `airflow_db_backend` ini + `postgres` extra, provisioned
   per session with testcontainers (Level-A single shared DB across all workers). NullPool selected
   via `AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED=False` is the chosen connection-exhaustion lever;
   a missing extra or Docker daemon hard-errors rather than skipping.
-- **Remaining work is tracked as GitHub issues, not here:** end-user compat-suite expansion
-  ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)), PyPI trusted publishing
-  ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)).
-- **Also done (2026-08-08):** `cap_structlog` survives Airflow logging reconfiguration
-  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)); the unified `airflow_config()`
-  context manager has a deprecated `conf_vars` alias (`config.py`,
-  [#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)), closing the last § UNIFY --
-  config/env item.
+- **Remaining work is tracked as GitHub issues, not here.** See the issue tracker; the
+  2026-08-07 adoption review filed the current set (2.x tier, migration tooling, inertness,
+  canary CI, docs infrastructure, and feature work).
 
 ## Corrections from implementation (2026-08-07)
 
@@ -799,3 +813,138 @@ leg's dependency layer where reasonable, to keep local dev and CI close.
 - Local CI reproduction via `act` before every push during development
 - Port a handful of the fork's actual tests as end-to-end proof
 - CI matrix green across the native OS × Python × Airflow-version grid
+
+---
+
+## Airflow 2.x tier (planned 2026-08-07, not yet started)
+
+Decision: actively plan a 2.x compatibility tier. The 2->3 migration cohort is the largest
+prospective audience -- Airflow 2 reached open-source EOL 2026-04-22 but hosted vendors support
+it into 2027, and real migrators are hitting exactly the pain this plugin solves
+([apache/airflow#63941](https://github.com/apache/airflow/discussions/63941): a 1000-test 2.10
+suite with ~700 `ti.run()` call sites went 7 min -> 50 min on Airflow 3). The killer feature is
+one fixture surface running the same suite on 2.11 and 3.x -- testing the migration itself.
+Design summary below; items marked VERIFY need the Phase 1a empirical spike (no 2.x install was
+available when this was designed).
+
+### Packaging is the forcing move, and it is breaking
+
+2.x ships as monolithic `apache-airflow`; 3.x as `apache-airflow-core`. The current
+`apache-airflow-core>=3.1,<4` base dependency would co-install a 3.x core into a 2.x
+environment -- both distributions install the `airflow` package, silently corrupting it. Fix,
+independent of when 2.x behavior lands:
+
+- Drop Airflow (and the sqlite provider) from `[project.dependencies]` entirely -- the
+  pytest-django pattern: the framework is the user's pin, not the plugin's. Keep `pytest`,
+  `pytest-xdist`, `pytest-timeout`.
+- Add convenience extras: `airflow3 = ["apache-airflow-core>=3.1,<4",
+  "apache-airflow-providers-sqlite>=4.1,<5"]` and `airflow2 = ["apache-airflow>=2.11,<3",
+  "apache-airflow-providers-sqlite>=3.9,<5"]` (VERIFY the 2.x sqlite-provider floor).
+- Extend the existing `resolve_capabilities()` session-start error to cover
+  neither-distribution-installed and both-installed (corrupt env), each with an actionable
+  message naming the extras.
+- Ship this alone as 0.2.0 with a loud CHANGELOG entry *before* any 2.x behavior, so the 3.x
+  audience absorbs the packaging break independently.
+
+### Capability seam gains a family axis
+
+`_compat/capabilities.py` gets `AirflowFamily` (V2 = `apache-airflow`, V3 =
+`apache-airflow-core`) resolved by an import-free `importlib.metadata` probe -- the one probe
+callable from pre-import bootstrap. `AirflowCapabilities` gains `family`, `has_task_sdk`,
+`uses_structlog`, `has_dag_versioning`, `dagrun_interface` (execution_date vs logical_date),
+`api_surface` (webserver vs api-server), param/timezone module enums. `_REQUIRED_SYMBOLS`
+splits into common/v2-only/v3-only tables; `_CERTIFIED_CAPABILITIES` gains one exact contract
+per certified 2.11.x patch. Existing probes already resolve correctly on 2.x
+(`task_instance_runner -> LEGACY_RUN`, `dag_bag_location -> MODELS`,
+`refresh_from_task_supports_dag_run -> False`).
+
+### Surface disposition on 2.11
+
+- **Works as-is:** `session`, markers, storage ladder, reporting, collection machinery,
+  `defaults.py`.
+- **Needs a `_compat` branch:** `dag_maker` persistence + `create_dagrun` (the largest work
+  item -- no bundles/`DagVersion`/`LazyDeserializedDAG`; `DAG.bulk_write_to_db` +
+  `SerializedDagModel.write_dag`; `execution_date=` interface, VERIFY `triggered_by` on 2.11);
+  `clear_db` (v2 table registry: datasets not assets, `XCom` not `XComModel`, no
+  bundle/deadline tables -- keep the `TableGroup` enum identical across families with
+  `BUNDLES`/`DEADLINES` vacuously satisfied so shared suites pass unmodified); `full_dag_bag`
+  (2.x `DagBag` kwargs differ); params validation (`airflow.models.param.ParamsDict` instead
+  of `airflow.sdk.definitions.param`); the smoke serializer branch.
+- **Nearly free:** `run_task_instance`/`run_ti` -- the `LEGACY_RUN` path already implements
+  the 2.x call shape (`ti.run(...)` exists on 2.x; it was removed in 3.2, which is why the
+  shim exists). Work is compat-suite certification, not code.
+- **Capability-gated unavailable, loud actionable errors:** `run_task` (no Task SDK on 2.x;
+  error points at `dag_maker.run_ti`/`run_task_instance`), `cap_structlog` (2.x logs via
+  stdlib logging; error points at builtin `caplog`), `api_server_url`/`api_client` (no
+  `airflow api-server` on 2.x; the FAB `airflow webserver` tier is demand-driven Phase 4 --
+  its 30-90 s cold start may force a controller-owned single server for 2.x only).
+- **New markers:** `requires_airflow3` / `requires_airflow2`, auto-skipped on the other
+  family -- the ergonomic bridge that lets one suite run green on both sides.
+
+### Bootstrap and storage
+
+Bootstrap branches on the metadata-only family probe (never imports Airflow). On 2.x: drop
+`AIRFLOW__CORE__AUTH_MANAGER`/`SIMPLE_AUTH_MANAGER_*`/`AIRFLOW__API_AUTH__JWT_SECRET`
+(SimpleAuthManager is 3.x-only), add `AIRFLOW__WEBSERVER__SECRET_KEY` and
+`AIRFLOW__API__AUTH_BACKENDS=...basic_auth`. `_environment_names()` returns the superset of
+both families so restore is family-independent. `BootstrapState` gains `family`;
+`STATE_VERSION` bumps to 2. `write_airflow_config` gains a family parameter. VERIFY:
+`AIRFLOW__CORE__UNIT_TEST_MODE` on 2.x triggers `load_test_config()`, which overlays a default
+`unittests.db` URL -- env-var precedence must hold on every read path (`as_dict` included) or
+`UNIT_TEST_MODE` gets dropped on 2.x. SQLite PRAGMAs reuse `install_legacy_sqlite_listener`
+(2.x has no `create_metadata_engine` override point); VERIFY `import_local_settings()` runs
+before `configure_orm()` on 2.11. `initdb()` exists on 2.x and stays the init call.
+
+### Certified versions and CI
+
+Certify the latest 2.11.x patch only -- 2.11 is upstream's designated bridge release and the
+official migration guidance is "get to latest 2.11 first." Latest 2.10.x is an explicit
+stretch, nothing older (EOL, outside the migration story). Python intersection: 3.10-3.12
+(2.x never supported 3.13). Three new CI legs; constraints files exist for 2.11 BUT pin the
+pytest family at 8.x, so the CI (and documented user) install pattern is: install Airflow
+under filtered constraints (pytest family stripped), then the plugin in a second resolver
+pass. Tracked as its own decision issue.
+
+### Existential risks, resolved by a Phase 1a spike before anything else
+
+- pytest 9.1 + its pluggy floor coexisting with 2.11's frozen dependency tree at runtime --
+  if genuinely incompatible, stop and reassess; nothing else is worth building. Do NOT lower
+  the pytest floor: the defaults/reporting code targets pytest 9 semantics, and a dual-pytest
+  matrix doubles certification for zero migration value.
+- `unit_test_mode`/`load_test_config` vs env-var precedence (above).
+- SQLAlchemy 1.4 (2.x pins `<2.0`): `session.scalars`/`session.scalar(select())` need
+  >=1.4.24; audit the five call sites in `_compat/dag.py`/`_compat/taskrun.py`.
+- The 100% branch-coverage gate: cross-family branches are unreachable from a single install;
+  budget probe-double tests (fake `importlib.metadata`, fake modules) mirroring the existing
+  fake-libc/`windll` pattern.
+
+### Build order
+
+Phase 0 packaging break (S, ships as 0.2.0) -> Phase 1a empirical spike (S, gates everything)
+-> Phase 1b bootstrap/db/config family branches (M) -> Phase 2 `dag_maker`/runners/dagbag/
+params/smoke (L, dominated by `_compat/dag.py`) -> Phase 3 gating UX, markers, docs, CI legs
+(M) -> Phase 4 FAB webserver api tier (optional, demand-driven).
+
+## Migration outcome diff (planned 2026-08-07, depends on the 2.x tier)
+
+"Isolate tests that pass on 2.x but fail on 3.x" cannot be an in-run switch -- one environment
+holds exactly one Airflow. The workable shape is a two-run baseline/compare workflow the
+plugin owns:
+
+- `--airflow-record=PATH` (2.11 env): write a results artifact at session end -- plugin
+  version, Airflow version, Python, nodeid -> outcome map.
+- `--airflow-baseline=PATH` (3.x env): compare live outcomes against the recording; terminal
+  summary gains categories: migration regressions (pass@2.x -> fail@3.x), fixed-on-3,
+  broken-on-both, new/missing nodeids. `requires_airflow3`-gated skips classify as "gated",
+  never "regression".
+- `--airflow-baseline-select=regressions`: deselect everything else -- the fast migration
+  iteration loop.
+- Managed-xfail mode: auto-xfail known regressions from the baseline so migration CI stays
+  green while work is in flight; each fix surfaces as XPASS.
+
+Two companions: a deprecation-strict mode (`--airflow-migration-strict`, promotes Airflow
+deprecation warnings to errors on a 2.11 run -- single-env *prediction* of 3.x breakage,
+composing with the diff's *verification*), and, later, a one-command dual-env orchestrator
+(uv-provisioned 2.11 + 3.x, run twice, print the categorized diff) layered over the same
+artifacts. Caveats tracked in the issues: nodeid stability across versions (parametrize ids),
+flaky-test tolerance, artifact/env mismatch detection.
