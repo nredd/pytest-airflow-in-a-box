@@ -8,7 +8,6 @@ jobs:
     name: >-
       ${{ matrix.os || 'ubuntu-latest' }} /
       Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
-      ${{ matrix.pytest-args }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
