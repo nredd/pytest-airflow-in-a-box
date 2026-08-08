@@ -44,6 +44,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- Metadata database initialization is now lazy: it moved from session start to the first test
+  that requires the database (a `db_test`/`api_test` marker or a database-backed plugin fixture),
+  coordinated across `pytest-xdist` workers by an advisory lock plus ready sentinel in the run
+  root so exactly one process migrates. Runs without Airflow-facing tests no longer import
+  Airflow or create the database; disable the plugin with `-p no:pytest_airflow_in_a_box`
+  ([#26](https://github.com/nredd/pytest-airflow-in-a-box/issues/26)).
 - DB-free task context now includes a logical data interval and accepts active asset
   inlet/outlet validation.
 - Airflow 2.x remains unsupported: it predates the Task SDK, DAG bundles/versions, and the

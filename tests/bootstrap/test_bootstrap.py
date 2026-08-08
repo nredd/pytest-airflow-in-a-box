@@ -31,8 +31,11 @@ def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
         import sqlite3
         from pathlib import Path
 
+        import pytest
+
         from pytest_airflow_in_a_box.plugin import get_bootstrap_state
 
+        @pytest.mark.db_test
         def test_state(pytestconfig):
             state = get_bootstrap_state(pytestconfig)
             assert state.root == Path(os.environ["AIRFLOW_HOME"])
