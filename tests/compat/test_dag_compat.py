@@ -439,3 +439,35 @@ def test_legacy_refresh_and_explicit_data_interval(monkeypatch: pytest.MonkeyPat
     assert created is dag_run
     assert selected is ti
     assert session.commits == 2
+
+
+def test_mapped_expansion_is_a_noop_for_regular_tasks() -> None:
+    """Avoid scheduler expansion for an ordinary serialized task."""
+
+    session: Any = _Session()
+
+    dag_compat.expand_mapped_task_instances(object(), "run", session)
+
+    assert session.commits == 0
+
+
+def test_mapped_expansion_commits_scheduler_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expand a mapped scheduler task and commit its generated instances."""
+
+    from airflow.models.taskmap import TaskMap
+
+    calls: list[tuple[Any, str, Any]] = []
+    monkeypatch.setattr(
+        TaskMap,
+        "expand_mapped_task",
+        lambda task, run_id, *, session: calls.append((task, run_id, session)),
+    )
+    task = SimpleNamespace(is_mapped=True)
+    session: Any = _Session()
+
+    dag_compat.expand_mapped_task_instances(task, "mapped_run", session)
+
+    assert calls == [(task, "mapped_run", session)]
+    assert session.commits == 1

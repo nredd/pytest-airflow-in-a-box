@@ -34,6 +34,7 @@ def _run_task(
     variables: dict[str, str] | None = None,
     connections: dict[str, dict[str, Any]] | None = None,
     map_index: int = -1,
+    try_number: int = 1,
     run_callbacks: bool = False,
 ) -> TaskRunResult:
     """Execute one operator in process with seeded fake supervisor state.
@@ -50,6 +51,7 @@ def _run_task(
         connections: dict[str, dict[str, Any]] | None seeding connection
             fields by connection id.
         map_index: int selecting the mapped task index.
+        try_number: int selecting the synthetic task attempt number.
         run_callbacks: bool dispatching task callbacks and listeners after
             execution.
 
@@ -66,6 +68,7 @@ def _run_task(
         params=params,
         comms=comms,
         map_index=map_index,
+        try_number=try_number,
         run_callbacks=run_callbacks,
     )
 

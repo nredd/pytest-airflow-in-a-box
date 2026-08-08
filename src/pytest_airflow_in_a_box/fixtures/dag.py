@@ -23,6 +23,7 @@ from pytest_airflow_in_a_box._compat.dag import (
     cleanup_dag,
     create_dag_run,
     ensure_dag_absent,
+    expand_mapped_task_instances,
     open_dag_session,
     persist_dag,
     select_task_instance,
@@ -430,7 +431,14 @@ class _DagFactory:
         if dag_run is not None and dag_run_kwargs is not None:
             raise ValueError("`dag_run_kwargs` cannot be supplied with an existing `dag_run`")
         resolved_dag_run = dag_run or self.create_dagrun(**(dag_run_kwargs or {}))
-        record, _ = self._require_persisted()
+        record, scheduler_dag = self._require_persisted()
+        if map_index >= 0:
+            scheduler_task = scheduler_dag.get_task(task_id)
+            expand_mapped_task_instances(
+                scheduler_task,
+                str(resolved_dag_run.run_id),
+                record.session,
+            )
         return select_task_instance(
             self.dag,
             resolved_dag_run,
@@ -450,6 +458,7 @@ class _DagFactory:
         ignore_task_deps: bool = False,
         ignore_ti_state: bool = False,
         mark_success: bool = False,
+        run_triggerer: bool = False,
     ) -> TaskInstance:
         """Create and run one task instance through the compatibility shim.
 
@@ -462,6 +471,7 @@ class _DagFactory:
             ignore_task_deps: bool controlling task-specific dependencies.
             ignore_ti_state: bool controlling existing task-instance state checks.
             mark_success: bool marking success without executing the task body.
+            run_triggerer: bool running one persisted trigger event and resuming deferral.
 
         Returns:
             airflow.models.taskinstance.TaskInstance containing refreshed persisted state.
@@ -480,6 +490,7 @@ class _DagFactory:
             ignore_task_deps=ignore_task_deps,
             ignore_ti_state=ignore_ti_state,
             mark_success=mark_success,
+            run_triggerer=run_triggerer,
             session=self.session,
         )
 

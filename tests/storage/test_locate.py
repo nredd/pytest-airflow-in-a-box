@@ -423,6 +423,12 @@ def test_read_mounts_tolerates_missing_proc_mounts(monkeypatch: pytest.MonkeyPat
     assert locate_module._read_mounts(None, "linux") == ()
 
 
+def test_read_mounts_skips_proc_on_other_platforms() -> None:
+    """Return no Linux mounts when probing another platform."""
+
+    assert locate_module._read_mounts(None, "darwin") == ()
+
+
 class _FakeStatfsFunction:
     """Callable statfs double accepting ctypes attribute assignment."""
 
