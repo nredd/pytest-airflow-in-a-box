@@ -29,7 +29,7 @@ def test_provider_package_composes_in_a_corpus_dag(pytester: pytest.Pytester) ->
         """
     )
 
-    result = pytester.runpytest_subprocess("-q", "--dag-folder", str(CORPUS))
+    result = pytester.runpytest_subprocess("-q", f"--dag-folder={CORPUS}")
 
     result.assert_outcomes(passed=1)
 

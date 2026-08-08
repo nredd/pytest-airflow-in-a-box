@@ -81,6 +81,6 @@ def test_asset_dags_survive_serialization(pytester: pytest.Pytester) -> None:
         """
     )
 
-    result = pytester.runpytest_subprocess("-q", "--dag-folder", str(CORPUS))
+    result = pytester.runpytest_subprocess("-q", f"--dag-folder={CORPUS}")
 
     result.assert_outcomes(passed=1)

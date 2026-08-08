@@ -8,7 +8,7 @@ jobs:
     name: >-
       ${{ matrix.os || 'ubuntu-latest' }} /
       Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
-      ${{ matrix.pytest-args }}
+      ${{ matrix.pytest-args }}${{ matrix.pytest-label }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
@@ -41,6 +41,10 @@ jobs:
             python-version: "3.12"
           - airflow-version: "3.3.0"
             python-version: "3.12"
+          - airflow-version: "3.3.0"
+            python-version: "3.12"
+            pytest-spec: "pytest==8.0.0"
+            pytest-label: "/ pytest 8.0.0"
           - airflow-version: "3.3.0"
             python-version: "3.14"
           # The one leg closing PLAN.md's outer-suite xdist verification: a
@@ -78,6 +82,9 @@ jobs:
             --constraint airflow-constraints.txt \
             --editable . \
             "apache-airflow-core==${AIRFLOW_VERSION}"
+          if [ -n "${{ matrix.pytest-spec }}" ]; then
+            uv pip install --python .venv-ci/bin/python "${{ matrix.pytest-spec }}"
+          fi
           uv pip install --python .venv-ci/bin/python coverage
           .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests
@@ -88,7 +95,7 @@ jobs:
       - name: Upload coverage data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}
+          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}${{ matrix.pytest-spec && '-pytest8' || '' }}
           path: .coverage.*
           include-hidden-files: true
           if-no-files-found: error
