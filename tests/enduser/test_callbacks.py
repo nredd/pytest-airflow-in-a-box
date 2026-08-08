@@ -8,7 +8,6 @@ from typing import Any, ClassVar
 import pytest
 from airflow.listeners import hookimpl
 from airflow.sdk import DAG, BaseOperator
-from airflow.sdk.listener import get_listener_manager
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
@@ -133,9 +132,10 @@ def test_persisted_callbacks_follow_task_state(
 def test_db_free_runner_dispatches_listeners(run_task: RunTask) -> None:
     """Notify a registered listener when finalization is requested."""
 
+    listener_api = pytest.importorskip("airflow.sdk.listener")
     listener = RecordingListener()
     RecordingListener.calls = []
-    manager = get_listener_manager()
+    manager = listener_api.get_listener_manager()
     manager.add_listener(listener)
     try:
         with DAG(dag_id="compat_listener", schedule=None) as dag:
