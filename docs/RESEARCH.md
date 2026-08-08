@@ -73,6 +73,11 @@ that motivates using Airflow's own published constraints files (via `uv pip inst
 --constraint`, not that generator script) rather than either unconstrained resolution or the fork's
 provider-deployment-oriented generator.
 
+_Section numbering is not contiguous: §15, §17, and §19 did not survive the import from the
+internal source revision. The gaps are historical artifacts of that revision process, kept so
+existing cross-references (from the plan doc and elsewhere) stay stable; no content referenced
+by this record is missing._
+
 ---
 
 ## 1. Upstream `devel-common`/`tests_common` — current architecture
@@ -1353,9 +1358,9 @@ design, the trimmed dependency/config-boilerplate footprint, the build-tooling c
 multi-Airflow-version compat testing mechanism (constraints files, not the fork's generator
 script).
 
-The full, current architecture is now maintained in the live plan file
-(`~/.claude/plans/purring-crafting-rain.md`), which supersedes the remaining open-thread list
-previously kept here.
+The full, current architecture is now maintained in the companion plan doc
+([`docs/PLAN.md`](PLAN.md)), which supersedes the remaining open-thread list previously kept
+here.
 
 ---
 
@@ -1567,3 +1572,50 @@ unreachable on every CI platform, the Darwin probe is unreachable on Linux CI (a
 subprocess pytester children are unmeasured, and the CI matrix runs plain `pytest` with no
 coverage step at all. Resolving this needs platform-conditional exclusions plus coverage wiring in
 CI, or a scoped gate — deferred, tracked in the plan's Corrections section.
+
+---
+
+## 24. The Airflow 2.x question, revisited (2026-08-07) — decision: build the tier
+
+The v1 scope line was "Airflow 3.x only (`>=3.1,<4`), structured so 2.x *could* be added
+later." Post-v1 adoption review reverses the deferral: the 2.x tier is now actively planned.
+The design lives in [`docs/PLAN.md`](PLAN.md) § Airflow 2.x tier; this section records the
+evidence behind the decision.
+
+**The migration cohort is the largest prospective audience, and it is time-boxed.** Apache
+Airflow 2 reached open-source end-of-life on 2026-04-22 (no further security or bug fixes;
+2.11 is the final minor and the designated bridge release — upstream migration guidance is
+"get to latest 2.11 first, then jump to 3"). Managed vendors extend paid 2.x support into 2027
+(Astronomer explicitly through April 2027), so a large share of production Airflow is *right
+now* mid-migration: running 2.11, targeting 3.x, and needing to validate Dags on both sides.
+
+**The pain is on record, and it is exactly this plugin's pitch.**
+[apache/airflow discussion #63941](https://github.com/apache/airflow/discussions/63941)
+(2026-03): a team migrating 2.10 -> 3.x with 1000+ tests and ~700 `ti.run()` call sites saw
+their suite go from 7 minutes to 50 minutes on Airflow 3, on top of needing a test-compatible
+`Context` for template rendering and mocked connections for SQL operators. Every element of
+that complaint maps onto an existing surface here (`run_task_instance`, the tuned SQLite tier,
+`dag_maker`) — except that none of it installs on their *current* 2.x environment.
+
+**Two findings from the design pass worth recording as research:**
+
+1. **The current base dependency is actively fatal to any 2.x environment.** 2.x ships as the
+   monolithic `apache-airflow` distribution; 3.x split into `apache-airflow-core`. Both
+   install the `airflow` package, so installing this plugin (which pins
+   `apache-airflow-core>=3.1,<4`) into a 2.11 env co-installs a 3.x core over it — silent
+   file-level corruption, not a resolver error. Any 2.x story therefore *starts* with a
+   breaking packaging change: drop Airflow from base dependencies entirely (the pytest-django
+   pattern — the framework is the user's pin, not the plugin's) and offer `[airflow2]` /
+   `[airflow3]` convenience extras.
+2. **Airflow 2.11's published constraints pin the pytest family at 8.x**, while the plugin's
+   floor is pytest `>=9.1`. Installing under unfiltered constraints hard-fails resolution. The
+   working pattern (used by the planned CI legs and documented for users) is: install Airflow
+   under constraints with the pytest-family lines stripped, then install the plugin in a
+   second resolver pass. Whether pytest 9.1's pluggy floor coexists with 2.11's frozen
+   dependency tree *at runtime* is the existential unknown that the design's Phase 1a spike
+   answers before anything else gets built.
+
+The "isolate what breaks on 3" ask that accompanies migrations was also settled: it cannot be
+an in-run switch (one environment holds exactly one Airflow) and is instead a two-run
+record/compare workflow plus a 2.11 deprecation-strict prediction mode — see
+[`docs/PLAN.md`](PLAN.md) § Migration outcome diff.
