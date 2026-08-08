@@ -12,14 +12,6 @@ from pytest_airflow_in_a_box.bootstrap import STATE_ENVIRONMENT_VARIABLE
 from pytest_airflow_in_a_box.storage import locate_storage
 
 
-@pytest.fixture(autouse=True)
-def _isolate_nested_pytest_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent an outer xdist worker identity from leaking into pytester subprocesses."""
-
-    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
-    monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
-
-
 def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
     """Create complete serial state and remove its owned tree at unconfigure."""
 

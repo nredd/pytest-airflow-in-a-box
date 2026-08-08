@@ -8,6 +8,7 @@ jobs:
     name: >-
       ${{ matrix.os || 'ubuntu-latest' }} /
       Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
+      ${{ matrix.pytest-args }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
@@ -40,8 +41,13 @@ jobs:
             python-version: "3.12"
           - airflow-version: "3.3.0"
             python-version: "3.12"
+          # The one leg closing PLAN.md's outer-suite xdist verification: latest
+          # Airflow x latest CPython runs the whole outer suite parallel. Pinned
+          # to `-n 4` (the runner's vCPU count) for reproducibility; the nested
+          # `-n auto` compat scenario covers real per-host core-count variance.
           - airflow-version: "3.3.0"
             python-version: "3.14"
+            pytest-args: "-n 4"
           - airflow-version: "3.3.0"
             python-version: "3.12"
             os: macos-latest
@@ -74,7 +80,7 @@ jobs:
         env:
           COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
-        run: .venv-ci/bin/python -m coverage run -m pytest -v
+        run: .venv-ci/bin/python -m coverage run -m pytest -v ${{ matrix.pytest-args }}
       - name: Upload coverage data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

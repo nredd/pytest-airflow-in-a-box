@@ -8,14 +8,6 @@ from pytest_airflow_in_a_box import plugin
 from pytest_airflow_in_a_box.plugin import get_bootstrap_state
 
 
-@pytest.fixture(autouse=True)
-def _isolate_nested_xdist_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent an outer worker identity from leaking into nested pytest processes."""
-
-    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
-    monkeypatch.delenv("PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE", raising=False)
-
-
 def test_serial_collection_observes_initialized_database(pytester: pytest.Pytester) -> None:
     """Finish metadata initialization before serial consumer module collection."""
 
