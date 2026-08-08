@@ -13,6 +13,7 @@ from pytest_airflow_in_a_box import (
     __version__,
     _compat,
     collection,
+    config,
     db,
     defaults,
     fixtures,
@@ -44,6 +45,12 @@ def test_public_surface_is_explicit() -> None:
         "format_import_errors",
         "prune_duplicate_items",
         "read_declared_cases",
+    )
+    assert config.__all__ == (
+        "ENV_VAR_PREFIX",
+        "airflow_config",
+        "conf_vars",
+        "env_var_name",
     )
     assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
     assert defaults.__all__ == (
@@ -139,6 +146,17 @@ def test_taskinstance_helpers_do_not_import_airflow() -> None:
 
     script = (
         "import sys; import pytest_airflow_in_a_box.taskinstance; "
+        "raise SystemExit('airflow' in sys.modules)"
+    )
+
+    subprocess.check_output([sys.executable, "-c", script], text=True)
+
+
+def test_config_helpers_do_not_import_airflow() -> None:
+    """Keep the configuration override helpers safe before Airflow bootstrap."""
+
+    script = (
+        "import sys; import pytest_airflow_in_a_box.config; "
         "raise SystemExit('airflow' in sys.modules)"
     )
 

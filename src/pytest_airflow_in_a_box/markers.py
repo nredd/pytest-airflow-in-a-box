@@ -19,6 +19,7 @@ MARKER_DESCRIPTIONS = (
     "environment(name): run only when the named environment's sentinel path exists",
     "need_serialized_dag([enabled]): request serialized Dag behavior",
     "postgres: require a provisioned Postgres metadata database",
+    "smoke: run a bundled zero-boilerplate check (opt in with airflow_smoke)",
 )
 
 ENVIRONMENT_MARKER_NAME = "environment"

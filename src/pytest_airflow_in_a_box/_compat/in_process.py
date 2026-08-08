@@ -75,6 +75,7 @@ class FakeSupervisorComms:
             ConnectionResult,
             ErrorResponse,
             ErrorType,
+            InactiveAssetsResult,
             VariableResult,
             XComCountResponse,
             XComResult,
@@ -120,6 +121,8 @@ class FakeSupervisorComms:
             return ConnectionResult.model_validate(
                 {"conn_type": "generic", **fields, "conn_id": msg.conn_id}
             )
+        if name == "ValidateInletsAndOutlets":
+            return InactiveAssetsResult(inactive_assets=[])
         return None
 
 
@@ -167,6 +170,7 @@ def run_task_in_process(
     params: dict[str, Any] | None = None,
     comms: FakeSupervisorComms | None = None,
     map_index: int = -1,
+    try_number: int = 1,
     run_callbacks: bool = False,
 ) -> InProcessRunResult:
     """Execute one operator through ``task_runner.run`` with fake supervision.
@@ -183,6 +187,7 @@ def run_task_in_process(
         params: dict[str, Any] | None overriding declared Dag params.
         comms: FakeSupervisorComms | None carrying seeded supervisor state.
         map_index: int selecting the mapped task index.
+        try_number: int selecting the synthetic task attempt number.
         run_callbacks: bool dispatching task callbacks and listeners through
             ``task_runner.finalize`` after execution.
 
@@ -200,6 +205,8 @@ def run_task_in_process(
         raise TypeError("`task` must be an Airflow operator exposing a string `task_id`")
     if not run_id:
         raise ValueError("`run_id` must be a non-empty run identifier")
+    if try_number < 1:
+        raise ValueError("`try_number` must be at least 1")
     try:
         bound_dag = task.dag
     except (AttributeError, RuntimeError):
@@ -226,7 +233,7 @@ def run_task_in_process(
         task_id=task_id,
         dag_id=resolved_dag_id,
         run_id=run_id,
-        try_number=1,
+        try_number=try_number,
         dag_version_id=uuid7(),
         map_index=map_index,
     )
@@ -235,6 +242,8 @@ def run_task_in_process(
             dag_id=resolved_dag_id,
             run_id=run_id,
             logical_date=run_date,
+            data_interval_start=run_date,
+            data_interval_end=run_date,
             run_after=run_date,
             start_date=now,
             run_type="manual",
@@ -242,13 +251,14 @@ def run_task_in_process(
             conf=dict(params) if params else None,
             consumed_asset_events=[],
         ),
-        max_tries=0,
+        max_tries=int(task.retries or 0),
+        should_retry=try_number <= int(task.retries or 0),
     )
     runtime_ti = task_runner.RuntimeTaskInstance.model_construct(
         **task_instance.model_dump(exclude_unset=True),
         task=task,
         _ti_context_from_server=context_from_server,
-        max_tries=0,
+        max_tries=int(task.retries or 0),
         start_date=now,
     )
 

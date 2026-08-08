@@ -154,6 +154,22 @@ def _get_serialized_dag_class() -> Any:
     return import_module(module_name).SerializedDAG
 
 
+def _get_dag_serializer() -> Any:
+    """Resolve the class exposing ``serialize_dag``/``deserialize_dag`` for the installed release.
+
+    Airflow 3.1 exposes both on ``serialized_objects.SerializedDAG``. Airflow 3.2 split the
+    scheduler-facing ``SerializedDAG`` data class into ``serialization.definitions.dag`` and kept
+    the encode/decode methods on a sibling ``serialized_objects.DagSerialization`` class.
+
+    Returns:
+        Any containing the release-specific class exposing ``serialize_dag``/``deserialize_dag``.
+    """
+
+    release = resolve_capabilities().release
+    module = import_module("airflow.serialization.serialized_objects")
+    return module.SerializedDAG if release < (3, 2, 0) else module.DagSerialization
+
+
 def _ensure_bundle(record: DagPersistenceRecord) -> None:
     """Create the fixture's isolated Dag bundle when absent.
 
@@ -448,6 +464,18 @@ def select_task_instance(
         ) from error
 
 
+def expand_mapped_task_instances(task: Any, run_id: str, session: Session) -> None:
+    """Expand a persisted mapped task for one DagRun when mapping applies."""
+
+    if not getattr(task, "is_mapped", False):
+        return
+
+    from airflow.models.taskmap import TaskMap
+
+    TaskMap.expand_mapped_task(task, run_id, session=session)
+    session.commit()
+
+
 def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
     """Cross Airflow's authoring/scheduler operator typing boundary.
 
@@ -549,6 +577,7 @@ __all__ = (
     "cleanup_dag",
     "create_dag_run",
     "ensure_dag_absent",
+    "expand_mapped_task_instances",
     "open_dag_session",
     "persist_dag",
     "select_task_instance",

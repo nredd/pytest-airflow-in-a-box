@@ -21,6 +21,7 @@ from airflow.sdk.execution_time.comms import (
     GetXComSequenceSlice,
     SetXCom,
     TaskState,
+    ValidateInletsAndOutlets,
 )
 from airflow.utils.state import TaskInstanceState
 
@@ -251,6 +252,15 @@ def test_rejects_empty_run_id() -> None:
         run_task_in_process(operator, run_id="")
 
 
+def test_rejects_invalid_try_number() -> None:
+    """Require one-based synthetic attempt numbers."""
+
+    operator = _build(ReturnOperator, "in_process_try_number", expression="x")
+
+    with pytest.raises(ValueError, match="`try_number` must be at least 1"):
+        run_task_in_process(operator, try_number=0)
+
+
 def test_fake_comms_answers_xcom_traffic() -> None:
     """Dispatch every XCom message type against the in-memory store."""
 
@@ -319,3 +329,13 @@ def test_fake_comms_records_unrecognized_messages() -> None:
 
     assert comms.send(TaskState(state=SdkTaskInstanceState.FAILED)) is None
     assert [type(msg).__name__ for msg in comms.sent] == ["TaskState"]
+
+
+def test_fake_comms_accepts_active_asset_inlets_and_outlets() -> None:
+    """Answer Task SDK asset validation with no inactive assets."""
+
+    from uuid6 import uuid7
+
+    result = FakeSupervisorComms().send(ValidateInletsAndOutlets(ti_id=uuid7()))
+
+    assert result.inactive_assets == []

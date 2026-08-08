@@ -24,17 +24,19 @@ where the implementation deviated from this plan and why.
   gate restored to 100 locally and on the CI union.
 - **Explicitly rejected:** Windows CI leg (Windows is unsupported; the `windll` branch is covered
   through a fake probe).
-- **Remaining work is tracked as GitHub issues, not here:** end-user compat-suite
-  expansion ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)), unified
-  `airflow_config()`/`conf_vars` ([#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)),
-  PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)), and
-  `cap_structlog` reconfiguration survival
-  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)).
 - **Postgres tier shipped** ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)):
   opt-in `--airflow-db-backend=postgres` / `airflow_db_backend` ini + `postgres` extra, provisioned
   per session with testcontainers (Level-A single shared DB across all workers). NullPool selected
   via `AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED=False` is the chosen connection-exhaustion lever;
   a missing extra or Docker daemon hard-errors rather than skipping.
+- **Remaining work is tracked as GitHub issues, not here:** Postgres tier
+  is complete; end-user compat-suite expansion ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)),
+  PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)), and
+  `cap_structlog` reconfiguration survival
+  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)).
+- **Also done (2026-08-08):** the unified `airflow_config()` context manager plus a deprecated
+  `conf_vars` alias (`config.py`, [#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)),
+  closing the last § UNIFY -- config/env item.
 
 ## Corrections from implementation (2026-08-07)
 
@@ -91,6 +93,24 @@ the record:
   `[tool.pytest-airflow-in-a-box.environments]` table needs `tomllib` (3.11+ stdlib) or `tomli`
   (not a dependency) on the 3.10 floor. The `airflow_environments` ini line list
   (`name = path`) rides pytest's own config machinery instead — same gate, zero parsing deps.
+- **No `conf` cache invalidation is needed for config overrides, so `_compat` is not involved.**
+  Issue #7 assumed a live `airflow.configuration.conf` might have cached values, requiring
+  invalidation through `_compat` where releases differ. Probed on 3.1.8/3.2.2/3.3.0:
+  `AirflowConfigParser._lookup_sequence` puts `_get_environment_variables` *first* on every `get()`
+  and keeps no per-value cache, so `get`, `getboolean`, `has_option`, `getsection`, and `as_dict`
+  observe an assignment and its removal immediately. `config.py` therefore imports nothing from
+  Airflow unless `refresh_settings` is requested, and calls no invalidation hook at all.
+- **One environment path covers both configuration parsers.** Airflow 3.2 added a second parser at
+  `airflow.sdk.configuration.conf` (absent on 3.1.x) reading the same `AIRFLOW__*` variables, so
+  assigning the variable reaches core and Task SDK parsers alike. Upstream's `conf_vars` instead
+  enumerates loaded modules via `sys.modules` and mutates each parser in place; the env-var
+  mechanism needs neither.
+- **`airflow.settings` globals do not follow the environment, so the refresh is opt-in.**
+  `SQL_ALCHEMY_CONN`/`DAGS_FOLDER`/`PLUGINS_FOLDER` resolve once at import. Upstream's `conf_vars`
+  always calls `settings.configure_vars()`; ours does so only under `refresh_settings=True`,
+  because calling it unconditionally would forfeit the module's pre-Airflow-import safety and
+  rewrite process-global state bootstrap owns. It is also only a partial remedy — a module that
+  re-exported a settings value *by value* froze that binding at import.
 
 ## Context
 
