@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `config` module with `airflow_config()`, one context manager -- usable as a decorator -- that
+  overrides Airflow configuration options and plain environment variables through a single code
+  path, restoring every name exactly on exit including names that were previously absent. A `None`
+  value makes a name absent for the duration of the context. Opt-in `refresh_settings=True`
+  recomputes the `airflow.settings` configuration globals.
+- `config.env_var_name()` and `config.ENV_VAR_PREFIX`, which reproduce Airflow's
+  `AIRFLOW__SECTION__KEY` name mangling without importing Airflow.
+
 - Consumer-style compatibility coverage for operators, TaskFlow mapping and branching, hooks,
   connections, provider SQL, sensors, deferral, callbacks, retries, assets, provider-shaped
   packages, Dag collection, and REST API CRUD.
@@ -22,6 +30,11 @@ All notable changes to this project will be documented in this file. The format 
 - Split the CI compat matrix into a reusable `.github/workflows/compat.yml` workflow so
   branch-protection rules can require one stable `Coverage` check regardless of how many
   Airflow/Python legs the matrix grows to.
+
+### Deprecated
+
+- `config.conf_vars()`, an alias provided under the name public Airflow documentation teaches. It
+  emits a `DeprecationWarning`; use `config.airflow_config()` instead.
 
 ### Changed
 
