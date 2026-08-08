@@ -46,11 +46,60 @@ jobs:
     name: Compat
     uses: ./.github/workflows/compat.yml
 
+  postgres:
+    name: postgres / Airflow 3.3.0 / Python 3.12
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/0.12.2/install.sh | sh
+      - name: Create constrained environment
+        env:
+          AIRFLOW_VERSION: "3.3.0"
+          PYTHON_VERSION: "3.12"
+        run: |
+          uv venv --python "$PYTHON_VERSION" .venv-ci
+          curl --fail --location --silent --show-error \
+            "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
+            --output airflow-constraints.txt
+          uv pip install --python .venv-ci/bin/python \
+            --constraint airflow-constraints.txt \
+            --editable ".[postgres]" \
+            "apache-airflow-core==${AIRFLOW_VERSION}"
+          uv pip install --python .venv-ci/bin/python coverage
+          .venv-ci/bin/python scripts/install_coverage_pth.py
+      - name: Run tests
+        # This leg buys real-integration confidence (FK-enforced `clear_db`
+        # order, `dag_maker`/`run_ti`/`api_test` parity on a real server), not
+        # coverage necessity: the injected-seam unit tests hold the 100 floor
+        # on every leg with no Docker. `ubuntu-latest` ships Docker, so the real
+        # testcontainers provisioner runs end-to-end. The outer flag governs
+        # only this session's metadata database; the `runpytest_subprocess`
+        # self-tests bootstrap their own inner sessions.
+        env:
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage
+        run: >-
+          .venv-ci/bin/python -m coverage run -m pytest -v
+          --airflow-db-backend=postgres
+          -m "compat or db_test or postgres"
+      - name: Upload coverage data
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-postgres-3.3.0-3.12
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [compat]
+    needs: [compat, postgres]
     permissions:
       contents: write
       pull-requests: write

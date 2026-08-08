@@ -36,6 +36,34 @@ uv add --dev pytest-airflow-in-a-box
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
 
+## Database backends
+
+The metadata database defaults to a tuned, WAL-mode SQLite file created per run -- fast and
+correct for single-writer test workloads, and the right default. SQLite serializes writers, so it
+cannot reproduce the concurrency semantics a real deployment runs on (row-level locking,
+`SELECT ... FOR UPDATE`, multiple concurrent writers). Opt into a disposable Postgres backend when
+you need that fidelity:
+
+```console
+uv add --dev "pytest-airflow-in-a-box[postgres]"
+pytest --airflow-db-backend=postgres
+```
+
+or persistently via the `airflow_db_backend` ini option (`sqlite` or `postgres`). The Postgres
+backend provisions one container per session with [testcontainers](https://testcontainers.com/)
+and hands Airflow the resulting SQLAlchemy URL; every worker in an `xdist` run shares that one
+database, mirroring the production topology of one metadata database behind many workers. It
+**requires a running Docker daemon** and the `postgres` extra. When either is missing the plugin
+**fails loudly with a usage error** rather than silently skipping, so a misconfigured Postgres run
+can never be mistaken for a passing SQLite run.
+
+SQLite-with-WAL and Postgres are not behaviorally equivalent; a suite green on one is not
+guaranteed green on the other. That divergence is the point -- run the Postgres backend to catch
+dialect- and concurrency-specific behavior before it ships.
+
+Plugin contributors can install the optional dependencies with `make install-postgres` (or
+`uv sync --extra postgres`).
+
 ## Development
 
 ```console
@@ -274,6 +302,7 @@ def test_api(api_client, dag_maker):
 
 - `db_test`: requires the isolated metadata database
 - `api_test`: requires the isolated REST API server
+- `postgres`: requires a provisioned Postgres metadata database (the `postgres` extra plus Docker)
 - `compat`: end-user tests exercised across the version matrix
 - `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
 - `environment(name)`: run only when the named environment's sentinel path exists, configured via

@@ -1,10 +1,14 @@
-.PHONY: help install format lint type test lock build dist release clean all
+.PHONY: help install install-postgres format lint type test lock build dist release clean all
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 install:  ## Install the locked development environment and git hooks
 	uv sync
+	uv run prek install
+
+install-postgres:  ## Install the development environment with the Postgres backend and hooks
+	uv sync --extra postgres
 	uv run prek install
 
 format:  ## Format code with ruff

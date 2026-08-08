@@ -21,7 +21,7 @@ def test_write_airflow_config_is_deterministic(tmp_path: Path) -> None:
     values = {
         "dags_folder": tmp_path / "dags",
         "logs_folder": tmp_path / "logs",
-        "database_path": tmp_path / "airflow.db",
+        "sql_alchemy_conn": sqlite_url(tmp_path / "airflow.db"),
         "password_file": tmp_path / "passwords.json",
         "jwt_secret": "stable-secret",
     }
@@ -56,6 +56,25 @@ def test_write_airflow_config_is_deterministic(tmp_path: Path) -> None:
     )
 
 
+def test_generated_config_accepts_a_postgres_url(tmp_path: Path) -> None:
+    """Write any SQLAlchemy URL verbatim into the database section."""
+
+    config_path = tmp_path / "airflow.cfg"
+    postgres_url = "postgresql+psycopg2://airflow:airflow@localhost:5432/airflow_test_abc"
+    write_airflow_config(
+        config_path,
+        dags_folder=tmp_path / "dags",
+        logs_folder=tmp_path / "logs",
+        sql_alchemy_conn=postgres_url,
+        password_file=tmp_path / "passwords.json",
+        jwt_secret="jwt-value",
+    )
+    cfg = configparser.ConfigParser()
+    cfg.read(config_path)
+
+    assert cfg.get("database", "sql_alchemy_conn") == postgres_url
+
+
 def test_generated_config_contains_required_airflow_settings(tmp_path: Path) -> None:
     """Configure test mode, paths, SQLite, SimpleAuthManager, and API signing."""
 
@@ -64,7 +83,7 @@ def test_generated_config_contains_required_airflow_settings(tmp_path: Path) -> 
         config_path,
         dags_folder=tmp_path / "dags",
         logs_folder=tmp_path / "logs",
-        database_path=tmp_path / "airflow.db",
+        sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
         password_file=tmp_path / "passwords.json",
         jwt_secret="jwt-value",
     )
@@ -87,7 +106,7 @@ def test_config_writer_rejects_relative_paths(tmp_path: Path) -> None:
             tmp_path / "airflow.cfg",
             dags_folder=Path("dags"),
             logs_folder=tmp_path / "logs",
-            database_path=tmp_path / "airflow.db",
+            sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
             password_file=tmp_path / "passwords.json",
             jwt_secret="jwt-value",
         )
@@ -100,6 +119,20 @@ def test_sqlite_url_rejects_relative_path() -> None:
         sqlite_url(Path("airflow.db"))
 
 
+def test_write_airflow_config_requires_a_database_url(tmp_path: Path) -> None:
+    """Reject an empty metadata database URL before writing configuration."""
+
+    with pytest.raises(ValueError, match="`sql_alchemy_conn` must not be empty"):
+        write_airflow_config(
+            tmp_path / "airflow.cfg",
+            dags_folder=tmp_path / "dags",
+            logs_folder=tmp_path / "logs",
+            sql_alchemy_conn="",
+            password_file=tmp_path / "passwords.json",
+            jwt_secret="jwt-value",
+        )
+
+
 def test_write_airflow_config_requires_a_jwt_secret(tmp_path: Path) -> None:
     """Reject an empty JWT secret before writing configuration."""
 
@@ -108,7 +141,7 @@ def test_write_airflow_config_requires_a_jwt_secret(tmp_path: Path) -> None:
             tmp_path / "airflow.cfg",
             dags_folder=tmp_path / "dags",
             logs_folder=tmp_path / "logs",
-            database_path=tmp_path / "airflow.db",
+            sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
             password_file=tmp_path / "passwords.json",
             jwt_secret="",
         )

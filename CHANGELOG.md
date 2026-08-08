@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- Postgres metadata database backend, provisioned per session via testcontainers and shared by all
+  `xdist` workers. Opt in with the new `postgres` extra plus a running Docker daemon; a missing
+  extra or daemon fails loudly instead of silently skipping.
+- CLI option `--airflow-db-backend` and ini option `airflow_db_backend` (`sqlite` or `postgres`)
+  to select the metadata database backend.
+- `postgres` marker for tests requiring a provisioned Postgres metadata database.
 - `config` module with `airflow_config()`, one context manager -- usable as a decorator -- that
   overrides Airflow configuration options and plain environment variables through a single code
   path, restoring every name exactly on exit including names that were previously absent. A `None`

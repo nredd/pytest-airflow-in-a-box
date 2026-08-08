@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 import pytest
 
 from pytest_airflow_in_a_box import bootstrap
+from pytest_airflow_in_a_box.airflow_cfg import sqlite_url
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_ENVIRONMENT_VARIABLE,
     STATE_KEY,
@@ -53,6 +55,8 @@ def _artifact_state(root: Path, *, owner_pid: int = 1234) -> BootstrapState:
         jwt_secret="secret",
         storage_reason="explicit",
         network_storage=False,
+        sql_alchemy_conn=sqlite_url(root / "airflow.db"),
+        db_backend="sqlite",
     )
 
 
@@ -157,7 +161,11 @@ def test_owner_state_wraps_storage_selection_failures(
         raise ValueError("no storage for you")
 
     monkeypatch.setattr(bootstrap, "locate_storage", explode)
-    ini_values = {"airflow_home": "", "allow_network_airflow_home": False}
+    ini_values = {
+        "airflow_home": "",
+        "allow_network_airflow_home": False,
+        "airflow_db_backend": "sqlite",
+    }
     config: Any = SimpleNamespace(
         getini=lambda name: ini_values[name], add_cleanup=lambda _callback: None
     )
@@ -182,7 +190,11 @@ def test_owner_state_cleans_up_after_provisioning_failure(
     monkeypatch.setattr(bootstrap, "write_airflow_config", fail_write)
     monkeypatch.setenv("AIRFLOW_HOME", "pre-existing-value")
     config: Any = SimpleNamespace(
-        getini=lambda name: {"airflow_home": str(base), "allow_network_airflow_home": False}[name],
+        getini=lambda name: {
+            "airflow_home": str(base),
+            "allow_network_airflow_home": False,
+            "airflow_db_backend": "sqlite",
+        }[name],
         add_cleanup=cleanups.append,
     )
 
@@ -281,6 +293,41 @@ def test_allow_network_honors_the_command_line_flag() -> None:
     assert bootstrap._allow_network(config, ["--allow-network-airflow-home"]) is True
 
 
+def test_db_backend_defaults_to_sqlite() -> None:
+    """Default to the SQLite backend when neither flag nor ini is set."""
+
+    config: Any = SimpleNamespace(getini=lambda _name: "")
+
+    assert bootstrap._db_backend(config, []) is bootstrap.DbBackend.SQLITE
+
+
+def test_db_backend_reads_the_command_line_flag() -> None:
+    """Prefer the command-line backend over the ini default."""
+
+    config: Any = SimpleNamespace(getini=lambda _name: "sqlite")
+
+    backend = bootstrap._db_backend(config, ["--airflow-db-backend=postgres"])
+
+    assert backend is bootstrap.DbBackend.POSTGRES
+
+
+def test_db_backend_reads_the_ini_value() -> None:
+    """Fall back to the ini backend when no command-line flag is present."""
+
+    config: Any = SimpleNamespace(getini=lambda _name: "postgres")
+
+    assert bootstrap._db_backend(config, []) is bootstrap.DbBackend.POSTGRES
+
+
+def test_db_backend_rejects_an_unsupported_value() -> None:
+    """Reject an unsupported backend string with a usage error."""
+
+    config: Any = SimpleNamespace(getini=lambda _name: "")
+
+    with pytest.raises(pytest.UsageError, match="must be `sqlite` or `postgres`"):
+        bootstrap._db_backend(config, ["--airflow-db-backend=mysql"])
+
+
 def test_state_from_payload_skips_file_validation_when_asked(tmp_path: Path) -> None:
     """Rebuild state from a payload without touching the filesystem."""
 
@@ -290,3 +337,70 @@ def test_state_from_payload_skips_file_validation_when_asked(tmp_path: Path) -> 
     rebuilt = bootstrap._state_from_payload(state.to_payload(), validate_files=False)
 
     assert rebuilt == state
+
+
+def test_state_from_payload_round_trips_a_postgres_backend(tmp_path: Path) -> None:
+    """Preserve a Postgres URL and backend through a payload round-trip."""
+
+    root = tmp_path / "run"
+    postgres_url = "postgresql+psycopg2://user:pass@localhost:5432/airflow_test_abc"
+    state = _artifact_state(root)
+    postgres_state = replace(state, sql_alchemy_conn=postgres_url, db_backend="postgres")
+
+    rebuilt = bootstrap._state_from_payload(postgres_state.to_payload(), validate_files=False)
+
+    assert rebuilt.db_backend == "postgres"
+    assert rebuilt.sql_alchemy_conn == postgres_url
+
+
+def test_state_from_payload_rejects_an_unknown_backend(tmp_path: Path) -> None:
+    """Reject a payload whose `db_backend` is not a supported value."""
+
+    payload = _artifact_state(tmp_path / "run").to_payload()
+    payload["db_backend"] = "mysql"
+
+    with pytest.raises(ValueError, match="`db_backend` must be a supported backend"):
+        bootstrap._state_from_payload(payload, validate_files=False)
+
+
+def test_state_from_payload_rejects_sqlite_url_disagreement(tmp_path: Path) -> None:
+    """Reject a SQLite state whose URL disagrees with its database path."""
+
+    payload = _artifact_state(tmp_path / "run").to_payload()
+    payload["sql_alchemy_conn"] = "sqlite:////somewhere/else.db"
+
+    with pytest.raises(ValueError, match="URL disagrees with the database path"):
+        bootstrap._state_from_payload(payload, validate_files=False)
+
+
+def test_install_environment_removes_an_inherited_sqlite_pool_toggle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prevent an inherited pool override from changing SQLite's default behavior."""
+
+    state = _artifact_state(tmp_path / "run")
+    for name in bootstrap._environment_names():
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE, "False")
+
+    bootstrap._install_environment(state)
+
+    assert bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE not in os.environ
+    assert os.environ[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == state.sql_alchemy_conn
+
+
+def test_install_environment_disables_pooling_for_postgres(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Select NullPool for Postgres by disabling Airflow connection pooling."""
+
+    state = _artifact_state(tmp_path / "run")
+    postgres_url = "postgresql+psycopg2://user:pass@localhost:5432/airflow_test_abc"
+    postgres_state = replace(state, sql_alchemy_conn=postgres_url, db_backend="postgres")
+
+    for name in bootstrap._environment_names():
+        monkeypatch.delenv(name, raising=False)
+    bootstrap._install_environment(postgres_state)
+
+    assert os.environ[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == postgres_url
+    assert os.environ[bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] == "False"

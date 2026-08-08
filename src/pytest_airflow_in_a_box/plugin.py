@@ -99,6 +99,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     parser.addini("airflow_home", "Base directory for isolated Airflow run storage.", default="")
     group.addoption(
+        "--airflow-db-backend",
+        action="store",
+        default=None,
+        dest="airflow_db_backend",
+        choices=("sqlite", "postgres"),
+        metavar="BACKEND",
+        help="Select the isolated Airflow metadata database backend.",
+    )
+    parser.addini(
+        "airflow_db_backend",
+        "Metadata database backend: `sqlite` or `postgres`.",
+        default="sqlite",
+    )
+    group.addoption(
         "--collect-dag-folder",
         action="store",
         default=None,

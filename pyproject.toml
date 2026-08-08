@@ -34,6 +34,13 @@ dependencies = [
     "pytest-xdist>=3.8",
 ]
 
+[project.optional-dependencies]
+postgres = [
+    "asyncpg>=0.29,<1",
+    "psycopg2-binary>=2.9,<3",
+    "testcontainers>=4.15,<5",
+]
+
 [project.urls]
 Changelog = "https://github.com/nredd/pytest-airflow-in-a-box/blob/main/CHANGELOG.md"
 Documentation = "https://github.com/nredd/pytest-airflow-in-a-box#readme"

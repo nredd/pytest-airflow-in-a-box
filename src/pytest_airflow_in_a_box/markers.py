@@ -18,6 +18,7 @@ MARKER_DESCRIPTIONS = (
     "db_test: require the isolated Airflow metadata database",
     "environment(name): run only when the named environment's sentinel path exists",
     "need_serialized_dag([enabled]): request serialized Dag behavior",
+    "postgres: require a provisioned Postgres metadata database",
     "smoke: run a bundled zero-boilerplate check (opt in with airflow_smoke)",
 )
 

@@ -527,6 +527,15 @@ still be designed so a Postgres/Docker tier can be added later without restructu
 Postgres code, dependency, or extra ships in v1. Prior research on the Postgres options is retained
 in §9 for whenever that tier is revisited.
 
+**Update (2026-08-07): the Postgres tier shipped**
+([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)). The provisioner seam held: the
+`Provisioner` protocol (`start() -> url`, `stop()`) added a testcontainers-backed Postgres
+implementation with zero dialect-conditional queries, exactly as designed. testcontainers was
+chosen over `pytest-postgresql` (no local Postgres binary required); Level-A single-shared-DB
+topology was chosen over per-worker isolation (mirrors production, keeps the env handoff identical
+to SQLite); `reset()` stayed deferred (`clear_db` + `dag_maker` still own per-test cleanup). See §9
+for the provisioning survey and the NullPool/connection-exhaustion analysis that drove the design.
+
 ### The official, non-monkeypatch seam for engine customization
 
 `settings.py:361-378` defines `create_metadata_engine(...)` with the docstring: *"Override in
@@ -673,7 +682,7 @@ subprocesses, **the database file must never live on NFS.**
    Python must not use modern-only syntax (f-string backslashes broke a probe script during this
    research).
 
-### Implications had Postgres been kept (retained for the future tier)
+### Implications had Postgres been kept (realized in the shipped tier)
 
 For client-server backends the in-memory question largely dissolves — pages live in the server's
 shared buffers, which all client processes already share. The parallel knobs would be: `initdb` with
@@ -681,11 +690,12 @@ the data directory on tmpfs, plus `fsync=off`, `synchronous_commit=off`, `full_p
 raised `shared_buffers` (same "disposable data → disable durability" philosophy, same
 order-of-magnitude payoff). Pooling inverts and becomes genuinely dangerous: Airflow's
 `pool_size=5`/`max_overflow=10` are **per process**, so 12 workers → up to 180 connections against
-Postgres's default `max_connections=100`. A Postgres tier must therefore override to `NullPool` or a
-1–2 connection pool per worker, since short-lived test workers gain nothing from connection reuse.
-Concurrent Alembic migrations from multiple workers against one real server is also a genuine
-hazard (inconsistent schema state, not just lock contention), making the existing FileLock
-"first worker migrates, others wait" pattern *more* load-bearing there, not less.
+Postgres's default `max_connections=100`. **The shipped tier's chosen lever is `NullPool`**, set
+deterministically via `AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED=False` (Airflow's
+`settings.py:prepare_engine_args` selects `NullPool` from that flag) — short-lived test workers gain
+nothing from connection reuse. Concurrent Alembic migrations from multiple workers against one real
+server is also a genuine hazard (inconsistent schema state, not just lock contention); the shipped
+Level-A design sidesteps it by having the controller alone run `initdb` before workers connect.
 
 Finally: SQLite-with-WAL and Postgres are **not behaviorally equivalent test targets**. Tests can
 pass on SQLite and fail on Postgres (stricter type coercion, real transaction isolation, actual
@@ -694,9 +704,13 @@ ladder*, not interchangeable options, and docs must say so.
 
 ---
 
-## 9. Postgres/MySQL provisioning options (deferred — retained for a future tier)
+## 9. Postgres/MySQL provisioning options (testcontainers chosen for the shipped tier)
 
 Researched before Postgres was cut from v1; recorded so the evaluation doesn't have to be redone.
+**The shipped tier ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)) chose
+`testcontainers`** (bottom of this list): the target machines have Docker but no local Postgres
+binary, so it runs both locally and on `ubuntu-latest` CI where `pytest-postgresql`/`pgserver`
+would not.
 
 - **`py-pglite` is a trap — do not adopt.** Markets itself as "zero config, no Docker," but its
   `manager.py` runs `npm install` and spawns `node pglite_manager.js`, making **Node.js a hard
@@ -714,11 +728,13 @@ Researched before Postgres was cut from v1; recorded so the evaluation doesn't h
   `pgserver` exists for MySQL/MariaDB. `pytest-mysql` (v4.0.0, Apr 2026) requires a local
   `mysqld`/`mysqladmin`. **Do not force parity** — route MySQL to Docker if it's ever needed.
 - **`testcontainers`** ([PyPI](https://pypi.org/project/testcontainers/), v4.15.0 Jul 2026) is the
-  power-user/CI path for both Postgres and MySQL via one actively maintained package. Modules now
-  live under `testcontainers.community.postgres` / `.mysql` (the old standalone
-  `testcontainers-postgres`/`-mysql` PyPI packages are dead `0.0.1rc1` stubs — don't reference
-  those). Requires a Docker daemon; recommended xdist pattern is a **filelock-guarded single shared
-  container with one migration**, not one container per worker.
+  power-user/CI path for both Postgres and MySQL via one actively maintained package. Postgres lives
+  under `testcontainers.community.postgres`; the provisioner keeps a stable-module fallback for older
+  layouts (the old standalone `testcontainers-postgres`/`-mysql` PyPI packages are dead `0.0.1rc1`
+  stubs — don't reference those). Its Postgres module does not install SQLAlchemy drivers, so the
+  optional extra declares `psycopg2-binary` for the sync engine and `asyncpg` for Airflow's async
+  metadata engine. Requires a Docker daemon; the selected xdist topology is one shared container with
+  one migration, not one container per worker.
 
 Notably, **Airflow's own CI never attempted an embedded-Postgres tier** — Breeze goes straight to
 Docker Compose (`ALLOWED_BACKENDS` in `dev/breeze/.../global_constants.py:70`) for anything beyond

@@ -24,13 +24,19 @@ where the implementation deviated from this plan and why.
   gate restored to 100 locally and on the CI union.
 - **Explicitly rejected:** Windows CI leg (Windows is unsupported; the `windll` branch is covered
   through a fake probe).
-- **Remaining work is tracked as GitHub issues, not here:** Postgres tier
-  ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)), end-user compat-suite
-  expansion ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)),
-  and PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)).
-- **Also done (2026-08-08):** the unified `airflow_config()` context manager plus a deprecated
-  `conf_vars` alias (`config.py`, [#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)),
-  closing the last § UNIFY -- config/env item.
+- **Postgres tier shipped** ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)):
+  opt-in `--airflow-db-backend=postgres` / `airflow_db_backend` ini + `postgres` extra, provisioned
+  per session with testcontainers (Level-A single shared DB across all workers). NullPool selected
+  via `AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED=False` is the chosen connection-exhaustion lever;
+  a missing extra or Docker daemon hard-errors rather than skipping.
+- **Remaining work is tracked as GitHub issues, not here:** end-user compat-suite expansion
+  ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)), PyPI trusted publishing
+  ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)).
+- **Also done (2026-08-08):** `cap_structlog` survives Airflow logging reconfiguration
+  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)); the unified `airflow_config()`
+  context manager has a deprecated `conf_vars` alias (`config.py`,
+  [#7](https://github.com/nredd/pytest-airflow-in-a-box/issues/7)), closing the last § UNIFY --
+  config/env item.
 
 ## Corrections from implementation (2026-08-07)
 
@@ -125,8 +131,9 @@ cite a section number there for the underlying evidence).
 - **Package/PyPI:** `pytest-airflow-in-a-box` (verified available)
 - **Repo:** `nredd/pytest-airflow-in-a-box` (verified available)
 - **Airflow target:** 3.x only (`>=3.1,<4`), structured so 2.x *could* be added later
-- **DB:** SQLite only, aggressively tuned. Postgres explicitly **out of scope for v1** (research
-  retained in doc §9 for later)
+- **DB:** SQLite by default, aggressively tuned. Postgres shipped post-v1 as an opt-in tier
+  ([#5](https://github.com/nredd/pytest-airflow-in-a-box/issues/5)); it was **out of scope for v1**
+  (research retained in doc §9)
 - **Type checking:** complete `ty` coverage, no inline waivers, minimal `cast`
 - **Build:** `uv_build`, no `hatch`/`tox`/`nox` (doc §14)
 - **CI:** native GitHub Actions matrix, no Docker-based OS/ISA testing, reproducible locally via

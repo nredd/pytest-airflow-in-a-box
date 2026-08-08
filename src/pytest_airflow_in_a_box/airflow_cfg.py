@@ -38,7 +38,7 @@ def write_airflow_config(
     *,
     dags_folder: Path,
     logs_folder: Path,
-    database_path: Path,
+    sql_alchemy_conn: str,
     password_file: Path,
     jwt_secret: str,
 ) -> None:
@@ -48,12 +48,12 @@ def write_airflow_config(
         config_path: pathlib.Path receiving the generated configuration.
         dags_folder: pathlib.Path containing test Dag files.
         logs_folder: pathlib.Path receiving Airflow logs.
-        database_path: pathlib.Path containing the SQLite metadata database.
+        sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
         password_file: pathlib.Path containing SimpleAuthManager passwords.
         jwt_secret: str used to sign Airflow API tokens.
 
     Raises:
-        ValueError: A path is relative or the JWT secret is empty.
+        ValueError: A path is relative, or the URL or JWT secret is empty.
         OSError: The configuration cannot be written.
     """
 
@@ -61,12 +61,13 @@ def write_airflow_config(
         "config_path": config_path,
         "dags_folder": dags_folder,
         "logs_folder": logs_folder,
-        "database_path": database_path,
         "password_file": password_file,
     }
     for name, path in paths.items():
         if not path.is_absolute():
             raise ValueError(f"`{name}` must be absolute: '{path}'")
+    if not sql_alchemy_conn:
+        raise ValueError("`sql_alchemy_conn` must not be empty")
     if not jwt_secret:
         raise ValueError("`jwt_secret` must not be empty")
 
@@ -80,7 +81,7 @@ def write_airflow_config(
         "simple_auth_manager_all_admins": "False",
         "simple_auth_manager_passwords_file": str(password_file),
     }
-    cfg["database"] = {"sql_alchemy_conn": sqlite_url(database_path)}
+    cfg["database"] = {"sql_alchemy_conn": sql_alchemy_conn}
     cfg["logging"] = {"base_log_folder": str(logs_folder)}
     cfg["api_auth"] = {"jwt_secret": jwt_secret}
 

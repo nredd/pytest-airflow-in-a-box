@@ -17,6 +17,13 @@ from pytest_airflow_in_a_box.storage.locate import (
     locate_storage,
     parse_proc_mounts,
 )
+from pytest_airflow_in_a_box.storage.postgres import PostgresProvisioner
+from pytest_airflow_in_a_box.storage.provision import (
+    DbBackend,
+    Provisioner,
+    SqliteProvisioner,
+    select_provisioner,
+)
 from pytest_airflow_in_a_box.storage.sqlite import (
     PragmaProfile,
     calculate_profile,
@@ -27,8 +34,12 @@ from pytest_airflow_in_a_box.storage.sqlite import (
 
 __all__ = (
     "DarwinFilesystem",
+    "DbBackend",
     "Mount",
+    "PostgresProvisioner",
     "PragmaProfile",
+    "Provisioner",
+    "SqliteProvisioner",
     "StorageFallbackWarning",
     "StorageLocation",
     "StorageReason",
@@ -38,5 +49,6 @@ __all__ = (
     "is_network_filesystem",
     "locate_storage",
     "parse_proc_mounts",
+    "select_provisioner",
     "write_local_settings",
 )
