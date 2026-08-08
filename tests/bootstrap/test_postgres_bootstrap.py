@@ -56,10 +56,13 @@ def test_postgres_backend_provisions_a_real_metadata_database(
         import os
         from pathlib import Path
 
+        import pytest
+
         from sqlalchemy import create_engine, text
 
         from pytest_airflow_in_a_box.plugin import get_bootstrap_state
 
+        @pytest.mark.db_test
         def test_state(pytestconfig):
             state = get_bootstrap_state(pytestconfig)
             assert state.db_backend == "postgres"
