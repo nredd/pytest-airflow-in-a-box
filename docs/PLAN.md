@@ -29,9 +29,9 @@ where the implementation deviated from this plan and why.
   per session with testcontainers (Level-A single shared DB across all workers). NullPool selected
   via `AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED=False` is the chosen connection-exhaustion lever;
   a missing extra or Docker daemon hard-errors rather than skipping.
-- **Remaining work is tracked as GitHub issues, not here:** Postgres tier
-  is complete; end-user compat-suite expansion ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)),
-  PyPI trusted publishing ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)), and
+- **Remaining work is tracked as GitHub issues, not here:** end-user compat-suite expansion
+  ([#6](https://github.com/nredd/pytest-airflow-in-a-box/issues/6)), PyPI trusted publishing
+  ([#8](https://github.com/nredd/pytest-airflow-in-a-box/issues/8)), and
   `cap_structlog` reconfiguration survival
   ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)).
 - **Also done (2026-08-08):** the unified `airflow_config()` context manager plus a deprecated

@@ -61,6 +61,9 @@ SQLite-with-WAL and Postgres are not behaviorally equivalent; a suite green on o
 guaranteed green on the other. That divergence is the point -- run the Postgres backend to catch
 dialect- and concurrency-specific behavior before it ships.
 
+Plugin contributors can install the optional dependencies with `make install-postgres` (or
+`uv sync --extra postgres`).
+
 ## Development
 
 ```console

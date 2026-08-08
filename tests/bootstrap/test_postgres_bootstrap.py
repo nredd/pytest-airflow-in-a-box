@@ -1,7 +1,7 @@
 """End-to-end Postgres bootstrap test gated on a real Docker daemon.
 
 This is the only test that starts a real container. It is skipped unless the
-``postgres`` extra is importable and a Docker client is on ``PATH``; the
+``postgres`` extra is importable and Docker's daemon is reachable; the
 injected-seam unit tests in ``tests/storage`` hold the coverage floor without
 Docker. The outer ``--airflow-db-backend=postgres`` flag governs the inner
 pytester session's metadata database, exercising the full owner path: select
@@ -14,13 +14,26 @@ References:
 from __future__ import annotations
 
 import importlib.util
+import json
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 
-from pytest_airflow_in_a_box.storage.postgres import _docker_is_available
+from pytest_airflow_in_a_box.storage.postgres import (
+    _docker_is_available,
+    _import_postgres_container,
+)
 
-_TESTCONTAINERS_INSTALLED = importlib.util.find_spec("testcontainers") is not None
-_POSTGRES_UNAVAILABLE = not (_TESTCONTAINERS_INSTALLED and _docker_is_available())
+_POSTGRES_EXTRA_INSTALLED = (
+    importlib.util.find_spec("testcontainers") is not None
+    and importlib.util.find_spec("psycopg2") is not None
+)
+try:
+    _import_postgres_container()
+except pytest.UsageError:
+    _POSTGRES_EXTRA_INSTALLED = False
+_POSTGRES_UNAVAILABLE = not (_POSTGRES_EXTRA_INSTALLED and _docker_is_available())
 
 pytestmark = [
     pytest.mark.postgres,
@@ -85,5 +98,12 @@ def test_postgres_backend_provisions_a_real_metadata_database(
 
     result = pytester.runpytest_subprocess("-q", "--airflow-db-backend=postgres")
 
+    assert result.ret == 0
     result.assert_outcomes(passed=1)
-    assert record_path.read_text(encoding="utf-8")
+    connection_url = json.loads(record_path.read_text(encoding="utf-8"))
+    engine = create_engine(connection_url)
+    try:
+        with pytest.raises(OperationalError):
+            engine.connect()
+    finally:
+        engine.dispose()

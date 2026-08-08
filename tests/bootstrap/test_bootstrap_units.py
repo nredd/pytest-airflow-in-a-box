@@ -373,25 +373,34 @@ def test_state_from_payload_rejects_sqlite_url_disagreement(tmp_path: Path) -> N
         bootstrap._state_from_payload(payload, validate_files=False)
 
 
-def test_environment_omits_the_pool_toggle_for_sqlite(tmp_path: Path) -> None:
-    """Leave the pool toggle unset so SQLite keeps Airflow's default pool."""
+def test_install_environment_removes_an_inherited_sqlite_pool_toggle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prevent an inherited pool override from changing SQLite's default behavior."""
 
     state = _artifact_state(tmp_path / "run")
+    for name in bootstrap._environment_names():
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE, "False")
 
-    environment = bootstrap._environment(state)
+    bootstrap._install_environment(state)
 
-    assert bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE not in environment
-    assert environment[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == state.sql_alchemy_conn
+    assert bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE not in os.environ
+    assert os.environ[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == state.sql_alchemy_conn
 
 
-def test_environment_disables_pooling_for_postgres(tmp_path: Path) -> None:
+def test_install_environment_disables_pooling_for_postgres(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Select NullPool for Postgres by disabling Airflow connection pooling."""
 
     state = _artifact_state(tmp_path / "run")
     postgres_url = "postgresql+psycopg2://user:pass@localhost:5432/airflow_test_abc"
     postgres_state = replace(state, sql_alchemy_conn=postgres_url, db_backend="postgres")
 
-    environment = bootstrap._environment(postgres_state)
+    for name in bootstrap._environment_names():
+        monkeypatch.delenv(name, raising=False)
+    bootstrap._install_environment(postgres_state)
 
-    assert environment[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == postgres_url
-    assert environment[bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] == "False"
+    assert os.environ[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == postgres_url
+    assert os.environ[bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] == "False"

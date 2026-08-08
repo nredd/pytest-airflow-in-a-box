@@ -49,7 +49,7 @@ class BootstrapState:
         root: pathlib.Path containing this run's isolated Airflow home.
         dags_folder: pathlib.Path containing test Dag files.
         logs_folder: pathlib.Path receiving Airflow logs.
-        database_path: pathlib.Path containing the SQLite metadata database.
+        database_path: pathlib.Path reserved for the SQLite metadata database.
         password_file: pathlib.Path containing SimpleAuthManager passwords.
         config_path: pathlib.Path containing ``airflow.cfg``.
         jwt_secret: str shared by all Airflow processes in this run.
@@ -341,7 +341,10 @@ def _install_environment(state: BootstrapState) -> None:
         state: BootstrapState containing run paths and secrets.
     """
 
-    os.environ.update(_environment(state))
+    variables = _environment(state)
+    os.environ.update(variables)
+    if state.db_backend == DbBackend.SQLITE:
+        os.environ.pop(SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE, None)
     os.environ[STATE_ENVIRONMENT_VARIABLE] = json.dumps(
         state.to_payload(), sort_keys=True, separators=(",", ":")
     )

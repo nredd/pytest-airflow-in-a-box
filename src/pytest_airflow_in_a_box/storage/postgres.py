@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib
 import logging
 import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -26,8 +27,8 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_POSTGRES_IMAGE = "postgres:16-alpine"
 _POSTGRES_CONTAINER_MODULES = (
-    "testcontainers.postgres",
     "testcontainers.community.postgres",
+    "testcontainers.postgres",
 )
 
 
@@ -71,6 +72,7 @@ ContainerFactory = Callable[[str, str], ContainerHandle]
 AvailabilityProbe = Callable[[], None]
 ModuleImporter = Callable[[str], ModuleType]
 DockerProbe = Callable[[], bool]
+DockerRunner = Callable[..., subprocess.CompletedProcess[bytes]]
 
 
 def _import_postgres_container(
@@ -100,17 +102,34 @@ def _import_postgres_container(
     )
 
 
-def _docker_is_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
-    """Report whether a ``docker`` client is discoverable on ``PATH``.
+def _docker_is_available(
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    run: DockerRunner = subprocess.run,
+) -> bool:
+    """Report whether a Docker client can reach a running daemon.
 
     Parameters:
-        which: Callable resolving an executable name to a path or ``None``.
+        which: Callable resolving the Docker executable name to a path or ``None``.
+        run: DockerRunner executing a bounded Docker daemon probe.
 
     Returns:
-        bool indicating whether a ``docker`` executable was found.
+        bool indicating whether Docker is present and its daemon is reachable.
     """
 
-    return which("docker") is not None
+    if which("docker") is None:
+        return False
+    try:
+        result = run(
+            ["docker", "info"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def require_postgres_available(
@@ -118,36 +137,41 @@ def require_postgres_available(
     import_probe: Callable[[], object] = _import_postgres_container,
     docker_probe: DockerProbe = _docker_is_available,
 ) -> None:
-    """Fail loudly unless both the ``postgres`` extra and a Docker client are present.
+    """Fail loudly unless the ``postgres`` extra and Docker daemon are available.
 
     Parameters:
         import_probe: Callable importing the container class, raising when absent.
-        docker_probe: DockerProbe reporting whether a Docker client is available.
+        docker_probe: DockerProbe reporting whether the Docker daemon is reachable.
 
     Raises:
-        pytest.UsageError: The extra is missing or no Docker client is available.
+        pytest.UsageError: The extra is missing or the Docker daemon is unreachable.
     """
 
     import_probe()
     if not docker_probe():
         raise pytest.UsageError(
-            "Postgres backend requires a running Docker daemon; no `docker` client was "
-            "found on PATH."
+            "Postgres backend requires a running Docker daemon reachable through `docker`."
         )
 
 
-def _default_container_factory(image: str, dbname: str) -> ContainerHandle:
+def _default_container_factory(
+    image: str,
+    dbname: str,
+    *,
+    import_container: Callable[[], PostgresContainerClass] = _import_postgres_container,
+) -> ContainerHandle:
     """Build a real ``PostgresContainer`` for the requested image and database.
 
     Parameters:
         image: str naming the Postgres container image.
         dbname: str naming the initial database created inside the container.
+        import_container: Callable resolving the Postgres container class.
 
     Returns:
         ContainerHandle containing an unstarted Postgres container.
     """
 
-    postgres_container = _import_postgres_container()
+    postgres_container = import_container()
     return postgres_container(image, dbname=dbname)
 
 
@@ -190,25 +214,30 @@ class PostgresProvisioner:
         del database_path
         if self._container is not None:
             raise RuntimeError("Postgres provisioner is already started")
-        container = self._container_factory(self._image, database_name)
         try:
+            container = self._container_factory(self._image, database_name)
+            self._container = container
             container.start()
             url = container.get_connection_url()
         except Exception as error:
+            try:
+                self.stop()
+            except Exception:
+                LOGGER.warning("Could not stop a failed Postgres test container", exc_info=True)
             raise pytest.UsageError(
                 f"Could not start the Postgres test container: {error}"
             ) from error
-        self._container = container
         LOGGER.info(f"Started Postgres test container for database '{database_name}'")
         return url
 
     def stop(self) -> None:
         """Stop the container if one is running; idempotent."""
 
-        if self._container is None:
-            return
-        self._container.stop()
+        container = self._container
         self._container = None
+        if container is None:
+            return
+        container.stop()
 
 
 __all__ = (
