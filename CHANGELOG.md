@@ -6,6 +6,24 @@ All notable changes to this project will be documented in this file. The format 
 
 ## Unreleased
 
+### Added
+
+- Widened the certified compatibility matrix to cover every non-yanked patch release
+  across the 3.1.x and 3.2.x lines: `3.1.1`, `3.1.2`, `3.1.3`, `3.1.5`, `3.1.6`, `3.1.7`,
+  and `3.2.1`. Each was verified to expose an identical private-API surface to its
+  bracketing certified release before being added ([#15](https://github.com/nredd/pytest-airflow-in-a-box/issues/15)).
+- Split the CI compat matrix into a reusable `.github/workflows/compat.yml` workflow so
+  branch-protection rules can require one stable `Coverage` check regardless of how many
+  Airflow/Python legs the matrix grows to.
+
+### Changed
+
+- Airflow 2.x remains unsupported: it predates the Task SDK, DAG bundles/versions, and the
+  `airflow.sdk` authoring package this plugin's compatibility layer depends on, and ships
+  under a different distribution name (`apache-airflow` rather than `apache-airflow-core`).
+  Supporting it would require a parallel, DB-backed `_compat` implementation rather than an
+  incremental addition to the current one.
+
 ## [0.1.2] - 2026-08-07
 
 ### Added

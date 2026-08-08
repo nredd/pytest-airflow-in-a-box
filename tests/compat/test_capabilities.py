@@ -238,6 +238,84 @@ def test_compat_package_import_does_not_import_airflow() -> None:
             ),
         ),
         (
+            "3.1.1",
+            (3, 1, 1),
+            AirflowCapabilities(
+                release=(3, 1, 1),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.1.2",
+            (3, 1, 2),
+            AirflowCapabilities(
+                release=(3, 1, 2),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.1.3",
+            (3, 1, 3),
+            AirflowCapabilities(
+                release=(3, 1, 3),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.1.5",
+            (3, 1, 5),
+            AirflowCapabilities(
+                release=(3, 1, 5),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.1.6",
+            (3, 1, 6),
+            AirflowCapabilities(
+                release=(3, 1, 6),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.1.7",
+            (3, 1, 7),
+            AirflowCapabilities(
+                release=(3, 1, 7),
+                dag_bag_location=DagBagLocation.MODELS,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=False,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
             "3.1.8",
             (3, 1, 8),
             AirflowCapabilities(
@@ -255,6 +333,19 @@ def test_compat_package_import_does_not_import_airflow() -> None:
             (3, 2, 0),
             AirflowCapabilities(
                 release=(3, 2, 0),
+                dag_bag_location=DagBagLocation.DAG_PROCESSING,
+                dag_bag_supports_include_examples=True,
+                task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+                refresh_from_task_supports_dag_run=False,
+                startup_details_supports_sentry=True,
+                runtime_task_instance_supports_queue=False,
+            ),
+        ),
+        (
+            "3.2.1",
+            (3, 2, 1),
+            AirflowCapabilities(
+                release=(3, 2, 1),
                 dag_bag_location=DagBagLocation.DAG_PROCESSING,
                 dag_bag_supports_include_examples=True,
                 task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
@@ -304,7 +395,7 @@ def test_resolves_certified_release_capabilities(
     assert capability_module.resolve_capabilities() == expected
 
 
-@pytest.mark.parametrize("version", ["3.2.1", "3.3.1", "4.0.0"])
+@pytest.mark.parametrize("version", ["3.2.3", "3.3.1", "4.0.0"])
 def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
     """Name the installed and complete supported versions for valid but uncertified releases."""
 
@@ -315,7 +406,10 @@ def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: s
 
     message = str(caught.value)
     assert f"installed version '{version}'" in message
-    assert "3.1.0, 3.1.8, 3.2.0, 3.2.2, 3.3.0" in message
+    assert (
+        "3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0"
+        in message
+    )
     assert isinstance(caught.value.__cause__, ValueError)
 
 
@@ -444,8 +538,10 @@ def test_rejects_vendor_contract_mismatch(
         capability_module.resolve_capabilities()
 
     assert caught.value.__cause__ is not None
-    assert "supported `apache-airflow-core` versions: 3.1.0, 3.1.8, 3.2.0, 3.2.2, 3.3.0" in str(
-        caught.value
+    assert (
+        "supported `apache-airflow-core` versions: "
+        "3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0"
+        in str(caught.value)
     )
 
 
@@ -598,8 +694,15 @@ def test_real_current_airflow_resolves(pytester: pytest.Pytester) -> None:
             capabilities = resolve_capabilities()
             assert capabilities.release in {
                 (3, 1, 0),
+                (3, 1, 1),
+                (3, 1, 2),
+                (3, 1, 3),
+                (3, 1, 5),
+                (3, 1, 6),
+                (3, 1, 7),
                 (3, 1, 8),
                 (3, 2, 0),
+                (3, 2, 1),
                 (3, 2, 2),
                 (3, 3, 0),
             }
