@@ -36,8 +36,9 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = [
-    "testcontainers>=4.15,<5",
+    "asyncpg>=0.29,<1",
     "psycopg2-binary>=2.9,<3",
+    "testcontainers>=4.15,<5",
 ]
 
 [project.urls]

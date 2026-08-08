@@ -731,9 +731,10 @@ would not.
   power-user/CI path for both Postgres and MySQL via one actively maintained package. Postgres lives
   under `testcontainers.community.postgres`; the provisioner keeps a stable-module fallback for older
   layouts (the old standalone `testcontainers-postgres`/`-mysql` PyPI packages are dead `0.0.1rc1`
-  stubs — don't reference those). Its Postgres module does not install a SQLAlchemy driver, so the
-  optional extra declares `psycopg2-binary` explicitly. Requires a Docker daemon; the selected xdist
-  topology is one shared container with one migration, not one container per worker.
+  stubs — don't reference those). Its Postgres module does not install SQLAlchemy drivers, so the
+  optional extra declares `psycopg2-binary` for the sync engine and `asyncpg` for Airflow's async
+  metadata engine. Requires a Docker daemon; the selected xdist topology is one shared container with
+  one migration, not one container per worker.
 
 Notably, **Airflow's own CI never attempted an embedded-Postgres tier** — Breeze goes straight to
 Docker Compose (`ALLOWED_BACKENDS` in `dev/breeze/.../global_constants.py:70`) for anything beyond
