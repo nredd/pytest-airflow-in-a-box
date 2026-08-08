@@ -25,12 +25,15 @@ from pytest_airflow_in_a_box.airflow_cfg import (
     write_airflow_config,
 )
 from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
+from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
 WORKER_INPUT_KEY = "pytest_airflow_in_a_box_bootstrap_state"
 XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
 PASSWORDS = '{"admin": "admin"}\n'
+SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
+SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED"
 
 JsonPrimitive = str | int | bool
 StatePayload = dict[str, JsonPrimitive]
@@ -52,6 +55,8 @@ class BootstrapState:
         jwt_secret: str shared by all Airflow processes in this run.
         storage_reason: str describing why the storage base was selected.
         network_storage: bool indicating network filesystem semantics.
+        sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
+        db_backend: str naming the selected metadata database backend.
     """
 
     version: int
@@ -65,6 +70,8 @@ class BootstrapState:
     jwt_secret: str
     storage_reason: str
     network_storage: bool
+    sql_alchemy_conn: str
+    db_backend: str
 
     def to_payload(self) -> StatePayload:
         """Serialize state to JSON-compatible primitives.
@@ -85,6 +92,8 @@ class BootstrapState:
             "jwt_secret": self.jwt_secret,
             "storage_reason": self.storage_reason,
             "network_storage": self.network_storage,
+            "sql_alchemy_conn": self.sql_alchemy_conn,
+            "db_backend": self.db_backend,
         }
 
 
@@ -207,6 +216,8 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "jwt_secret",
         "storage_reason",
         "network_storage",
+        "sql_alchemy_conn",
+        "db_backend",
     }
     if set(payload) != expected_keys:
         raise ValueError("Bootstrap state has missing or unexpected fields")
@@ -227,6 +238,19 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
     if any(path.parent != root for path in path_values.values()):
         raise ValueError("Bootstrap state paths must be direct children of the run root")
 
+    sql_alchemy_conn = _require_string(payload, "sql_alchemy_conn")
+    backend_value = _require_string(payload, "db_backend")
+    try:
+        backend = DbBackend(backend_value)
+    except ValueError as error:
+        raise ValueError(
+            f"Bootstrap state field `db_backend` must be a supported backend: '{backend_value}'"
+        ) from error
+    if backend is DbBackend.SQLITE and sql_alchemy_conn != sqlite_url(
+        path_values["database_path"]
+    ):
+        raise ValueError("SQLite bootstrap state URL disagrees with the database path")
+
     state = BootstrapState(
         version=version,
         owner_pid=_require_int(payload, "owner_pid"),
@@ -239,6 +263,8 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         jwt_secret=_require_string(payload, "jwt_secret"),
         storage_reason=_require_string(payload, "storage_reason"),
         network_storage=_require_bool(payload, "network_storage"),
+        sql_alchemy_conn=sql_alchemy_conn,
+        db_backend=str(backend),
     )
     if validate_files:
         local_settings_path = state.root / "config" / "airflow_local_settings.py"
@@ -290,7 +316,7 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         dict[str, str] containing environment variable assignments.
     """
 
-    return {
+    variables = {
         "AIRFLOW_HOME": str(state.root),
         "AIRFLOW_CONFIG": str(state.config_path),
         "AIRFLOW__CORE__DAGS_FOLDER": str(state.dags_folder),
@@ -299,10 +325,13 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         "AIRFLOW__CORE__AUTH_MANAGER": SIMPLE_AUTH_MANAGER,
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS": "admin:admin",
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": str(state.password_file),
-        "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": sqlite_url(state.database_path),
+        SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE: state.sql_alchemy_conn,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER": str(state.logs_folder),
         "AIRFLOW__API_AUTH__JWT_SECRET": state.jwt_secret,
     }
+    if state.db_backend == DbBackend.POSTGRES:
+        variables[SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] = "False"
+    return variables
 
 
 def _install_environment(state: BootstrapState) -> None:
@@ -381,6 +410,33 @@ def _allow_network(config: pytest.Config, args: list[str]) -> bool:
     return ini_value
 
 
+def _db_backend(config: pytest.Config, args: list[str]) -> DbBackend:
+    """Resolve the command-line or ini metadata database backend.
+
+    Parameters:
+        config: pytest.Config containing parsed startup options.
+        args: list[str] containing pytest command-line arguments.
+
+    Returns:
+        DbBackend selecting the metadata database backend.
+
+    Raises:
+        pytest.UsageError: The selected backend is not a supported value.
+    """
+
+    command_line = _argument_value(args, "--airflow-db-backend")
+    ini_value: object = config.getini("airflow_db_backend")
+    value = command_line if command_line else ini_value
+    if not isinstance(value, str) or not value:
+        return DbBackend.SQLITE
+    try:
+        return DbBackend(value)
+    except ValueError as error:
+        raise pytest.UsageError(
+            f"Ini/option `airflow_db_backend` must be `sqlite` or `postgres`: '{value}'"
+        ) from error
+
+
 def _candidate_path(args: list[str]) -> Path | None:
     """Resolve pytest's temporary-storage candidate without constructing fixtures.
 
@@ -412,6 +468,8 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         pytest.UsageError: Storage selection or artifact creation fails.
     """
 
+    backend = _db_backend(config, args)
+    provisioner = select_provisioner(backend)
     try:
         location = locate_storage(
             explicit=_option_path(config, args),
@@ -433,12 +491,15 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         if cleaned:
             return
         cleaned = True
-        for name, value in original_environment.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-        shutil.rmtree(root, ignore_errors=True)
+        try:
+            provisioner.stop()
+        finally:
+            for name, value in original_environment.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            shutil.rmtree(root, ignore_errors=True)
 
     config.add_cleanup(cleanup)
     try:
@@ -453,6 +514,10 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         password_file.write_text(PASSWORDS, encoding="utf-8")
         password_file.chmod(0o600)
         write_local_settings(local_settings_path)
+        database_name = f"airflow_test_{secrets.token_hex(8)}"
+        sql_alchemy_conn = provisioner.start(
+            database_path=database_path, database_name=database_name
+        )
         state = BootstrapState(
             version=STATE_VERSION,
             owner_pid=os.getpid(),
@@ -465,12 +530,14 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             jwt_secret=secrets.token_urlsafe(48),
             storage_reason=str(location.reason),
             network_storage=location.network,
+            sql_alchemy_conn=sql_alchemy_conn,
+            db_backend=str(backend),
         )
         write_airflow_config(
             config_path,
             dags_folder=dags_folder,
             logs_folder=logs_folder,
-            database_path=database_path,
+            sql_alchemy_conn=sql_alchemy_conn,
             password_file=password_file,
             jwt_secret=state.jwt_secret,
         )
@@ -499,7 +566,8 @@ def _environment_names() -> tuple[str, ...]:
         "AIRFLOW__CORE__AUTH_MANAGER",
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS",
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE",
-        "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN",
+        SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE,
+        SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER",
         "AIRFLOW__API_AUTH__JWT_SECRET",
         STATE_ENVIRONMENT_VARIABLE,
