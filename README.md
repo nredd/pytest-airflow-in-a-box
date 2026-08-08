@@ -206,6 +206,36 @@ Three things worth knowing:
 `DeprecationWarning` and carries this plugin's semantics, so it does not recompute the settings
 globals the way upstream's does -- use `airflow_config(..., refresh_settings=True)` for that.
 
+## Smoke tests
+
+A bundled catalog of zero-boilerplate checks against the configured Dag folder, synthesized with
+no files written. Off unless configured:
+
+```console
+pytest --airflow-smoke --dag-folder=dags/
+```
+
+or persistently via the `airflow_smoke` ini option. Every item carries `smoke`, so `-m smoke` /
+`-m "not smoke"` select exactly the bundled catalog:
+
+- `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
+  (`airflow_dag_parse_timeout`, default `30` seconds, exported as
+  `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
+  `SlowDagParseWarning` on files above `airflow_dag_parse_slowpoke_ratio` (default `0.75`) of the
+  timeout without failing the run; logs a slowest-first parse-timing table
+- `test_dag_serialization_roundtrip` -- every parsed Dag survives Airflow's scheduler
+  serialization round trip
+- `test_no_duplicate_dag_ids` -- no two Dag files declare the same `dag_id`
+- `test_schedule_sanity` -- every scheduled Dag computes its next run without raising
+- `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`)
+
+Three additional policy checks appear only when their ini is configured, so defaults stay
+zero-config:
+
+- `airflow_dag_id_pattern` -- every `dag_id` matches the given regex
+- `airflow_required_dag_tags` -- every Dag carries the listed tags
+- `airflow_forbid_default_owner` -- no task is owned by the stock `airflow` owner
+
 ## Database cleanup
 
 `clear_db` is a registry-driven whole-database reset for serial setup and teardown contexts:
@@ -248,6 +278,7 @@ def test_api(api_client, dag_maker):
 - `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
 - `environment(name)`: run only when the named environment's sentinel path exists, configured via
   the `airflow_environments` ini line list (`lab = /opt/lab/sentinel`)
+- `smoke`: a bundled zero-boilerplate check, opt in with `airflow_smoke`
 
 ## Compatibility suite
 

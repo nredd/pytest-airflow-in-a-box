@@ -98,6 +98,7 @@ def test_registered_markers_pass_strict_validation(pytester: pytest.Pytester) ->
         @pytest.mark.compat
         @pytest.mark.db_test
         @pytest.mark.need_serialized_dag(False)
+        @pytest.mark.smoke
         def test_registered_markers():
             pass
         """
