@@ -70,33 +70,11 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  testpypi:
-    name: Publish to TestPyPI
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [build]
-    environment: testpypi
-    permissions:
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: dist
-          path: dist/
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
-        with:
-          subject-path: "dist/*"
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
   pypi:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [build, testpypi]
+    needs: [build]
     environment: pypi
     permissions:
       id-token: write
