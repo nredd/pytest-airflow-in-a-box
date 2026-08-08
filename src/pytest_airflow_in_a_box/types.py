@@ -28,6 +28,9 @@ class SerializedDag(Protocol):
     def task_ids(self) -> list[str]:
         """Return the task identifiers present in the persisted Dag."""
 
+    def get_task(self, task_id: str) -> Any:
+        """Return the task with the requested identifier."""
+
 
 class DagMaker(Protocol):
     """Build and persist isolated Airflow Dags for one pytest test.
@@ -103,6 +106,7 @@ class DagMaker(Protocol):
         ignore_task_deps: bool = False,
         ignore_ti_state: bool = False,
         mark_success: bool = False,
+        run_triggerer: bool = False,
     ) -> TaskInstance:
         """Create and execute one task instance through the compatibility shim."""
 
@@ -146,6 +150,7 @@ class RunTask(Protocol):
         variables: dict[str, str] | None = None,
         connections: dict[str, dict[str, Any]] | None = None,
         map_index: int = -1,
+        try_number: int = 1,
         run_callbacks: bool = False,
     ) -> TaskRunResult:
         """Execute one operator with seeded fake supervisor state.
@@ -162,6 +167,7 @@ class RunTask(Protocol):
             connections: dict[str, dict[str, Any]] | None seeding connection
                 fields by connection id.
             map_index: int selecting the mapped task index.
+            try_number: int selecting the synthetic task attempt number.
             run_callbacks: bool dispatching task callbacks and listeners after
                 execution.
 

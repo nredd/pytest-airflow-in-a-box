@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file. The format 
 
 ## Unreleased
 
+### Added
+
+- Consumer-style compatibility coverage for operators, TaskFlow mapping and branching, hooks,
+  connections, provider SQL, sensors, deferral, callbacks, retries, assets, provider-shaped
+  packages, Dag collection, and REST API CRUD.
+- On-demand mapped task-instance expansion through `dag_maker.create_ti` and `run_ti`.
+- Inline persisted-trigger execution and deferred-task resumption through
+  `dag_maker.run_ti(..., run_triggerer=True)`.
+- Synthetic attempt selection and retry callback behavior through `run_task(..., try_number=...)`.
+
+### Changed
+
+- DB-free task context now includes a logical data interval and accepts active asset
+  inlet/outlet validation.
+
 ## [0.1.2] - 2026-08-07
 
 ### Added
