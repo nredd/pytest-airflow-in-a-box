@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file. The format 
   run-dependent fields normalized away so diffs stay stable across machines and checkouts.
   Opt in with the new `airflow_dag_snapshot_dir` ini option; regenerate snapshots with
   `--airflow-smoke-update` ([#34](https://github.com/nredd/pytest-airflow-in-a-box/issues/34)).
+- CLI option `--airflow-doctor`, which prints a one-shot, copy-pasteable diagnostics report --
+  the storage ladder decision, resolved `AIRFLOW_HOME`/database URL scheme/backend tier, plugin/
+  pytest/Python/Airflow versions plus the resolved capability table, and API server state -- then
+  exits without collecting or running tests
+  ([#37](https://github.com/nredd/pytest-airflow-in-a-box/issues/37)).
 - Postgres metadata database backend, provisioned per session via testcontainers and shared by all
   `xdist` workers. Opt in with the new `postgres` extra plus a running Docker daemon; a missing
   extra or daemon fails loudly instead of silently skipping.

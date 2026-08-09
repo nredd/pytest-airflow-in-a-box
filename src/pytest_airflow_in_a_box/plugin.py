@@ -9,6 +9,7 @@ References:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ from pytest_airflow_in_a_box.defaults import (
     apply_option_defaults,
     register_ini_defaults,
 )
+from pytest_airflow_in_a_box.doctor import render_doctor_report
 from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
     api_client,
@@ -198,6 +200,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "Directory of committed Dag serialization snapshots, checked by the smoke catalog.",
         default="",
     )
+    group.addoption(
+        "--airflow-doctor",
+        action="store_true",
+        default=False,
+        dest="airflow_doctor",
+        help="Print a one-shot diagnostics report and exit without running tests.",
+    )
     register_ini_defaults(parser)
 
 
@@ -215,6 +224,28 @@ def pytest_load_initial_conftests(
     """
     del parser
     early_config.stash[STATE_KEY] = load_initial_state(early_config, args)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    """Print the diagnostics report and exit when `--airflow-doctor` is requested.
+
+    Runs ``tryfirst`` so the report short-circuits the ordinary test session: no
+    workers spawn and no collection happens. Bootstrap state is already available
+    here because ``pytest_load_initial_conftests`` runs during argument parsing,
+    which completes before pytest dispatches this hook.
+
+    Parameters:
+        config: pytest.Config for the active invocation.
+
+    Returns:
+        int | None containing exit code 0 when the report was printed.
+    """
+
+    if not config.option.airflow_doctor:
+        return None
+    sys.stdout.write(render_doctor_report(config))
+    return 0
 
 
 @pytest.hookimpl(tryfirst=True)
