@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `test_dag_serialization_snapshot`, a 9th bundled smoke item diffing each Dag's serialized
+  structure (topology, schedule, params, task attrs) against a committed snapshot file, with
+  run-dependent fields normalized away so diffs stay stable across machines and checkouts.
+  Opt in with the new `airflow_dag_snapshot_dir` ini option; regenerate snapshots with
+  `--airflow-smoke-update` ([#34](https://github.com/nredd/pytest-airflow-in-a-box/issues/34)).
 - Postgres metadata database backend, provisioned per session via testcontainers and shared by all
   `xdist` workers. Opt in with the new `postgres` extra plus a running Docker daemon; a missing
   extra or daemon fails loudly instead of silently skipping.

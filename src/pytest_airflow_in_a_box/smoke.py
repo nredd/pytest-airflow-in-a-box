@@ -13,12 +13,15 @@ References:
 from __future__ import annotations
 
 import contextlib
+import difflib
 import io
+import json
 import logging
 import os
 import re
 import warnings
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -39,6 +42,9 @@ SMOKE_ENABLED_KEY = pytest.StashKey[bool]()
 DAG_BAG_KEY = pytest.StashKey["DagBag"]()
 DEFAULT_OWNER = "airflow"
 DUPLICATE_ID_MARKER = "AirflowDagDuplicatedIdException"
+RUN_DEPENDENT_SERIALIZED_DAG_KEYS = frozenset(
+    {"_processor_dags_folder", "fileloc", "relative_fileloc"}
+)
 
 
 class SlowDagParseWarning(RuntimeWarning):
@@ -206,6 +212,58 @@ def _forbid_default_owner(config: pytest.Config) -> bool:
     if not isinstance(value, bool):
         raise pytest.UsageError("Ini option `airflow_forbid_default_owner` must be a boolean")
     return value
+
+
+def _snapshot_dir(config: pytest.Config) -> Path | None:
+    """Resolve the committed Dag serialization snapshot directory.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_dag_snapshot_dir`` ini value.
+
+    Returns:
+        pathlib.Path | None containing the resolved directory, or ``None`` when unset.
+
+    Raises:
+        pytest.UsageError: The ini value is not a string.
+    """
+
+    value: object = config.getini("airflow_dag_snapshot_dir")
+    if not isinstance(value, str):
+        raise pytest.UsageError("Ini option `airflow_dag_snapshot_dir` must be a path string")
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else config.rootpath / path
+
+
+def _smoke_update(config: pytest.Config) -> bool:
+    """Read whether the snapshot policy should regenerate rather than diff.
+
+    Parameters:
+        config: pytest.Config containing the ``--airflow-smoke-update`` option value.
+
+    Returns:
+        bool indicating whether committed snapshots should be overwritten.
+    """
+
+    return bool(config.getoption("airflow_smoke_update"))
+
+
+def _normalize_serialized_dag(encoded: dict[str, Any]) -> dict[str, Any]:
+    """Strip run-dependent, checkout-path-sensitive keys from a serialized Dag.
+
+    Parameters:
+        encoded: dict[str, Any] returned by ``serialize_dag``.
+
+    Returns:
+        dict[str, Any] with every run-dependent key removed.
+    """
+
+    return {
+        key: value
+        for key, value in encoded.items()
+        if key not in RUN_DEPENDENT_SERIALIZED_DAG_KEYS
+    }
 
 
 def _smoke_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
@@ -684,6 +742,89 @@ class ForbidDefaultOwnerItem(pytest.Item):
         return self.nodeid, 0, self.name
 
 
+class SerializedDagSnapshotItem(pytest.Item):
+    """Diff every Dag's serialized structure against a committed snapshot file."""
+
+    def __init__(
+        self, *, name: str, parent: SmokeCollector, snapshot_dir: Path, update: bool
+    ) -> None:
+        """Create the item and mark it as a bundled smoke test.
+
+        Parameters:
+            name: str containing the pytest item name.
+            parent: SmokeCollector that collected this item.
+            snapshot_dir: pathlib.Path containing the committed snapshot directory.
+            update: bool indicating whether to regenerate rather than diff snapshots.
+        """
+
+        super().__init__(name=name, parent=parent)
+        self.snapshot_dir = snapshot_dir
+        self.update = update
+        self.add_marker(pytest.mark.smoke)
+
+    def runtest(self) -> None:
+        """Diff, or regenerate, every parsed Dag's normalized serialized snapshot.
+
+        Raises:
+            SmokeCheckFailure: A Dag failed to serialize, has no committed snapshot, or its
+                serialized structure drifted from the committed snapshot.
+        """
+
+        dag_bag = _smoke_dag_bag(self.session, self.config)
+        serialized_dag_class = _get_dag_serializer()
+        failures: list[str] = []
+        for dag_id, dag in sorted(dag_bag.dags.items()):
+            try:
+                current = (
+                    json.dumps(
+                        _normalize_serialized_dag(serialized_dag_class.serialize_dag(dag)),
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+            except Exception as error:
+                failures.append(f"Dag `{dag_id}` failed to serialize: {error}")
+                continue
+
+            snapshot_path = self.snapshot_dir / f"{dag_id}.json"
+            if self.update:
+                self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+                snapshot_path.write_text(current, encoding="utf-8")
+                continue
+
+            if not snapshot_path.is_file():
+                failures.append(
+                    f"Dag `{dag_id}` has no committed snapshot at '{snapshot_path}'; "
+                    "regenerate with `--airflow-smoke-update`"
+                )
+                continue
+
+            committed = snapshot_path.read_text(encoding="utf-8")
+            if committed != current:
+                diff = "".join(
+                    difflib.unified_diff(
+                        committed.splitlines(keepends=True),
+                        current.splitlines(keepends=True),
+                        fromfile=f"{dag_id}.json (committed)",
+                        tofile=f"{dag_id}.json (current)",
+                    )
+                )
+                failures.append(f"Dag `{dag_id}` drifted from its committed snapshot:\n{diff}")
+
+        if failures:
+            raise SmokeCheckFailure("\n\n".join(failures))
+
+    def reportinfo(self) -> tuple[str, int, str]:
+        """Locate this item for terminal and junit reporting.
+
+        Returns:
+            tuple[str, int, str] containing path, line, and title.
+        """
+
+        return self.nodeid, 0, self.name
+
+
 class SmokeCollector(pytest.Collector):
     """Collect the bundled smoke catalog directly on the pytest session."""
 
@@ -718,6 +859,14 @@ class SmokeCollector(pytest.Collector):
             )
         if _forbid_default_owner(self.config):
             yield ForbidDefaultOwnerItem.from_parent(self, name="test_forbid_default_owner")
+        snapshot_dir = _snapshot_dir(self.config)
+        if snapshot_dir is not None:
+            yield SerializedDagSnapshotItem.from_parent(
+                self,
+                name="test_dag_serialization_snapshot",
+                snapshot_dir=snapshot_dir,
+                update=_smoke_update(self.config),
+            )
 
 
 def collect_smoke_items(
@@ -746,6 +895,7 @@ __all__ = (
     "PoolReferencesExistItem",
     "RequiredDagTagsItem",
     "ScheduleSanityItem",
+    "SerializedDagSnapshotItem",
     "SlowDagParseWarning",
     "SmokeCheckFailure",
     "SmokeCollector",
