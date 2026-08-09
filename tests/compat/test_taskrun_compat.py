@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import asyncio
+import re
+import sys
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -12,9 +15,12 @@ from airflow.utils.state import TaskInstanceState
 from pytest_airflow_in_a_box._compat import taskrun
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner
 from pytest_airflow_in_a_box.taskinstance import (
+    DEFAULT_TRIGGER_TIMEOUT,
     TaskResolutionError,
+    TriggerExecutionError,
     ordered_task_instances,
     run_task_instance,
+    run_trigger,
 )
 
 
@@ -97,6 +103,59 @@ class _EmptyTrigger:
 
     async def cleanup(self) -> None:
         type(self).cleaned = True
+
+
+class _EventTrigger:
+    """Emit one event, then record cleanup."""
+
+    def __init__(self, value: int) -> None:
+        """Store the payload yielded by ``run``."""
+
+        self.value = value
+        self.cleaned = False
+
+    async def run(self):
+        """Yield one payload, then a second the caller must never observe."""
+
+        yield {"value": self.value}
+        yield {"value": None}
+
+    async def cleanup(self) -> None:
+        """Record cleanup."""
+
+        self.cleaned = True
+
+
+class _SilentTrigger:
+    """Await far longer than any test timeout without emitting an event."""
+
+    def __init__(self) -> None:
+        """Initialize the cleanup flag."""
+
+        self.cleaned = False
+
+    async def run(self):
+        """Sleep, then yield an event no caller waits for."""
+
+        await asyncio.sleep(30)
+        yield {"value": "late"}
+
+    async def cleanup(self) -> None:
+        """Record cleanup."""
+
+        self.cleaned = True
+
+
+class _SyncRunTrigger:
+    """Return a plain value from ``run`` instead of an async iterator."""
+
+    def run(self) -> None:
+        """Return a non-iterable value."""
+
+        return
+
+    async def cleanup(self) -> None:
+        """Do nothing."""
 
 
 def _capabilities(
@@ -440,7 +499,9 @@ def test_legacy_run_triggerer_resumes_a_deferred_task(monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         taskrun,
         "_resume_deferred_task_instance",
-        lambda instance, session: resumed.append((instance, session)),
+        lambda instance, session, *, trigger_timeout: resumed.append(
+            (instance, session, trigger_timeout)
+        ),
     )
     session: Any = _Session()
 
@@ -448,7 +509,7 @@ def test_legacy_run_triggerer_resumes_a_deferred_task(monkeypatch: pytest.Monkey
     result = run_task_instance(ti, task, run_triggerer=True, session=session)
 
     assert result.state == TaskInstanceState.SUCCESS
-    assert resumed == [(ti, session)]
+    assert resumed == [(ti, session, DEFAULT_TRIGGER_TIMEOUT)]
     assert ti.run_kwargs["ignore_ti_state"] is True
 
 
@@ -462,9 +523,6 @@ def test_resume_deferred_requires_a_session() -> None:
 
 def test_resume_deferred_requires_a_trigger(monkeypatch: pytest.MonkeyPatch) -> None:
     """Report a deferred task whose trigger relationship is missing."""
-
-    import sys
-    from types import ModuleType
 
     ti: Any = _TaskInstance()
     ti.trigger_id = None
@@ -508,6 +566,96 @@ def test_resume_deferred_requires_one_event() -> None:
         taskrun._resume_deferred_task_instance(ti, session)
 
     assert _EmptyTrigger.cleaned is True
+
+
+def test_run_trigger_returns_the_first_event() -> None:
+    """Stop at the first event and clean the trigger up."""
+
+    trigger = _EventTrigger(42)
+
+    event = run_trigger(trigger)
+
+    assert event == {"value": 42}
+    assert trigger.cleaned is True
+
+
+def test_run_trigger_reports_a_trigger_without_events() -> None:
+    """Name a trigger whose generator completes without yielding."""
+
+    _EmptyTrigger.cleaned = False
+
+    with pytest.raises(TriggerExecutionError, match="completed without an event"):
+        run_trigger(_EmptyTrigger())
+
+    assert _EmptyTrigger.cleaned is True
+
+
+def test_run_trigger_reports_a_timeout() -> None:
+    """Bound a trigger that never emits and retain the timeout cause."""
+
+    trigger = _SilentTrigger()
+    expected = re.escape("yielded no event within '0.01' seconds")
+
+    with pytest.raises(TriggerExecutionError, match=expected) as caught:
+        run_trigger(trigger, timeout=0.01)
+
+    assert isinstance(caught.value.__cause__, asyncio.TimeoutError)
+    assert trigger.cleaned is True
+
+
+def test_run_trigger_rejects_a_non_positive_timeout() -> None:
+    """Reject a timeout that can never admit an event."""
+
+    with pytest.raises(ValueError, match="`timeout` must be positive, got '0'"):
+        run_trigger(_EventTrigger(1), timeout=0)
+
+
+def test_run_trigger_rejects_a_non_trigger() -> None:
+    """Name the trigger methods a supplied object is missing."""
+
+    with pytest.raises(TypeError, match="lacks 'run', 'cleanup'"):
+        run_trigger(object())
+
+
+def test_run_trigger_rejects_a_synchronous_run() -> None:
+    """Reject a ``run`` that does not return an async iterator."""
+
+    with pytest.raises(TypeError, match="did not return an async iterator"):
+        run_trigger(_SyncRunTrigger())
+
+
+def test_resume_deferred_forwards_the_trigger_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass the caller's trigger timeout through to ``run_trigger``."""
+
+    ti: Any = _TaskInstance()
+    ti.trigger_id = 9
+    row = SimpleNamespace(classpath=f"{__name__}._EventTrigger", kwargs={"value": 7})
+    submitted: list[Any] = []
+    trigger_module: Any = SimpleNamespace(
+        Trigger=SimpleNamespace(
+            submit_event=lambda trigger_id, event, session: submitted.append(
+                (trigger_id, event, session)
+            )
+        )
+    )
+    monkeypatch.setitem(sys.modules, "airflow.models.trigger", trigger_module)
+    timeouts: list[float] = []
+
+    def fake_run_trigger(trigger: Any, *, timeout: float) -> Any:
+        timeouts.append(timeout)
+        return {"value": trigger.value}
+
+    monkeypatch.setattr(taskrun, "run_trigger", fake_run_trigger)
+    session: Any = SimpleNamespace(
+        commit=lambda: None,
+        expire_all=lambda: None,
+        get=lambda _model, _identity: row,
+    )
+
+    taskrun._resume_deferred_task_instance(ti, session, trigger_timeout=1.5)
+
+    assert timeouts == [1.5]
+    assert submitted == [(9, {"value": 7}, session)]
 
 
 def test_missing_task_resolution_retains_cause() -> None:

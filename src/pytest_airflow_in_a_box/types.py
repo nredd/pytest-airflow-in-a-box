@@ -10,6 +10,8 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
+from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -107,6 +109,7 @@ class DagMaker(Protocol):
         ignore_ti_state: bool = False,
         mark_success: bool = False,
         run_triggerer: bool = False,
+        trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
     ) -> TaskInstance:
         """Create and execute one task instance through the compatibility shim."""
 
