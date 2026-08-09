@@ -31,6 +31,13 @@ All notable changes to this project will be documented in this file. The format 
   recomputes the `airflow.settings` configuration globals.
 - `config.env_var_name()` and `config.ENV_VAR_PREFIX`, which reproduce Airflow's
   `AIRFLOW__SECTION__KEY` name mangling without importing Airflow.
+- `airflow_variables` and `airflow_connections` fixtures seeding committed Variable and Connection
+  rows for database-backed tests, taking the same field shapes `run_task(variables=...)` and
+  `run_task(connections=...)` take. Each row the fixture inserted is deleted on teardown, an
+  existing row is never overwritten, and an identifier already shadowed by an
+  `AIRFLOW_VAR_*`/`AIRFLOW_CONN_*` variable fails loudly rather than being silently outranked by
+  Airflow's environment secrets backend
+  ([#35](https://github.com/nredd/pytest-airflow-in-a-box/issues/35)).
 
 - Consumer-style compatibility coverage for operators, TaskFlow mapping and branching, hooks,
   connections, provider SQL, sensors, deferral, callbacks, retries, assets, provider-shaped
@@ -51,6 +58,12 @@ All notable changes to this project will be documented in this file. The format 
 
 - `config.conf_vars()`, an alias provided under the name public Airflow documentation teaches. It
   emits a `DeprecationWarning`; use `config.airflow_config()` instead.
+
+### Fixed
+
+- Pinned one Fernet key per run root as `AIRFLOW__CORE__FERNET_KEY`. Airflow's `unit_test_mode`
+  generates a fresh random key in every process, so an encrypted connection password or Variable
+  value written by the pytest process was undecryptable in the `api_client` server subprocess.
 
 ### Changed
 

@@ -34,6 +34,17 @@ from pytest_airflow_in_a_box._compat.in_process import (
     run_task_in_process,
 )
 from pytest_airflow_in_a_box._compat.params import ParamsCaseError, validate_dag_params
+from pytest_airflow_in_a_box._compat.seed import (
+    SeedCleanupError,
+    SeedPersistenceError,
+    SeedRecord,
+    cleanup_seeds,
+    open_seed_session,
+    seed_connections,
+    seed_variables,
+    validate_connections,
+    validate_variables,
+)
 
 __all__ = (
     "AirflowCapabilities",
@@ -45,13 +56,22 @@ __all__ = (
     "FakeSupervisorComms",
     "InProcessRunResult",
     "ParamsCaseError",
+    "SeedCleanupError",
+    "SeedPersistenceError",
+    "SeedRecord",
     "TaskInstanceRunner",
     "build_dag_bag",
+    "cleanup_seeds",
     "clear_tables",
     "ensure_database",
     "implied_groups",
     "initialize_database",
+    "open_seed_session",
     "resolve_capabilities",
     "run_task_in_process",
+    "seed_connections",
+    "seed_variables",
+    "validate_connections",
     "validate_dag_params",
+    "validate_variables",
 )

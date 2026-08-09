@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -53,6 +54,7 @@ def _artifact_state(root: Path, *, owner_pid: int = 1234) -> BootstrapState:
         password_file=root / "simple_auth_manager_passwords.json",
         config_path=root / "airflow.cfg",
         jwt_secret="secret",
+        fernet_key="fernet",
         storage_reason="explicit",
         network_storage=False,
         sql_alchemy_conn=sqlite_url(root / "airflow.db"),
@@ -404,3 +406,33 @@ def test_install_environment_disables_pooling_for_postgres(
 
     assert os.environ[bootstrap.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE] == postgres_url
     assert os.environ[bootstrap.SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] == "False"
+
+
+def test_generate_fernet_key_is_a_distinct_valid_key() -> None:
+    """Generate a decodable 32-byte Fernet key that differs per call."""
+
+    first = bootstrap.generate_fernet_key()
+    second = bootstrap.generate_fernet_key()
+
+    assert first != second
+    assert len(base64.urlsafe_b64decode(first)) == 32
+
+
+def test_install_environment_pins_one_fernet_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the run's Fernet key so every Airflow process decrypts the same rows.
+
+    Airflow's `unit_test_mode` generates a fresh random key per process, so
+    without this the `api_client` server subprocess cannot read an encrypted
+    connection password written by the pytest process.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    for name in bootstrap._environment_names():
+        monkeypatch.delenv(name, raising=False)
+
+    bootstrap._install_environment(state)
+
+    assert "AIRFLOW__CORE__FERNET_KEY" in bootstrap._environment_names()
+    assert os.environ["AIRFLOW__CORE__FERNET_KEY"] == state.fernet_key

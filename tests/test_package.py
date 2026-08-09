@@ -63,6 +63,8 @@ def test_public_surface_is_explicit() -> None:
         "register_ini_defaults",
     )
     assert fixtures.__all__ == (
+        "airflow_connections",
+        "airflow_variables",
         "api_client",
         "api_server_url",
         "cap_structlog",
@@ -80,6 +82,8 @@ def test_public_surface_is_explicit() -> None:
         "register_markers",
     )
     assert plugin.__all__ == (
+        "airflow_connections",
+        "airflow_variables",
         "api_client",
         "api_server_url",
         "cap_structlog",
@@ -99,7 +103,14 @@ def test_public_surface_is_explicit() -> None:
         "ordered_task_instances",
         "run_task_instance",
     )
-    assert types.__all__ == ("DagMaker", "RunTask", "SerializedDag", "TaskRunResult")
+    assert types.__all__ == (
+        "AirflowConnections",
+        "AirflowVariables",
+        "DagMaker",
+        "RunTask",
+        "SerializedDag",
+        "TaskRunResult",
+    )
     assert _compat.__all__ == (
         "AirflowCapabilities",
         "AirflowCompatibilityError",
@@ -110,15 +121,24 @@ def test_public_surface_is_explicit() -> None:
         "FakeSupervisorComms",
         "InProcessRunResult",
         "ParamsCaseError",
+        "SeedCleanupError",
+        "SeedPersistenceError",
+        "SeedRecord",
         "TaskInstanceRunner",
         "build_dag_bag",
+        "cleanup_seeds",
         "clear_tables",
         "ensure_database",
         "implied_groups",
         "initialize_database",
+        "open_seed_session",
         "resolve_capabilities",
         "run_task_in_process",
+        "seed_connections",
+        "seed_variables",
+        "validate_connections",
         "validate_dag_params",
+        "validate_variables",
     )
 
 

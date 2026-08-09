@@ -41,6 +41,7 @@ def write_airflow_config(
     sql_alchemy_conn: str,
     password_file: Path,
     jwt_secret: str,
+    fernet_key: str,
 ) -> None:
     """Write a deterministic Airflow configuration without importing Airflow.
 
@@ -51,9 +52,10 @@ def write_airflow_config(
         sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
         password_file: pathlib.Path containing SimpleAuthManager passwords.
         jwt_secret: str used to sign Airflow API tokens.
+        fernet_key: str shared by every Airflow process encrypting metadata.
 
     Raises:
-        ValueError: A path is relative, or the URL or JWT secret is empty.
+        ValueError: A path is relative, or the URL, JWT secret, or Fernet key is empty.
         OSError: The configuration cannot be written.
     """
 
@@ -70,6 +72,8 @@ def write_airflow_config(
         raise ValueError("`sql_alchemy_conn` must not be empty")
     if not jwt_secret:
         raise ValueError("`jwt_secret` must not be empty")
+    if not fernet_key:
+        raise ValueError("`fernet_key` must not be empty")
 
     cfg = configparser.ConfigParser(interpolation=None)
     cfg["core"] = {
@@ -80,6 +84,7 @@ def write_airflow_config(
         "simple_auth_manager_users": "admin:admin",
         "simple_auth_manager_all_admins": "False",
         "simple_auth_manager_passwords_file": str(password_file),
+        "fernet_key": fernet_key,
     }
     cfg["database"] = {"sql_alchemy_conn": sql_alchemy_conn}
     cfg["logging"] = {"base_log_folder": str(logs_folder)}

@@ -24,6 +24,7 @@ def test_write_airflow_config_is_deterministic(tmp_path: Path) -> None:
         "sql_alchemy_conn": sqlite_url(tmp_path / "airflow.db"),
         "password_file": tmp_path / "passwords.json",
         "jwt_secret": "stable-secret",
+        "fernet_key": "stable-fernet",
     }
 
     write_airflow_config(config_path, **values)
@@ -42,6 +43,7 @@ def test_write_airflow_config_is_deterministic(tmp_path: Path) -> None:
             "simple_auth_manager_users = admin:admin\n"
             "simple_auth_manager_all_admins = False\n"
             f"simple_auth_manager_passwords_file = {tmp_path / 'passwords.json'}\n"
+            "fernet_key = stable-fernet\n"
             "\n"
             "[database]\n"
             f"sql_alchemy_conn = sqlite:///{tmp_path / 'airflow.db'}\n"
@@ -68,6 +70,7 @@ def test_generated_config_accepts_a_postgres_url(tmp_path: Path) -> None:
         sql_alchemy_conn=postgres_url,
         password_file=tmp_path / "passwords.json",
         jwt_secret="jwt-value",
+        fernet_key="fernet-value",
     )
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
@@ -86,6 +89,7 @@ def test_generated_config_contains_required_airflow_settings(tmp_path: Path) -> 
         sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
         password_file=tmp_path / "passwords.json",
         jwt_secret="jwt-value",
+        fernet_key="fernet-value",
     )
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
@@ -96,6 +100,7 @@ def test_generated_config_contains_required_airflow_settings(tmp_path: Path) -> 
     assert cfg.get("core", "simple_auth_manager_users") == "admin:admin"
     assert cfg.get("database", "sql_alchemy_conn") == sqlite_url(tmp_path / "airflow.db")
     assert cfg.get("api_auth", "jwt_secret") == "jwt-value"
+    assert cfg.get("core", "fernet_key") == "fernet-value"
 
 
 def test_config_writer_rejects_relative_paths(tmp_path: Path) -> None:
@@ -109,6 +114,7 @@ def test_config_writer_rejects_relative_paths(tmp_path: Path) -> None:
             sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
             password_file=tmp_path / "passwords.json",
             jwt_secret="jwt-value",
+            fernet_key="fernet-value",
         )
 
 
@@ -130,6 +136,7 @@ def test_write_airflow_config_requires_a_database_url(tmp_path: Path) -> None:
             sql_alchemy_conn="",
             password_file=tmp_path / "passwords.json",
             jwt_secret="jwt-value",
+            fernet_key="fernet-value",
         )
 
 
@@ -144,4 +151,20 @@ def test_write_airflow_config_requires_a_jwt_secret(tmp_path: Path) -> None:
             sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
             password_file=tmp_path / "passwords.json",
             jwt_secret="",
+            fernet_key="fernet-value",
+        )
+
+
+def test_write_airflow_config_requires_a_fernet_key(tmp_path: Path) -> None:
+    """Reject an empty Fernet key before writing configuration."""
+
+    with pytest.raises(ValueError, match="`fernet_key` must not be empty"):
+        write_airflow_config(
+            tmp_path / "airflow.cfg",
+            dags_folder=tmp_path / "dags",
+            logs_folder=tmp_path / "logs",
+            sql_alchemy_conn=sqlite_url(tmp_path / "airflow.db"),
+            password_file=tmp_path / "passwords.json",
+            jwt_secret="jwt-value",
+            fernet_key="",
         )
