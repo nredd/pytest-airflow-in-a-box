@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,6 +24,9 @@ def _config(
     dag_id_pattern: object = "",
     required_dag_tags: object = (),
     forbid_default_owner: object = False,
+    airflow_smoke_update: object = None,
+    snapshot_dir: object = "",
+    rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for smoke config-reader tests.
 
@@ -34,6 +38,9 @@ def _config(
         dag_id_pattern: object containing the ``airflow_dag_id_pattern`` ini value.
         required_dag_tags: object containing the ``airflow_required_dag_tags`` ini value.
         forbid_default_owner: object containing the ``airflow_forbid_default_owner`` ini value.
+        airflow_smoke_update: object containing the parsed ``--airflow-smoke-update`` value.
+        snapshot_dir: object containing the ``airflow_dag_snapshot_dir`` ini value.
+        rootpath: pathlib.Path used to resolve a relative snapshot directory.
 
     Returns:
         types.SimpleNamespace shaped like the configuration surface under test.
@@ -48,11 +55,17 @@ def _config(
         if isinstance(required_dag_tags, (list, tuple))
         else required_dag_tags,
         "airflow_forbid_default_owner": forbid_default_owner,
+        "airflow_dag_snapshot_dir": snapshot_dir,
+    }
+    option_values = {
+        "airflow_smoke": airflow_smoke,
+        "airflow_smoke_update": airflow_smoke_update,
     }
     return SimpleNamespace(
-        getoption=lambda name: {"airflow_smoke": airflow_smoke}[name],
+        getoption=lambda name: option_values[name],
         getini=lambda name: ini_values[name],
         stash=pytest.Stash(),
+        rootpath=rootpath,
     )
 
 
@@ -217,6 +230,61 @@ def test_forbid_default_owner_rejects_non_boolean() -> None:
 
     with pytest.raises(pytest.UsageError, match="must be a boolean"):
         smoke._forbid_default_owner(_config(forbid_default_owner="yes"))
+
+
+def test_snapshot_dir_returns_none_when_unset() -> None:
+    """Return no snapshot directory when the ini value is empty."""
+
+    assert smoke._snapshot_dir(_config()) is None
+
+
+def test_snapshot_dir_resolves_relative_paths_against_rootpath() -> None:
+    """Resolve a relative snapshot directory against the configured rootpath."""
+
+    config = _config(snapshot_dir="snapshots", rootpath=Path("/repo"))
+
+    assert smoke._snapshot_dir(config) == Path("/repo/snapshots")
+
+
+def test_snapshot_dir_passes_through_absolute_paths() -> None:
+    """Leave an absolute snapshot directory unchanged."""
+
+    config = _config(snapshot_dir="/abs/snapshots", rootpath=Path("/repo"))
+
+    assert smoke._snapshot_dir(config) == Path("/abs/snapshots")
+
+
+def test_snapshot_dir_rejects_non_string() -> None:
+    """Reject a non-string ini value."""
+
+    with pytest.raises(pytest.UsageError, match="must be a path string"):
+        smoke._snapshot_dir(_config(snapshot_dir=7))
+
+
+def test_smoke_update_defaults_to_false() -> None:
+    """Return disabled when the CLI option is unset."""
+
+    assert smoke._smoke_update(_config()) is False
+
+
+def test_smoke_update_reads_configured_value() -> None:
+    """Return the configured CLI option value."""
+
+    assert smoke._smoke_update(_config(airflow_smoke_update=True)) is True
+
+
+def test_normalize_serialized_dag_strips_run_dependent_keys() -> None:
+    """Drop every run-dependent key while leaving other keys untouched."""
+
+    encoded = {
+        "dag_id": "sample",
+        "_processor_dags_folder": "/home/user/dags",
+        "fileloc": "/home/user/dags/sample.py",
+        "relative_fileloc": "sample.py",
+        "tags": ["team-a"],
+    }
+
+    assert smoke._normalize_serialized_dag(encoded) == {"dag_id": "sample", "tags": ["team-a"]}
 
 
 def _stat(file: str, seconds: float, *, dags: int = 1, tasks: int = 1) -> Any:
@@ -548,6 +616,169 @@ def test_forbid_default_owner_item_passes_when_every_task_is_owned(
     item.runtest()
 
 
+def _snapshot_item(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    dags: dict[str, Any],
+    snapshot_dir: Path,
+    update: bool,
+    serialize_dag: Any = lambda _dag: {"dag_id": "irrelevant"},
+) -> Any:
+    """Build a bare `SerializedDagSnapshotItem` wired to a fake Dag bag and serializer.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch used to stub the shared Dag bag and serializer.
+        dags: dict[str, Any] mapping dag_id to a Dag double passed to `serialize_dag`.
+        snapshot_dir: pathlib.Path used as the item's committed snapshot directory.
+        update: bool indicating whether the item runs in update mode.
+        serialize_dag: Any callable serializing a Dag double into a plain dict.
+
+    Returns:
+        Any containing the constructed item with only the attributes under test.
+    """
+
+    dag_bag: Any = SimpleNamespace(dags=dags)
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=serialize_dag),
+    )
+    return _bare_item(
+        smoke.SerializedDagSnapshotItem,
+        session=None,
+        config=None,
+        snapshot_dir=snapshot_dir,
+        update=update,
+    )
+
+
+def test_snapshot_item_update_mode_writes_new_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Write a new snapshot file when none exists yet."""
+
+    snapshot_dir = tmp_path / "snapshots"
+    item = _snapshot_item(
+        monkeypatch,
+        dags={"sample": _dag("sample")},
+        snapshot_dir=snapshot_dir,
+        update=True,
+        serialize_dag=lambda _dag: {"dag_id": "sample"},
+    )
+
+    item.runtest()
+
+    written = (snapshot_dir / "sample.json").read_text(encoding="utf-8")
+    assert written == '{\n  "dag_id": "sample"\n}\n'
+
+
+def test_snapshot_item_update_mode_overwrites_existing_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Overwrite a differing committed snapshot in update mode."""
+
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    (snapshot_dir / "sample.json").write_text("stale", encoding="utf-8")
+    item = _snapshot_item(
+        monkeypatch,
+        dags={"sample": _dag("sample")},
+        snapshot_dir=snapshot_dir,
+        update=True,
+        serialize_dag=lambda _dag: {"dag_id": "sample"},
+    )
+
+    item.runtest()
+
+    written = (snapshot_dir / "sample.json").read_text(encoding="utf-8")
+    assert written == '{\n  "dag_id": "sample"\n}\n'
+
+
+def test_snapshot_item_diff_mode_fails_when_snapshot_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fail naming the missing path and the update flag when no snapshot exists."""
+
+    snapshot_dir = tmp_path / "snapshots"
+    item = _snapshot_item(
+        monkeypatch, dags={"sample": _dag("sample")}, snapshot_dir=snapshot_dir, update=False
+    )
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="has no committed snapshot") as caught:
+        item.runtest()
+
+    assert "--airflow-smoke-update" in str(caught.value)
+
+
+def test_snapshot_item_diff_mode_passes_when_snapshot_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Raise nothing when the committed snapshot matches the current serialization."""
+
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    (snapshot_dir / "sample.json").write_text('{\n  "dag_id": "sample"\n}\n', encoding="utf-8")
+    item = _snapshot_item(
+        monkeypatch,
+        dags={"sample": _dag("sample")},
+        snapshot_dir=snapshot_dir,
+        update=False,
+        serialize_dag=lambda _dag: {"dag_id": "sample"},
+    )
+
+    item.runtest()
+
+
+def test_snapshot_item_diff_mode_fails_with_diff_on_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fail with a unified diff body naming the dag_id when content drifted."""
+
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    (snapshot_dir / "sample.json").write_text('{\n  "dag_id": "sample"\n}\n', encoding="utf-8")
+    item = _snapshot_item(
+        monkeypatch,
+        dags={"sample": _dag("sample")},
+        snapshot_dir=snapshot_dir,
+        update=False,
+        serialize_dag=lambda _dag: {"dag_id": "sample", "tags": ["new-tag"]},
+    )
+
+    with pytest.raises(smoke.SmokeCheckFailure, match=r"Dag `sample` drifted") as caught:
+        item.runtest()
+
+    assert "-{" in str(caught.value) or "+  " in str(caught.value)
+
+
+def test_snapshot_item_aggregates_serialize_failures_without_blocking_other_dags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Report a per-Dag serialize failure while still processing every other Dag."""
+
+    snapshot_dir = tmp_path / "snapshots"
+
+    def serialize_dag(dag: Any) -> dict[str, Any]:
+        if dag == "explode":
+            raise ValueError("cannot serialize a lambda")
+        return {"dag_id": "fine"}
+
+    item = _snapshot_item(
+        monkeypatch,
+        dags={"broken": "explode", "fine": "fine"},
+        snapshot_dir=snapshot_dir,
+        update=True,
+        serialize_dag=serialize_dag,
+    )
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="cannot serialize a lambda") as caught:
+        item.runtest()
+
+    assert "Dag `broken`" in str(caught.value)
+    assert (snapshot_dir / "fine.json").is_file()
+
+
 def test_smoke_dag_bag_caches_one_bag_per_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Build the Dag bag once, export the timeout, and serve later calls from the stash."""
 
@@ -785,10 +1016,74 @@ def test_forbid_default_owner_policy_appears_only_when_configured(
     enabled.stdout.fnmatch_lines(["*owned by the stock*`airflow`*owner*"])
 
 
+def test_dag_snapshot_policy_appears_only_when_configured(pytester: pytest.Pytester) -> None:
+    """Collect the snapshot policy item only when its ini is set."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+
+    disabled = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
+    disabled.assert_outcomes(passed=5)
+    assert "test_dag_serialization_snapshot" not in disabled.stdout.str()
+
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
+    enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags", "--airflow-smoke-update")
+    enabled.assert_outcomes(passed=6)
+    enabled.stdout.fnmatch_lines(["*::smoke::test_dag_serialization_snapshot PASSED*"])
+
+
+def test_dag_snapshot_update_flag_writes_snapshot_file(pytester: pytest.Pytester) -> None:
+    """Write one JSON snapshot file per Dag when `--airflow-smoke-update` is passed."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
+    )
+
+    result.assert_outcomes(passed=6)
+    snapshot_path = pytester.path / "snapshots" / "valid_dag.json"
+    assert snapshot_path.is_file()
+    assert '"dag_id": "valid_dag"' in snapshot_path.read_text(encoding="utf-8")
+
+
+def test_dag_snapshot_second_run_passes_without_update(pytester: pytest.Pytester) -> None:
+    """Pass in diff mode once a snapshot has been committed for an unchanged Dag."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
+    pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
+    ).assert_outcomes(passed=6)
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
+
+    result.assert_outcomes(passed=6)
+
+
+def test_dag_snapshot_fails_on_drift(pytester: pytest.Pytester) -> None:
+    """Fail in diff mode once the Dag's serialized structure drifts from its snapshot."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
+    pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
+    ).assert_outcomes(passed=6)
+
+    (pytester.path / "dags" / "valid.py").write_text(
+        VALID_DAG.replace('tags=["team-a"]', 'tags=["team-b"]'), encoding="utf-8"
+    )
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
+
+    result.assert_outcomes(passed=5, failed=1)
+    result.stdout.fnmatch_lines(["*drifted from its committed snapshot*"])
+
+
 def test_smoke_marker_selects_exactly_the_bundled_items(pytester: pytest.Pytester) -> None:
     """Select exactly the bundled smoke items with `-m smoke`."""
 
     _write_dags(pytester, valid=VALID_DAG)
+
     pytester.makepyfile(
         """
         def test_regular():

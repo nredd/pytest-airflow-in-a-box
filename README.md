@@ -284,6 +284,9 @@ zero-config:
 - `airflow_dag_id_pattern` -- every `dag_id` matches the given regex
 - `airflow_required_dag_tags` -- every Dag carries the listed tags
 - `airflow_forbid_default_owner` -- no task is owned by the stock `airflow` owner
+- `airflow_dag_snapshot_dir` -- every Dag's serialized structure (topology, schedule, params,
+  task attrs) matches its committed snapshot in the configured directory; regenerate with
+  `--airflow-smoke-update`
 
 ## Database cleanup
 

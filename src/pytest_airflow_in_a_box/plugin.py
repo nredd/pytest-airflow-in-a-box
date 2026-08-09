@@ -186,6 +186,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type="bool",
         default=False,
     )
+    group.addoption(
+        "--airflow-smoke-update",
+        action="store_true",
+        default=None,
+        dest="airflow_smoke_update",
+        help="Regenerate committed Dag serialization snapshots instead of diffing them.",
+    )
+    parser.addini(
+        "airflow_dag_snapshot_dir",
+        "Directory of committed Dag serialization snapshots, checked by the smoke catalog.",
+        default="",
+    )
     register_ini_defaults(parser)
 
 
