@@ -351,6 +351,21 @@ and ini settings always win. Warning filters silence traced third-party deprecat
 warnings visible, and promote pytest's collection and unraisable warnings to errors. User-supplied
 `filterwarnings` lines take precedence.
 
+## Diagnostics
+
+`--airflow-doctor` prints a one-shot, copy-pasteable report and exits without collecting or
+running tests -- useful for bug reports and "why is it slow/failing here" triage:
+
+```console
+pytest --airflow-doctor
+```
+
+The report covers the storage ladder decision and its reason, the resolved `AIRFLOW_HOME`,
+database URL scheme, and backend tier, plugin/pytest/Python/Airflow versions plus the resolved
+capability table, and API server state. The API server section always reads "not started": the
+`api_server_url` fixture is a lazy, per-process, session-scoped subprocess with no state before a
+test requests it, and a standalone `--airflow-doctor` invocation never does.
+
 ## License
 
 Apache License 2.0. See `LICENSE`, `NOTICE`, and `PROVENANCE.md`.
