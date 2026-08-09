@@ -38,6 +38,13 @@ All notable changes to this project will be documented in this file. The format 
 - On-demand mapped task-instance expansion through `dag_maker.create_ti` and `run_ti`.
 - Inline persisted-trigger execution and deferred-task resumption through
   `dag_maker.run_ti(..., run_triggerer=True)`.
+- `taskinstance.run_trigger(trigger, *, timeout=...)`, which drives one trigger's async `run()` to
+  its first `TriggerEvent` on a private event loop with no triggerer job, DagRun, or metadata
+  database, always running `cleanup()`. A trigger that never fires raises the new
+  `TriggerExecutionError` rather than hanging the suite
+  ([#36](https://github.com/nredd/pytest-airflow-in-a-box/issues/36)).
+- `trigger_timeout` on `run_ti` and `run_task_instance`, bounding the persisted trigger's first
+  event when `run_triggerer=True`. Defaults to `taskinstance.DEFAULT_TRIGGER_TIMEOUT`.
 - Synthetic attempt selection and retry callback behavior through `run_task(..., try_number=...)`.
 - Widened the certified compatibility matrix to cover every non-yanked patch release
   across the 3.1.x and 3.2.x lines: `3.1.1`, `3.1.2`, `3.1.3`, `3.1.5`, `3.1.6`, `3.1.7`,
