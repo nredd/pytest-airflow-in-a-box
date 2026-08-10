@@ -36,6 +36,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
+from pytest_airflow_in_a_box._compat.registry import lookup_authoring_dag
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -70,6 +71,11 @@ def _session_kwargs(session: Session | None) -> dict[str, Session]:
 def _resolve_task(ti: TaskInstance, task: Operator | None, session: Session | None) -> Any:
     """Resolve an authoring or scheduler task without importing Airflow eagerly.
 
+    Resolution prefers the explicit ``task`` argument, then the transiently attached
+    ``ti.task``, then the plugin's registry of persisted authoring Dags, and finally
+    the transient Dag attached to the instance's DagRun. The registry step resolves
+    ``dag_maker``-owned tasks for instances queried through any consumer session.
+
     Parameters:
         ti: airflow.models.taskinstance.TaskInstance being executed.
         task: airflow.sdk.types.Operator | None explicitly supplied by the caller.
@@ -87,12 +93,16 @@ def _resolve_task(ti: TaskInstance, task: Operator | None, session: Session | No
     attached_task = getattr(ti, "task", None)
     if attached_task is not None:
         return attached_task
+    authoring_dag = lookup_authoring_dag(str(ti.dag_id))
+    if authoring_dag is not None and str(ti.task_id) in authoring_dag.task_dict:
+        return authoring_dag.get_task(str(ti.task_id))
     try:
         dag_run = ti.get_dagrun(**_session_kwargs(session))
         return dag_run.get_dag().get_task(str(ti.task_id))
     except Exception as error:
         raise TaskResolutionError(
-            f"Could not resolve task '{ti.task_id}' for DagRun '{ti.run_id}': {error}"
+            f"Could not resolve task '{ti.task_id}' for DagRun '{ti.run_id}': {error}; "
+            f"pass `task=dag.get_task('{ti.task_id}')` from the authoring Dag"
         ) from error
 
 

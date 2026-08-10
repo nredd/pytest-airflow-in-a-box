@@ -14,6 +14,10 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
+from pytest_airflow_in_a_box._compat.registry import (
+    register_authoring_dag,
+    unregister_authoring_dag,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -251,6 +255,9 @@ def persist_dag(
 ) -> SerializedDag:
     """Persist every metadata row required by certified Airflow releases.
 
+    Successful persistence registers the authoring Dag so task resolution works
+    for task instances queried through sessions the factory does not own.
+
     Parameters:
         dag: airflow.sdk.DAG containing the completed task graph.
         record: DagPersistenceRecord identifying owned resources.
@@ -272,7 +279,9 @@ def persist_dag(
         operation = "committing Dag metadata"
         record.session.commit()
         operation = "loading persisted serialized Dag metadata"
-        return _load_serialized_dag(record)
+        serialized_dag = _load_serialized_dag(record)
+        register_authoring_dag(record.dag_id, dag)
+        return serialized_dag
     except Exception as error:
         record.session.rollback()
         try:
@@ -547,7 +556,7 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 
 
 def cleanup_dag(record: DagPersistenceRecord) -> None:
-    """Remove one fixture-owned Dag in foreign-key-safe order and close its session.
+    """Remove one fixture-owned Dag, deregister its authoring Dag, and close its session.
 
     Parameters:
         record: DagPersistenceRecord identifying fixture-owned rows.
@@ -564,6 +573,7 @@ def cleanup_dag(record: DagPersistenceRecord) -> None:
             f"Could not clean Airflow Dag metadata for '{record.dag_id}': {error}"
         ) from error
     finally:
+        unregister_authoring_dag(record.dag_id)
         record.session.close()
 
 
