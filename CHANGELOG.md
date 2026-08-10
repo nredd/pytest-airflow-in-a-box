@@ -4,10 +4,21 @@ All notable changes to this project will be documented in this file. The format 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.2.0] - 2026-08-09
 
 ### Added
 
+- Bundled catalog of zero-boilerplate smoke checks against the configured Dag folder,
+  synthesized with no files written. Opt in with `--airflow-smoke` or the `airflow_smoke` ini
+  option; every item carries the `smoke` marker so `-m smoke` / `-m "not smoke"` select exactly
+  the bundled catalog. Items: `test_dag_bag_integrity` (fails on import errors and per-file
+  parse timeouts via `airflow_dag_parse_timeout`, warns with `SlowDagParseWarning` on files
+  above `airflow_dag_parse_slowpoke_ratio` of the timeout, and logs a slowest-first
+  parse-timing table), `test_dag_serialization_roundtrip`, `test_no_duplicate_dag_ids`,
+  `test_schedule_sanity`, and `test_pool_references_exist` (`db_test`), plus policy checks
+  that appear only when their ini is configured: `airflow_dag_id_pattern`,
+  `airflow_required_dag_tags`, and `airflow_forbid_default_owner`
+  ([#10](https://github.com/nredd/pytest-airflow-in-a-box/issues/10)).
 - `test_dag_serialization_snapshot`, a 9th bundled smoke item diffing each Dag's serialized
   structure (topology, schedule, params, task attrs) against a committed snapshot file, with
   run-dependent fields normalized away so diffs stay stable across machines and checkouts.
@@ -68,6 +79,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- `cap_structlog` now keeps capturing across mid-test `structlog.configure()` /
+  `structlog.configure_once()` calls -- Airflow reconfigures structlog in several startup
+  paths, which previously replaced the processor chain and silently dropped the capture.
+  The fixture intercepts configuration while active and re-inserts its capture processor
+  into the new chain; teardown restores the exact original callables, nested-safe
+  ([#9](https://github.com/nredd/pytest-airflow-in-a-box/issues/9)).
 - Pinned one Fernet key per run root as `AIRFLOW__CORE__FERNET_KEY`. Airflow's `unit_test_mode`
   generates a fresh random key in every process, so an encrypted connection password or Variable
   value written by the pytest process was undecryptable in the `api_client` server subprocess.
@@ -113,5 +130,6 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.2.0
 [0.1.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.1.2
