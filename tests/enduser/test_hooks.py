@@ -7,12 +7,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from airflow.models.connection import Connection
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.sdk import DAG, BaseHook, BaseOperator
 from airflow.utils.state import TaskInstanceState
 
-from pytest_airflow_in_a_box.types import DagMaker, RunTask
+from pytest_airflow_in_a_box.types import AirflowConnections, DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
 
@@ -61,22 +60,24 @@ def _expected_connection() -> dict[str, str]:
 
 
 @pytest.mark.db_test
-def test_custom_hook_reads_a_persisted_connection(dag_maker: DagMaker) -> None:
+def test_custom_hook_reads_a_persisted_connection(
+    airflow_connections: AirflowConnections, dag_maker: DagMaker
+) -> None:
     """Resolve host, schema, login, and typed extra through metadata."""
 
     with dag_maker(dag_id="compat_hook_db"):
         HookOperator(task_id="connect", conn_id="compat_hook_db_conn")
-    dag_maker.session.add(
-        Connection(
-            conn_id="compat_hook_db_conn",
-            conn_type="http",
-            host="127.0.0.1",
-            schema="synthetic",
-            login="tester",
-            extra='{"region": "local"}',
-        )
+    airflow_connections(
+        {
+            "compat_hook_db_conn": {
+                "conn_type": "http",
+                "host": "127.0.0.1",
+                "schema": "synthetic",
+                "login": "tester",
+                "extra": '{"region": "local"}',
+            }
+        }
     )
-    dag_maker.session.commit()
 
     ti = dag_maker.run_ti("connect")
 
@@ -110,7 +111,9 @@ def _fetch_scalar(cursor: Any) -> int:
 
 
 @pytest.mark.db_test
-def test_sqlite_provider_operator_runs_end_to_end(dag_maker: DagMaker, tmp_path: Path) -> None:
+def test_sqlite_provider_operator_runs_end_to_end(
+    airflow_connections: AirflowConnections, dag_maker: DagMaker, tmp_path: Path
+) -> None:
     """Execute a real installed-provider operator against synthetic SQLite."""
 
     database = tmp_path / "provider.db"
@@ -124,10 +127,7 @@ def test_sqlite_provider_operator_runs_end_to_end(dag_maker: DagMaker, tmp_path:
             sql="SELECT value FROM answers",
             handler=cast(Any, _fetch_scalar),
         )
-    dag_maker.session.add(
-        Connection(conn_id="compat_sqlite_conn", conn_type="sqlite", host=str(database))
-    )
-    dag_maker.session.commit()
+    airflow_connections({"compat_sqlite_conn": {"conn_type": "sqlite", "host": str(database)}})
 
     ti = dag_maker.run_ti("query")
 

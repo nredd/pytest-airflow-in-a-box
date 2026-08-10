@@ -36,6 +36,8 @@ from pytest_airflow_in_a_box.defaults import (
 from pytest_airflow_in_a_box.doctor import render_doctor_report
 from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
+    airflow_connections,
+    airflow_variables,
     api_client,
     api_server_url,
     cap_structlog,
@@ -57,6 +59,8 @@ from pytest_airflow_in_a_box.reporting import configure_reporting
 from pytest_airflow_in_a_box.smoke import collect_smoke_items
 
 __all__ = (
+    "airflow_connections",
+    "airflow_variables",
     "api_client",
     "api_server_url",
     "cap_structlog",

@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -19,6 +20,44 @@ if TYPE_CHECKING:
     from airflow.models.taskinstance import TaskInstance
     from airflow.sdk import DAG
     from sqlalchemy.orm import Session
+
+
+class AirflowVariables(Protocol):
+    """Seed fixture-owned Airflow Variable rows for one database-backed test."""
+
+    def __call__(self, variables: Mapping[str, str]) -> None:
+        """Commit one batch of Variables, removed when the test finishes.
+
+        Parameters:
+            variables: Mapping[str, str] containing Variable values by key.
+
+        Raises:
+            TypeError: The batch, a key, or a value has the wrong type.
+            ValueError: A key is malformed, already present in the metadata
+                database, or shadowed by an ``AIRFLOW_VAR_*`` variable.
+        """
+
+
+class AirflowConnections(Protocol):
+    """Seed fixture-owned Airflow Connection rows for one database-backed test."""
+
+    def __call__(self, connections: Mapping[str, Mapping[str, Any]]) -> None:
+        """Commit one batch of Connections, removed when the test finishes.
+
+        Fields are the flat shape ``run_task(connections=...)`` takes, so
+        ``conn_type`` defaults to ``generic`` and ``extra`` is a JSON object
+        string.
+
+        Parameters:
+            connections: Mapping[str, Mapping[str, Any]] containing connection
+                fields by connection id.
+
+        Raises:
+            TypeError: The batch, a connection id, or a field has the wrong type.
+            ValueError: A connection id or field is malformed, already present in
+                the metadata database, or shadowed by an ``AIRFLOW_CONN_*``
+                variable.
+        """
 
 
 class SerializedDag(Protocol):
@@ -179,4 +218,11 @@ class RunTask(Protocol):
         """
 
 
-__all__ = ("DagMaker", "RunTask", "SerializedDag", "TaskRunResult")
+__all__ = (
+    "AirflowConnections",
+    "AirflowVariables",
+    "DagMaker",
+    "RunTask",
+    "SerializedDag",
+    "TaskRunResult",
+)

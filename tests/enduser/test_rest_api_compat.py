@@ -8,7 +8,7 @@ import pytest
 from airflow.providers.standard.operators.empty import EmptyOperator
 
 from pytest_airflow_in_a_box.fixtures.api import AirflowApiClient
-from pytest_airflow_in_a_box.types import DagMaker
+from pytest_airflow_in_a_box.types import AirflowConnections, DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.api_test, pytest.mark.db_test]
 
@@ -122,3 +122,30 @@ def test_connection_crud(api_client: AirflowApiClient) -> None:
     assert updated.body["description"] == "updated"
     assert deleted.status == 204
     assert api_client.get(path).status == 404
+
+
+def test_api_server_decrypts_a_seeded_connection(
+    airflow_connections: AirflowConnections, api_client: AirflowApiClient
+) -> None:
+    """Decrypt encrypted metadata written by the pytest process in the API server subprocess.
+
+    Airflow's `unit_test_mode` generates a fresh random Fernet key per process, so this proves
+    the run's pinned `AIRFLOW__CORE__FERNET_KEY` reaches the `api_client` server subprocess too.
+    """
+
+    airflow_connections(
+        {
+            "compat_fernet_conn": {
+                "conn_type": "http",
+                "host": "127.0.0.1",
+                "password": "s3cret",
+                "extra": '{"region": "local"}',
+            }
+        }
+    )
+
+    response = api_client.get("/api/v2/connections/compat_fernet_conn")
+
+    assert response.status == 200
+    assert response.body["host"] == "127.0.0.1"
+    assert response.body["extra"] == '{"region": "local"}'

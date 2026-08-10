@@ -8,6 +8,7 @@ References:
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import secrets
@@ -27,7 +28,7 @@ from pytest_airflow_in_a_box.airflow_cfg import (
 from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
-STATE_VERSION = 2
+STATE_VERSION = 3
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
 WORKER_INPUT_KEY = "pytest_airflow_in_a_box_bootstrap_state"
 XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
@@ -53,6 +54,7 @@ class BootstrapState:
         password_file: pathlib.Path containing SimpleAuthManager passwords.
         config_path: pathlib.Path containing ``airflow.cfg``.
         jwt_secret: str shared by all Airflow processes in this run.
+        fernet_key: str shared by all Airflow processes encrypting metadata.
         storage_reason: str describing why the storage base was selected.
         network_storage: bool indicating network filesystem semantics.
         sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
@@ -68,6 +70,7 @@ class BootstrapState:
     password_file: Path
     config_path: Path
     jwt_secret: str
+    fernet_key: str
     storage_reason: str
     network_storage: bool
     sql_alchemy_conn: str
@@ -90,6 +93,7 @@ class BootstrapState:
             "password_file": str(self.password_file),
             "config_path": str(self.config_path),
             "jwt_secret": self.jwt_secret,
+            "fernet_key": self.fernet_key,
             "storage_reason": self.storage_reason,
             "network_storage": self.network_storage,
             "sql_alchemy_conn": self.sql_alchemy_conn,
@@ -214,6 +218,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "password_file",
         "config_path",
         "jwt_secret",
+        "fernet_key",
         "storage_reason",
         "network_storage",
         "sql_alchemy_conn",
@@ -261,6 +266,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         password_file=path_values["password_file"],
         config_path=path_values["config_path"],
         jwt_secret=_require_string(payload, "jwt_secret"),
+        fernet_key=_require_string(payload, "fernet_key"),
         storage_reason=_require_string(payload, "storage_reason"),
         network_storage=_require_bool(payload, "network_storage"),
         sql_alchemy_conn=sql_alchemy_conn,
@@ -306,6 +312,21 @@ def _state_from_environment() -> BootstrapState:
         raise pytest.UsageError(f"Invalid inherited Airflow bootstrap state: {error}") from error
 
 
+def generate_fernet_key() -> str:
+    """Generate one Fernet key without importing Airflow or `cryptography`.
+
+    Airflow's ``unit_test_mode`` generates a fresh random Fernet key in every
+    process, so encrypted metadata written by one process is undecryptable in
+    another. Pinning one key per run root keeps seeded connection passwords and
+    Variable values readable from the ``api_client`` server subprocess.
+
+    Returns:
+        str containing a url-safe base64-encoded 32-byte Fernet key.
+    """
+
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+
+
 def _environment(state: BootstrapState) -> dict[str, str]:
     """Build the minimum pre-import Airflow environment.
 
@@ -328,6 +349,7 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE: state.sql_alchemy_conn,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER": str(state.logs_folder),
         "AIRFLOW__API_AUTH__JWT_SECRET": state.jwt_secret,
+        "AIRFLOW__CORE__FERNET_KEY": state.fernet_key,
     }
     if state.db_backend == DbBackend.POSTGRES:
         variables[SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] = "False"
@@ -531,6 +553,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             password_file=password_file,
             config_path=config_path,
             jwt_secret=secrets.token_urlsafe(48),
+            fernet_key=generate_fernet_key(),
             storage_reason=str(location.reason),
             network_storage=location.network,
             sql_alchemy_conn=sql_alchemy_conn,
@@ -543,6 +566,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             sql_alchemy_conn=sql_alchemy_conn,
             password_file=password_file,
             jwt_secret=state.jwt_secret,
+            fernet_key=state.fernet_key,
         )
     except (OSError, ValueError) as error:
         cleanup()
@@ -573,6 +597,7 @@ def _environment_names() -> tuple[str, ...]:
         SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER",
         "AIRFLOW__API_AUTH__JWT_SECRET",
+        "AIRFLOW__CORE__FERNET_KEY",
         STATE_ENVIRONMENT_VARIABLE,
     )
 

@@ -16,7 +16,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     TaskInstanceRunner,
 )
 from pytest_airflow_in_a_box.airflow_cfg import sqlite_url
-from pytest_airflow_in_a_box.bootstrap import BootstrapState
+from pytest_airflow_in_a_box.bootstrap import STATE_VERSION, BootstrapState
 
 CAPABILITIES = AirflowCapabilities(
     release=(3, 3, 0),
@@ -52,7 +52,7 @@ def _state(
     """
 
     return BootstrapState(
-        version=2,
+        version=STATE_VERSION,
         owner_pid=1234,
         root=root,
         dags_folder=root / "dags",
@@ -61,6 +61,7 @@ def _state(
         password_file=root / "simple_auth_manager_passwords.json",
         config_path=root / "airflow.cfg",
         jwt_secret="secret",
+        fernet_key="fernet",
         storage_reason=storage_reason,
         network_storage=network_storage,
         sql_alchemy_conn=sql_alchemy_conn or sqlite_url(root / "airflow.db"),
