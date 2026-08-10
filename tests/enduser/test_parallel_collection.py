@@ -101,3 +101,36 @@ def test_smoke_and_dag_folder_collection_are_xdist_consistent(
     result.assert_outcomes(passed=12, failed=2)
     assert "Different tests were collected" not in result.stdout.str()
     result.stdout.fnmatch_lines(["*dag-import*"])
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_node_id_positional_drops_smoke_catalog_on_every_worker(
+    pytester: pytest.Pytester,
+) -> None:
+    """Drop the synthetic catalog consistently across workers on explicit node selection.
+
+    Workers re-parse the master's raw command line, so the node-ID positional must
+    scope every worker to the one selected test with no cross-worker divergence
+    (https://github.com/nredd/pytest-airflow-in-a-box/issues/54).
+    """
+
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "-n",
+        "2",
+        "--airflow-smoke",
+        "--dag-folder",
+        str(CORPUS),
+        "test_regular.py::test_regular",
+    )
+
+    result.assert_outcomes(passed=1)
+    assert "Different tests were collected" not in result.stdout.str()
+    assert "::smoke" not in result.stdout.str()
