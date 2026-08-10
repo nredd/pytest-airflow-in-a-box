@@ -20,11 +20,13 @@
 ``run_task_instance`` is adapted from Apache Airflow and modified to defer every
 Airflow import, resolve optional tasks, preserve dependency semantics, implement
 ``mark_success``, and return the refreshed caller-owned ORM task instance.
-``ordered_task_instances`` is locally authored.
+``ordered_task_instances`` and ``run_trigger`` are locally authored.
 
 References:
     https://github.com/apache/airflow/blob/2d374f71bc81202204ac0208df07b07c280668fa/devel-common/src/tests_common/test_utils/taskinstance.py
     https://github.com/apache/airflow/pull/59835
+    https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/deferring.html
+    https://airflow.apache.org/docs/apache-airflow/stable/_api/airflow/triggers/base/index.html
 """
 
 from __future__ import annotations
@@ -41,9 +43,15 @@ if TYPE_CHECKING:
     from airflow.sdk.types import Operator
     from sqlalchemy.orm import Session
 
+DEFAULT_TRIGGER_TIMEOUT = 10.0
+
 
 class TaskResolutionError(RuntimeError):
     """Report failure to resolve an executable task for a task instance."""
+
+
+class TriggerExecutionError(RuntimeError):
+    """Report failure to drive a trigger to its first event."""
 
 
 def _session_kwargs(session: Session | None) -> dict[str, Session]:
@@ -277,11 +285,76 @@ def _run_sdk_task_instance(
     return ti
 
 
-def _resume_deferred_task_instance(ti: TaskInstance, session: Session | None) -> None:
-    """Run one persisted trigger event and submit it to the deferred task instance."""
+def run_trigger(trigger: Any, *, timeout: float = DEFAULT_TRIGGER_TIMEOUT) -> Any:
+    """Drive one trigger's async ``run`` to its first event and return that event.
+
+    The trigger runs in process on a private event loop, so no triggerer job, metadata
+    database, or deferred task instance is required. ``cleanup`` always runs, including
+    when the trigger raises or the timeout expires.
+
+    Parameters:
+        trigger: airflow.triggers.base.BaseTrigger exposing ``run`` and ``cleanup``.
+        timeout: float seconds allowed for the first event to arrive.
+
+    Returns:
+        airflow.triggers.base.TriggerEvent yielded first by ``trigger.run()``.
+
+    Raises:
+        TypeError: The supplied object is not trigger-shaped.
+        ValueError: The supplied timeout is not positive.
+        TriggerExecutionError: The trigger times out or completes without an event.
+    """
+
+    if timeout <= 0:
+        raise ValueError(f"`timeout` must be positive, got '{timeout}'")
+    missing = [name for name in ("run", "cleanup") if not callable(getattr(trigger, name, None))]
+    if missing:
+        missing_names = ", ".join(f"'{name}'" for name in missing)
+        raise TypeError(f"`trigger` of type '{type(trigger).__name__}' lacks {missing_names}")
+
+    async def awaited_event() -> Any:
+        events = trigger.run()
+        if not callable(getattr(events, "__anext__", None)):
+            raise TypeError(
+                f"`trigger.run()` of type '{type(trigger).__name__}' "
+                "did not return an async iterator"
+            )
+        try:
+            # ``asyncio.run`` closes an abandoned generator through ``shutdown_asyncgens``.
+            return await asyncio.wait_for(events.__anext__(), timeout)
+        except StopAsyncIteration as error:
+            raise TriggerExecutionError(
+                f"Trigger '{type(trigger).__name__}' completed without an event"
+            ) from error
+        except asyncio.TimeoutError as error:
+            raise TriggerExecutionError(
+                f"Trigger '{type(trigger).__name__}' yielded no event within '{timeout}' seconds"
+            ) from error
+        finally:
+            await trigger.cleanup()
+
+    return asyncio.run(awaited_event())
+
+
+def _resume_deferred_task_instance(
+    ti: TaskInstance,
+    session: Session | None,
+    *,
+    trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+) -> None:
+    """Run one persisted trigger event and submit it to the deferred task instance.
+
+    Parameters:
+        ti: airflow.models.taskinstance.TaskInstance holding the persisted trigger.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        trigger_timeout: float seconds allowed for the trigger's first event.
+
+    Raises:
+        TriggerExecutionError: The session, trigger relationship, or trigger row is absent.
+    """
 
     if session is None:
-        raise RuntimeError("Trigger execution requires a persisted task instance session")
+        raise TriggerExecutionError("Trigger execution requires a persisted task instance session")
 
     from airflow.models.trigger import Trigger
 
@@ -293,23 +366,17 @@ def _resume_deferred_task_instance(ti: TaskInstance, session: Session | None) ->
     _refresh_task_instance(ti, session)
     trigger_id = ti.trigger_id
     if trigger_id is None:
-        raise RuntimeError(f"Deferred task instance '{ti.task_id}' has no persisted trigger")
+        raise TriggerExecutionError(
+            f"Deferred task instance '{ti.task_id}' has no persisted trigger"
+        )
     trigger_row = session.get(Trigger, trigger_id)
     if trigger_row is None:
-        raise RuntimeError(
+        raise TriggerExecutionError(
             f"Deferred task instance '{ti.task_id}' trigger '{trigger_id}' is absent"
         )
     trigger = module_loading.import_string(str(trigger_row.classpath))(**trigger_row.kwargs)
 
-    async def first_event() -> Any:
-        try:
-            async for event in trigger.run():
-                return event
-            raise RuntimeError(f"Trigger '{trigger_row.classpath}' completed without an event")
-        finally:
-            await trigger.cleanup()
-
-    event = asyncio.run(first_event())
+    event = run_trigger(trigger, timeout=trigger_timeout)
     Trigger.submit_event(trigger_id, event, session=session)
     session.commit()
     _refresh_task_instance(ti, session)
@@ -324,6 +391,7 @@ def run_task_instance(
     ignore_ti_state: bool = False,
     mark_success: bool = False,
     run_triggerer: bool = False,
+    trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
     session: Session | None = None,
 ) -> TaskInstance:
     """Run one persisted task instance through the certified Airflow entry point.
@@ -336,6 +404,7 @@ def run_task_instance(
         ignore_ti_state: bool controlling existing task-instance state checks.
         mark_success: bool marking success without executing the task body.
         run_triggerer: bool running one persisted trigger event and resuming a deferred task.
+        trigger_timeout: float seconds allowed for the persisted trigger's first event.
         session: sqlalchemy.orm.Session | None used for metadata operations.
 
     Returns:
@@ -343,6 +412,7 @@ def run_task_instance(
 
     Raises:
         TaskResolutionError: No executable task can be resolved.
+        TriggerExecutionError: A deferred task's trigger cannot be driven to an event.
         RuntimeError: Airflow 3.2+ cannot execute a detached instance or returns no result.
         BaseException: Airflow reports the task execution error.
     """
@@ -367,7 +437,7 @@ def run_task_instance(
 
     if result.state != TaskInstanceState.DEFERRED:
         return result
-    _resume_deferred_task_instance(result, session)
+    _resume_deferred_task_instance(result, session, trigger_timeout=trigger_timeout)
     arguments["ignore_ti_state"] = True
     if capabilities.task_instance_runner is TaskInstanceRunner.LEGACY_RUN:
         return _run_legacy_task_instance(result, resolved_task, **arguments)
@@ -425,4 +495,11 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
         ti.refresh_from_task(task, dag_run=dag_run)
 
 
-__all__ = ("TaskResolutionError", "ordered_task_instances", "run_task_instance")
+__all__ = (
+    "DEFAULT_TRIGGER_TIMEOUT",
+    "TaskResolutionError",
+    "TriggerExecutionError",
+    "ordered_task_instances",
+    "run_task_instance",
+    "run_trigger",
+)

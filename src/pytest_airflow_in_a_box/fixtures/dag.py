@@ -29,7 +29,7 @@ from pytest_airflow_in_a_box._compat.dag import (
     persist_dag,
     select_task_instance,
 )
-from pytest_airflow_in_a_box._compat.taskrun import run_task_instance
+from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT, run_task_instance
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.markers import read_bool_marker
 from pytest_airflow_in_a_box.types import DagMaker, SerializedDag
@@ -461,6 +461,7 @@ class _DagFactory:
         ignore_ti_state: bool = False,
         mark_success: bool = False,
         run_triggerer: bool = False,
+        trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
     ) -> TaskInstance:
         """Create and run one task instance through the compatibility shim.
 
@@ -474,6 +475,7 @@ class _DagFactory:
             ignore_ti_state: bool controlling existing task-instance state checks.
             mark_success: bool marking success without executing the task body.
             run_triggerer: bool running one persisted trigger event and resuming deferral.
+            trigger_timeout: float seconds allowed for the persisted trigger's first event.
 
         Returns:
             airflow.models.taskinstance.TaskInstance containing refreshed persisted state.
@@ -493,6 +495,7 @@ class _DagFactory:
             ignore_ti_state=ignore_ti_state,
             mark_success=mark_success,
             run_triggerer=run_triggerer,
+            trigger_timeout=trigger_timeout,
             session=self.session,
         )
 

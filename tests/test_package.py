@@ -99,9 +99,12 @@ def test_public_surface_is_explicit() -> None:
         "worker_suffixed_path",
     )
     assert taskinstance.__all__ == (
+        "DEFAULT_TRIGGER_TIMEOUT",
         "TaskResolutionError",
+        "TriggerExecutionError",
         "ordered_task_instances",
         "run_task_instance",
+        "run_trigger",
     )
     assert types.__all__ == (
         "AirflowConnections",
