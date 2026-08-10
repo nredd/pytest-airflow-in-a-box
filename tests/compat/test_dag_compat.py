@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
+from pytest_airflow_in_a_box._compat import registry
 from pytest_airflow_in_a_box._compat.dag import (
     DagCleanupError,
     DagPersistenceError,
@@ -175,6 +176,57 @@ def test_persistence_reports_cleanup_failure(monkeypatch: pytest.MonkeyPatch) ->
 
     assert caught.value.__cause__ is persistence_failure
     assert session.rollbacks == 1
+
+
+def test_persist_registers_and_cleanup_unregisters_authoring_dag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register the authoring Dag only after persistence and remove it at cleanup."""
+
+    session = _Session()
+    serialized = object()
+    monkeypatch.setattr(registry, "_AUTHORING_DAGS", {})
+    monkeypatch.setattr(dag_compat, "_ensure_bundle", lambda _record: None)
+    monkeypatch.setattr(dag_compat, "_sync_dag_model", lambda _dag, _record: None)
+    monkeypatch.setattr(dag_compat, "_write_serialized_dag", lambda _dag, _record: None)
+    monkeypatch.setattr(dag_compat, "_load_serialized_dag", lambda _record: serialized)
+    monkeypatch.setattr(dag_compat, "_cleanup_dag", lambda _record: None)
+    dag: Any = object()
+    record = _record(session)
+
+    persisted = dag_compat.persist_dag(dag, record)
+
+    assert persisted is serialized
+    assert registry.lookup_authoring_dag("compat_dag") is dag
+
+    dag_compat.cleanup_dag(record)
+
+    assert registry.lookup_authoring_dag("compat_dag") is None
+    assert session.closes == 1
+
+
+def test_failed_persistence_does_not_register_authoring_dag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the registry empty when persistence fails before commit."""
+
+    session = _Session()
+
+    def fail_bundle(record: DagPersistenceRecord) -> None:
+        """Raise the representative persistence failure."""
+
+        del record
+        raise OSError("bundle write failed")
+
+    monkeypatch.setattr(registry, "_AUTHORING_DAGS", {})
+    monkeypatch.setattr(dag_compat, "_ensure_bundle", fail_bundle)
+    monkeypatch.setattr(dag_compat, "_cleanup_dag", lambda _record: None)
+    dag: Any = object()
+
+    with pytest.raises(DagPersistenceError, match="creating DagBundleModel"):
+        dag_compat.persist_dag(dag, _record(session))
+
+    assert registry.lookup_authoring_dag("compat_dag") is None
 
 
 def test_loading_requires_serialized_metadata(monkeypatch: pytest.MonkeyPatch) -> None:

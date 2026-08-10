@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. The format 
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `run_task_instance` resolves the task for a `dag_maker`-persisted Dag even when the task
+  instance was queried through a separate consumer session (e.g. the `session` fixture),
+  via a process-local registry of authoring Dags registered at persist time and removed at
+  fixture cleanup. The terminal `TaskResolutionError` now also hints at passing
+  `task=dag.get_task(...)` ([#56](https://github.com/nredd/pytest-airflow-in-a-box/issues/56)).
+
 ## [0.2.0] - 2026-08-09
 
 ### Added

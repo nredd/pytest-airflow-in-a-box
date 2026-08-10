@@ -128,7 +128,10 @@ def test_task(dag_maker):
 ```
 
 Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `run_task_instance`,
-`ordered_task_instances`, `run_trigger`, `TaskResolutionError`, and `TriggerExecutionError`. The
+`ordered_task_instances`, `run_trigger`, `TaskResolutionError`, and `TriggerExecutionError`.
+`run_task_instance` resolves the executable task automatically for any `dag_maker`-persisted Dag,
+including task instances queried through a different session (e.g. the `session` fixture); pass
+`task=` only for Dags the plugin does not own. The
 `DagMaker` protocol additionally exposes `create_dagrun`, `create_ti`, and `run_ti`. Passing
 `map_index` expands a mapped task on demand; upstream-XCom mapping works after its producer has run
 in the same DagRun. Passing `run_triggerer=True` runs the persisted trigger event and resumes a

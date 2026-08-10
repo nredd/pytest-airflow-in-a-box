@@ -18,6 +18,7 @@ from airflow.sdk import task
 from airflow.utils.session import create_session
 from airflow.utils.state import TaskInstanceState
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from pytest_airflow_in_a_box.fixtures.dag import RUN_ID_MAX_LENGTH
 from pytest_airflow_in_a_box.taskinstance import ordered_task_instances, run_task_instance
@@ -48,6 +49,31 @@ def test_taskflow_task_runs_to_success_and_pushes_xcom(dag_maker: DagMaker) -> N
 
     assert ti.state == TaskInstanceState.SUCCESS
     assert ti.xcom_pull(task_ids="answer", session=dag_maker.session) == 42
+
+
+def test_run_task_instance_resolves_task_across_sessions(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Resolve the authoring task for an instance queried through a consumer session."""
+
+    with dag_maker(dag_id="cross_session_resolution"):
+
+        @task
+        def answer() -> int:
+            """Return a deterministic XCom value."""
+
+            return 42
+
+        answer()
+
+    dag_run = dag_maker.create_dagrun()
+    ti = dag_run.get_task_instances(session=session)[0]
+
+    result = run_task_instance(ti, session=session)
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert result.xcom_pull(task_ids="answer", session=session) == 42
 
 
 def test_failure_propagates_and_refreshes_original_ti(dag_maker: DagMaker) -> None:

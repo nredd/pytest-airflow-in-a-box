@@ -246,6 +246,58 @@ def test_runner_resolves_task_from_persisted_dagrun(
     persisted_task: Any = object()
     scheduler_dag = SimpleNamespace(get_task=lambda _task_id: persisted_task)
     ti.get_dagrun = lambda: SimpleNamespace(get_dag=lambda: scheduler_dag)
+    monkeypatch.setattr(taskrun, "lookup_authoring_dag", lambda _dag_id: None)
+    monkeypatch.setattr(
+        taskrun,
+        "resolve_capabilities",
+        lambda: _capabilities(TaskInstanceRunner.LEGACY_RUN),
+    )
+
+    result = run_task_instance(ti)
+
+    assert result is ti
+    assert ti.task is persisted_task
+
+
+def test_resolve_task_prefers_registered_authoring_dag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a detached instance through the registered authoring Dag."""
+
+    ti: Any = _TaskInstance()
+    registered_task: Any = object()
+    authoring_dag = SimpleNamespace(
+        task_dict={"compat_task": registered_task},
+        get_task=lambda _task_id: registered_task,
+    )
+    ti.get_dagrun = lambda **_kwargs: pytest.fail("DagRun fallback must not run")
+    monkeypatch.setattr(taskrun, "lookup_authoring_dag", lambda _dag_id: authoring_dag)
+    monkeypatch.setattr(
+        taskrun,
+        "resolve_capabilities",
+        lambda: _capabilities(TaskInstanceRunner.LEGACY_RUN),
+    )
+
+    result = run_task_instance(ti)
+
+    assert result is ti
+    assert ti.task is registered_task
+
+
+def test_resolve_task_falls_back_when_task_absent_from_registered_dag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the DagRun fallback when the registered Dag lacks the task identifier."""
+
+    ti: Any = _TaskInstance()
+    persisted_task: Any = object()
+    scheduler_dag = SimpleNamespace(get_task=lambda _task_id: persisted_task)
+    ti.get_dagrun = lambda: SimpleNamespace(get_dag=lambda: scheduler_dag)
+    monkeypatch.setattr(
+        taskrun,
+        "lookup_authoring_dag",
+        lambda _dag_id: SimpleNamespace(task_dict={}),
+    )
     monkeypatch.setattr(
         taskrun,
         "resolve_capabilities",
@@ -658,8 +710,8 @@ def test_resume_deferred_forwards_the_trigger_timeout(monkeypatch: pytest.Monkey
     assert submitted == [(9, {"value": 7}, session)]
 
 
-def test_missing_task_resolution_retains_cause() -> None:
-    """Name missing task metadata and retain the Airflow lookup failure."""
+def test_missing_task_resolution_retains_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Name missing task metadata, hint at the fix, and retain the Airflow lookup failure."""
 
     ti: Any = _TaskInstance()
     failure = LookupError("missing DagRun")
@@ -671,11 +723,13 @@ def test_missing_task_resolution_retains_cause() -> None:
         raise failure
 
     ti.get_dagrun = fail_lookup
+    monkeypatch.setattr(taskrun, "lookup_authoring_dag", lambda _dag_id: None)
 
     with pytest.raises(TaskResolutionError, match="compat_task") as caught:
         run_task_instance(ti)
 
     assert caught.value.__cause__ is failure
+    assert "pass `task=dag.get_task('compat_task')`" in str(caught.value)
 
 
 def test_ordered_task_instances_sorts_graph_then_map_index() -> None:
