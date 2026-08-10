@@ -26,6 +26,8 @@ def _config(
     forbid_default_owner: object = False,
     airflow_smoke_update: object = None,
     snapshot_dir: object = "",
+    sample_size: object = "0",
+    sample_seed: object = "0",
     rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for smoke config-reader tests.
@@ -40,6 +42,8 @@ def _config(
         forbid_default_owner: object containing the ``airflow_forbid_default_owner`` ini value.
         airflow_smoke_update: object containing the parsed ``--airflow-smoke-update`` value.
         snapshot_dir: object containing the ``airflow_dag_snapshot_dir`` ini value.
+        sample_size: object containing the ``airflow_serialization_sample_size`` ini value.
+        sample_seed: object containing the ``airflow_serialization_sample_seed`` ini value.
         rootpath: pathlib.Path used to resolve a relative snapshot directory.
 
     Returns:
@@ -56,6 +60,8 @@ def _config(
         else required_dag_tags,
         "airflow_forbid_default_owner": forbid_default_owner,
         "airflow_dag_snapshot_dir": snapshot_dir,
+        "airflow_serialization_sample_size": sample_size,
+        "airflow_serialization_sample_seed": sample_seed,
     }
     option_values = {
         "airflow_smoke": airflow_smoke,
@@ -329,6 +335,72 @@ def test_smoke_update_reads_configured_value() -> None:
     assert smoke._smoke_update(_config(airflow_smoke_update=True)) is True
 
 
+def test_serialization_sample_size_reads_default() -> None:
+    """Parse the default sample size string into the exhaustive sentinel."""
+
+    assert smoke._serialization_sample_size(_config()) == 0
+
+
+def test_serialization_sample_size_reads_configured_value() -> None:
+    """Parse a configured sample size string into an int."""
+
+    assert smoke._serialization_sample_size(_config(sample_size="25")) == 25
+
+
+@pytest.mark.parametrize(
+    "value",
+    [7, "oops", "1.5", "-1"],
+)
+def test_serialization_sample_size_rejects_malformed_values(value: object) -> None:
+    """Reject non-string, non-integer, and negative sample sizes."""
+
+    with pytest.raises(pytest.UsageError, match="must be a non-negative integer"):
+        smoke._serialization_sample_size(_config(sample_size=value))
+
+
+def test_serialization_sample_seed_reads_configured_value() -> None:
+    """Return the configured seed string, defaulting to '0'."""
+
+    assert smoke._serialization_sample_seed(_config()) == "0"
+    assert smoke._serialization_sample_seed(_config(sample_seed="release-42")) == "release-42"
+
+
+def test_serialization_sample_seed_rejects_non_string() -> None:
+    """Reject a non-string seed value."""
+
+    with pytest.raises(pytest.UsageError, match="`airflow_serialization_sample_seed` must be"):
+        smoke._serialization_sample_seed(_config(sample_seed=7))
+
+
+def test_validate_smoke_options_rejects_update_with_sampling() -> None:
+    """Reject snapshot update mode combined with serialization sampling."""
+
+    config = _config(airflow_smoke_update=True, snapshot_dir="snapshots", sample_size="1")
+
+    with pytest.raises(pytest.UsageError, match="cannot be combined"):
+        smoke._validate_smoke_options(config)
+
+
+@pytest.mark.parametrize(
+    ("update", "snapshot_dir", "sample_size"),
+    [
+        (None, "snapshots", "1"),
+        (True, "", "1"),
+        (True, "snapshots", "0"),
+    ],
+)
+def test_validate_smoke_options_passes_partial_combinations(
+    update: object, snapshot_dir: object, sample_size: object
+) -> None:
+    """Raise nothing unless update mode, a snapshot dir, and sampling are all active."""
+
+    config = _config(
+        airflow_smoke_update=update, snapshot_dir=snapshot_dir, sample_size=sample_size
+    )
+
+    smoke._validate_smoke_options(config)
+
+
 def test_normalize_serialized_dag_strips_run_dependent_keys() -> None:
     """Drop every run-dependent key while leaving other keys untouched."""
 
@@ -444,6 +516,258 @@ def _task(task_id: str, *, owner: str = "someone", pool: str = "default_pool") -
     return SimpleNamespace(task_id=task_id, owner=owner, pool=pool)
 
 
+def _session() -> Any:
+    """Create a minimal session double carrying only a stash.
+
+    Returns:
+        types.SimpleNamespace shaped like the session surface the smoke caches read.
+    """
+
+    return SimpleNamespace(stash=pytest.Stash())
+
+
+def test_serialized_dag_entry_rejects_inconsistent_outcomes() -> None:
+    """Reject entries recording both, or neither, of a payload and an error."""
+
+    with pytest.raises(ValueError, match="Exactly one of `encoded` and `error`"):
+        smoke.SerializedDagEntry(encoded={"dag_id": "x"}, error="boom", seconds=0.1)
+    with pytest.raises(ValueError, match="Exactly one of `encoded` and `error`"):
+        smoke.SerializedDagEntry(encoded=None, error=None, seconds=0.1)
+
+
+def test_serialized_dag_entry_rejects_negative_seconds() -> None:
+    """Reject a negative duration."""
+
+    with pytest.raises(ValueError, match="`seconds` must be non-negative"):
+        smoke.SerializedDagEntry(encoded={"dag_id": "x"}, error=None, seconds=-0.1)
+
+
+def test_serialized_dag_entry_payload_returns_encoded_dag() -> None:
+    """Return the serialized payload of a successful entry."""
+
+    entry = smoke.SerializedDagEntry(encoded={"dag_id": "x"}, error=None, seconds=0.1)
+
+    assert entry.payload() == {"dag_id": "x"}
+
+
+def test_serialized_dag_entry_payload_rejects_failed_entries() -> None:
+    """Raise when the payload of a failed entry is requested."""
+
+    entry = smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1)
+
+    with pytest.raises(ValueError, match="records a serialization failure: 'boom'"):
+        entry.payload()
+
+
+def test_sampled_dag_ids_returns_all_sorted_when_exhaustive() -> None:
+    """Return every id in lexical order when sampling is off or covers the corpus."""
+
+    ids = ["bravo", "alpha", "charlie"]
+
+    assert smoke._sampled_dag_ids(ids, sample_size=0, seed="0") == ["alpha", "bravo", "charlie"]
+    assert smoke._sampled_dag_ids(ids, sample_size=9, seed="0") == ["alpha", "bravo", "charlie"]
+
+
+def test_sampled_dag_ids_selects_a_deterministic_subset() -> None:
+    """Select the same lexically sorted subset on every call for a fixed seed."""
+
+    ids = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+
+    first = smoke._sampled_dag_ids(ids, sample_size=3, seed="0")
+    second = smoke._sampled_dag_ids(reversed(ids), sample_size=3, seed="0")
+
+    assert first == ["alpha", "bravo", "echo"]
+    assert second == first
+
+
+def test_sampled_dag_ids_varies_with_seed() -> None:
+    """Select a different subset when the seed changes."""
+
+    ids = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+
+    assert smoke._sampled_dag_ids(ids, sample_size=3, seed="other") == [
+        "charlie",
+        "delta",
+        "echo",
+    ]
+
+
+def test_sampled_dag_ids_rejects_negative_sample_size() -> None:
+    """Reject a negative sample size."""
+
+    with pytest.raises(ValueError, match="`sample_size` must be non-negative"):
+        smoke._sampled_dag_ids(["alpha"], sample_size=-1, seed="0")
+
+
+def test_serialized_dag_cache_builds_once_per_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serialize the corpus once and serve later calls from the session stash."""
+
+    serialized: list[str] = []
+    dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(
+            serialize_dag=lambda dag: (serialized.append("call"), {"dag": str(dag)})[1]
+        ),
+    )
+    session = _session()
+    config = _config()
+
+    first = smoke._serialized_dag_cache(session, config)
+    second = smoke._serialized_dag_cache(session, config)
+
+    assert second is first
+    assert sorted(first) == ["one", "two"]
+    assert serialized == ["call", "call"]
+
+
+def test_serialized_dag_cache_records_per_dag_failures(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Record a per-Dag failure entry and warn without raising."""
+
+    def serialize_dag(dag: Any) -> dict[str, Any]:
+        if dag == "explode":
+            raise ValueError("cannot serialize a lambda")
+        return {"dag_id": "fine"}
+
+    dag_bag: Any = SimpleNamespace(dags={"broken": "explode", "fine": "fine"})
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=serialize_dag)
+    )
+    logging.getLogger("pytest_airflow_in_a_box.smoke").disabled = False
+
+    with caplog.at_level("WARNING", logger="pytest_airflow_in_a_box.smoke"):
+        entries = smoke._serialized_dag_cache(_session(), _config())
+
+    assert entries["broken"].error == "cannot serialize a lambda"
+    assert entries["broken"].encoded is None
+    assert entries["fine"].payload() == {"dag_id": "fine"}
+    assert "Dag `broken` failed to serialize" in caplog.text
+
+
+def test_serialized_dag_cache_logs_per_dag_progress(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Log a per-Dag progress line as each serialization completes."""
+
+    dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=lambda _dag: {"dag_id": "x"}),
+    )
+    logging.getLogger("pytest_airflow_in_a_box.smoke").disabled = False
+
+    with caplog.at_level("INFO", logger="pytest_airflow_in_a_box.smoke"):
+        smoke._serialized_dag_cache(_session(), _config())
+
+    assert "Serialized Dag `one`" in caplog.text
+    assert "(1/2)" in caplog.text
+    assert "(2/2)" in caplog.text
+
+
+def test_serialized_dag_cache_applies_sampling(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Serialize only the deterministic sample and announce the narrowed coverage."""
+
+    dag_bag: Any = SimpleNamespace(
+        dags={dag_id: _dag(dag_id) for dag_id in ("alpha", "bravo", "charlie")}
+    )
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=lambda _dag: {"dag_id": "x"}),
+    )
+    logging.getLogger("pytest_airflow_in_a_box.smoke").disabled = False
+
+    with caplog.at_level("INFO", logger="pytest_airflow_in_a_box.smoke"):
+        entries = smoke._serialized_dag_cache(_session(), _config(sample_size="1"))
+
+    assert len(entries) == 1
+    assert set(entries) == set(
+        smoke._sampled_dag_ids(("alpha", "bravo", "charlie"), sample_size=1, seed="0")
+    )
+    assert "deterministic sample of 1 of 3 Dags (seed '0')" in caplog.text
+
+
+def test_corpus_timeout_scales_with_file_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Multiply the parse timeout by the recursive Dag file count."""
+
+    (tmp_path / "a.py").write_text("", encoding="utf-8")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "b.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: tmp_path)
+
+    assert smoke._corpus_timeout(_config(parse_timeout="30")) == 60.0
+
+
+def test_corpus_timeout_defaults_to_one_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fall back to a single-file budget when the Dag folder is missing."""
+
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: tmp_path / "missing")
+
+    assert smoke._corpus_timeout(_config(parse_timeout="30")) == 30.0
+
+
+def test_serialization_timeout_floors_a_tiny_parse_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep the roundtrip deadline at the floor when the parse timeout is tuned down."""
+
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: tmp_path / "missing")
+
+    assert (
+        smoke._serialization_timeout(_config(parse_timeout="0.05"))
+        == smoke.SERIALIZATION_TIMEOUT_FLOOR_SECONDS
+    )
+
+
+def test_serialization_timeout_follows_a_larger_corpus_deadline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Scale past the floor with the corpus-wide parse deadline."""
+
+    (tmp_path / "a.py").write_text("", encoding="utf-8")
+    (tmp_path / "b.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: tmp_path)
+
+    assert smoke._serialization_timeout(_config(parse_timeout="30")) == 60.0
+
+
+def test_log_serialization_table_marks_ok_and_failed_rows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Render one row per Dag with timing columns and the correct ok/FAILED status."""
+
+    entries = {
+        "fast": smoke.SerializedDagEntry(encoded={"dag_id": "fast"}, error=None, seconds=0.1),
+        "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.2),
+    }
+    logging.getLogger("pytest_airflow_in_a_box.smoke").disabled = False
+
+    with caplog.at_level("INFO", logger="pytest_airflow_in_a_box.smoke"):
+        text = smoke._log_serialization_table(entries, {"fast": 0.05}, frozenset({"broken"}))
+
+    assert "fast" in text
+    assert "0.150s" in text
+    assert "ok" in text
+    assert "FAILED" in text
+    assert "-" in text
+    assert "Dag serialization report" in caplog.text
+
+
 def test_integrity_repr_failure_delegates_foreign_exceptions() -> None:
     """Hand non-smoke exceptions back to pytest's standard representation."""
 
@@ -488,7 +812,7 @@ def test_serialization_roundtrip_collects_per_dag_failures(
         "_get_dag_serializer",
         lambda: SimpleNamespace(serialize_dag=explode, deserialize_dag=lambda _encoded: None),
     )
-    item = _bare_item(smoke.DagSerializationRoundtripItem, session=None, config=None)
+    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
 
     with pytest.raises(smoke.SmokeCheckFailure, match="cannot serialize a lambda") as caught:
         item.runtest()
@@ -512,9 +836,93 @@ def test_serialization_roundtrip_passes_when_every_dag_survives(
             deserialize_dag=lambda _encoded: object(),
         ),
     )
-    item = _bare_item(smoke.DagSerializationRoundtripItem, session=None, config=None)
+    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
 
     item.runtest()
+
+
+def test_serialization_roundtrip_reports_deserialize_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report a Dag whose serialized payload cannot be deserialized."""
+
+    dag_bag: Any = SimpleNamespace(dags={"broken": _dag("broken")})
+
+    def explode(_encoded: object) -> object:
+        raise ValueError("cannot rebuild the Dag")
+
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(
+            serialize_dag=lambda _dag: {"dag_id": "broken"}, deserialize_dag=explode
+        ),
+    )
+    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="cannot rebuild the Dag") as caught:
+        item.runtest()
+
+    assert "Dag `broken` failed to round-trip" in str(caught.value)
+
+
+def test_serialization_roundtrip_appends_timing_table_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Append the slowest-first timing table below the failure bullets."""
+
+    def serialize_dag(dag: Any) -> dict[str, Any]:
+        if dag == "explode":
+            raise ValueError("cannot serialize a lambda")
+        return {"dag_id": "fine"}
+
+    dag_bag: Any = SimpleNamespace(dags={"broken": "explode", "fine": "fine"})
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(
+            serialize_dag=serialize_dag, deserialize_dag=lambda _encoded: object()
+        ),
+    )
+    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
+
+    with pytest.raises(smoke.SmokeCheckFailure) as caught:
+        item.runtest()
+
+    body = str(caught.value)
+    assert "Dag `broken` failed to round-trip" in body
+    assert "FAILED" in body
+    assert "fine" in body
+
+
+def test_serialization_roundtrip_repr_failure_returns_smoke_message() -> None:
+    """Render a smoke failure body without a pytest-internal traceback."""
+
+    item = _bare_item(smoke.DagSerializationRoundtripItem)
+    excinfo: Any = SimpleNamespace(value=smoke.SmokeCheckFailure("the body"))
+
+    assert item.repr_failure(excinfo, style="long") == "the body"
+
+
+def test_serialization_roundtrip_repr_failure_delegates_foreign_exceptions() -> None:
+    """Hand non-smoke exceptions back to pytest's standard representation."""
+
+    item = _bare_item(smoke.DagSerializationRoundtripItem)
+    delegated: list[str] = []
+    excinfo: Any = SimpleNamespace(value=RuntimeError("something else"))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            pytest.Item,
+            "repr_failure",
+            lambda _self, _excinfo: delegated.append("called") or "delegated",
+        )
+
+        assert item.repr_failure(excinfo) == "delegated"
+
+    assert delegated == ["called"]
 
 
 def _scheduled_dag(*, can_be_scheduled: bool, raises: Exception | None = None) -> Any:
@@ -555,11 +963,11 @@ def test_schedule_sanity_skips_unscheduled_dags(monkeypatch: pytest.MonkeyPatch)
         smoke,
         "_get_dag_serializer",
         lambda: SimpleNamespace(
-            serialize_dag=lambda _dag: pytest.fail("must not serialize"),
-            deserialize_dag=lambda _dag: pytest.fail("must not serialize"),
+            serialize_dag=lambda dag: dag,
+            deserialize_dag=lambda _dag: pytest.fail("must not deserialize"),
         ),
     )
-    item = _bare_item(smoke.ScheduleSanityItem, session=None, config=None)
+    item = _bare_item(smoke.ScheduleSanityItem, session=_session(), config=_config())
 
     item.runtest()
 
@@ -579,13 +987,39 @@ def test_schedule_sanity_reports_broken_timetables(monkeypatch: pytest.MonkeyPat
             deserialize_dag=lambda dag: dag,
         ),
     )
-    item = _bare_item(smoke.ScheduleSanityItem, session=None, config=None)
+    item = _bare_item(smoke.ScheduleSanityItem, session=_session(), config=_config())
 
     with pytest.raises(smoke.SmokeCheckFailure, match="bad cron") as caught:
         item.runtest()
 
     assert "Dag `broken`" in str(caught.value)
     assert "Dag `healthy`" not in str(caught.value)
+
+
+def test_schedule_sanity_skips_serialization_failures_and_unsampled_dags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip Dags whose serialization failed or that fell outside the sample."""
+
+    dag_bag: Any = SimpleNamespace(
+        dags={
+            "broken": _scheduled_dag(can_be_scheduled=True),
+            "unsampled": _scheduled_dag(can_be_scheduled=True),
+        }
+    )
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(deserialize_dag=lambda _dag: pytest.fail("must not deserialize")),
+    )
+    session = _session()
+    session.stash[smoke.SERIALIZED_DAG_CACHE_KEY] = {
+        "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1),
+    }
+    item = _bare_item(smoke.ScheduleSanityItem, session=session, config=_config())
+
+    item.runtest()
 
 
 def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -702,8 +1136,8 @@ def _snapshot_item(
     )
     return _bare_item(
         smoke.SerializedDagSnapshotItem,
-        session=None,
-        config=None,
+        session=_session(),
+        config=_config(),
         snapshot_dir=snapshot_dir,
         update=update,
     )
@@ -941,6 +1375,38 @@ def test_ini_option_enables_the_catalog(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
 
     result.assert_outcomes(passed=5)
+
+
+def test_serialization_sampling_bounds_the_catalog(pytester: pytest.Pytester) -> None:
+    """Pass the full catalog while serializing only the configured sample."""
+
+    second = VALID_DAG.replace("valid_dag", "second_dag")
+    _write_dags(pytester, valid=VALID_DAG, second=second)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_serialization_sample_size = 1\n")
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
+    )
+
+    result.assert_outcomes(passed=5)
+    result.stdout.fnmatch_lines(["*deterministic sample of 1 of 2 Dags (seed '0')*"])
+
+
+def test_smoke_update_rejects_sampling_at_startup(pytester: pytest.Pytester) -> None:
+    """Refuse to regenerate snapshots from a serialization sample."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_dag_snapshot_dir = snapshots\n"
+        "airflow_serialization_sample_size = 1\n"
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "--airflow-smoke-update")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*`--airflow-smoke-update` cannot be combined*"])
 
 
 def test_broken_dag_fails_integrity_with_traceback(pytester: pytest.Pytester) -> None:
