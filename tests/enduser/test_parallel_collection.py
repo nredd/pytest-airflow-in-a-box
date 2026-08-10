@@ -226,6 +226,8 @@ def test_node_id_positional_drops_smoke_catalog_on_every_worker(
         "--airflow-smoke",
         "--dag-folder",
         str(CORPUS),
+        "--rootdir",
+        str(pytester.path),
         f"{pytester.path / 'test_regular.py'}::test_regular",
     )
 
