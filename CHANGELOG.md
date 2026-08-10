@@ -43,6 +43,11 @@ All notable changes to this project will be documented in this file. The format 
   endpoint through `conf.get("api", "base_url")`. The environment is restored exactly after each
   test via the new autouse `api_base_url` fixture
   ([#57](https://github.com/nredd/pytest-airflow-in-a-box/issues/57)).
+- `tests/enduser/test_parallel_collection.py` passes `--dag-folder`/`--collect-dag-folder` in
+  `--option=value` form instead of as separate argv entries, so a node-ID positional no longer
+  lets pytest 8.0.0's rootdir determination treat the Dag folder path as an ambiguous
+  positional and walk collection up to `/`
+  ([#66](https://github.com/nredd/pytest-airflow-in-a-box/issues/66)).
 
 ## [0.2.0] - 2026-08-09
 
