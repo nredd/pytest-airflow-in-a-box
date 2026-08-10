@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Ini options `airflow_serialization_sample_size` and `airflow_serialization_sample_seed`,
+  bounding the serialization-backed smoke checks to a deterministic hash-selected sample of the
+  Dag corpus; the default (`0`) stays exhaustive
+  ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
+- `test_dag_serialization_roundtrip` logs a slowest-first per-Dag serialization timing table,
+  streams per-Dag progress at INFO, and carries a corpus-scaled `pytest-timeout` deadline so a
+  pathological Dag is named before an outer CI timeout
+  ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
+
+### Changed
+
+- `test_dag_serialization_roundtrip`, `test_schedule_sanity`, and
+  `test_dag_serialization_snapshot` share one worker-scoped serialized-Dag cache instead of each
+  serializing the whole corpus independently; `--airflow-smoke-update` now rejects a configured
+  sampling ini rather than silently regenerating a snapshot subset
+  ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
+
 ### Fixed
 
 - `run_task_instance` resolves the task for a `dag_maker`-persisted Dag even when the task

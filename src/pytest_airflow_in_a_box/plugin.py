@@ -206,6 +206,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "Directory of committed Dag serialization snapshots, checked by the smoke catalog.",
         default="",
     )
+    parser.addini(
+        "airflow_serialization_sample_size",
+        "Number of Dags the serialization smoke checks cover; 0 covers every Dag.",
+        default="0",
+    )
+    parser.addini(
+        "airflow_serialization_sample_seed",
+        "Seed for deterministic selection of the serialization smoke sample.",
+        default="0",
+    )
     group.addoption(
         "--airflow-doctor",
         action="store_true",
