@@ -65,6 +65,7 @@ def test_public_surface_is_explicit() -> None:
     assert fixtures.__all__ == (
         "airflow_connections",
         "airflow_variables",
+        "api_base_url",
         "api_client",
         "api_server_url",
         "cap_structlog",
@@ -84,6 +85,7 @@ def test_public_surface_is_explicit() -> None:
     assert plugin.__all__ == (
         "airflow_connections",
         "airflow_variables",
+        "api_base_url",
         "api_client",
         "api_server_url",
         "cap_structlog",

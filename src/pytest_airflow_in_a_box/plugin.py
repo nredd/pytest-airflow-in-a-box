@@ -38,6 +38,7 @@ from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
     airflow_connections,
     airflow_variables,
+    api_base_url,
     api_client,
     api_server_url,
     cap_structlog,
@@ -61,6 +62,7 @@ from pytest_airflow_in_a_box.smoke import collect_smoke_items
 __all__ = (
     "airflow_connections",
     "airflow_variables",
+    "api_base_url",
     "api_client",
     "api_server_url",
     "cap_structlog",
