@@ -189,10 +189,8 @@ def test_smoke_and_dag_folder_collection_are_xdist_consistent(
         "-n",
         "2",
         "--airflow-smoke",
-        "--dag-folder",
-        str(CORPUS),
-        "--collect-dag-folder",
-        str(CORPUS),
+        f"--dag-folder={CORPUS}",
+        f"--collect-dag-folder={CORPUS}",
         str(CORPUS),
     )
 
@@ -224,11 +222,8 @@ def test_node_id_positional_drops_smoke_catalog_on_every_worker(
         "-n",
         "2",
         "--airflow-smoke",
-        "--dag-folder",
-        str(CORPUS),
-        "--rootdir",
-        str(pytester.path),
-        f"{pytester.path / 'test_regular.py'}::test_regular",
+        f"--dag-folder={CORPUS}",
+        "test_regular.py::test_regular",
     )
 
     result.assert_outcomes(passed=1)
