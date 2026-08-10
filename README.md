@@ -336,7 +336,11 @@ pytest --airflow-smoke --dag-folder=dags/
 ```
 
 or persistently via the `airflow_smoke` ini option. Every item carries `smoke`, so `-m smoke` /
-`-m "not smoke"` select exactly the bundled catalog:
+`-m "not smoke"` select exactly the bundled catalog. Explicit selection is honored: pointing
+pytest at a file or node ID (`pytest tests/test_x.py`, `pytest tests/test_x.py::test_one`) runs
+*only* that selection and drops the catalog, while directory positionals (`pytest tests/`),
+bare runs, and `testpaths`-driven runs keep it. `-k`, `-m`, and `--deselect ::smoke::<name>`
+apply to the items as usual:
 
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
