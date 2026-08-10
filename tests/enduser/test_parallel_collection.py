@@ -16,6 +16,7 @@ import json
 import platform
 import sys
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
@@ -52,6 +53,54 @@ _DAG_BAG_SUITE = """
         (RECORD_DIR / worker).write_text(json.dumps(record), encoding="utf-8")
 """
 
+_SHARED_SMOKE_DAG = """
+    import json
+    import os
+    from pathlib import Path
+
+    from airflow.sdk import DAG, task
+
+    RECORD_DIR = Path({record_dir!r})
+    record = {{"worker": os.environ["PYTEST_XDIST_WORKER"], "pid": os.getpid()}}
+    (RECORD_DIR / f"import-{{os.getpid()}}.json").write_text(
+        json.dumps(record), encoding="utf-8"
+    )
+
+    with DAG(dag_id="shared_smoke", schedule=None, tags=["team-a"]) as dag:
+        @task
+        def work():
+            pass
+
+        work()
+"""
+
+_SMOKE_REPORTING_CONFTST = """
+    import json
+    import os
+    from pathlib import Path
+
+    import pytest
+
+    RECORD_DIR = Path({record_dir!r})
+
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(items):
+        user_item = next(item for item in items if item.name == "test_user_smoke")
+        assert user_item.get_closest_marker("xdist_group") is None
+
+
+    def pytest_runtest_logreport(report):
+        if report.when != "call" or "::smoke::" not in report.nodeid:
+            return
+        worker = getattr(report, "worker_id", os.environ.get("PYTEST_XDIST_WORKER", "master"))
+        name = report.nodeid.rsplit("::", 1)[-1]
+        record = {{"worker": worker, "nodeid": report.nodeid}}
+        (RECORD_DIR / f"item-{{worker}}-{{name}}.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+"""
+
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
 def test_full_dag_bag_is_identical_on_every_worker(pytester: pytest.Pytester) -> None:
@@ -73,6 +122,55 @@ def test_full_dag_bag_is_identical_on_every_worker(pytester: pytest.Pytester) ->
     assert len(records) == 2
     assert len({record["worker"] for record in records}) == 2
     assert [record["dag_ids"] for record in records] == [CORPUS_DAG_IDS, CORPUS_DAG_IDS]
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_smoke_items_share_one_parse_while_remaining_distributed(
+    pytester: pytest.Pytester,
+) -> None:
+    """Parse on one worker while independently scheduling the bundled items."""
+
+    record_dir = pytester.path / "smoke-records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "shared_smoke.py").write_text(
+        dedent(_SHARED_SMOKE_DAG.format(record_dir=str(record_dir))), encoding="utf-8"
+    )
+    pytester.makeconftest(_SMOKE_REPORTING_CONFTST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.smoke
+        def test_user_smoke():
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "-n",
+        "4",
+        "--dist=loadgroup",
+        "--maxschedchunk=1",
+        "--airflow-smoke",
+        "--dag-folder",
+        str(dag_folder),
+        "-m",
+        "smoke",
+    )
+
+    result.assert_outcomes(passed=6)
+    import_records = [
+        json.loads(path.read_text(encoding="utf-8")) for path in record_dir.glob("import-*.json")
+    ]
+    item_records = [
+        json.loads(path.read_text(encoding="utf-8")) for path in record_dir.glob("item-*.json")
+    ]
+    assert len(import_records) == 1
+    assert len(item_records) == 5
+    assert len({record["worker"] for record in item_records}) > 1
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)

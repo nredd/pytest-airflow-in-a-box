@@ -20,13 +20,17 @@ All notable changes to this project will be documented in this file. The format 
 ### Changed
 
 - `test_dag_serialization_roundtrip`, `test_schedule_sanity`, and
-  `test_dag_serialization_snapshot` share one worker-scoped serialized-Dag cache instead of each
-  serializing the whole corpus independently; `--airflow-smoke-update` now rejects a configured
-  sampling ini rather than silently regenerating a snapshot subset
+  `test_dag_serialization_snapshot` share one run-scoped serialized-Dag cache instead of each check
+  or worker serializing the whole corpus independently; `--airflow-smoke-update` now rejects a
+  configured sampling ini rather than silently regenerating a snapshot subset
   ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
 
 ### Fixed
 
+- Bundled smoke items remain independently schedulable across `pytest-xdist` workers while sharing
+  one worker-elected, serialized Dag corpus, avoiding a full Dag-folder parse in every participating
+  process without turning the `smoke` marker into a scheduling constraint
+  ([#55](https://github.com/nredd/pytest-airflow-in-a-box/issues/55)).
 - `run_task_instance` resolves the task for a `dag_maker`-persisted Dag even when the task
   instance was queried through a separate consumer session (e.g. the `session` fixture),
   via a process-local registry of authoring Dags registered at persist time and removed at

@@ -39,9 +39,9 @@ The `pytest11` entry point loads the plugin automatically. Consumer projects do 
 
 The bundled pytest plugins are intentional runtime dependencies. `pytest-xdist` is part of the
 supported execution model: controller bootstrap state and worker-scoped artifacts are coordinated
-for parallel runs. `pytest-timeout` backs up Airflow's per-file Dag parse watchdog with a corpus-scaled deadline on
-the bundled integrity and serialization-roundtrip smoke items, so a hang outside the per-file
-parser boundary cannot wedge the test session.
+for parallel runs. `pytest-timeout` backs up Airflow's per-file Dag parse watchdog with a
+corpus-scaled deadline on every bundled smoke item, so whichever worker produces the shared corpus
+cannot wedge the test session outside the per-file parser boundary.
 
 The plugin is inert on runs without Airflow-facing tests: session startup only prepares a
 disposable run directory and `AIRFLOW__*` environment variables. Airflow itself is imported and
@@ -342,6 +342,11 @@ pytest at a file or node ID (`pytest tests/test_x.py`, `pytest tests/test_x.py::
 bare runs, and `testpaths`-driven runs keep it. `-k`, `-m`, and `--deselect ::smoke::<name>`
 apply to the items as usual:
 
+Under `pytest-xdist`, bundled items remain independently schedulable across workers. The first item
+to need the corpus parses it once and publishes a serialized artifact below the isolated run root;
+the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
+no scheduling effect, so user-authored smoke tests remain fully parallel too.
+
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
@@ -356,9 +361,9 @@ apply to the items as usual:
 - `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`)
 
 The serialization-backed checks (`test_dag_serialization_roundtrip`, `test_schedule_sanity`,
-`test_dag_serialization_snapshot`) share one serialized-Dag cache per worker process, so the
-corpus is serialized once per run rather than once per check. Two ini options bound the cost on
-large generated corpora:
+`test_dag_serialization_snapshot`) share the producer's serialized-Dag cache across workers, so
+the corpus is parsed and the selected Dags are serialized once per run. Two ini options bound the
+cost on large generated corpora:
 
 - `airflow_serialization_sample_size` (default `0`, meaning every Dag) -- serialize only a
   deterministic sample of N Dags, selected by hashing each `dag_id` with

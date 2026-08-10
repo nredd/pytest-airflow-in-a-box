@@ -385,8 +385,8 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     """Initialize the database when the surviving collection requires it.
 
     Runs after deselection so `pytest -k unrelated` stays free, and before the
-    run phase so per-test budgets (e.g. ``pytest-timeout`` on smoke items)
-    never absorb the one-time migration cost. Environment-gated items that
+    run phase so test execution never absorbs the one-time migration cost.
+    Environment-gated items that
     will skip do not trigger initialization.
 
     Parameters:
