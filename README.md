@@ -338,6 +338,11 @@ pytest --airflow-smoke --dag-folder=dags/
 or persistently via the `airflow_smoke` ini option. Every item carries `smoke`, so `-m smoke` /
 `-m "not smoke"` select exactly the bundled catalog:
 
+Under `pytest-xdist`, bundled items remain independently schedulable across workers. The first item
+to need the corpus parses it once and publishes a serialized artifact below the isolated run root;
+the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
+no scheduling effect, so user-authored smoke tests remain fully parallel too.
+
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
@@ -349,7 +354,7 @@ or persistently via the `airflow_smoke` ini option. Every item carries `smoke`, 
 - `test_schedule_sanity` -- every scheduled Dag computes its next run without raising
 - `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`)
 
-Three additional policy checks appear only when their ini is configured, so defaults stay
+Four additional policy checks appear only when their ini is configured, so defaults stay
 zero-config:
 
 - `airflow_dag_id_pattern` -- every `dag_id` matches the given regex

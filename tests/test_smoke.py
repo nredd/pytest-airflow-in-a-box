@@ -426,7 +426,7 @@ def test_serialization_roundtrip_collects_per_dag_failures(
     def explode(_dag: object) -> dict[str, Any]:
         raise ValueError("cannot serialize a lambda")
 
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -447,7 +447,7 @@ def test_serialization_roundtrip_passes_when_every_dag_survives(
     """Raise nothing when every Dag round-trips."""
 
     dag_bag: Any = SimpleNamespace(dags={"fine": _dag("fine")})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -494,7 +494,7 @@ def test_schedule_sanity_skips_unscheduled_dags(monkeypatch: pytest.MonkeyPatch)
     dag_bag: Any = SimpleNamespace(
         dags={"manual": _scheduled_dag(can_be_scheduled=False, raises=ValueError("never called"))}
     )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -514,7 +514,7 @@ def test_schedule_sanity_reports_broken_timetables(monkeypatch: pytest.MonkeyPat
     broken = _scheduled_dag(can_be_scheduled=True, raises=ValueError("bad cron"))
     healthy = _scheduled_dag(can_be_scheduled=True)
     dag_bag: Any = SimpleNamespace(dags={"broken": broken, "healthy": healthy})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -535,6 +535,8 @@ def test_schedule_sanity_reports_broken_timetables(monkeypatch: pytest.MonkeyPat
 def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -> None:
     """Report every task whose declared pool is absent from the database."""
 
+    from airflow.models.pool import Pool
+
     dag_bag: Any = SimpleNamespace(
         dags={
             "etl": _dag(
@@ -543,7 +545,12 @@ def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -
             )
         }
     )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        Pool,
+        "get_pools",
+        lambda **_kwargs: [SimpleNamespace(pool="default_pool")],
+    )
     item = _bare_item(smoke.PoolReferencesExistItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure, match="references unknown pool `nope`") as caught:
@@ -557,7 +564,7 @@ def test_dag_id_pattern_item_passes_matching_ids(monkeypatch: pytest.MonkeyPatch
     """Raise nothing when every dag_id matches the configured pattern."""
 
     dag_bag: Any = SimpleNamespace(dags={"team_a": _dag("team_a")})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     item = _bare_item(
         smoke.DagIdPatternItem, session=None, config=None, pattern=re.compile("^team_")
     )
@@ -571,7 +578,7 @@ def test_required_dag_tags_item_passes_when_tags_present(monkeypatch: pytest.Mon
     dag_bag: Any = SimpleNamespace(
         dags={"tagged": _dag("tagged", tags=frozenset({"team-a", "extra"}))}
     )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     item = _bare_item(
         smoke.RequiredDagTagsItem, session=None, config=None, tags=frozenset({"team-a"})
     )
@@ -592,7 +599,7 @@ def test_forbid_default_owner_item_reports_every_stock_owner(
             )
         }
     )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     item = _bare_item(smoke.ForbidDefaultOwnerItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure, match="owned by the stock") as caught:
@@ -610,7 +617,7 @@ def test_forbid_default_owner_item_passes_when_every_task_is_owned(
     dag_bag: Any = SimpleNamespace(
         dags={"etl": _dag("etl", tasks=(_task("owned", owner="team"),))}
     )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     item = _bare_item(smoke.ForbidDefaultOwnerItem, session=None, config=None)
 
     item.runtest()
@@ -638,7 +645,7 @@ def _snapshot_item(
     """
 
     dag_bag: Any = SimpleNamespace(dags=dags)
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -779,24 +786,137 @@ def test_snapshot_item_aggregates_serialize_failures_without_blocking_other_dags
     assert (snapshot_dir / "fine.json").is_file()
 
 
-def test_smoke_dag_bag_caches_one_bag_per_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Build the Dag bag once, export the timeout, and serve later calls from the stash."""
+def _sample_corpus() -> smoke.SmokeCorpus:
+    """Create one portable corpus for cache and artifact tests.
+
+    Returns:
+        pytest_airflow_in_a_box.smoke.SmokeCorpus containing one Dag.
+    """
+
+    return smoke.SmokeCorpus(
+        dags={
+            "sample": smoke.SmokeDag(
+                dag_id="sample",
+                tags=frozenset({"team-a"}),
+                tasks=(smoke.SmokeTask(task_id="task", owner="team-a", pool="default_pool"),),
+                can_be_scheduled=False,
+                serialized={"dag_id": "sample"},
+                serialization_error=None,
+            )
+        },
+        import_errors={"broken.py": "traceback"},
+        dagbag_stats=(
+            smoke.SmokeDagFileStat(
+                file="sample.py", duration=timedelta(seconds=0.25), dag_num=1, task_num=1
+            ),
+        ),
+        producer_pid=123,
+        producer_worker="gw1",
+    )
+
+
+def test_smoke_corpus_artifact_round_trips() -> None:
+    """Preserve every portable field through the shared JSON representation."""
+
+    corpus = _sample_corpus()
+
+    assert smoke._smoke_corpus_from_payload(smoke._smoke_corpus_payload(corpus)) == corpus
+
+
+def test_smoke_corpus_rejects_an_unknown_artifact_version() -> None:
+    """Reject a shared artifact written by an incompatible plugin schema."""
+
+    with pytest.raises(ValueError, match="Unsupported smoke corpus version"):
+        smoke._smoke_corpus_from_payload({"version": -1})
+
+
+def test_smoke_corpus_build_extracts_portable_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Extract task metadata and retain one Dag's serialization failure."""
+
+    good = SimpleNamespace(
+        tags={"team-a"},
+        tasks=[_task("good")],
+        timetable=SimpleNamespace(can_be_scheduled=False),
+    )
+    broken = SimpleNamespace(
+        tags=set(),
+        tasks=[_task("broken", owner="airflow", pool="custom")],
+        timetable=SimpleNamespace(can_be_scheduled=True),
+    )
+    dag_bag = SimpleNamespace(
+        dags={"good": good, "broken": broken},
+        import_errors={"bad.py": "boom"},
+        dagbag_stats=[_stat("dags.py", 0.5, dags=2, tasks=2)],
+    )
+
+    def serialize(dag: object) -> dict[str, Any]:
+        if dag is broken:
+            raise ValueError("cannot serialize callback")
+        return {"dag_id": "good"}
+
+    monkeypatch.delenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", raising=False)
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw2")
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder: dag_bag)
+    monkeypatch.setattr(
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=serialize)
+    )
+
+    corpus = smoke._build_smoke_corpus(_config(parse_timeout="12.5"))
+
+    assert corpus.dags["good"].serialized == {"dag_id": "good"}
+    assert corpus.dags["broken"].serialization_error == "cannot serialize callback"
+    assert corpus.dags["broken"].tasks[0].pool == "custom"
+    assert corpus.producer_worker == "gw2"
+    assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "12.5"
+
+
+def test_smoke_corpus_is_built_once_and_cached_per_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Build one artifact, then load it from another process-shaped session."""
 
     builds: list[object] = []
-    sentinel = object()
-    monkeypatch.delenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", raising=False)
-    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: "dags")
+    corpus = _sample_corpus()
+    config = _config()
     monkeypatch.setattr(
-        smoke, "build_dag_bag", lambda folder: (builds.append(folder), sentinel)[1]
+        smoke, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
     )
-    session: Any = SimpleNamespace(stash=pytest.Stash())
-    config = _config(parse_timeout="12.5")
+    monkeypatch.setattr(
+        smoke, "_build_smoke_corpus", lambda value: (builds.append(value), corpus)[1]
+    )
+    first_session: Any = SimpleNamespace(stash=pytest.Stash())
 
-    assert smoke._smoke_dag_bag(session, config) is sentinel
-    assert smoke._smoke_dag_bag(session, config) is sentinel
+    assert smoke._smoke_corpus(first_session, config) is corpus
+    assert smoke._smoke_corpus(first_session, config) is corpus
 
-    assert builds == ["dags"]
-    assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "12.5"
+    second_session: Any = SimpleNamespace(stash=pytest.Stash())
+    loaded = smoke._smoke_corpus(second_session, config)
+
+    assert builds == [config]
+    assert loaded == corpus
+    assert loaded is not corpus
+
+
+def test_serialize_smoke_dag_uses_shared_payload_and_reports_producer_error() -> None:
+    """Avoid reserializing a portable Dag and retain its producer failure."""
+
+    corpus_dag = _sample_corpus().dags["sample"]
+    serializer = SimpleNamespace(serialize_dag=lambda _dag: {"fallback": True})
+
+    assert smoke._serialize_smoke_dag(corpus_dag, serializer) == {"dag_id": "sample"}
+    assert smoke._serialize_smoke_dag(object(), serializer) == {"fallback": True}
+
+    failed = smoke.SmokeDag(
+        dag_id="failed",
+        tags=frozenset(),
+        tasks=(),
+        can_be_scheduled=False,
+        serialized={},
+        serialization_error="producer failed",
+    )
+    with pytest.raises(ValueError, match="producer failed"):
+        smoke._serialize_smoke_dag(failed, serializer)
 
 
 def _write_dags(pytester: pytest.Pytester, **files: str) -> Any:

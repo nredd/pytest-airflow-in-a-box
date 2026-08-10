@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- Bundled smoke items remain independently schedulable across `pytest-xdist` workers while sharing
+  one worker-elected, serialized Dag corpus, avoiding a full Dag-folder parse in every participating
+  process without turning the `smoke` marker into a scheduling constraint
+  ([#55](https://github.com/nredd/pytest-airflow-in-a-box/issues/55)).
 - `run_task_instance` resolves the task for a `dag_maker`-persisted Dag even when the task
   instance was queried through a separate consumer session (e.g. the `session` fixture),
   via a process-local registry of authoring Dags registered at persist time and removed at
