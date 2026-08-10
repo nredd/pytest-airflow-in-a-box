@@ -397,10 +397,27 @@ def test_api(api_client, dag_maker):
     assert response.body["dag_id"] == "visible"
 ```
 
+The `api_test` marker alone also starts the server, and every activated test -- marked or
+requesting `api_client`/`api_server_url` -- gets the selected URL published as
+`AIRFLOW__API__BASE_URL` for its duration, so application code can discover the endpoint
+through active Airflow configuration:
+
+```python
+import pytest
+from airflow.configuration import conf
+
+
+@pytest.mark.api_test
+def test_application_client():
+    base_url = conf.get("api", "base_url")
+    assert base_url.startswith("http://127.0.0.1:")
+```
+
 ## Markers
 
 - `db_test`: requires the isolated metadata database (triggers its lazy initialization)
-- `api_test`: requires the isolated REST API server (triggers lazy database initialization)
+- `api_test`: starts the isolated REST API server lazily and publishes its URL as
+  `AIRFLOW__API__BASE_URL` for the test's duration (triggers lazy database initialization)
 - `postgres`: requires a provisioned Postgres metadata database (the `postgres` extra plus Docker)
 - `compat`: end-user tests exercised across the version matrix
 - `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
@@ -439,7 +456,8 @@ The report covers the storage ladder decision and its reason, the resolved `AIRF
 database URL scheme, and backend tier, plugin/pytest/Python/Airflow versions plus the resolved
 capability table, and API server state. The API server section always reads "not started": the
 `api_server_url` fixture is a lazy, per-process, session-scoped subprocess with no state before a
-test requests it, and a standalone `--airflow-doctor` invocation never does.
+test requests it or an `api_test`-marked test runs, and a standalone `--airflow-doctor`
+invocation never does either.
 
 ## License
 

@@ -1,10 +1,13 @@
 """Live Airflow REST API server fixture and a small typed client.
 
-The server is a lazy, session-scoped, per-process concern: it starts only when
-the first ``api_test`` actually requests it, binds a loopback ephemeral port,
-and serves Airflow's ``core`` API app against the shared isolated metadata
-database. Under xdist each worker owns its own server process; they share the
-database, so no cross-worker coordination or port election is needed. This
+The server is a lazy, session-scoped, per-process concern: it starts when the
+first ``api_test``-marked test runs or a test requests ``api_client`` or
+``api_server_url``, binds a loopback ephemeral port, and serves Airflow's
+``core`` API app against the shared isolated metadata database. For each such
+test the selected URL is published as ``AIRFLOW__API__BASE_URL`` so
+application code can discover the endpoint through active Airflow
+configuration. Under xdist each worker owns its own server process; they share
+the database, so no cross-worker coordination or port election is needed. This
 deliberately replaces the plan's controller-owned single server: it is
 strictly simpler and costs nothing on sessions without API tests.
 
@@ -32,6 +35,7 @@ import pytest
 
 from pytest_airflow_in_a_box._compat import ensure_database
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
+from pytest_airflow_in_a_box.config import airflow_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -368,10 +372,44 @@ def api_client(api_server_url: str) -> AirflowApiClient:
     return AirflowApiClient(api_server_url, token=fetch_access_token(api_server_url))
 
 
+@pytest.fixture(autouse=True)
+def api_base_url(request: pytest.FixtureRequest) -> Iterator[str | None]:
+    """Publish the live server's URL through Airflow configuration for one test.
+
+    Activates for tests carrying the ``api_test`` marker and tests whose fixture
+    closure contains ``api_client`` or ``api_server_url``: the session-scoped
+    server starts lazily and its URL is exported as ``AIRFLOW__API__BASE_URL``,
+    so application code discovers the endpoint through
+    ``conf.get("api", "base_url")``. The environment is restored exactly after
+    each test. Every other test sees ``None`` and starts nothing. Being autouse,
+    this fixture appears in every closure, so requesting it explicitly does not
+    activate the server by itself.
+
+    Parameters:
+        request: pytest.FixtureRequest exposing markers and the fixture closure.
+
+    Yields:
+        str | None containing the published base URL, or ``None`` when inactive.
+    """
+
+    active = request.node.get_closest_marker("api_test") is not None or not {
+        "api_client",
+        "api_server_url",
+    }.isdisjoint(request.fixturenames)
+    if not active:
+        yield None
+        return
+    # The server subprocess launches before the override, so it never inherits it.
+    base_url = request.getfixturevalue("api_server_url")
+    with airflow_config({("api", "base_url"): base_url}):
+        yield base_url
+
+
 __all__ = (
     "AirflowApiClient",
     "ApiResponse",
     "ApiServerError",
+    "api_base_url",
     "api_client",
     "api_server_url",
     "fetch_access_token",

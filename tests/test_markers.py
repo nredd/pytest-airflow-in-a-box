@@ -90,6 +90,15 @@ def test_read_bool_marker_rejects_empty_name() -> None:
 def test_registered_markers_pass_strict_validation(pytester: pytest.Pytester) -> None:
     """Register every public marker before strict collection validation."""
 
+    pytester.makeconftest(
+        """
+        import pytest
+
+        @pytest.fixture(scope="session")
+        def api_server_url():
+            return "http://127.0.0.1:9"
+        """
+    )
     pytester.makepyfile(
         """
         import pytest

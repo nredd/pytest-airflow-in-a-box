@@ -18,6 +18,12 @@ All notable changes to this project will be documented in this file. The format 
   positionals, bare runs, and `testpaths`-driven runs keep it. `-k`/`-m`/`--deselect` continue
   to apply to smoke items as usual
   ([#54](https://github.com/nredd/pytest-airflow-in-a-box/issues/54)).
+- The `api_test` marker now activates the isolated REST API server on its own, and every
+  activated test -- marked or requesting `api_client`/`api_server_url` -- gets the selected URL
+  published as `AIRFLOW__API__BASE_URL` for its duration, so application code can discover the
+  endpoint through `conf.get("api", "base_url")`. The environment is restored exactly after each
+  test via the new autouse `api_base_url` fixture
+  ([#57](https://github.com/nredd/pytest-airflow-in-a-box/issues/57)).
 
 ## [0.2.0] - 2026-08-09
 

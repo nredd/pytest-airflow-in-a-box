@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-pytestmark = [pytest.mark.compat, pytest.mark.api_test, pytest.mark.db_test]
+pytestmark = [pytest.mark.compat, pytest.mark.db_test]
 
 # Every nested run re-bootstraps Airflow and starts two API servers; macOS and
 # musl CI hosts need roughly double the glibc-Linux budget.
@@ -41,6 +41,7 @@ _API_SUITE = """
     def test_version_endpoint_responds(api_client):
         response = api_client.get("/api/v2/version")
         assert response.status == 200
+        assert os.environ["AIRFLOW__API__BASE_URL"] == api_client.base_url
         worker = os.environ["PYTEST_XDIST_WORKER"]
         record = {{"worker": worker, "api_server_url": api_client.base_url}}
         (RECORD_DIR / worker).write_text(json.dumps(record), encoding="utf-8")

@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import email.message
+import os
 import subprocess
 import urllib.error
 from pathlib import Path
@@ -24,7 +25,7 @@ from pytest_airflow_in_a_box.fixtures.api import (
 )
 from pytest_airflow_in_a_box.types import DagMaker
 
-pytestmark = [pytest.mark.api_test, pytest.mark.db_test]
+pytestmark = [pytest.mark.db_test]
 
 
 def test_client_rejects_invalid_inputs() -> None:
@@ -60,6 +61,26 @@ def test_decode_body_handles_json_text_and_empty(raw: bytes, expected: object) -
     assert _decode_body(raw) == expected
 
 
+@pytest.mark.api_test
+def test_marker_alone_starts_and_publishes_the_server() -> None:
+    """Discover the marker-activated server through active Airflow configuration."""
+
+    # Deferred so Airflow configuration loads inside the bootstrapped session.
+    from airflow.configuration import conf
+
+    base_url = conf.get("api", "base_url")
+
+    assert base_url == os.environ["AIRFLOW__API__BASE_URL"]
+    assert base_url.startswith("http://127.0.0.1:")
+    assert api._server_responds(base_url)
+
+
+def test_explicit_fixture_publishes_the_url(api_server_url: str) -> None:
+    """Publish the URL for an unmarked test that requests the server fixture."""
+
+    assert os.environ["AIRFLOW__API__BASE_URL"] == api_server_url
+
+
 def test_dag_listing_requires_authentication(api_server_url: str) -> None:
     """Reject unauthenticated requests against a protected endpoint."""
 
@@ -70,6 +91,7 @@ def test_dag_listing_requires_authentication(api_server_url: str) -> None:
     assert response.status == 401
 
 
+@pytest.mark.api_test
 def test_authenticated_client_reads_version(api_client: AirflowApiClient) -> None:
     """Fetch the running Airflow version through the authenticated client."""
 
@@ -81,6 +103,7 @@ def test_authenticated_client_reads_version(api_client: AirflowApiClient) -> Non
     assert response.body["version"]
 
 
+@pytest.mark.api_test
 def test_persisted_dag_is_visible_through_the_api(
     api_client: AirflowApiClient,
     dag_maker: DagMaker,
