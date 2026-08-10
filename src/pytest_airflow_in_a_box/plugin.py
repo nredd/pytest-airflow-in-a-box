@@ -38,6 +38,7 @@ from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
     airflow_connections,
     airflow_variables,
+    api_base_url,
     api_client,
     api_server_url,
     cap_structlog,
@@ -61,6 +62,7 @@ from pytest_airflow_in_a_box.smoke import collect_smoke_items
 __all__ = (
     "airflow_connections",
     "airflow_variables",
+    "api_base_url",
     "api_client",
     "api_server_url",
     "cap_structlog",
@@ -203,6 +205,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "airflow_dag_snapshot_dir",
         "Directory of committed Dag serialization snapshots, checked by the smoke catalog.",
         default="",
+    )
+    parser.addini(
+        "airflow_serialization_sample_size",
+        "Number of Dags the serialization smoke checks cover; 0 covers every Dag.",
+        default="0",
+    )
+    parser.addini(
+        "airflow_serialization_sample_seed",
+        "Seed for deterministic selection of the serialization smoke sample.",
+        default="0",
     )
     group.addoption(
         "--airflow-doctor",

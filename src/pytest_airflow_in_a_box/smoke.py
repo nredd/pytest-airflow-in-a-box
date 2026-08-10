@@ -15,12 +15,15 @@ References:
 from __future__ import annotations
 
 import contextlib
+import copy
 import difflib
+import hashlib
 import io
 import json
 import logging
 import os
 import re
+import time
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
@@ -35,7 +38,7 @@ from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
 
     from _pytest._code.code import TerminalRepr
 
@@ -46,11 +49,13 @@ SMOKE_CORPUS_KEY = pytest.StashKey["SmokeCorpus"]()
 SMOKE_CORPUS_VERSION = 1
 SMOKE_CORPUS_ARTIFACT_NAME = ".airflow-smoke-corpus.json"
 SMOKE_CORPUS_LOCK_NAME = ".airflow-smoke-corpus.lock"
+SERIALIZED_DAG_CACHE_KEY = pytest.StashKey[dict[str, "SerializedDagEntry"]]()
 DEFAULT_OWNER = "airflow"
 DUPLICATE_ID_MARKER = "AirflowDagDuplicatedIdException"
 RUN_DEPENDENT_SERIALIZED_DAG_KEYS = frozenset(
     {"_processor_dags_folder", "fileloc", "relative_fileloc"}
 )
+SERIALIZATION_TIMEOUT_FLOOR_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -70,8 +75,9 @@ class SmokeDag:
     tags: frozenset[str]
     tasks: tuple[SmokeTask, ...]
     can_be_scheduled: bool
-    serialized: dict[str, Any]
+    serialized: dict[str, Any] | None
     serialization_error: str | None
+    serialization_seconds: float
 
 
 @dataclass(frozen=True)
@@ -113,6 +119,53 @@ class SmokeCheckFailure(Exception):
         if not message:
             raise ValueError("`message` must be a non-empty failure body")
         super().__init__(message)
+
+
+@dataclass(frozen=True)
+class SerializedDagEntry:
+    """Hold one Dag's cached serialization outcome and timing.
+
+    Parameters:
+        encoded: dict[str, Any] | None containing the ``serialize_dag`` output, or ``None`` when
+            serialization failed.
+        error: str | None containing the serialization failure message, or ``None`` on success.
+        seconds: float containing the wall-clock duration of ``serialize_dag``.
+
+    Raises:
+        ValueError: Both or neither of ``encoded`` and ``error`` are set, or ``seconds`` is
+            negative.
+    """
+
+    encoded: dict[str, Any] | None
+    error: str | None
+    seconds: float
+
+    def __post_init__(self) -> None:
+        """Validate that the entry records exactly one outcome and a sane duration.
+
+        Raises:
+            ValueError: Both or neither of ``encoded`` and ``error`` are set, or ``seconds`` is
+                negative.
+        """
+
+        if (self.encoded is None) == (self.error is None):
+            raise ValueError("Exactly one of `encoded` and `error` must be set")
+        if self.seconds < 0:
+            raise ValueError(f"`seconds` must be non-negative: '{self.seconds}'")
+
+    def payload(self) -> dict[str, Any]:
+        """Return the serialized payload of a successful entry.
+
+        Returns:
+            dict[str, Any] containing the ``serialize_dag`` output.
+
+        Raises:
+            ValueError: The entry records a serialization failure.
+        """
+
+        if self.encoded is None:
+            raise ValueError(f"Entry records a serialization failure: '{self.error}'")
+        return self.encoded
 
 
 def _smoke_enabled(config: pytest.Config) -> bool:
@@ -226,6 +279,58 @@ def _slowpoke_ratio(config: pytest.Config) -> float:
             f"Ini option `airflow_dag_parse_slowpoke_ratio` must be in (0, 1]: '{value}'"
         )
     return ratio
+
+
+def _serialization_sample_size(config: pytest.Config) -> int:
+    """Read how many Dags the serialization smoke checks cover.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_serialization_sample_size`` ini value.
+
+    Returns:
+        int containing the sample size; ``0`` means every Dag.
+
+    Raises:
+        pytest.UsageError: The ini value is not a non-negative integer.
+    """
+
+    value: object = config.getini("airflow_serialization_sample_size")
+    if not isinstance(value, str):
+        raise pytest.UsageError(
+            "Ini option `airflow_serialization_sample_size` must be a non-negative integer"
+        )
+    try:
+        size = int(value)
+    except ValueError as error:
+        raise pytest.UsageError(
+            f"Ini option `airflow_serialization_sample_size` must be a non-negative integer: "
+            f"'{value}'"
+        ) from error
+    if size < 0:
+        raise pytest.UsageError(
+            f"Ini option `airflow_serialization_sample_size` must be a non-negative integer: "
+            f"'{value}'"
+        )
+    return size
+
+
+def _serialization_sample_seed(config: pytest.Config) -> str:
+    """Read the seed selecting which Dags land in the serialization sample.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_serialization_sample_seed`` ini value.
+
+    Returns:
+        str containing the sample seed.
+
+    Raises:
+        pytest.UsageError: The ini value is not a string.
+    """
+
+    value: object = config.getini("airflow_serialization_sample_seed")
+    if not isinstance(value, str):
+        raise pytest.UsageError("Ini option `airflow_serialization_sample_seed` must be a string")
+    return value
 
 
 def _dag_id_pattern(config: pytest.Config) -> re.Pattern[str] | None:
@@ -362,15 +467,41 @@ def _build_smoke_corpus(config: pytest.Config) -> SmokeCorpus:
     os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(timeout)
     dag_bag = build_dag_bag(_dag_folder(config))
     serializer = _get_dag_serializer()
+    sample_size = _serialization_sample_size(config)
+    seed = _serialization_sample_seed(config)
+    selected = _sampled_dag_ids(dag_bag.dags, sample_size=sample_size, seed=seed)
+    if len(selected) < len(dag_bag.dags):
+        LOGGER.info(
+            f"Serializing a deterministic sample of {len(selected)} of {len(dag_bag.dags)} "
+            f"Dags (seed '{seed}')"
+        )
+    selected_ids = set(selected)
     dags: dict[str, SmokeDag] = {}
-    for dag_id, dag in dag_bag.dags.items():
-        try:
-            encoded = serializer.serialize_dag(dag)
-            serialized = json.loads(json.dumps(encoded))
-            serialization_error = None
-        except Exception as error:
-            serialized = {}
-            serialization_error = str(error)
+    total = len(selected)
+    progress = 0
+    for dag_id, dag in sorted(dag_bag.dags.items()):
+        serialized = None
+        serialization_error = None
+        serialization_seconds = 0.0
+        if dag_id in selected_ids:
+            progress += 1
+            started = time.perf_counter()
+            try:
+                encoded = serializer.serialize_dag(dag)
+                serialized = json.loads(json.dumps(encoded))
+            except Exception as error:
+                serialization_seconds = time.perf_counter() - started
+                serialization_error = str(error)
+                LOGGER.warning(
+                    f"Dag `{dag_id}` failed to serialize after {serialization_seconds:.3f}s "
+                    f"({progress}/{total}): {error}"
+                )
+            else:
+                serialization_seconds = time.perf_counter() - started
+                LOGGER.info(
+                    f"Serialized Dag `{dag_id}` in {serialization_seconds:.3f}s "
+                    f"({progress}/{total})"
+                )
         dags[dag_id] = SmokeDag(
             dag_id=dag_id,
             tags=frozenset(dag.tags),
@@ -381,6 +512,7 @@ def _build_smoke_corpus(config: pytest.Config) -> SmokeCorpus:
             can_be_scheduled=dag.timetable.can_be_scheduled,
             serialized=serialized,
             serialization_error=serialization_error,
+            serialization_seconds=serialization_seconds,
         )
     stats = tuple(
         SmokeDagFileStat(
@@ -434,6 +566,7 @@ def _smoke_corpus_payload(corpus: SmokeCorpus) -> dict[str, Any]:
                 "can_be_scheduled": dag.can_be_scheduled,
                 "serialized": dag.serialized,
                 "serialization_error": dag.serialization_error,
+                "serialization_seconds": dag.serialization_seconds,
             }
             for dag_id, dag in corpus.dags.items()
         },
@@ -465,6 +598,7 @@ def _smoke_corpus_from_payload(payload: dict[str, Any]) -> SmokeCorpus:
                 can_be_scheduled=value["can_be_scheduled"],
                 serialized=value["serialized"],
                 serialization_error=value["serialization_error"],
+                serialization_seconds=value["serialization_seconds"],
             )
             for dag_id, value in payload["dags"].items()
         },
@@ -551,25 +685,179 @@ def _smoke_corpus(session: pytest.Session, config: pytest.Config) -> SmokeCorpus
     return session.stash[SMOKE_CORPUS_KEY]
 
 
-def _serialize_smoke_dag(dag: Any, serializer: Any) -> dict[str, Any]:
-    """Return a producer-serialized Dag or serialize an authoring test double.
+def _corpus_timeout(config: pytest.Config) -> float:
+    """Scale the per-file parse timeout by the Dag folder's file count.
 
     Parameters:
-        dag: Any containing a SmokeDag or authoring Dag.
-        serializer: Any exposing Airflow's release-specific ``serialize_dag`` method.
+        config: pytest.Config containing plugin options and ini values.
 
     Returns:
-        dict[str, Any] containing the scheduler serialization.
-
-    Raises:
-        ValueError: The producer could not serialize the Dag.
+        float containing the corpus-wide item timeout in seconds.
     """
 
-    if not isinstance(dag, SmokeDag):
-        return serializer.serialize_dag(dag)
-    if dag.serialization_error is not None:
-        raise ValueError(dag.serialization_error)
-    return dag.serialized
+    timeout = _parse_timeout(config)
+    folder = _dag_folder(config)
+    file_count = max(1, len(list(folder.rglob("*.py")))) if folder.is_dir() else 1
+    return timeout * file_count
+
+
+def _serialization_timeout(config: pytest.Config) -> float:
+    """Bound the serialization roundtrip item without inheriting a tiny parse timeout.
+
+    The corpus-scaled parse deadline is the only pre-parse proxy for corpus size, but a user
+    tuning ``airflow_dag_parse_timeout`` down for a fast parse check must not starve the
+    serialization pass, whose cost scales with tasks rather than files.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+
+    Returns:
+        float containing the roundtrip item timeout in seconds.
+    """
+
+    return max(SERIALIZATION_TIMEOUT_FLOOR_SECONDS, _corpus_timeout(config))
+
+
+def _smoke_item_timeout(config: pytest.Config) -> float:
+    """Bound an item that may become the shared corpus producer.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+
+    Returns:
+        float containing the combined parse and serialization budget in seconds.
+    """
+
+    return _corpus_timeout(config) + _serialization_timeout(config)
+
+
+def _sampled_dag_ids(dag_ids: Iterable[str], *, sample_size: int, seed: str) -> list[str]:
+    """Select a deterministic, seed-keyed sample of Dag identifiers.
+
+    Ranks every ``dag_id`` by the SHA-256 digest of ``f"{seed}:{dag_id}"`` and keeps the first
+    ``sample_size``, so the selection is reproducible across runs, platforms, and processes.
+
+    Parameters:
+        dag_ids: Iterable[str] containing every discovered Dag identifier.
+        sample_size: int containing the number of Dags to keep; ``0`` keeps every Dag.
+        seed: str keying which Dags land in the sample.
+
+    Returns:
+        list[str] containing the selected identifiers in lexical order.
+
+    Raises:
+        ValueError: The sample size is negative.
+    """
+
+    if sample_size < 0:
+        raise ValueError(f"`sample_size` must be non-negative: '{sample_size}'")
+    unique_ids = sorted(set(dag_ids))
+    if sample_size == 0 or sample_size >= len(unique_ids):
+        return unique_ids
+
+    def _rank(dag_id: str) -> str:
+        return hashlib.sha256(f"{seed}:{dag_id}".encode()).hexdigest()
+
+    return sorted(sorted(unique_ids, key=_rank)[:sample_size])
+
+
+def _smoke_dag_bag(session: pytest.Session, config: pytest.Config) -> SmokeCorpus:
+    """Return the process-cached portable Dag corpus.
+
+    Parameters:
+        session: pytest.Session used to cache the decoded corpus.
+        config: pytest.Config carrying the shared bootstrap run root.
+
+    Returns:
+        SmokeCorpus containing every parsed Dag's portable smoke-check data.
+    """
+
+    return _smoke_corpus(session, config)
+
+
+def _serialized_dag_cache(
+    session: pytest.Session, config: pytest.Config
+) -> dict[str, SerializedDagEntry]:
+    """Expose the producer's sampled serialization results to every smoke item.
+
+    Portable Dags were serialized by the process that published the shared corpus. Authoring Dag
+    test doubles are serialized here so this helper remains independently testable.
+
+    Parameters:
+        session: pytest.Session used to cache the serialized corpus.
+        config: pytest.Config containing plugin options and ini values.
+
+    Returns:
+        dict[str, SerializedDagEntry] mapping each selected ``dag_id`` to its outcome.
+    """
+
+    if SERIALIZED_DAG_CACHE_KEY in session.stash:
+        return session.stash[SERIALIZED_DAG_CACHE_KEY]
+
+    dag_bag = _smoke_dag_bag(session, config)
+    sample_size = _serialization_sample_size(config)
+    seed = _serialization_sample_seed(config)
+    selected = _sampled_dag_ids(dag_bag.dags, sample_size=sample_size, seed=seed)
+    if len(selected) < len(dag_bag.dags):
+        LOGGER.info(
+            f"Serializing a deterministic sample of {len(selected)} of {len(dag_bag.dags)} "
+            f"Dags (seed '{seed}')"
+        )
+
+    serialized_dag_class: Any | None = None
+    entries: dict[str, SerializedDagEntry] = {}
+    total = len(selected)
+    for index, dag_id in enumerate(selected, start=1):
+        dag = dag_bag.dags[dag_id]
+        if isinstance(dag, SmokeDag):
+            entries[dag_id] = SerializedDagEntry(
+                encoded=dag.serialized,
+                error=dag.serialization_error,
+                seconds=dag.serialization_seconds,
+            )
+            continue
+        if serialized_dag_class is None:
+            serialized_dag_class = _get_dag_serializer()
+        started = time.perf_counter()
+        try:
+            encoded = serialized_dag_class.serialize_dag(dag)
+        except Exception as error:
+            seconds = time.perf_counter() - started
+            LOGGER.warning(
+                f"Dag `{dag_id}` failed to serialize after {seconds:.3f}s "
+                f"({index}/{total}): {error}"
+            )
+            entries[dag_id] = SerializedDagEntry(encoded=None, error=str(error), seconds=seconds)
+            continue
+        seconds = time.perf_counter() - started
+        LOGGER.info(f"Serialized Dag `{dag_id}` in {seconds:.3f}s ({index}/{total})")
+        entries[dag_id] = SerializedDagEntry(encoded=encoded, error=None, seconds=seconds)
+
+    session.stash[SERIALIZED_DAG_CACHE_KEY] = entries
+    return entries
+
+
+def _validate_smoke_options(config: pytest.Config) -> None:
+    """Reject smoke option combinations that would silently narrow coverage.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+
+    Raises:
+        pytest.UsageError: Snapshot update mode is combined with serialization sampling, which
+            would regenerate only a subset of the committed snapshots.
+    """
+
+    if (
+        _smoke_update(config)
+        and _snapshot_dir(config) is not None
+        and _serialization_sample_size(config) > 0
+    ):
+        raise pytest.UsageError(
+            "`--airflow-smoke-update` cannot be combined with "
+            "`airflow_serialization_sample_size`; regenerating snapshots from a sample would "
+            "silently drop the unsampled Dags"
+        )
 
 
 def _log_stats_table(dag_bag: Any, *, timeout: float, ratio: float) -> str:
@@ -613,6 +901,51 @@ def _log_stats_table(dag_bag: Any, *, timeout: float, ratio: float) -> str:
     return text
 
 
+def _log_serialization_table(
+    entries: dict[str, SerializedDagEntry],
+    deserialize_seconds: dict[str, float],
+    failed_ids: frozenset[str],
+) -> str:
+    """Render and log a slowest-first table of every serialized Dag.
+
+    Parameters:
+        entries: dict[str, SerializedDagEntry] mapping each ``dag_id`` to its serialization
+            outcome and timing.
+        deserialize_seconds: dict[str, float] mapping each round-tripped ``dag_id`` to its
+            deserialization duration; Dags absent from the mapping render a ``-`` column.
+        failed_ids: frozenset[str] containing every ``dag_id`` that failed either round-trip
+            stage.
+
+    Returns:
+        str containing the rendered table text.
+    """
+
+    from airflow.cli.simple_table import AirflowConsole
+
+    def _total(dag_id: str) -> float:
+        return entries[dag_id].seconds + deserialize_seconds.get(dag_id, 0.0)
+
+    rows = sorted(entries, key=_total, reverse=True)
+
+    def _mapper(dag_id: str) -> dict[str, str]:
+        entry = entries[dag_id]
+        decode = deserialize_seconds.get(dag_id)
+        return {
+            "dag_id": dag_id,
+            "serialize": f"{entry.seconds:.3f}s",
+            "deserialize": "-" if decode is None else f"{decode:.3f}s",
+            "total": f"{_total(dag_id):.3f}s",
+            "status": "FAILED" if dag_id in failed_ids else "ok",
+        }
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        AirflowConsole(width=100).print_as(data=rows, output="table", mapper=_mapper)
+    text = buffer.getvalue()
+    LOGGER.info(f"Dag serialization report:\n{text}")
+    return text
+
+
 class DagBagIntegrityItem(pytest.Item):
     """Fail on Dag import errors and per-file parse timeouts; warn on slowpokes."""
 
@@ -626,6 +959,7 @@ class DagBagIntegrityItem(pytest.Item):
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
         self.add_marker(pytest.mark.db_test)
 
     def runtest(self) -> None:
@@ -699,7 +1033,7 @@ class DagBagIntegrityItem(pytest.Item):
 
 
 class DagSerializationRoundtripItem(pytest.Item):
-    """Round-trip every parsed Dag through Airflow's scheduler serialization."""
+    """Round-trip the serialized Dag corpus through Airflow's scheduler serialization."""
 
     def __init__(self, *, name: str, parent: SmokeCollector) -> None:
         """Create the item and mark it as a bundled smoke test.
@@ -711,27 +1045,67 @@ class DagSerializationRoundtripItem(pytest.Item):
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
-        """Serialize and deserialize every parsed Dag.
+        """Round-trip every cached serialized Dag and log a slowest-first timing table.
 
         Raises:
             SmokeCheckFailure: Any Dag failed to round-trip through serialization.
         """
 
-        dag_bag = _smoke_corpus(self.session, self.config)
+        entries = _serialized_dag_cache(self.session, self.config)
         serialized_dag_class = _get_dag_serializer()
         failures: list[str] = []
-        for dag_id, dag in sorted(dag_bag.dags.items()):
+        failed_ids: set[str] = set()
+        deserialize_seconds: dict[str, float] = {}
+        total = len(entries)
+        for index, (dag_id, entry) in enumerate(sorted(entries.items()), start=1):
+            if entry.error is not None:
+                failures.append(
+                    f"Dag `{dag_id}` failed to round-trip through serialization: {entry.error}"
+                )
+                failed_ids.add(dag_id)
+                continue
+            started = time.perf_counter()
             try:
-                encoded = _serialize_smoke_dag(dag, serialized_dag_class)
-                serialized_dag_class.deserialize_dag(encoded)
+                # Deserialization mutates its input, so the shared cache gets a copy.
+                serialized_dag_class.deserialize_dag(copy.deepcopy(entry.payload()))
             except Exception as error:
+                deserialize_seconds[dag_id] = time.perf_counter() - started
                 failures.append(
                     f"Dag `{dag_id}` failed to round-trip through serialization: {error}"
                 )
+                failed_ids.add(dag_id)
+                continue
+            deserialize_seconds[dag_id] = time.perf_counter() - started
+            LOGGER.info(
+                f"Round-tripped Dag `{dag_id}` in {deserialize_seconds[dag_id]:.3f}s "
+                f"({index}/{total})"
+            )
+        table = _log_serialization_table(entries, deserialize_seconds, frozenset(failed_ids))
         if failures:
-            raise SmokeCheckFailure("\n\n".join(failures))
+            raise SmokeCheckFailure("\n\n".join(failures) + f"\n\n{table}")
+
+    def repr_failure(
+        self,
+        excinfo: pytest.ExceptionInfo[BaseException],
+        style: object = None,
+    ) -> str | TerminalRepr:
+        """Format smoke check failures without a pytest-internal traceback.
+
+        Parameters:
+            excinfo: pytest.ExceptionInfo[BaseException] describing the failure.
+            style: object containing an unused traceback style override.
+
+        Returns:
+            str | TerminalRepr containing the failure representation.
+        """
+
+        del style
+        if isinstance(excinfo.value, SmokeCheckFailure):
+            return str(excinfo.value)
+        return super().repr_failure(excinfo)
 
     def reportinfo(self) -> tuple[str, int, str]:
         """Locate this item for terminal and junit reporting.
@@ -756,6 +1130,7 @@ class NoDuplicateDagIdsItem(pytest.Item):
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
         """Surface every duplicated ``dag_id`` collision the Dag bag recorded.
@@ -796,9 +1171,13 @@ class ScheduleSanityItem(pytest.Item):
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
-        """Compute the next scheduled run for every scheduled, serialized Dag.
+        """Compute the next scheduled run for every scheduled Dag in the serialized cache.
+
+        Dags missing from a sampled cache, or whose serialization already failed, are skipped;
+        serialization failures belong to ``test_dag_serialization_roundtrip``.
 
         Raises:
             SmokeCheckFailure: A scheduled Dag's timetable raised while computing its next run.
@@ -806,7 +1185,8 @@ class ScheduleSanityItem(pytest.Item):
 
         from airflow.timetables.base import TimeRestriction
 
-        dag_bag = _smoke_corpus(self.session, self.config)
+        dag_bag = _smoke_dag_bag(self.session, self.config)
+        entries = _serialized_dag_cache(self.session, self.config)
         serialized_dag_class = _get_dag_serializer()
         failures: list[str] = []
         for dag_id, dag in sorted(dag_bag.dags.items()):
@@ -817,10 +1197,12 @@ class ScheduleSanityItem(pytest.Item):
             )
             if not can_be_scheduled:
                 continue
+            entry = entries.get(dag_id)
+            if entry is None or entry.error is not None:
+                continue
             try:
-                decoded = serialized_dag_class.deserialize_dag(
-                    _serialize_smoke_dag(dag, serialized_dag_class)
-                )
+                # Deserialization mutates its input, so the shared cache gets a copy.
+                decoded = serialized_dag_class.deserialize_dag(copy.deepcopy(entry.payload()))
                 restriction = TimeRestriction(
                     earliest=decoded.start_date,
                     latest=decoded.end_date,
@@ -860,6 +1242,7 @@ class PoolReferencesExistItem(pytest.Item):
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
         self.add_marker(pytest.mark.db_test)
 
     def runtest(self) -> None:
@@ -912,6 +1295,7 @@ class DagIdPatternItem(pytest.Item):
         super().__init__(name=name, parent=parent)
         self.pattern = pattern
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
         """Match every ``dag_id`` against the configured pattern.
@@ -954,6 +1338,7 @@ class RequiredDagTagsItem(pytest.Item):
         super().__init__(name=name, parent=parent)
         self.tags = tags
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
         """Check every Dag's tags for the required set.
@@ -994,6 +1379,7 @@ class ForbidDefaultOwnerItem(pytest.Item):
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
         """Check every task's owner against Airflow's stock default.
@@ -1043,31 +1429,30 @@ class SerializedDagSnapshotItem(pytest.Item):
         self.snapshot_dir = snapshot_dir
         self.update = update
         self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
-        """Diff, or regenerate, every parsed Dag's normalized serialized snapshot.
+        """Diff, or regenerate, every cached serialized Dag's normalized snapshot.
 
         Raises:
             SmokeCheckFailure: A Dag failed to serialize, has no committed snapshot, or its
                 serialized structure drifted from the committed snapshot.
         """
 
-        dag_bag = _smoke_corpus(self.session, self.config)
-        serialized_dag_class = _get_dag_serializer()
+        entries = _serialized_dag_cache(self.session, self.config)
         failures: list[str] = []
-        for dag_id, dag in sorted(dag_bag.dags.items()):
-            try:
-                current = (
-                    json.dumps(
-                        _normalize_serialized_dag(_serialize_smoke_dag(dag, serialized_dag_class)),
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n"
-                )
-            except Exception as error:
-                failures.append(f"Dag `{dag_id}` failed to serialize: {error}")
+        for dag_id, entry in sorted(entries.items()):
+            if entry.error is not None:
+                failures.append(f"Dag `{dag_id}` failed to serialize: {entry.error}")
                 continue
+            current = (
+                json.dumps(
+                    _normalize_serialized_dag(entry.payload()),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
 
             snapshot_path = self.snapshot_dir / f"{dag_id}.json"
             if self.update:
@@ -1160,10 +1545,14 @@ def collect_smoke_items(
         session: pytest.Session that owns the synthetic smoke collector.
         config: pytest.Config containing plugin options and ini values.
         items: list[pytest.Item] mutated to include enabled smoke items.
+
+    Raises:
+        pytest.UsageError: The enabled smoke options form an invalid combination.
     """
 
     if not _smoke_enabled(config):
         return
+    _validate_smoke_options(config)
     if not _smoke_in_scope(config):
         LOGGER.info(f"Skipping smoke catalog: positional selection {config.args} excludes it")
         return
@@ -1180,6 +1569,7 @@ __all__ = (
     "PoolReferencesExistItem",
     "RequiredDagTagsItem",
     "ScheduleSanityItem",
+    "SerializedDagEntry",
     "SerializedDagSnapshotItem",
     "SlowDagParseWarning",
     "SmokeCheckFailure",

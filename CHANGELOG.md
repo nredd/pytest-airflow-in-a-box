@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Ini options `airflow_serialization_sample_size` and `airflow_serialization_sample_seed`,
+  bounding the serialization-backed smoke checks to a deterministic hash-selected sample of the
+  Dag corpus; the default (`0`) stays exhaustive
+  ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
+- `test_dag_serialization_roundtrip` logs a slowest-first per-Dag serialization timing table,
+  streams per-Dag progress at INFO, and carries a corpus-scaled `pytest-timeout` deadline so a
+  pathological Dag is named before an outer CI timeout
+  ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
+
+### Changed
+
+- `test_dag_serialization_roundtrip`, `test_schedule_sanity`, and
+  `test_dag_serialization_snapshot` share one worker-scoped serialized-Dag cache instead of each
+  serializing the whole corpus independently; `--airflow-smoke-update` now rejects a configured
+  sampling ini rather than silently regenerating a snapshot subset
+  ([#53](https://github.com/nredd/pytest-airflow-in-a-box/issues/53)).
+
 ### Fixed
 
 - Bundled smoke items remain independently schedulable across `pytest-xdist` workers while sharing
@@ -22,6 +41,12 @@ All notable changes to this project will be documented in this file. The format 
   positionals, bare runs, and `testpaths`-driven runs keep it. `-k`/`-m`/`--deselect` continue
   to apply to smoke items as usual
   ([#54](https://github.com/nredd/pytest-airflow-in-a-box/issues/54)).
+- The `api_test` marker now activates the isolated REST API server on its own, and every
+  activated test -- marked or requesting `api_client`/`api_server_url` -- gets the selected URL
+  published as `AIRFLOW__API__BASE_URL` for its duration, so application code can discover the
+  endpoint through `conf.get("api", "base_url")`. The environment is restored exactly after each
+  test via the new autouse `api_base_url` fixture
+  ([#57](https://github.com/nredd/pytest-airflow-in-a-box/issues/57)).
 
 ## [0.2.0] - 2026-08-09
 

@@ -39,9 +39,9 @@ The `pytest11` entry point loads the plugin automatically. Consumer projects do 
 
 The bundled pytest plugins are intentional runtime dependencies. `pytest-xdist` is part of the
 supported execution model: controller bootstrap state and worker-scoped artifacts are coordinated
-for parallel runs. `pytest-timeout` backs up Airflow's per-file Dag parse watchdog with a deadline
-for the complete bundled integrity smoke item, so a hang outside the per-file parser boundary
-cannot wedge the test session.
+for parallel runs. `pytest-timeout` backs up Airflow's per-file Dag parse watchdog with a
+corpus-scaled deadline on every bundled smoke item, so whichever worker produces the shared corpus
+cannot wedge the test session outside the per-file parser boundary.
 
 The plugin is inert on runs without Airflow-facing tests: session startup only prepares a
 disposable run directory and `AIRFLOW__*` environment variables. Airflow itself is imported and
@@ -353,10 +353,25 @@ no scheduling effect, so user-authored smoke tests remain fully parallel too.
   `SlowDagParseWarning` on files above `airflow_dag_parse_slowpoke_ratio` (default `0.75`) of the
   timeout without failing the run; logs a slowest-first parse-timing table
 - `test_dag_serialization_roundtrip` -- every parsed Dag survives Airflow's scheduler
-  serialization round trip
+  serialization round trip; logs a slowest-first per-Dag timing table and carries a corpus-scaled
+  `pytest-timeout` deadline (floored at 30 seconds, so a tuned-down parse timeout cannot starve
+  the serialization pass) so a pathological Dag is named before an outer CI timeout
 - `test_no_duplicate_dag_ids` -- no two Dag files declare the same `dag_id`
 - `test_schedule_sanity` -- every scheduled Dag computes its next run without raising
 - `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`)
+
+The serialization-backed checks (`test_dag_serialization_roundtrip`, `test_schedule_sanity`,
+`test_dag_serialization_snapshot`) share the producer's serialized-Dag cache across workers, so
+the corpus is parsed and the selected Dags are serialized once per run. Two ini options bound the
+cost on large generated corpora:
+
+- `airflow_serialization_sample_size` (default `0`, meaning every Dag) -- serialize only a
+  deterministic sample of N Dags, selected by hashing each `dag_id` with
+  `airflow_serialization_sample_seed` (default `0`); the same corpus and seed always select the
+  same sample, and `test_schedule_sanity` skips Dags outside it. Incompatible with
+  `--airflow-smoke-update`, which must regenerate every snapshot
+- run with `--log-cli-level=INFO` to stream per-Dag serialization progress live; captured-only
+  logs do not survive a hard outer kill
 
 Four additional policy checks appear only when their ini is configured, so defaults stay
 zero-config:
@@ -402,10 +417,27 @@ def test_api(api_client, dag_maker):
     assert response.body["dag_id"] == "visible"
 ```
 
+The `api_test` marker alone also starts the server, and every activated test -- marked or
+requesting `api_client`/`api_server_url` -- gets the selected URL published as
+`AIRFLOW__API__BASE_URL` for its duration, so application code can discover the endpoint
+through active Airflow configuration:
+
+```python
+import pytest
+from airflow.configuration import conf
+
+
+@pytest.mark.api_test
+def test_application_client():
+    base_url = conf.get("api", "base_url")
+    assert base_url.startswith("http://127.0.0.1:")
+```
+
 ## Markers
 
 - `db_test`: requires the isolated metadata database (triggers its lazy initialization)
-- `api_test`: requires the isolated REST API server (triggers lazy database initialization)
+- `api_test`: starts the isolated REST API server lazily and publishes its URL as
+  `AIRFLOW__API__BASE_URL` for the test's duration (triggers lazy database initialization)
 - `postgres`: requires a provisioned Postgres metadata database (the `postgres` extra plus Docker)
 - `compat`: end-user tests exercised across the version matrix
 - `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
@@ -444,7 +476,8 @@ The report covers the storage ladder decision and its reason, the resolved `AIRF
 database URL scheme, and backend tier, plugin/pytest/Python/Airflow versions plus the resolved
 capability table, and API server state. The API server section always reads "not started": the
 `api_server_url` fixture is a lazy, per-process, session-scoped subprocess with no state before a
-test requests it, and a standalone `--airflow-doctor` invocation never does.
+test requests it or an `api_test`-marked test runs, and a standalone `--airflow-doctor`
+invocation never does either.
 
 ## License
 

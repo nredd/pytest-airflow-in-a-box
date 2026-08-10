@@ -13,7 +13,7 @@ from typing import Protocol
 import pytest
 
 MARKER_DESCRIPTIONS = (
-    "api_test: require the isolated Airflow REST API server (triggers lazy database init)",
+    "api_test: start the isolated Airflow REST API server lazily and publish `api.base_url`",
     "compat: exercise the public plugin surface across certified runtimes",
     "db_test: require the isolated Airflow metadata database (triggers lazy database init)",
     "environment(name): run only when the named environment's sentinel path exists",
