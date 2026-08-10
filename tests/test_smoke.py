@@ -115,6 +115,62 @@ def test_smoke_enabled_rejects_non_boolean_ini() -> None:
         smoke._smoke_enabled(config)
 
 
+def _scope_config(
+    *, args_source: pytest.Config.ArgsSource, args: list[str], invocation_dir: Path
+) -> Any:
+    """Create a minimal configuration double for `_smoke_in_scope` tests.
+
+    Parameters:
+        args_source: pytest.Config.ArgsSource describing where the positional args came from.
+        args: list[str] of resolved positional args.
+        invocation_dir: pathlib.Path of the invocation directory.
+
+    Returns:
+        types.SimpleNamespace shaped like the configuration surface under test.
+    """
+
+    return SimpleNamespace(
+        args_source=args_source, args=args, invocation_params=SimpleNamespace(dir=invocation_dir)
+    )
+
+
+def test_smoke_in_scope_without_explicit_positionals(tmp_path: Path) -> None:
+    """Keep the catalog in scope for bare and testpaths-driven runs."""
+
+    for source in (
+        pytest.Config.ArgsSource.INVOCATION_DIR,
+        pytest.Config.ArgsSource.TESTPATHS,
+    ):
+        config = _scope_config(args_source=source, args=["test_x.py"], invocation_dir=tmp_path)
+        assert smoke._smoke_in_scope(config) is True
+
+
+def test_smoke_in_scope_drops_catalog_for_node_id_and_file_args(tmp_path: Path) -> None:
+    """Drop the catalog when every explicit positional names a file or node ID."""
+
+    (tmp_path / "test_x.py").write_text("", encoding="utf-8")
+    config = _scope_config(
+        args_source=pytest.Config.ArgsSource.ARGS,
+        args=["test_x.py::test_one", "test_x.py"],
+        invocation_dir=tmp_path,
+    )
+
+    assert smoke._smoke_in_scope(config) is False
+
+
+def test_smoke_in_scope_keeps_catalog_for_directory_arg(tmp_path: Path) -> None:
+    """Keep the catalog when any explicit positional is a directory."""
+
+    (tmp_path / "sub").mkdir()
+    config = _scope_config(
+        args_source=pytest.Config.ArgsSource.ARGS,
+        args=["missing.py::test_one", "sub"],
+        invocation_dir=tmp_path,
+    )
+
+    assert smoke._smoke_in_scope(config) is True
+
+
 def test_parse_timeout_reads_default() -> None:
     """Parse the default timeout string into a float."""
 
@@ -1220,3 +1276,98 @@ def test_smoke_marker_selects_exactly_the_bundled_items(pytester: pytest.Pyteste
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke"
     )
     deselected.assert_outcomes(passed=1, deselected=5)
+
+
+def test_explicit_node_id_and_file_args_exclude_smoke_catalog(
+    pytester: pytest.Pytester,
+) -> None:
+    """Honor explicit node-ID and file positionals by dropping the synthetic catalog.
+
+    Regression test for https://github.com/nredd/pytest-airflow-in-a-box/issues/54.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\n")
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    node = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "test_regular.py::test_regular"
+    )
+    node.assert_outcomes(passed=1)
+    node.stdout.no_fnmatch_line("*::smoke*")
+
+    file = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "test_regular.py")
+    file.assert_outcomes(passed=1)
+    file.stdout.no_fnmatch_line("*::smoke*")
+
+
+def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
+    """Keep the catalog when an explicit positional is a directory scan."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\n")
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", ".")
+
+    result.assert_outcomes(passed=6)
+
+
+def test_keyword_expression_deselects_smoke_items(pytester: pytest.Pytester) -> None:
+    """Deselect the whole catalog when `-k` matches only an ordinary test.
+
+    Regression test for https://github.com/nredd/pytest-airflow-in-a-box/issues/54.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\n")
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-k", "test_regular")
+
+    result.assert_outcomes(passed=1, deselected=5)
+
+
+def test_testpaths_file_glob_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
+    """Keep the catalog when `testpaths` resolves to file args without user positionals."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\ntestpaths = test_regular.py\n")
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
+
+    result.assert_outcomes(passed=6)
+
+
+def test_deselect_prunes_single_smoke_item(pytester: pytest.Pytester) -> None:
+    """Prune one smoke item with `--deselect` while the rest of the catalog runs."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\n")
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "--deselect", "::smoke::test_dag_bag_integrity"
+    )
+
+    result.assert_outcomes(passed=4, deselected=1)

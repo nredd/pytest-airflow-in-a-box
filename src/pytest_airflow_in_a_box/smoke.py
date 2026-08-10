@@ -2,7 +2,9 @@
 
 Every item is synthesized directly on the pytest ``Session`` rather than anchored to a real file
 on disk, so the catalog carries no collection dependency on the user's project layout. Off unless
-``airflow_smoke``/``--airflow-smoke`` is enabled; collection cost is zero when disabled.
+``airflow_smoke``/``--airflow-smoke`` is enabled; collection cost is zero when disabled. Explicit
+file or node-ID positionals scope the run to those tests and drop the catalog; directory
+positionals and arg-less runs keep it.
 
 References:
     https://docs.pytest.org/en/stable/example/nonpython.html
@@ -136,6 +138,36 @@ def _smoke_enabled(config: pytest.Config) -> bool:
         enabled = ini_value
     config.stash[SMOKE_ENABLED_KEY] = enabled
     return enabled
+
+
+def _smoke_in_scope(config: pytest.Config) -> bool:
+    """Report whether the run's positional selection leaves the smoke catalog in scope.
+
+    The catalog is synthesized onto the ``Session`` after ``perform_collect`` has already
+    honored positional args, so node-ID and file selection must be re-applied here: explicit
+    file or node-ID positionals scope the run to those tests only, while directory positionals
+    (and arg-less runs, including ``testpaths``-driven ones) keep the session-level catalog.
+    Keyword and marker deselection (``-k``/``-m``/``--deselect``) need no handling -- pytest
+    applies them after this plugin's ``tryfirst`` collection hook.
+
+    Parameters:
+        config: pytest.Config containing resolved positional args and invocation metadata.
+
+    Returns:
+        bool indicating whether the bundled catalog should be appended to the collection.
+    """
+
+    if config.args_source is not pytest.Config.ArgsSource.ARGS:
+        return True
+
+    invocation_dir = config.invocation_params.dir
+    for arg in config.args:
+        path_part, separator, _ = arg.partition("::")
+        if separator:
+            continue
+        if (invocation_dir / path_part).is_dir():
+            return True
+    return False
 
 
 def _parse_timeout(config: pytest.Config) -> float:
@@ -1122,7 +1154,7 @@ class SmokeCollector(pytest.Collector):
 def collect_smoke_items(
     session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Append the bundled smoke catalog to collected items when enabled.
+    """Append the bundled smoke catalog to collected items when enabled and in scope.
 
     Parameters:
         session: pytest.Session that owns the synthetic smoke collector.
@@ -1131,6 +1163,9 @@ def collect_smoke_items(
     """
 
     if not _smoke_enabled(config):
+        return
+    if not _smoke_in_scope(config):
+        LOGGER.info(f"Skipping smoke catalog: positional selection {config.args} excludes it")
         return
     collector = SmokeCollector.from_parent(session, name="smoke")
     items.extend(collector.collect())

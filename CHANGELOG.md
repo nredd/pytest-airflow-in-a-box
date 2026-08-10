@@ -17,6 +17,11 @@ All notable changes to this project will be documented in this file. The format 
   via a process-local registry of authoring Dags registered at persist time and removed at
   fixture cleanup. The terminal `TaskResolutionError` now also hints at passing
   `task=dag.get_task(...)` ([#56](https://github.com/nredd/pytest-airflow-in-a-box/issues/56)).
+- Synthetic smoke items no longer bypass explicit pytest selection: file and node-ID
+  positionals (`pytest tests/test_x.py::test_one`) drop the bundled catalog, while directory
+  positionals, bare runs, and `testpaths`-driven runs keep it. `-k`/`-m`/`--deselect` continue
+  to apply to smoke items as usual
+  ([#54](https://github.com/nredd/pytest-airflow-in-a-box/issues/54)).
 
 ## [0.2.0] - 2026-08-09
 
