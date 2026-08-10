@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "pytest-airflow-in-a-box"
-version = "0.2.0"
+version = "0.3.0"
 description = "Pytest infrastructure for testing Apache Airflow DAGs without a live deployment"
 readme = "README.md"
 requires-python = ">=3.10"

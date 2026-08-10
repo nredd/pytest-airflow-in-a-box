@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-10
+
 ### Added
 
 - Ini options `airflow_serialization_sample_size` and `airflow_serialization_sample_seed`,
@@ -179,6 +181,7 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.3.0
 [0.2.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.2.0
 [0.1.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.1.2
