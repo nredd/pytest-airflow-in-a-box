@@ -15,18 +15,22 @@ All notable changes to this project will be documented in this file. The format 
 - BREAKING: Airflow is no longer a base dependency. The Airflow 2.x monolith and the 3.x
   core both install the `airflow` package, so the previous hard `apache-airflow-core>=3.1,<4`
   pin would silently corrupt any Airflow 2.x environment the plugin was installed into --
-  the packaging prerequisite for the planned 2.x compatibility tier, which supersedes the
-  0.1.2 note that 2.x support was out of scope
+  the packaging prerequisite for the planned 2.x compatibility tier, superseding the 0.2.0
+  note that 2.x support would require a parallel implementation
   ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)). Install the new
   `airflow3` extra (`apache-airflow>=3.1,<4` plus the sqlite provider) for the previous
-  behavior, or keep pinning Airflow yourself. An `airflow2` extra
+  behavior, or keep pinning Airflow yourself; `sqlalchemy` stays a direct dependency
+  because the storage layer imports it at plugin load. An `airflow2` extra
   (`apache-airflow>=2.9,<3`) ships ahead of the tier; the two extras are declared mutually
-  exclusive under `[tool.uv] conflicts`.
-- Session startup now distinguishes the possible Airflow installation states with
-  actionable errors: no Airflow at all, Airflow 2.x without the tier that supports it, a
-  3.x meta-package without `apache-airflow-core`, and the corrupt case of `apache-airflow<3`
-  coexisting with `apache-airflow-core`
-  ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
+  exclusive under `[tool.uv] conflicts` (a uv-project affordance -- wheel metadata cannot
+  express exclusivity, so pip users get only the runtime check below).
+- The first test that needs the metadata database now distinguishes the possible Airflow
+  installation states with actionable single-line errors (`pytest.UsageError`, not an
+  `INTERNALERROR` traceback): no Airflow at all, Airflow 2.x without the tier that
+  supports it, an `apache-airflow` meta-package without `apache-airflow-core`, and the
+  corrupt case of `apache-airflow<3` coexisting with `apache-airflow-core`. Runs without
+  Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
+  diagnosis ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
 
 ## [0.4.0] - 2026-08-12
 

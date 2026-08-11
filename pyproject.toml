@@ -30,6 +30,7 @@ dependencies = [
     "pytest>=8",
     "pytest-timeout>=2.4",
     "pytest-xdist>=3.8",
+    "sqlalchemy>=1.4.36",
 ]
 
 # Airflow is deliberately absent from the base dependencies (pytest-django pattern): the

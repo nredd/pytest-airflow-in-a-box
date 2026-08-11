@@ -41,6 +41,18 @@ jobs:
         run: uv run prek run --all-files
       - name: Build distributions
         run: uv run python -m build --installer uv
+      - name: Smoke-test the bare wheel without Airflow
+        # The plugin must load and stay inert from a bare `pip install` with no
+        # Airflow present, and `--airflow-doctor` must render the actionable
+        # incompatibility instead of crashing. Guards the no-Airflow base-deps
+        # contract introduced for the 2.x tier (#25).
+        run: |
+          uv venv --python "$PYTHON_VERSION" .venv-bare
+          uv pip install --python .venv-bare/bin/python dist/*.whl
+          mkdir -p /tmp/bare-suite
+          printf 'def test_trivial() -> None:\n    assert True\n' > /tmp/bare-suite/test_trivial.py
+          (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q test_trivial.py)
+          (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q --airflow-doctor | grep -F "No Airflow distribution is installed")
       - name: Sync docs dependencies
         run: uv sync --locked --group docs
       - name: Build docs
@@ -73,7 +85,8 @@ jobs:
           uv pip install --python .venv-ci/bin/python \
             --constraint airflow-constraints.txt \
             --editable ".[postgres]" \
-            "apache-airflow-core==${AIRFLOW_VERSION}"
+            "apache-airflow-core==${AIRFLOW_VERSION}" \
+            "apache-airflow-providers-sqlite>=4.1,<5"
           uv pip install --python .venv-ci/bin/python coverage
           .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests
