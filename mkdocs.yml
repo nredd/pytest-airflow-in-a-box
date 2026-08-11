@@ -1,0 +1,61 @@
+site_name: pytest-airflow-in-a-box
+site_description: Pytest infrastructure for testing Apache Airflow DAGs without a live deployment
+site_url: https://nredd.github.io/pytest-airflow-in-a-box/
+repo_url: https://github.com/nredd/pytest-airflow-in-a-box
+repo_name: nredd/pytest-airflow-in-a-box
+edit_uri: edit/main/docs/
+strict: true
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Guide:
+      - Task execution: guide/task-execution.md
+      - Deferrable operators: guide/deferrable-operators.md
+      - DB-free task execution: guide/db-free-execution.md
+      - Seeding Variables and Connections: guide/seeding.md
+      - Structlog capture: guide/structlog.md
+      - Dag-file collection: guide/dag-collection.md
+      - Airflow configuration: guide/configuration.md
+      - Smoke tests: guide/smoke-tests.md
+      - Database: guide/database.md
+      - Live REST API: guide/rest-api.md
+  - Reference:
+      - Markers: reference/markers.md
+      - Defaults: reference/defaults.md
+      - Diagnostics: reference/diagnostics.md
+  - Development: development.md

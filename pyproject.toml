@@ -43,7 +43,7 @@ postgres = [
 
 [project.urls]
 Changelog = "https://github.com/nredd/pytest-airflow-in-a-box/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/nredd/pytest-airflow-in-a-box#readme"
+Documentation = "https://nredd.github.io/pytest-airflow-in-a-box/"
 Homepage = "https://github.com/nredd/pytest-airflow-in-a-box"
 Issues = "https://github.com/nredd/pytest-airflow-in-a-box/issues"
 Repository = "https://github.com/nredd/pytest-airflow-in-a-box"
@@ -60,6 +60,10 @@ dev = [
     "ty==0.0.69",
     "uv==0.12.2",
     "uv-build==0.12.2",
+]
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.7.7",
 ]
 
 [tool.ruff]

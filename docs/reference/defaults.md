@@ -1,0 +1,8 @@
+# Defaults
+
+The plugin needs zero ini configuration. It applies `--tb=short`, `-ra`, `--durations=20`, and
+failed-only `tmp_path` retention, but only where the user has not chosen a value -- explicit flags
+and ini settings always win. Warning filters silence traced third-party deprecation noise
+(`flask_appbuilder`, `flask_sqlalchemy`, `starlette`) while keeping Airflow's own deprecation
+warnings visible, and promote pytest's collection and unraisable warnings to errors. User-supplied
+`filterwarnings` lines take precedence.
