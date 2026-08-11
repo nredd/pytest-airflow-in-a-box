@@ -111,6 +111,8 @@ def _base_modules() -> dict[str, SimpleNamespace]:
     generic_class = type("GenericAirflowSymbol", (), {})
     return {
         "airflow.sdk": SimpleNamespace(DAG=generic_class),
+        "airflow.sdk.definitions.param": SimpleNamespace(ParamsDict=generic_class),
+        "airflow.sdk.timezone": SimpleNamespace(utcnow=_callable_symbol),
         "airflow.utils.db": SimpleNamespace(initdb=_callable_symbol),
         "airflow.utils.session": SimpleNamespace(create_session=_callable_symbol),
         "airflow.models.dagrun": SimpleNamespace(DagRun=generic_class),
@@ -213,6 +215,7 @@ def _install_fake_environment(
     modules: dict[str, SimpleNamespace],
     meta_version: str | None = None,
     meta_error: Exception | None = None,
+    python_version: tuple[int, int] = (3, 12),
 ) -> None:
     """Patch metadata and imports to expose one isolated fake Airflow installation.
 
@@ -226,7 +229,12 @@ def _install_fake_environment(
             metadata; None reports the meta-distribution as absent.
         meta_error: Exception | None raised by the meta-distribution lookup instead of
             returning or reporting absence; takes precedence over `meta_version`.
+        python_version: tuple[int, int] reported as the running interpreter -- part of
+            the faked environment because the real host may be 3.13/3.14, where the
+            ragged-matrix guard would otherwise fire inside every fake 2.x scenario.
     """
+
+    monkeypatch.setattr(capability_module, "_running_python", lambda: python_version)
 
     def fake_version(distribution_name: str) -> str:
         """Return fake metadata for exactly the two known Airflow distributions."""
@@ -715,7 +723,7 @@ def test_installed_family_reports_none_without_airflow(
 
 
 def test_installed_family_survives_metadata_failure(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Report no family instead of raising when the core metadata read explodes."""
 
@@ -727,14 +735,42 @@ def test_installed_family_survives_metadata_failure(
 
     monkeypatch.setattr(capability_module.metadata, "version", broken_version)
 
-    assert capability_module.installed_family() is None
+    with caplog.at_level("WARNING", logger=capability_module.LOGGER.name):
+        assert capability_module.installed_family() is None
+
+    assert "metadata backend exploded" in caplog.text
 
 
-def test_v2_python_cap_is_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_installed_family_warns_on_unreadable_meta_metadata(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Warn, not raise, when only the meta-distribution is present but unreadable."""
+
+    _install_fake_environment(
+        monkeypatch, None, {}, meta_error=RuntimeError("half-clobbered dist-info")
+    )
+
+    with caplog.at_level("WARNING", logger=capability_module.LOGGER.name):
+        assert capability_module.installed_family() is None
+
+    assert "half-clobbered dist-info" in caplog.text
+
+
+def test_running_python_reports_the_interpreter() -> None:
+    """Report the live interpreter's major and minor version."""
+
+    assert capability_module._running_python() == sys.version_info[:2]
+
+
+@pytest.mark.parametrize("python_version", [(3, 13), (3, 14), (4, 0)])
+def test_v2_python_cap_is_enforced(
+    monkeypatch: pytest.MonkeyPatch, python_version: tuple[int, int]
+) -> None:
     """Reject a certified 2.x release on a Python the family never supported."""
 
-    _install_fake_environment(monkeypatch, None, {}, meta_version="2.11.2")
-    monkeypatch.setattr(capability_module, "_running_python", lambda: (3, 13))
+    _install_fake_environment(
+        monkeypatch, None, {}, meta_version="2.11.2", python_version=python_version
+    )
 
     with pytest.raises(AirflowCompatibilityError, match="does not support Python") as caught:
         capability_module.resolve_capabilities()
@@ -901,12 +937,12 @@ def _backport_serialized_dag_location(modules: dict[str, SimpleNamespace]) -> No
 @pytest.mark.parametrize(
     ("release", "mutate", "symbol"),
     [
-        ((3, 2, 2), _replace_dag_bag_with_old_location, "DagBag canonical location"),
-        ((3, 3, 0), _add_include_examples, "DagBag.__init__.include_examples"),
-        ((3, 2, 2), _restore_legacy_runner, "TaskInstance task runner"),
-        ((3, 3, 0), _remove_dag_run_refresh, "TaskInstance.refresh_from_task.dag_run"),
-        ((3, 2, 2), _remove_sentry_field, "StartupDetails.sentry_integration"),
-        ((3, 3, 0), _remove_queue_field, "TaskInstance DTO queue"),
+        ((3, 2, 2), _replace_dag_bag_with_old_location, "capability `dag_bag_location`"),
+        ((3, 3, 0), _add_include_examples, "capability `dag_bag_supports_include_examples`"),
+        ((3, 2, 2), _restore_legacy_runner, "capability `task_instance_runner`"),
+        ((3, 3, 0), _remove_dag_run_refresh, "capability `refresh_from_task_supports_dag_run`"),
+        ((3, 2, 2), _remove_sentry_field, "capability `startup_details_supports_sentry`"),
+        ((3, 3, 0), _remove_queue_field, "capability `runtime_task_instance_supports_queue`"),
         ((3, 1, 8), _backport_serialized_dag_location, "SerializedDAG canonical location"),
     ],
 )

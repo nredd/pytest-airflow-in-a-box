@@ -140,13 +140,45 @@ def test_v2_environment_swaps_the_auth_surface(tmp_path: Path) -> None:
     variables = bootstrap._environment(state)
 
     assert variables["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
-    assert "basic_auth" in variables["AIRFLOW__API__AUTH_BACKENDS"]
+    assert variables["AIRFLOW__API__AUTH_BACKENDS"] == bootstrap.BASIC_AUTH_BACKENDS
     assert "AIRFLOW__CORE__AUTH_MANAGER" not in variables
     assert "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS" not in variables
     assert "AIRFLOW__API_AUTH__JWT_SECRET" not in variables
     v3_variables = bootstrap._environment(_artifact_state(tmp_path / "run3"))
     assert "AIRFLOW__WEBSERVER__SECRET_KEY" not in v3_variables
     assert "AIRFLOW__CORE__AUTH_MANAGER" in v3_variables
+
+
+def test_install_environment_owns_the_other_family_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evict ambient variables of the family this run does not use.
+
+    `_install_environment` mutates `os.environ` directly, and this suite runs inside
+    the plugin's own bootstrapped session, so the complete owned surface is snapshotted
+    and restored manually -- monkeypatch only tracks names it set itself.
+    """
+
+    owned = (*bootstrap._environment_names(), bootstrap.STATE_ENVIRONMENT_VARIABLE)
+    original = {name: os.environ.get(name) for name in owned}
+    monkeypatch.setenv("AIRFLOW__CORE__AUTH_MANAGER", "ambient.AuthManager")
+    monkeypatch.setenv("AIRFLOW__API_AUTH__JWT_SECRET", "ambient-secret")
+    monkeypatch.setenv("AIRFLOW__API__AUTH_BACKENDS", "ambient.backend")
+    state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
+
+    try:
+        bootstrap._install_environment(state)
+
+        assert "AIRFLOW__CORE__AUTH_MANAGER" not in os.environ
+        assert "AIRFLOW__API_AUTH__JWT_SECRET" not in os.environ
+        assert os.environ["AIRFLOW__API__AUTH_BACKENDS"] == bootstrap.BASIC_AUTH_BACKENDS
+        assert os.environ["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def test_state_from_environment_requires_the_variable(

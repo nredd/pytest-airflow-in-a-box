@@ -300,17 +300,16 @@ def install_legacy_sqlite_listener() -> None:
         ValueError: Airflow has an invalid configured database URL or SQLite path.
     """
 
-    family = installed_family()
-    if family is None:
-        return
-    if family is AirflowFamily.V3:
-        try:
-            installed_version = metadata.version(AIRFLOW_CORE_DISTRIBUTION)
-        except metadata.PackageNotFoundError:
-            return
+    try:
+        installed_version = metadata.version(AIRFLOW_CORE_DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        installed_version = None
+    if installed_version is not None:
         uses_fallback = installed_version.startswith(("3.1.", "3.2.0"))
         if not uses_fallback:
             return
+    elif installed_family() is not AirflowFamily.V2:
+        return
 
     global _LEGACY_SQLITE_LISTENER
     with _LEGACY_LISTENER_LOCK:

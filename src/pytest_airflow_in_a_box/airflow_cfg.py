@@ -15,7 +15,13 @@ from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 SIMPLE_AUTH_MANAGER = (
     "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
 )
-BASIC_AUTH_BACKENDS = "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+# The FAB-provider paths, not the deprecated `airflow.api.auth.backend.*` shims: the
+# provider is a hard dependency of every certified 2.x monolith and these import without
+# a `RemovedInAirflow3Warning`.
+BASIC_AUTH_BACKENDS = (
+    "airflow.providers.fab.auth_manager.api.auth.backend.basic_auth,"
+    "airflow.providers.fab.auth_manager.api.auth.backend.session"
+)
 
 
 def sqlite_url(database_path: Path) -> str:
@@ -45,7 +51,7 @@ def write_airflow_config(
     password_file: Path,
     jwt_secret: str,
     fernet_key: str,
-    family: AirflowFamily = AirflowFamily.V3,
+    family: AirflowFamily,
 ) -> None:
     """Write a deterministic Airflow configuration without importing Airflow.
 
