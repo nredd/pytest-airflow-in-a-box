@@ -10,6 +10,14 @@ uv run prek install
 ```
 
 `uv run prek install` registers the pre-commit and pre-push hooks that gate every commit.
+
+The dev environment carries Airflow 3.x through the `dev` dependency group. To experiment
+against an Airflow 2.x resolution instead (the `airflow2` extra conflicts with the default
+`dev` group by design):
+
+```console
+uv sync --no-default-groups --extra airflow2
+```
 Running checks manually (`make lint`, etc.) does not replace them -- install the hooks
 first, always. For the Postgres backend extra, see the "Development" section of
 `README.md`.

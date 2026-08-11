@@ -18,6 +18,8 @@ from importlib import import_module, metadata
 from inspect import signature
 from typing import NoReturn
 
+from packaging.version import InvalidVersion, Version
+
 Release = tuple[int, int, int]
 
 SUPPORTED_RELEASES: tuple[Release, ...] = (
@@ -270,46 +272,66 @@ def _raise_compatibility_error(
     ) from error
 
 
-def _meta_release() -> tuple[str, int] | None:
-    """Read the `apache-airflow` meta-distribution version without importing Airflow.
+@dataclass(frozen=True)
+class _MetaDistribution:
+    """Observed `apache-airflow` meta-distribution state.
+
+    `version` is None when the meta-distribution is absent; `major` is None when it is
+    absent or its version does not parse as PEP 440.
+    """
+
+    version: str | None
+    major: int | None
+
+
+def _meta_distribution() -> _MetaDistribution:
+    """Read the `apache-airflow` meta-distribution state without importing Airflow.
+
+    Any metadata failure beyond the version string being unparseable reports the
+    distribution as absent instead of propagating: this read supplies advisory context
+    for error messages and the corruption check, and the module's contract of raising
+    only `AirflowCompatibilityError` must survive a broken metadata backend.
 
     Returns:
-        tuple[str, int] | None containing the metadata version and its leading integer
-        component, or None when the meta-distribution is absent or its version has no
-        integer prefix.
+        _MetaDistribution containing the observed version string and PEP 440 major.
     """
 
     try:
         installed_version = metadata.version(AIRFLOW_META_DISTRIBUTION)
-    except metadata.PackageNotFoundError:
-        return None
-    prefix = installed_version.split(".", 1)[0]
-    if not prefix.isdigit():
-        return None
-    return installed_version, int(prefix)
+    except Exception:
+        return _MetaDistribution(version=None, major=None)
+    try:
+        parsed = Version(installed_version)
+    except InvalidVersion:
+        return _MetaDistribution(version=installed_version, major=None)
+    return _MetaDistribution(version=installed_version, major=parsed.release[0])
 
 
 def _reject_corrupt_environment() -> None:
-    """Reject an Airflow 2.x monolith coexisting with the installed 3.x core.
+    """Reject a non-3.x `apache-airflow` coexisting with the installed 3.x core.
 
     Both majors install the same `airflow` package, so their coexistence is file-level
     corruption that pip does not detect. This check runs before family classification;
-    a 3.x meta-package alongside the core is the normal shape, not an error.
+    a 3.x meta-package alongside the core is the normal shape, not an error. The check
+    fails closed: a meta-distribution version that does not parse, or parses below
+    major 3 (including dev fallbacks like '0.1.dev0'), is treated as corruption and the
+    offending version is named so a false positive stays debuggable.
 
     Raises:
-        AirflowCompatibilityError: An `apache-airflow<3` distribution is installed next
-            to `apache-airflow-core`.
+        AirflowCompatibilityError: A non-3.x or unparseable `apache-airflow`
+            distribution is installed next to `apache-airflow-core`.
     """
 
-    meta = _meta_release()
-    if meta is not None and meta[1] < 3:
-        raise AirflowCompatibilityError(
-            f"Corrupt Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` '{meta[0]}' "
-            f"coexists with `{AIRFLOW_DISTRIBUTION}` -- both install the `airflow` "
-            f"package, so the 2.x files are silently overwritten by the 3.x core. "
-            f"Recreate the environment with exactly one family extra: "
-            f"`pytest-airflow-in-a-box[airflow2]` or `pytest-airflow-in-a-box[airflow3]`."
-        )
+    meta = _meta_distribution()
+    if meta.version is None or (meta.major is not None and meta.major >= 3):
+        return
+    raise AirflowCompatibilityError(
+        f"Corrupt Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` '{meta.version}' "
+        f"coexists with `{AIRFLOW_DISTRIBUTION}` -- both install the `airflow` package, "
+        f"so any 2.x files are silently overwritten by the 3.x core. Recreate the "
+        f"environment and install `pytest-airflow-in-a-box[airflow3]` for a supported "
+        f"Airflow 3.x."
+    )
 
 
 def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
@@ -322,21 +344,21 @@ def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
         AirflowCompatibilityError: Always, naming the installed family and the fix.
     """
 
-    meta = _meta_release()
-    if meta is not None and meta[1] < 3:
+    meta = _meta_distribution()
+    if meta.major is not None and meta.major < 3:
         raise AirflowCompatibilityError(
             f"Apache Airflow 2.x is installed (`{AIRFLOW_META_DISTRIBUTION}` "
-            f"'{meta[0]}') but this release supports only Airflow 3.x. The 2.x "
+            f"'{meta.version}') but this release supports only Airflow 3.x. The 2.x "
             f"compatibility tier is tracked in "
             f"https://github.com/nredd/pytest-airflow-in-a-box/issues/25. Install "
             f"`pytest-airflow-in-a-box[airflow3]` to use a supported Airflow."
         ) from error
-    if meta is not None:
+    if meta.version is not None:
         raise AirflowCompatibilityError(
-            f"Broken Airflow 3.x installation: `{AIRFLOW_META_DISTRIBUTION}` "
-            f"'{meta[0]}' is installed without `{AIRFLOW_DISTRIBUTION}`. Reinstall via "
-            f"`pytest-airflow-in-a-box[airflow3]` so the meta-package pins a coherent "
-            f"core + task-sdk pair."
+            f"Broken Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` "
+            f"'{meta.version}' is installed without `{AIRFLOW_DISTRIBUTION}`. Reinstall "
+            f"via `pytest-airflow-in-a-box[airflow3]` so the meta-package pins a "
+            f"coherent core + task-sdk pair."
         ) from error
     raise AirflowCompatibilityError(
         f"No Airflow distribution is installed (`{AIRFLOW_DISTRIBUTION}` and "

@@ -496,6 +496,7 @@ def test_airflow2_environment_points_at_the_tier_issue(
     assert "'2.11.2'" in message
     assert "issues/25" in message
     assert "pytest-airflow-in-a-box[airflow3]" in message
+    assert isinstance(caught.value.__cause__, capability_module.metadata.PackageNotFoundError)
 
 
 def test_meta_without_core_is_reported_broken(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -510,34 +511,82 @@ def test_meta_without_core_is_reported_broken(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(capability_module.metadata, "version", fake_version)
 
-    with pytest.raises(AirflowCompatibilityError, match=r"Broken Airflow 3\.x") as caught:
+    with pytest.raises(AirflowCompatibilityError, match="Broken Airflow installation") as caught:
         capability_module.resolve_capabilities()
 
     assert "'3.3.0'" in str(caught.value)
+    assert isinstance(caught.value.__cause__, capability_module.metadata.PackageNotFoundError)
 
 
+@pytest.mark.parametrize(
+    "meta_version",
+    ["2.11.2", "1!2.11.2", "0.1.dev0+g1234567", "unversioned"],
+)
 def test_corrupt_dual_family_environment_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, meta_version: str
 ) -> None:
-    """Reject a 2.x monolith coexisting with the 3.x core before family classification."""
+    """Fail closed on any non-3.x or unparseable meta-distribution next to the core."""
 
-    _install_fake_environment(monkeypatch, "3.3.0", {}, meta_version="2.11.2")
+    _install_fake_environment(monkeypatch, "3.3.0", {}, meta_version=meta_version)
 
-    with pytest.raises(AirflowCompatibilityError, match="Corrupt Airflow installation"):
+    with pytest.raises(AirflowCompatibilityError, match="Corrupt Airflow installation") as caught:
         capability_module.resolve_capabilities()
 
+    assert f"'{meta_version}'" in str(caught.value)
 
-def test_meta_version_without_integer_prefix_is_ignored(
+
+def test_meta_metadata_failure_is_treated_as_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Treat a malformed meta-distribution version as absent rather than corrupt."""
+    """Resolve normally on a healthy core when the meta-distribution read explodes."""
 
     modules = _fake_modules((3, 3, 0))
-    _install_fake_environment(monkeypatch, "3.3.0", modules, meta_version="unversioned")
+
+    def fake_version(distribution_name: str) -> str:
+        """Fail the meta-distribution lookup with a non-PackageNotFoundError error."""
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            raise RuntimeError("metadata backend exploded")
+        assert distribution_name == AIRFLOW_DISTRIBUTION
+        return "3.3.0"
+
+    def fake_import_module(name: str, package: str | None = None) -> object:
+        """Resolve fake modules with importlib-compatible failure behavior."""
+
+        del package
+        try:
+            return modules[name]
+        except KeyError as error:
+            raise ModuleNotFoundError(f"No module named '{name}'", name=name) from error
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+    monkeypatch.setattr(capability_module, "import_module", fake_import_module)
 
     resolved = capability_module.resolve_capabilities()
 
     assert resolved.release == (3, 3, 0)
+
+
+def test_meta_metadata_failure_keeps_the_no_airflow_diagnosis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the friendly no-Airflow diagnosis when the meta-distribution read explodes."""
+
+    missing = capability_module.metadata.PackageNotFoundError(AIRFLOW_DISTRIBUTION)
+
+    def fake_version(distribution_name: str) -> str:
+        """Fail both distribution lookups in distinct, realistic ways."""
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            raise RuntimeError("metadata backend exploded")
+        raise missing
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match="No Airflow distribution") as caught:
+        capability_module.resolve_capabilities()
+
+    assert caught.value.__cause__ is missing
 
 
 def test_meta_alongside_core_is_the_normal_3x_shape(

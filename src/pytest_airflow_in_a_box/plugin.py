@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import ensure_database
+from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
     XdistNode,
@@ -394,7 +394,28 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     """
 
     if any(_requires_database_at_collection(item) for item in session.items):
-        ensure_database(get_bootstrap_state(session.config).root)
+        _ensure_database_or_usage_error(get_bootstrap_state(session.config).root)
+
+
+def _ensure_database_or_usage_error(root: Path) -> None:
+    """Initialize the metadata database, rendering incompatibility as a usage error.
+
+    `AirflowCompatibilityError` describes an installation problem the user must fix
+    (no Airflow, an unsupported family, or a corrupt environment). Left unhandled it
+    surfaces as a pytest `INTERNALERROR` traceback wall; `pytest.UsageError` renders
+    the same message as a single actionable `ERROR:` line instead.
+
+    Parameters:
+        root: Path containing the bootstrap run directory.
+
+    Raises:
+        pytest.UsageError: The installed Airflow environment is unusable.
+    """
+
+    try:
+        ensure_database(root)
+    except AirflowCompatibilityError as error:
+        raise pytest.UsageError(str(error)) from error
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
@@ -411,7 +432,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
 
     apply_environment_gate(item)
     if _requires_database(item):
-        ensure_database(get_bootstrap_state(item.config).root)
+        _ensure_database_or_usage_error(get_bootstrap_state(item.config).root)
 
 
 @pytest.hookimpl(optionalhook=True)

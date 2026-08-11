@@ -30,7 +30,10 @@ uv add --dev "pytest-airflow-in-a-box[airflow3]"
 
 The plugin does not depend on Airflow directly -- the `airflow3` extra pins
 `apache-airflow>=3.1,<4`, and projects that pin Airflow themselves (for example through
-Airflow's published constraints files) can install the plugin bare.
+Airflow's published constraints files) can install the plugin bare. An `airflow2` extra
+exists ahead of the planned Airflow 2.x compatibility tier
+([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)); on this release the
+first Airflow-facing test in a 2.x environment fails with a single actionable error.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
