@@ -13,6 +13,75 @@ small, typed testing surface.
 The package auto-registers with pytest, creates an isolated metadata database, and provides typed
 fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 
+## Contents
+
+- [Quickstart](#quickstart)
+- [Why not...](#why-not)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Database backends](#database-backends)
+- [Task execution](#task-execution)
+- [Deferrable operators](#deferrable-operators)
+- [DB-free task execution](#db-free-task-execution)
+- [Seeding Variables and Connections](#seeding-variables-and-connections)
+- [Structlog capture](#structlog-capture)
+- [Dag-file collection](#dag-file-collection)
+- [Airflow configuration](#airflow-configuration)
+- [Smoke tests](#smoke-tests)
+- [Database cleanup](#database-cleanup)
+- [Live REST API](#live-rest-api)
+- [Markers](#markers)
+- [Compatibility suite](#compatibility-suite)
+- [Defaults](#defaults)
+- [Diagnostics](#diagnostics)
+- [Development](#development)
+- [License](#license)
+
+## Quickstart
+
+```console
+uv add --dev pytest-airflow-in-a-box
+pip install pytest-airflow-in-a-box
+```
+
+```python
+from airflow.sdk import task
+from airflow.utils.state import TaskInstanceState
+
+
+def test_answer(dag_maker):
+    with dag_maker():
+
+        @task
+        def answer():
+            return 42
+
+        answer()
+
+    assert dag_maker.run_ti("answer").state == TaskInstanceState.SUCCESS
+```
+
+```console
+pytest
+```
+
+The `pytest11` entry point registers the plugin automatically -- no `pytest_plugins`
+declaration needed. See [Task execution](#task-execution) for the full `dag_maker`/`run_ti`
+surface, and the rest of this README for sessions, DB-free task execution, deferrable
+operators, the REST API fixture, and bundled smoke checks.
+
+## Why not...
+
+- **`dag.test()`** -- Airflow's own built-in helper runs one Dag end to end, but it is not a
+  pytest plugin: no fixtures, no isolated metadata database, no `xdist` parallelism, no REST
+  API testing
+- **upstream `tests_common`** -- the harness Airflow's own core test suite runs on; it targets
+  testing Airflow itself, not published as a package for testing DAG-author code
+- **Flowminder `pytest-airflow`** -- an inverse concept (runs pytest suites under Airflow,
+  rather than testing DAGs under pytest) and unmaintained
+- **`airflow-pytest-plugin`** -- generates JUnit-XML dashboards from DAG runs; not aimed at
+  isolated, fixture-driven unit testing
+
 ## Requirements
 
 - CPython 3.10 through 3.14
@@ -32,6 +101,7 @@ using Airflow's published constraints files.
 
 ```console
 uv add --dev pytest-airflow-in-a-box
+pip install pytest-airflow-in-a-box
 ```
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
@@ -84,22 +154,6 @@ dialect- and concurrency-specific behavior before it ships.
 
 Plugin contributors can install the optional dependencies with `make install-postgres` (or
 `uv sync --extra postgres`).
-
-## Development
-
-```console
-uv sync
-uv run prek install
-make all
-```
-
-Run the GitHub Actions workflow locally on Linux with [act](https://nektosact.com/):
-
-```console
-act pull_request
-```
-
-`act` cannot reproduce native macOS or Windows behavior.
 
 ## Task execution
 
@@ -478,6 +532,24 @@ capability table, and API server state. The API server section always reads "not
 `api_server_url` fixture is a lazy, per-process, session-scoped subprocess with no state before a
 test requests it or an `api_test`-marked test runs, and a standalone `--airflow-doctor`
 invocation never does either.
+
+## Development
+
+```console
+uv sync
+uv run prek install
+make all
+```
+
+Run the GitHub Actions workflow locally on Linux with [act](https://nektosact.com/):
+
+```console
+act pull_request
+```
+
+`act` cannot reproduce native macOS or Windows behavior. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution workflow and the
+[issue tracker](https://github.com/nredd/pytest-airflow-in-a-box/issues) for open work.
 
 ## License
 
