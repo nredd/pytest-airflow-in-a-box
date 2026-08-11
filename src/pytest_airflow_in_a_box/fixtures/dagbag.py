@@ -21,8 +21,12 @@ if TYPE_CHECKING:
 def _dag_folder(config: pytest.Config) -> Path:
     """Resolve the CLI, ini, or bootstrap Dag directory.
 
+    A relative CLI value stays relative to the invocation directory. A relative ini
+    value resolves against `config.rootpath`, matching normal pytest configuration-file
+    semantics.
+
     Parameters:
-        config: pytest.Config containing plugin options and bootstrap state.
+        config: pytest.Config containing plugin options, ini values, and rootpath.
 
     Returns:
         pathlib.Path containing the selected Dag directory.
@@ -41,7 +45,8 @@ def _dag_folder(config: pytest.Config) -> Path:
     if not isinstance(ini_value, str):
         raise pytest.UsageError("Ini option `airflow_dags_folder` must be a path string")
     if ini_value:
-        return Path(ini_value)
+        path = Path(ini_value)
+        return path if path.is_absolute() else config.rootpath / path
     return get_bootstrap_state(config).dags_folder
 
 
