@@ -8,10 +8,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
-- A `## Cookbook` README section with recipes for SQL operators against mocked connections,
+- A `docs/guide/cookbook.md` page with recipes for SQL operators against mocked connections,
   mocking custom hooks with `unittest.mock`, asserting rendered templates, `PYTEST_DAG_CASES`,
   deferrable operators, and asset outlet/consumer testing; four are adapted from a real test in
-  `tests/enduser/` and two cross-reference existing coverage
+  `tests/enduser/` and two cross-reference existing guide pages
   ([#33](https://github.com/nredd/pytest-airflow-in-a-box/issues/33)).
 
 ### Fixed
