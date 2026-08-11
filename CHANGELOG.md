@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Ini option `airflow_pools`, seeding consumer-defined pools as `name = slots` lines before
+  `test_pool_references_exist` runs, so a task's custom pool no longer needs private bootstrap
+  code or deselecting the item. Seeding is idempotent, so the item stays safe under
+  `pytest-xdist --dist each` and test reruns
+  ([#70](https://github.com/nredd/pytest-airflow-in-a-box/issues/70)).
+
 ### Fixed
 
 - `airflow_dags_folder` ini values now resolve relative paths against `config.rootpath`

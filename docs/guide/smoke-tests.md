@@ -30,7 +30,19 @@ no scheduling effect, so user-authored smoke tests remain fully parallel too.
   the serialization pass) so a pathological Dag is named before an outer CI timeout
 - `test_no_duplicate_dag_ids` -- no two Dag files declare the same `dag_id`
 - `test_schedule_sanity` -- every scheduled Dag computes its next run without raising
-- `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`)
+- `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`).
+  A fresh metadata database only knows Airflow's stock pools; seed consumer-defined ones with
+  `airflow_pools`, as `name = <positive slot count>` lines, seeded right before this item runs:
+  ```ini
+  [pytest]
+  airflow_pools =
+      batch = 4
+      critical = 1
+  ```
+  Seeding is idempotent -- a pool already present with the configured slot count is left alone,
+  so the item stays safe to run more than once against the same database (every worker under
+  `pytest-xdist --dist each`, or a rerun after failure). A name that already exists with a
+  *different* slot count (including Airflow's own `default_pool`) fails the item
 
 The serialization-backed checks (`test_dag_serialization_roundtrip`, `test_schedule_sanity`,
 `test_dag_serialization_snapshot`) share the producer's serialized-Dag cache across workers, so

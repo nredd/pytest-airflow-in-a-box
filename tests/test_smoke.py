@@ -28,6 +28,7 @@ def _config(
     snapshot_dir: object = "",
     sample_size: object = "0",
     sample_seed: object = "0",
+    pools: object = (),
     rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for smoke config-reader tests.
@@ -44,6 +45,7 @@ def _config(
         snapshot_dir: object containing the ``airflow_dag_snapshot_dir`` ini value.
         sample_size: object containing the ``airflow_serialization_sample_size`` ini value.
         sample_seed: object containing the ``airflow_serialization_sample_seed`` ini value.
+        pools: object containing the ``airflow_pools`` ini value.
         rootpath: pathlib.Path used to resolve a relative snapshot directory.
 
     Returns:
@@ -62,6 +64,7 @@ def _config(
         "airflow_dag_snapshot_dir": snapshot_dir,
         "airflow_serialization_sample_size": sample_size,
         "airflow_serialization_sample_seed": sample_seed,
+        "airflow_pools": list(pools) if isinstance(pools, (list, tuple)) else pools,
     }
     option_values = {
         "airflow_smoke": airflow_smoke,
@@ -273,6 +276,44 @@ def test_required_dag_tags_rejects_malformed_values(value: object) -> None:
 
     with pytest.raises(pytest.UsageError, match="must be a list of tags"):
         smoke._required_dag_tags(_config(required_dag_tags=value))
+
+
+def test_pool_seeds_returns_empty_when_unset() -> None:
+    """Return no pools when the ini value is unset."""
+
+    assert smoke._pool_seeds(_config()) == ()
+
+
+def test_pool_seeds_parses_configured_lines() -> None:
+    """Parse every `name = slots` line into a `PoolSeed`."""
+
+    pools = smoke._pool_seeds(_config(pools=["batch = 4", "critical = 1"]))
+
+    assert pools == (
+        smoke.PoolSeed(name="batch", slots=4),
+        smoke.PoolSeed(name="critical", slots=1),
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (7, "must be a list of lines"),
+        ([7], "must be a list of lines"),
+        (["batch"], "must be `name = slots`"),
+        (["= 4"], "must be `name = slots`"),
+        (["batch ="], "must be `name = slots`"),
+        (["batch = many"], "slots must be an integer"),
+        (["batch = 0"], "slots must be positive"),
+        (["batch = -1"], "slots must be positive"),
+        (["batch = 4", "batch = 1"], "Duplicate `airflow_pools` pool name: `batch`"),
+    ],
+)
+def test_pool_seeds_rejects_malformed_values(value: object, match: str) -> None:
+    """Reject a non-list value and every malformed line shape."""
+
+    with pytest.raises(pytest.UsageError, match=match):
+        smoke._pool_seeds(_config(pools=value))
 
 
 def test_forbid_default_owner_defaults_to_false() -> None:
@@ -1051,15 +1092,132 @@ def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         Pool,
         "get_pools",
-        lambda **_kwargs: [SimpleNamespace(pool="default_pool")],
+        lambda **_kwargs: [SimpleNamespace(pool="default_pool", slots=128)],
     )
-    item = _bare_item(smoke.PoolReferencesExistItem, session=None, config=None)
+    item = _bare_item(smoke.PoolReferencesExistItem, session=None, config=None, pools=())
 
     with pytest.raises(smoke.SmokeCheckFailure, match="references unknown pool `nope`") as caught:
         item.runtest()
 
     assert "task `missing`" in str(caught.value)
     assert "task `known`" not in str(caught.value)
+
+
+def _fake_pool_session(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Replace `create_session` with a fake recording every row added for seeding.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch scoped to the calling test.
+
+    Returns:
+        list[Any] that accumulates every row passed to `add_all`.
+    """
+
+    import contextlib
+
+    from airflow.utils import session as session_module
+
+    added: list[Any] = []
+
+    class _FakeSession:
+        """Record rows added by the item without touching a real database."""
+
+        def add_all(self, rows: Any) -> None:
+            """Record every row passed for seeding.
+
+            Parameters:
+                rows: Any containing the iterable of unsaved model instances.
+            """
+
+            added.extend(rows)
+
+    @contextlib.contextmanager
+    def _fake_create_session() -> Any:
+        """Yield a fake session instead of opening a real database connection."""
+
+        yield _FakeSession()
+
+    monkeypatch.setattr(session_module, "create_session", _fake_create_session)
+    return added
+
+
+def test_pool_references_seeds_configured_pools_before_checking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seed every configured pool, then pass tasks that reference it."""
+
+    from airflow.models.pool import Pool
+
+    dag_bag: Any = SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("t", pool="batch"),))})
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        Pool, "get_pools", lambda **_kwargs: [SimpleNamespace(pool="default_pool", slots=128)]
+    )
+    added = _fake_pool_session(monkeypatch)
+    item = _bare_item(
+        smoke.PoolReferencesExistItem,
+        session=None,
+        config=None,
+        pools=(smoke.PoolSeed(name="batch", slots=4),),
+    )
+
+    item.runtest()
+
+    assert len(added) == 1
+    assert added[0].pool == "batch"
+    assert added[0].slots == 4
+
+
+def test_pool_references_seed_matching_existing_slots_is_a_no_op(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a configured pool already seeded with the same slots as already done.
+
+    Covers re-execution of this item against a database another worker already
+    seeded, e.g. under `pytest-xdist --dist each` or a test rerun after failure.
+    """
+
+    from airflow.models.pool import Pool
+
+    dag_bag: Any = SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("t", pool="batch"),))})
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        Pool, "get_pools", lambda **_kwargs: [SimpleNamespace(pool="batch", slots=4)]
+    )
+    added = _fake_pool_session(monkeypatch)
+    item = _bare_item(
+        smoke.PoolReferencesExistItem,
+        session=None,
+        config=None,
+        pools=(smoke.PoolSeed(name="batch", slots=4),),
+    )
+
+    item.runtest()
+
+    assert added == []
+
+
+def test_pool_references_rejects_seed_colliding_with_existing_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail loudly when a configured pool already exists with a different slot count."""
+
+    from airflow.models.pool import Pool
+
+    dag_bag: Any = SimpleNamespace(dags={})
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        Pool, "get_pools", lambda **_kwargs: [SimpleNamespace(pool="default_pool", slots=128)]
+    )
+    item = _bare_item(
+        smoke.PoolReferencesExistItem,
+        session=None,
+        config=None,
+        pools=(smoke.PoolSeed(name="default_pool", slots=4),),
+    )
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="cannot seed `default_pool`"):
+        item.runtest()
 
 
 def test_dag_id_pattern_item_passes_matching_ids(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1447,6 +1605,17 @@ from airflow.sdk import DAG
 slow_dag = DAG(dag_id="slow_dag", schedule=None)
 """
 
+POOL_DAG = """
+from airflow.sdk import DAG, task
+
+with DAG(dag_id="pool_dag", schedule=None) as dag:
+    @task(pool="batch")
+    def t():
+        pass
+
+    t()
+"""
+
 
 def test_smoke_disabled_by_default_collects_nothing(pytester: pytest.Pytester) -> None:
     """Leave the Dag folder untouched when the feature is not enabled."""
@@ -1577,6 +1746,46 @@ def test_timeout_crossing_fails_the_run(pytester: pytest.Pytester) -> None:
 
     result.assert_outcomes(passed=4, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
+
+
+def test_pool_seed_option_allows_a_configured_pool_reference(pytester: pytest.Pytester) -> None:
+    """Seed a custom pool so a task referencing it passes the check."""
+
+    _write_dags(pytester, valid=POOL_DAG)
+
+    unconfigured = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
+    )
+    unconfigured.assert_outcomes(passed=4, failed=1)
+    unconfigured.stdout.fnmatch_lines(["*references unknown pool `batch`*"])
+
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_pools =\n    batch = 4\n")
+    configured = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
+    configured.assert_outcomes(passed=5)
+
+
+def test_pool_seed_option_rejects_malformed_lines(pytester: pytest.Pytester) -> None:
+    """Fail collection when an `airflow_pools` line is malformed."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_pools =\n    batch\n")
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*must be `name = slots`*"])
+
+
+def test_pool_seed_option_rejects_collision_with_existing_pool(pytester: pytest.Pytester) -> None:
+    """Fail the item when a configured pool collides with an existing one."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_pools =\n    default_pool = 4\n")
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
+
+    result.assert_outcomes(passed=4, failed=1)
+    result.stdout.fnmatch_lines(["*cannot seed `default_pool`*"])
 
 
 def test_dag_id_pattern_policy_appears_only_when_configured(pytester: pytest.Pytester) -> None:
