@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- A `## Cookbook` README section with recipes for SQL operators against mocked connections,
+  mocking custom hooks with `unittest.mock`, asserting rendered templates, `PYTEST_DAG_CASES`,
+  deferrable operators, and asset outlet/consumer testing; four are adapted from a real test in
+  `tests/enduser/` and two cross-reference existing coverage
+  ([#33](https://github.com/nredd/pytest-airflow-in-a-box/issues/33)).
+
 ### Fixed
 
 - `airflow_dags_folder` ini values now resolve relative paths against `config.rootpath`
