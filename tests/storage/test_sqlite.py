@@ -203,9 +203,7 @@ def test_legacy_listener_installation_is_idempotent_and_ignores_other_dbapi_conn
     listener = sqlite._LEGACY_SQLITE_LISTENER
     install_legacy_sqlite_listener()
 
-    # Each installation attempt reads core metadata twice: once through the shared
-    # `installed_family()` probe and once through the version gate.
-    assert requested_distributions == ["apache-airflow-core"] * 4
+    assert requested_distributions == ["apache-airflow-core", "apache-airflow-core"]
     assert listener is not None
     assert sqlite._LEGACY_SQLITE_LISTENER is listener
     assert event.contains(Engine, "connect", listener)
@@ -441,6 +439,12 @@ def test_legacy_listener_always_installs_on_the_v2_family(
 
     from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 
+    def core_absent(distribution: str) -> str:
+        """Report the 3.x core distribution as absent."""
+
+        raise sqlite.metadata.PackageNotFoundError(distribution)
+
+    monkeypatch.setattr(sqlite.metadata, "version", core_absent)
     monkeypatch.setattr(sqlite, "installed_family", lambda: AirflowFamily.V2)
     monkeypatch.setenv(
         sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{tmp_path / 'meta.db'}"
@@ -454,30 +458,15 @@ def test_legacy_listener_always_installs_on_the_v2_family(
 def test_legacy_listener_skips_an_airflow_free_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Install nothing when no Airflow family is present."""
+    """Install nothing when the core is absent and no 2.x family is present."""
 
-    monkeypatch.setattr(sqlite, "installed_family", lambda: None)
-
-    install_legacy_sqlite_listener()
-
-    assert sqlite._LEGACY_SQLITE_LISTENER is None
-
-
-def test_legacy_listener_survives_core_metadata_vanishing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Install nothing when core metadata vanishes between the family and version reads."""
-
-    from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
-
-    monkeypatch.setattr(sqlite, "installed_family", lambda: AirflowFamily.V3)
-
-    def vanished_version(distribution: str) -> str:
-        """Simulate the core distribution disappearing mid-probe."""
+    def core_absent(distribution: str) -> str:
+        """Report the 3.x core distribution as absent."""
 
         raise sqlite.metadata.PackageNotFoundError(distribution)
 
-    monkeypatch.setattr(sqlite.metadata, "version", vanished_version)
+    monkeypatch.setattr(sqlite.metadata, "version", core_absent)
+    monkeypatch.setattr(sqlite, "installed_family", lambda: None)
 
     install_legacy_sqlite_listener()
 

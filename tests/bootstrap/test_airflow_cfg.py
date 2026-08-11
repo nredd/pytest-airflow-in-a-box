@@ -32,6 +32,7 @@ def _write_stable_config(config_path: Path, tmp_path: Path) -> None:
         password_file=tmp_path / "passwords.json",
         jwt_secret="stable-secret",
         fernet_key="stable-fernet",
+        family=AirflowFamily.V3,
     )
 
 
@@ -83,6 +84,7 @@ def test_generated_config_accepts_a_postgres_url(tmp_path: Path) -> None:
         password_file=tmp_path / "passwords.json",
         jwt_secret="jwt-value",
         fernet_key="fernet-value",
+        family=AirflowFamily.V3,
     )
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
@@ -102,6 +104,7 @@ def test_generated_config_contains_required_airflow_settings(tmp_path: Path) -> 
         password_file=tmp_path / "passwords.json",
         jwt_secret="jwt-value",
         fernet_key="fernet-value",
+        family=AirflowFamily.V3,
     )
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
@@ -153,6 +156,7 @@ def test_config_writer_rejects_relative_paths(tmp_path: Path) -> None:
             password_file=tmp_path / "passwords.json",
             jwt_secret="jwt-value",
             fernet_key="fernet-value",
+            family=AirflowFamily.V3,
         )
 
 
@@ -175,6 +179,7 @@ def test_write_airflow_config_requires_a_database_url(tmp_path: Path) -> None:
             password_file=tmp_path / "passwords.json",
             jwt_secret="jwt-value",
             fernet_key="fernet-value",
+            family=AirflowFamily.V3,
         )
 
 
@@ -190,6 +195,7 @@ def test_write_airflow_config_requires_a_jwt_secret(tmp_path: Path) -> None:
             password_file=tmp_path / "passwords.json",
             jwt_secret="",
             fernet_key="fernet-value",
+            family=AirflowFamily.V3,
         )
 
 
@@ -205,4 +211,5 @@ def test_write_airflow_config_requires_a_fernet_key(tmp_path: Path) -> None:
             password_file=tmp_path / "passwords.json",
             jwt_secret="jwt-value",
             fernet_key="",
+            family=AirflowFamily.V3,
         )

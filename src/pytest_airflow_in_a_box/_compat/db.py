@@ -10,6 +10,12 @@ some certified releases (asset partition tables arrived in 3.2, the
 ``asset_trigger`` association left after 3.1) and are skipped where absent;
 the compat suite pins expected presence per release.
 
+The registry is family-parallel: ``_V2_TABLE_REGISTRY`` mirrors the 3.x group
+sequence exactly (so ``TableGroup`` stays family-independent) with ``assets``
+mapped to the renamed 2.x ``dataset*`` tables, ``deadlines``/``bundles``
+vacuously satisfied, and its own optional-spec set for symbols that arrived in
+2.10. ``clear_tables`` selects the registry from the resolved family.
+
 Out of scope: ``deadline_alert`` definitions (user configuration, like asset
 definitions) and Airflow-internal bookkeeping tables; clearing ``dags``
 without ``assets`` leaves asset definitions and their Dag reference rows in
@@ -199,8 +205,10 @@ _OPTIONAL_SPECS_V2: frozenset[ModelSpec] = frozenset(
     }
 )
 
+# The group-sequence equality between the two registries is pinned by
+# `test_v2_registry_mirrors_the_group_sequence`, not a module-level assert
+# (stripped under `python -O`).
 REGISTRY_GROUPS: tuple[str, ...] = tuple(group for group, _specs in _TABLE_REGISTRY)
-assert tuple(group for group, _specs in _V2_TABLE_REGISTRY) == REGISTRY_GROUPS
 
 
 def _active_registry() -> tuple[Registry, frozenset[ModelSpec]]:
@@ -278,6 +286,8 @@ def clear_tables(groups: Collection[str]) -> None:
 
     Raises:
         ValueError: A requested group is not a registered group name.
+        AirflowCompatibilityError: The installed Airflow cannot be certified when the
+            family is resolved for registry selection.
         DatabaseCleanupError: A registry target cannot be resolved or deleted.
     """
 

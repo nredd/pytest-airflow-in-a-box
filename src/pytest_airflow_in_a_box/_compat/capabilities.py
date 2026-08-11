@@ -11,15 +11,18 @@ References:
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 from importlib import import_module, metadata
 from inspect import signature
 from typing import NoReturn
 
 from packaging.version import InvalidVersion, Version
+
+LOGGER = logging.getLogger(__name__)
 
 Release = tuple[int, int, int]
 
@@ -62,8 +65,9 @@ SUPPORTED_VERSIONS_V2 = tuple(
     ".".join(str(part) for part in release)
     for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]
 )
-# The maximum Python minor each family supports; 2.x never runs on 3.13+ and its
+# The Python range the 2.x family supports; 2.x never runs on 3.13+ and its
 # `requires-python` uses bare `!=3.13` exclusions pip does not enforce (see #41).
+MIN_V2_PYTHON = (3, 10)
 MAX_V2_PYTHON = (3, 12)
 AIRFLOW_DISTRIBUTION = AirflowFamily.V3.value
 AIRFLOW_META_DISTRIBUTION = AirflowFamily.V2.value
@@ -325,6 +329,8 @@ _COMMON_REQUIRED_SYMBOLS = (
 )
 _V3_REQUIRED_SYMBOLS = (
     ("airflow.sdk", "DAG"),
+    ("airflow.sdk.definitions.param", "ParamsDict"),
+    ("airflow.sdk.timezone", "utcnow"),
     ("airflow.models.dag_version", "DagVersion"),
     ("airflow.models.dagbundle", "DagBundleModel"),
     ("airflow.serialization.serialized_objects", "LazyDeserializedDAG"),
@@ -492,8 +498,17 @@ def installed_family() -> AirflowFamily | None:
         meta = _meta_distribution()
         if meta.major is not None and meta.major < 3:
             return AirflowFamily.V2
+        if meta.unreadable is not None:
+            LOGGER.warning(
+                f"Could not classify the Airflow family: `{AIRFLOW_META_DISTRIBUTION}` "
+                f"metadata is unreadable ({meta.unreadable})."
+            )
         return None
-    except Exception:
+    except Exception as error:
+        LOGGER.warning(
+            f"Could not classify the Airflow family: reading `{AIRFLOW_DISTRIBUTION}` "
+            f"metadata failed ({type(error).__name__}: {error})."
+        )
         return None
     return AirflowFamily.V3
 
@@ -531,7 +546,8 @@ def _installed_v2_release(
             f"Broken Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` is present "
             f"but its metadata is unreadable ({meta.unreadable}), and "
             f"`{AIRFLOW_DISTRIBUTION}` is absent. Recreate the environment and install "
-            f"`pytest-airflow-in-a-box[airflow3]` for a supported Airflow 3.x."
+            f"the `pytest-airflow-in-a-box[airflow3]` or "
+            f"`pytest-airflow-in-a-box[airflow2]` extra."
         ) from error
     if meta.version is None:
         raise AirflowCompatibilityError(
@@ -545,17 +561,8 @@ def _installed_v2_release(
         raise AirflowCompatibilityError(
             f"Broken Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` "
             f"'{meta.version}' is installed without `{AIRFLOW_DISTRIBUTION}`. Reinstall "
-            f"via `pytest-airflow-in-a-box[airflow3]` so the meta-package pins a "
-            f"coherent core + task-sdk pair."
-        ) from error
-    if _running_python() > MAX_V2_PYTHON:
-        running = ".".join(str(part) for part in _running_python())
-        raise AirflowCompatibilityError(
-            f"Apache Airflow 2.x (`{AIRFLOW_META_DISTRIBUTION}` '{meta.version}') does "
-            f"not support Python '{running}' -- its `requires-python` caps at "
-            f"{'.'.join(str(part) for part in MAX_V2_PYTHON)} but uses bare `!=` "
-            f"exclusions the installer does not enforce. Use Python 3.10-3.12 for the "
-            f"2.x tier, or upgrade to Airflow 3."
+            f"via the `pytest-airflow-in-a-box[airflow3]` or "
+            f"`pytest-airflow-in-a-box[airflow2]` extra for a coherent installation."
         ) from error
 
     match = VERSION_PATTERN.fullmatch(meta.version)
@@ -577,6 +584,16 @@ def _installed_v2_release(
             AIRFLOW_META_DISTRIBUTION,
             certified_error,
         )
+    if _running_python() > MAX_V2_PYTHON:
+        running = ".".join(str(part) for part in _running_python())
+        minimum = ".".join(str(part) for part in MIN_V2_PYTHON)
+        maximum = ".".join(str(part) for part in MAX_V2_PYTHON)
+        raise AirflowCompatibilityError(
+            f"Apache Airflow 2.x (`{AIRFLOW_META_DISTRIBUTION}` '{meta.version}') does "
+            f"not support Python '{running}' -- its `requires-python` caps at "
+            f"{maximum} but uses bare `!=` exclusions the installer does not enforce. "
+            f"Use Python {minimum}-{maximum} for the 2.x tier, or upgrade to Airflow 3."
+        ) from error
     return meta.version, release, AirflowFamily.V2
 
 
@@ -830,43 +847,21 @@ def _verify_contract(
     """
 
     expected = _CERTIFIED_CAPABILITIES[observed.release]
-    checks = (
-        (observed.dag_bag_location, expected.dag_bag_location, "DagBag canonical location"),
-        (
-            observed.dag_bag_supports_include_examples,
-            expected.dag_bag_supports_include_examples,
-            "DagBag.__init__.include_examples",
-        ),
-        (
-            observed.task_instance_runner,
-            expected.task_instance_runner,
-            "TaskInstance task runner",
-        ),
-        (
-            observed.refresh_from_task_supports_dag_run,
-            expected.refresh_from_task_supports_dag_run,
-            "TaskInstance.refresh_from_task.dag_run",
-        ),
-        (
-            observed.startup_details_supports_sentry,
-            expected.startup_details_supports_sentry,
-            "StartupDetails.sentry_integration",
-        ),
-        (
-            observed.runtime_task_instance_supports_queue,
-            expected.runtime_task_instance_supports_queue,
-            "TaskInstance DTO queue",
-        ),
-        (
-            serialized_dag_location,
-            _CERTIFIED_SERIALIZED_DAG_LOCATIONS[observed.release],
-            "SerializedDAG canonical location",
-        ),
-        (observed.family, expected.family, "Airflow distribution family"),
+    _verify_value(
+        serialized_dag_location,
+        _CERTIFIED_SERIALIZED_DAG_LOCATIONS[observed.release],
+        "SerializedDAG canonical location",
+        installed_version,
     )
-    for actual, certified, symbol in checks:
-        _verify_value(actual, certified, symbol, installed_version)
-    _verify_value(observed, expected, "complete capability contract", installed_version)
+    # Iterating the dataclass fields keeps the contract complete by construction: a
+    # field added to `AirflowCapabilities` is verified without touching this function.
+    for field in fields(observed):
+        _verify_value(
+            getattr(observed, field.name),
+            getattr(expected, field.name),
+            f"capability `{field.name}`",
+            installed_version,
+        )
 
 
 def _resolve_uncached(
@@ -991,5 +986,6 @@ __all__ = (
     "ParamsLocation",
     "TaskInstanceRunner",
     "TimezoneLocation",
+    "installed_family",
     "resolve_capabilities",
 )

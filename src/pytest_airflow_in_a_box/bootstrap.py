@@ -22,6 +22,7 @@ import pytest
 
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 from pytest_airflow_in_a_box.airflow_cfg import (
+    BASIC_AUTH_BACKENDS,
     SIMPLE_AUTH_MANAGER,
     sqlite_url,
     write_airflow_config,
@@ -364,9 +365,7 @@ def _environment(state: BootstrapState) -> dict[str, str]:
     }
     if state.family == AirflowFamily.V2.value:
         variables["AIRFLOW__WEBSERVER__SECRET_KEY"] = state.jwt_secret
-        variables["AIRFLOW__API__AUTH_BACKENDS"] = (
-            "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
-        )
+        variables["AIRFLOW__API__AUTH_BACKENDS"] = BASIC_AUTH_BACKENDS
     else:
         variables["AIRFLOW__CORE__AUTH_MANAGER"] = SIMPLE_AUTH_MANAGER
         variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] = "admin:admin"
@@ -386,8 +385,12 @@ def _install_environment(state: BootstrapState) -> None:
 
     variables = _environment(state)
     os.environ.update(variables)
-    if state.db_backend == DbBackend.SQLITE:
-        os.environ.pop(SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE, None)
+    # Own the complete family-independent surface: any owned name this state does not
+    # set (the other family's auth variables, the SQLite-only pool flag) must not leak
+    # in from the ambient shell environment.
+    for name in _environment_names():
+        if name not in variables and name != STATE_ENVIRONMENT_VARIABLE:
+            os.environ.pop(name, None)
     os.environ[STATE_ENVIRONMENT_VARIABLE] = json.dumps(
         state.to_payload(), sort_keys=True, separators=(",", ":")
     )
@@ -564,6 +567,9 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         sql_alchemy_conn = provisioner.start(
             database_path=database_path, database_name=database_name
         )
+        # Best-effort classification on purpose: bootstrap must never import Airflow,
+        # and `resolve_capabilities()` remains the authority that rejects corrupt or
+        # Airflow-free environments once a test actually needs Airflow.
         family = installed_family() or AirflowFamily.V3
         state = BootstrapState(
             version=STATE_VERSION,
