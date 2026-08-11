@@ -20,6 +20,7 @@ from typing import Protocol, runtime_checkable
 
 import pytest
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 from pytest_airflow_in_a_box.airflow_cfg import (
     SIMPLE_AUTH_MANAGER,
     sqlite_url,
@@ -28,7 +29,7 @@ from pytest_airflow_in_a_box.airflow_cfg import (
 from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
-STATE_VERSION = 3
+STATE_VERSION = 4
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
 WORKER_INPUT_KEY = "pytest_airflow_in_a_box_bootstrap_state"
 XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
@@ -59,6 +60,8 @@ class BootstrapState:
         network_storage: bool indicating network filesystem semantics.
         sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
         db_backend: str naming the selected metadata database backend.
+        family: str naming the Airflow distribution family (`AirflowFamily` value); on
+            2.x the `jwt_secret` doubles as the webserver secret key.
     """
 
     version: int
@@ -75,6 +78,7 @@ class BootstrapState:
     network_storage: bool
     sql_alchemy_conn: str
     db_backend: str
+    family: str
 
     def to_payload(self) -> StatePayload:
         """Serialize state to JSON-compatible primitives.
@@ -98,6 +102,7 @@ class BootstrapState:
             "network_storage": self.network_storage,
             "sql_alchemy_conn": self.sql_alchemy_conn,
             "db_backend": self.db_backend,
+            "family": self.family,
         }
 
 
@@ -223,6 +228,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "network_storage",
         "sql_alchemy_conn",
         "db_backend",
+        "family",
     }
     if set(payload) != expected_keys:
         raise ValueError("Bootstrap state has missing or unexpected fields")
@@ -256,6 +262,14 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
     ):
         raise ValueError("SQLite bootstrap state URL disagrees with the database path")
 
+    family_value = _require_string(payload, "family")
+    try:
+        AirflowFamily(family_value)
+    except ValueError as error:
+        raise ValueError(
+            f"Bootstrap state field `family` must be a supported family: '{family_value}'"
+        ) from error
+
     state = BootstrapState(
         version=version,
         owner_pid=_require_int(payload, "owner_pid"),
@@ -271,6 +285,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         network_storage=_require_bool(payload, "network_storage"),
         sql_alchemy_conn=sql_alchemy_conn,
         db_backend=str(backend),
+        family=family_value,
     )
     if validate_files:
         local_settings_path = state.root / "config" / "airflow_local_settings.py"
@@ -343,14 +358,20 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         "AIRFLOW__CORE__DAGS_FOLDER": str(state.dags_folder),
         "AIRFLOW__CORE__UNIT_TEST_MODE": "True",
         "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
-        "AIRFLOW__CORE__AUTH_MANAGER": SIMPLE_AUTH_MANAGER,
-        "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS": "admin:admin",
-        "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": str(state.password_file),
         SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE: state.sql_alchemy_conn,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER": str(state.logs_folder),
-        "AIRFLOW__API_AUTH__JWT_SECRET": state.jwt_secret,
         "AIRFLOW__CORE__FERNET_KEY": state.fernet_key,
     }
+    if state.family == AirflowFamily.V2.value:
+        variables["AIRFLOW__WEBSERVER__SECRET_KEY"] = state.jwt_secret
+        variables["AIRFLOW__API__AUTH_BACKENDS"] = (
+            "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+        )
+    else:
+        variables["AIRFLOW__CORE__AUTH_MANAGER"] = SIMPLE_AUTH_MANAGER
+        variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] = "admin:admin"
+        variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE"] = str(state.password_file)
+        variables["AIRFLOW__API_AUTH__JWT_SECRET"] = state.jwt_secret
     if state.db_backend == DbBackend.POSTGRES:
         variables[SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] = "False"
     return variables
@@ -543,6 +564,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         sql_alchemy_conn = provisioner.start(
             database_path=database_path, database_name=database_name
         )
+        family = installed_family() or AirflowFamily.V3
         state = BootstrapState(
             version=STATE_VERSION,
             owner_pid=os.getpid(),
@@ -558,6 +580,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             network_storage=location.network,
             sql_alchemy_conn=sql_alchemy_conn,
             db_backend=str(backend),
+            family=family.value,
         )
         write_airflow_config(
             config_path,
@@ -567,6 +590,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             password_file=password_file,
             jwt_secret=state.jwt_secret,
             fernet_key=state.fernet_key,
+            family=family,
         )
     except (OSError, ValueError) as error:
         cleanup()
@@ -597,6 +621,8 @@ def _environment_names() -> tuple[str, ...]:
         SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER",
         "AIRFLOW__API_AUTH__JWT_SECRET",
+        "AIRFLOW__WEBSERVER__SECRET_KEY",
+        "AIRFLOW__API__AUTH_BACKENDS",
         "AIRFLOW__CORE__FERNET_KEY",
         STATE_ENVIRONMENT_VARIABLE,
     )

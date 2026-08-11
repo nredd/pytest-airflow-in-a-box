@@ -75,3 +75,37 @@ def test_optional_specs_match_certified_release_shape() -> None:
     for (module_name, attribute), expected in expected_presence.items():
         present = hasattr(importlib.import_module(module_name), attribute)
         assert present is expected, f"`{module_name}.{attribute}` presence drifted"
+
+
+def test_registry_selection_follows_the_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Select the family-matching registry and optional-spec set."""
+
+    from types import SimpleNamespace
+
+    from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
+
+    monkeypatch.setattr(
+        compat_db, "resolve_capabilities", lambda: SimpleNamespace(family=AirflowFamily.V2)
+    )
+    assert compat_db._active_registry() == (
+        compat_db._V2_TABLE_REGISTRY,
+        compat_db._OPTIONAL_SPECS_V2,
+    )
+
+    monkeypatch.setattr(
+        compat_db, "resolve_capabilities", lambda: SimpleNamespace(family=AirflowFamily.V3)
+    )
+    assert compat_db._active_registry() == (
+        compat_db._TABLE_REGISTRY,
+        compat_db._OPTIONAL_SPECS,
+    )
+
+
+def test_v2_registry_mirrors_the_group_sequence() -> None:
+    """Keep the 2.x registry group names identical to the 3.x sequence."""
+
+    v3_groups = tuple(group for group, _specs in compat_db._TABLE_REGISTRY)
+    v2_groups = tuple(group for group, _specs in compat_db._V2_TABLE_REGISTRY)
+
+    assert v2_groups == v3_groups
+    assert {group.value for group in TableGroup} == set(v2_groups)

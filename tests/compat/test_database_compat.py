@@ -11,8 +11,13 @@ from pytest_airflow_in_a_box import _compat
 from pytest_airflow_in_a_box._compat import database as database_module
 from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowCapabilities,
+    AirflowFamily,
+    ApiSurface,
     DagBagLocation,
+    DagRunInterface,
+    ParamsLocation,
     TaskInstanceRunner,
+    TimezoneLocation,
 )
 from pytest_airflow_in_a_box._compat.database import DatabaseInitializationError
 
@@ -35,12 +40,20 @@ def _capabilities() -> AirflowCapabilities:
 
     return AirflowCapabilities(
         release=(3, 3, 0),
+        family=AirflowFamily.V3,
         dag_bag_location=DagBagLocation.DAG_PROCESSING,
         dag_bag_supports_include_examples=False,
         task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
         refresh_from_task_supports_dag_run=True,
         startup_details_supports_sentry=True,
         runtime_task_instance_supports_queue=True,
+        has_task_sdk=True,
+        uses_structlog=True,
+        has_dag_versioning=True,
+        dagrun_interface=DagRunInterface.LOGICAL_DATE,
+        api_surface=ApiSurface.API_SERVER,
+        params_location=ParamsLocation.SDK,
+        timezone_location=TimezoneLocation.SDK,
     )
 
 

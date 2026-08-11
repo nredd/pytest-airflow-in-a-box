@@ -26,12 +26,15 @@ import importlib
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, resolve_capabilities
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 ModelSpec = tuple[str, str]
+Registry = tuple[tuple[str, tuple[ModelSpec, ...]], ...]
 
-_TABLE_REGISTRY: tuple[tuple[str, tuple[ModelSpec, ...]], ...] = (
+_TABLE_REGISTRY: Registry = (
     ("xcom", (("airflow.models.xcom", "XComModel"),)),
     (
         "task_instances",
@@ -121,7 +124,96 @@ _OPTIONAL_SPECS: frozenset[ModelSpec] = frozenset(
     }
 )
 
+# The 2.x registry mirrors the 3.x group sequence exactly so shared suites and the
+# `TableGroup` enum stay family-independent: `deadlines` and `bundles` are vacuously
+# satisfied (the tables arrived in 3.x), `assets` maps to the renamed `dataset*`
+# tables, and the XCom delete target is the `BaseXCom` ORM model because 2.x `XCom`
+# is a backend-resolved alias. Spike-verified on 2.9.3/2.10.5/2.11.2 (2026-08-11);
+# `dataset_alias_dataset_event_assocation_table` spells "assocation" as upstream does.
+_V2_TABLE_REGISTRY: Registry = (
+    ("xcom", (("airflow.models.xcom", "BaseXCom"),)),
+    (
+        "task_instances",
+        (
+            ("airflow.models.renderedtifields", "RenderedTaskInstanceFields"),
+            ("airflow.models.taskreschedule", "TaskReschedule"),
+            ("airflow.models.taskmap", "TaskMap"),
+            ("airflow.models.taskinstancehistory", "TaskInstanceHistory"),
+            ("airflow.models.taskinstance", "TaskInstance"),
+        ),
+    ),
+    ("deadlines", ()),
+    (
+        "runs",
+        (
+            ("airflow.models.dataset", "association_table"),
+            ("airflow.models.dagrun", "DagRun"),
+        ),
+    ),
+    (
+        "serialized_dags",
+        (
+            ("airflow.models.serialized_dag", "SerializedDagModel"),
+            ("airflow.models.dagcode", "DagCode"),
+        ),
+    ),
+    (
+        "assets",
+        (
+            ("airflow.models.dataset", "dataset_alias_dataset_event_assocation_table"),
+            ("airflow.models.dataset", "association_table"),
+            ("airflow.models.dataset", "DatasetDagRunQueue"),
+            ("airflow.models.dataset", "DatasetEvent"),
+            ("airflow.models.dataset", "TaskOutletDatasetReference"),
+            ("airflow.models.dataset", "DagScheduleDatasetAliasReference"),
+            ("airflow.models.dataset", "DagScheduleDatasetReference"),
+            ("airflow.models.dataset", "alias_association_table"),
+            ("airflow.models.dataset", "DatasetAliasModel"),
+            ("airflow.models.dataset", "DatasetModel"),
+        ),
+    ),
+    ("triggers", (("airflow.models.trigger", "Trigger"),)),
+    (
+        "dags",
+        (
+            ("airflow.models.dag", "DagTag"),
+            ("airflow.models.dag", "DagOwnerAttributes"),
+            ("airflow.models.dagwarning", "DagWarning"),
+            ("airflow.models.dag", "DagModel"),
+        ),
+    ),
+    ("bundles", ()),
+    ("logs", (("airflow.models.log", "Log"),)),
+    ("variables", (("airflow.models.variable", "Variable"),)),
+    ("connections", (("airflow.models.connection", "Connection"),)),
+)
+
+# Dataset aliases and task-instance history arrived in 2.10; absent on 2.9.3.
+_OPTIONAL_SPECS_V2: frozenset[ModelSpec] = frozenset(
+    {
+        ("airflow.models.taskinstancehistory", "TaskInstanceHistory"),
+        ("airflow.models.dataset", "dataset_alias_dataset_event_assocation_table"),
+        ("airflow.models.dataset", "DagScheduleDatasetAliasReference"),
+        ("airflow.models.dataset", "alias_association_table"),
+        ("airflow.models.dataset", "DatasetAliasModel"),
+    }
+)
+
 REGISTRY_GROUPS: tuple[str, ...] = tuple(group for group, _specs in _TABLE_REGISTRY)
+assert tuple(group for group, _specs in _V2_TABLE_REGISTRY) == REGISTRY_GROUPS
+
+
+def _active_registry() -> tuple[Registry, frozenset[ModelSpec]]:
+    """Select the table registry and optional-spec set for the installed family.
+
+    Returns:
+        tuple[Registry, frozenset[ModelSpec]] containing the family's registry and the
+        specs allowed to be absent on some of its certified releases.
+    """
+
+    if resolve_capabilities().family is AirflowFamily.V2:
+        return _V2_TABLE_REGISTRY, _OPTIONAL_SPECS_V2
+    return _TABLE_REGISTRY, _OPTIONAL_SPECS
 
 
 class DatabaseCleanupError(RuntimeError):
@@ -199,13 +291,14 @@ def clear_tables(groups: Collection[str]) -> None:
     from sqlalchemy import delete
 
     requested = set(groups)
+    registry, optional_specs = _active_registry()
     try:
         with create_session() as session:
-            for group, specs in _TABLE_REGISTRY:
+            for group, specs in registry:
                 if group not in requested:
                     continue
                 for spec in specs:
-                    if spec in _OPTIONAL_SPECS:
+                    if spec in optional_specs:
                         try:
                             target = _resolve_spec(spec)
                         except (ImportError, AttributeError):
