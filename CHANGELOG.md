@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- Ini option `airflow_pools`, seeding consumer-defined pools as `name = slots` lines before
+  `test_pool_references_exist` runs, so a task's custom pool no longer needs private bootstrap
+  code or deselecting the item. Seeding is idempotent, so the item stays safe under
+  `pytest-xdist --dist each` and test reruns
+  ([#70](https://github.com/nredd/pytest-airflow-in-a-box/issues/70)).
 - A `docs/guide/cookbook.md` page with recipes for SQL operators against mocked connections,
   mocking custom hooks with `unittest.mock`, asserting rendered templates, `PYTEST_DAG_CASES`,
   deferrable operators, and asset outlet/consumer testing; four are adapted from a real test in
