@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- `airflow_dags_folder` ini values now resolve relative paths against `config.rootpath`
+  instead of the process working directory, matching normal pytest configuration-file
+  semantics; the `--dag-folder` CLI option remains relative to the invocation directory
+  ([#71](https://github.com/nredd/pytest-airflow-in-a-box/issues/71)).
+
 ## [0.3.0] - 2026-08-10
 
 ### Added
