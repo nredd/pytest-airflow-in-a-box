@@ -12,6 +12,7 @@ References:
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from importlib import import_module, metadata
@@ -22,25 +23,50 @@ from packaging.version import InvalidVersion, Version
 
 Release = tuple[int, int, int]
 
-SUPPORTED_RELEASES: tuple[Release, ...] = (
-    (3, 1, 0),
-    (3, 1, 1),
-    (3, 1, 2),
-    (3, 1, 3),
-    (3, 1, 5),
-    (3, 1, 6),
-    (3, 1, 7),
-    (3, 1, 8),
-    (3, 2, 0),
-    (3, 2, 1),
-    (3, 2, 2),
-    (3, 3, 0),
-)
+
+class AirflowFamily(str, Enum):
+    """Closed set of Airflow distribution families, valued by distribution name."""
+
+    V2 = "apache-airflow"
+    V3 = "apache-airflow-core"
+
+
+SUPPORTED_RELEASES_BY_FAMILY: dict[AirflowFamily, tuple[Release, ...]] = {
+    AirflowFamily.V3: (
+        (3, 1, 0),
+        (3, 1, 1),
+        (3, 1, 2),
+        (3, 1, 3),
+        (3, 1, 5),
+        (3, 1, 6),
+        (3, 1, 7),
+        (3, 1, 8),
+        (3, 2, 0),
+        (3, 2, 1),
+        (3, 2, 2),
+        (3, 3, 0),
+    ),
+    # Certified per issue #41: the final 2.x release, Composer 3's exact 2.10 patch, and
+    # the oldest line still shipped by a managed vendor. Spike-verified 2026-08-11.
+    AirflowFamily.V2: (
+        (2, 9, 3),
+        (2, 10, 5),
+        (2, 11, 2),
+    ),
+}
+SUPPORTED_RELEASES = SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
 SUPPORTED_VERSIONS = tuple(
     ".".join(str(part) for part in release) for release in SUPPORTED_RELEASES
 )
-AIRFLOW_DISTRIBUTION = "apache-airflow-core"
-AIRFLOW_META_DISTRIBUTION = "apache-airflow"
+SUPPORTED_VERSIONS_V2 = tuple(
+    ".".join(str(part) for part in release)
+    for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]
+)
+# The maximum Python minor each family supports; 2.x never runs on 3.13+ and its
+# `requires-python` uses bare `!=3.13` exclusions pip does not enforce (see #41).
+MAX_V2_PYTHON = (3, 12)
+AIRFLOW_DISTRIBUTION = AirflowFamily.V3.value
+AIRFLOW_META_DISTRIBUTION = AirflowFamily.V2.value
 VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
     r"(?:[-_.]?dev(?:[-_.]?\d+)?)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$",
@@ -73,9 +99,86 @@ class _SerializedDagLocation(str, Enum):
     DEFINITIONS = "airflow.serialization.definitions.dag"
 
 
+class DagRunInterface(str, Enum):
+    """Closed set of certified ``create_dagrun`` date-keyword interfaces."""
+
+    EXECUTION_DATE = "execution_date"
+    LOGICAL_DATE = "logical_date"
+
+
+class ApiSurface(str, Enum):
+    """Closed set of certified REST API server entry points."""
+
+    WEBSERVER = "airflow webserver"
+    API_SERVER = "airflow api-server"
+
+
+class ParamsLocation(str, Enum):
+    """Closed set of certified params-validation module locations."""
+
+    MODELS = "airflow.models.param"
+    SDK = "airflow.sdk.definitions.param"
+
+
+class TimezoneLocation(str, Enum):
+    """Closed set of certified timezone-helper module locations."""
+
+    UTILS = "airflow.utils.timezone"
+    SDK = "airflow.sdk.timezone"
+
+
 @dataclass(frozen=True)
 class AirflowCapabilities:
     """Immutable metadata describing a validated Airflow private interface.
+
+    Parameters:
+        release: tuple[int, int, int] containing the certified base release.
+        family: AirflowFamily naming the installed distribution family.
+        dag_bag_location: DagBagLocation naming the canonical import location.
+        dag_bag_supports_include_examples: bool indicating constructor support.
+        task_instance_runner: TaskInstanceRunner selecting the execution entry point.
+        refresh_from_task_supports_dag_run: bool indicating ``dag_run`` keyword support.
+        startup_details_supports_sentry: bool | None indicating the sentry model field;
+            None on 2.x, which has no Task SDK to probe.
+        runtime_task_instance_supports_queue: bool | None indicating the runtime DTO
+            queue field; None on 2.x, which has no Task SDK to probe.
+        has_task_sdk: bool indicating the `airflow.sdk` execution stack exists.
+        uses_structlog: bool indicating task logs flow through structlog.
+        has_dag_versioning: bool indicating DAG bundle/version models exist.
+        dagrun_interface: DagRunInterface selecting the ``create_dagrun`` date keyword.
+        api_surface: ApiSurface naming the REST API server entry point.
+        params_location: ParamsLocation naming the params-validation module.
+        timezone_location: TimezoneLocation naming the timezone-helper module.
+    """
+
+    release: Release
+    family: AirflowFamily
+    dag_bag_location: DagBagLocation
+    dag_bag_supports_include_examples: bool
+    task_instance_runner: TaskInstanceRunner
+    refresh_from_task_supports_dag_run: bool
+    startup_details_supports_sentry: bool | None
+    runtime_task_instance_supports_queue: bool | None
+    has_task_sdk: bool
+    uses_structlog: bool
+    has_dag_versioning: bool
+    dagrun_interface: DagRunInterface
+    api_surface: ApiSurface
+    params_location: ParamsLocation
+    timezone_location: TimezoneLocation
+
+
+def _certify_v3(
+    release: Release,
+    *,
+    dag_bag_location: DagBagLocation,
+    dag_bag_supports_include_examples: bool,
+    task_instance_runner: TaskInstanceRunner,
+    refresh_from_task_supports_dag_run: bool,
+    startup_details_supports_sentry: bool,
+    runtime_task_instance_supports_queue: bool,
+) -> AirflowCapabilities:
+    """Build one certified 3.x contract row with the family-static fields filled.
 
     Parameters:
         release: tuple[int, int, int] containing the certified base release.
@@ -85,128 +188,121 @@ class AirflowCapabilities:
         refresh_from_task_supports_dag_run: bool indicating ``dag_run`` keyword support.
         startup_details_supports_sentry: bool indicating the sentry model field.
         runtime_task_instance_supports_queue: bool indicating the runtime DTO queue field.
+
+    Returns:
+        AirflowCapabilities containing the complete certified contract.
     """
 
-    release: Release
-    dag_bag_location: DagBagLocation
-    dag_bag_supports_include_examples: bool
-    task_instance_runner: TaskInstanceRunner
-    refresh_from_task_supports_dag_run: bool
-    startup_details_supports_sentry: bool
-    runtime_task_instance_supports_queue: bool
+    return AirflowCapabilities(
+        release=release,
+        family=AirflowFamily.V3,
+        dag_bag_location=dag_bag_location,
+        dag_bag_supports_include_examples=dag_bag_supports_include_examples,
+        task_instance_runner=task_instance_runner,
+        refresh_from_task_supports_dag_run=refresh_from_task_supports_dag_run,
+        startup_details_supports_sentry=startup_details_supports_sentry,
+        runtime_task_instance_supports_queue=runtime_task_instance_supports_queue,
+        has_task_sdk=True,
+        uses_structlog=True,
+        has_dag_versioning=True,
+        dagrun_interface=DagRunInterface.LOGICAL_DATE,
+        api_surface=ApiSurface.API_SERVER,
+        params_location=ParamsLocation.SDK,
+        timezone_location=TimezoneLocation.SDK,
+    )
 
 
-_CERTIFIED_CAPABILITIES = {
-    (3, 1, 0): AirflowCapabilities(
-        release=(3, 1, 0),
+def _certify_v2(release: Release) -> AirflowCapabilities:
+    """Build one certified 2.x contract row.
+
+    Every probed value is uniform across the certified 2.x releases -- the Phase 1a
+    spike (2026-08-11) observed identical signatures on 2.9.3, 2.10.5, and 2.11.2 for
+    every symbol the plugin touches.
+
+    Parameters:
+        release: tuple[int, int, int] containing the certified base release.
+
+    Returns:
+        AirflowCapabilities containing the complete certified contract.
+    """
+
+    return AirflowCapabilities(
+        release=release,
+        family=AirflowFamily.V2,
         dag_bag_location=DagBagLocation.MODELS,
         dag_bag_supports_include_examples=True,
         task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
         refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 1): AirflowCapabilities(
-        release=(3, 1, 1),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 2): AirflowCapabilities(
-        release=(3, 1, 2),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 3): AirflowCapabilities(
-        release=(3, 1, 3),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 5): AirflowCapabilities(
-        release=(3, 1, 5),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 6): AirflowCapabilities(
-        release=(3, 1, 6),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 7): AirflowCapabilities(
-        release=(3, 1, 7),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 1, 8): AirflowCapabilities(
-        release=(3, 1, 8),
-        dag_bag_location=DagBagLocation.MODELS,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=False,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 2, 0): AirflowCapabilities(
-        release=(3, 2, 0),
-        dag_bag_location=DagBagLocation.DAG_PROCESSING,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=True,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 2, 1): AirflowCapabilities(
-        release=(3, 2, 1),
-        dag_bag_location=DagBagLocation.DAG_PROCESSING,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=True,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 2, 2): AirflowCapabilities(
-        release=(3, 2, 2),
-        dag_bag_location=DagBagLocation.DAG_PROCESSING,
-        dag_bag_supports_include_examples=True,
-        task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
-        refresh_from_task_supports_dag_run=False,
-        startup_details_supports_sentry=True,
-        runtime_task_instance_supports_queue=False,
-    ),
-    (3, 3, 0): AirflowCapabilities(
-        release=(3, 3, 0),
-        dag_bag_location=DagBagLocation.DAG_PROCESSING,
-        dag_bag_supports_include_examples=False,
-        task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
-        refresh_from_task_supports_dag_run=True,
-        startup_details_supports_sentry=True,
-        runtime_task_instance_supports_queue=True,
-    ),
-}
+        startup_details_supports_sentry=None,
+        runtime_task_instance_supports_queue=None,
+        has_task_sdk=False,
+        uses_structlog=False,
+        has_dag_versioning=False,
+        dagrun_interface=DagRunInterface.EXECUTION_DATE,
+        api_surface=ApiSurface.WEBSERVER,
+        params_location=ParamsLocation.MODELS,
+        timezone_location=TimezoneLocation.UTILS,
+    )
+
+
+_CERTIFIED_CAPABILITIES = (
+    {release: _certify_v2(release) for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]}
+    | {
+        release: _certify_v3(
+            release,
+            dag_bag_location=DagBagLocation.MODELS,
+            dag_bag_supports_include_examples=True,
+            task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+            refresh_from_task_supports_dag_run=False,
+            startup_details_supports_sentry=False,
+            runtime_task_instance_supports_queue=False,
+        )
+        for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
+        if release < (3, 2, 0)
+    }
+    | {
+        (3, 2, 0): _certify_v3(
+            (3, 2, 0),
+            dag_bag_location=DagBagLocation.DAG_PROCESSING,
+            dag_bag_supports_include_examples=True,
+            task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+            refresh_from_task_supports_dag_run=False,
+            startup_details_supports_sentry=True,
+            runtime_task_instance_supports_queue=False,
+        ),
+        (3, 2, 1): _certify_v3(
+            (3, 2, 1),
+            dag_bag_location=DagBagLocation.DAG_PROCESSING,
+            dag_bag_supports_include_examples=True,
+            task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+            refresh_from_task_supports_dag_run=False,
+            startup_details_supports_sentry=True,
+            runtime_task_instance_supports_queue=False,
+        ),
+        (3, 2, 2): _certify_v3(
+            (3, 2, 2),
+            dag_bag_location=DagBagLocation.DAG_PROCESSING,
+            dag_bag_supports_include_examples=True,
+            task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+            refresh_from_task_supports_dag_run=False,
+            startup_details_supports_sentry=True,
+            runtime_task_instance_supports_queue=False,
+        ),
+        (3, 3, 0): _certify_v3(
+            (3, 3, 0),
+            dag_bag_location=DagBagLocation.DAG_PROCESSING,
+            dag_bag_supports_include_examples=False,
+            task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+            refresh_from_task_supports_dag_run=True,
+            startup_details_supports_sentry=True,
+            runtime_task_instance_supports_queue=True,
+        ),
+    }
+)
 _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
+    (2, 9, 3): _SerializedDagLocation.SERIALIZED_OBJECTS,
+    (2, 10, 5): _SerializedDagLocation.SERIALIZED_OBJECTS,
+    (2, 11, 2): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (3, 1, 0): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (3, 1, 1): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (3, 1, 2): _SerializedDagLocation.SERIALIZED_OBJECTS,
@@ -220,13 +316,15 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 2, 2): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
 }
-_REQUIRED_SYMBOLS = (
-    ("airflow.sdk", "DAG"),
+_COMMON_REQUIRED_SYMBOLS = (
     ("airflow.utils.db", "initdb"),
     ("airflow.utils.session", "create_session"),
     ("airflow.models.dagrun", "DagRun"),
     ("airflow.models.serialized_dag", "SerializedDagModel"),
     ("airflow.models.dag", "DagModel"),
+)
+_V3_REQUIRED_SYMBOLS = (
+    ("airflow.sdk", "DAG"),
     ("airflow.models.dag_version", "DagVersion"),
     ("airflow.models.dagbundle", "DagBundleModel"),
     ("airflow.serialization.serialized_objects", "LazyDeserializedDAG"),
@@ -242,6 +340,23 @@ _REQUIRED_SYMBOLS = (
     ("airflow.sdk.api.datamodels._generated", "TaskInstanceState"),
     ("airflow.sdk.api.datamodels._generated", "TIRunContext"),
 )
+# Spike-verified present on 2.9.3/2.10.5/2.11.2 (2026-08-11); the surface Phase 2's
+# fixture branches consume.
+_V2_REQUIRED_SYMBOLS = (
+    ("airflow.models.dag", "DAG"),
+    ("airflow.models.param", "ParamsDict"),
+    ("airflow.exceptions", "ParamValidationError"),
+    ("airflow.exceptions", "RemovedInAirflow3Warning"),
+    ("airflow.exceptions", "AirflowProviderDeprecationWarning"),
+    ("airflow.utils.timezone", "utcnow"),
+    ("airflow.utils.timezone", "coerce_datetime"),
+    ("airflow.utils.timezone", "convert_to_utc"),
+    ("airflow.models.dataset", "DatasetModel"),
+)
+_REQUIRED_SYMBOLS_BY_FAMILY = {
+    AirflowFamily.V2: _COMMON_REQUIRED_SYMBOLS + _V2_REQUIRED_SYMBOLS,
+    AirflowFamily.V3: _COMMON_REQUIRED_SYMBOLS + _V3_REQUIRED_SYMBOLS,
+}
 
 _CAPABILITIES: AirflowCapabilities | None = None
 
@@ -265,10 +380,12 @@ def _raise_compatibility_error(
     """
 
     supported = ", ".join(SUPPORTED_VERSIONS)
+    supported_v2 = ", ".join(SUPPORTED_VERSIONS_V2)
     raise AirflowCompatibilityError(
         f"Apache Airflow compatibility validation failed for installed version "
         f"'{installed_version}' while {operation} `{symbol}`: {error}. Install one of the "
-        f"supported `{AIRFLOW_DISTRIBUTION}` versions: {supported}."
+        f"supported `{AIRFLOW_DISTRIBUTION}` versions: {supported}, or one of the "
+        f"supported `{AIRFLOW_META_DISTRIBUTION}` versions: {supported_v2}."
     ) from error
 
 
@@ -356,14 +473,56 @@ def _reject_corrupt_environment() -> None:
     )
 
 
-def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
-    """Explain a missing `apache-airflow-core` in terms of what is actually installed.
+def installed_family() -> AirflowFamily | None:
+    """Classify the installed Airflow family from metadata alone, without importing Airflow.
+
+    This is the one probe callable from pre-import bootstrap. It never raises: a corrupt
+    or Airflow-free environment classifies best-effort (core metadata wins) or None, and
+    `resolve_capabilities()` remains the authority that rejects invalid environments
+    with actionable errors once a test actually needs Airflow.
+
+    Returns:
+        AirflowFamily | None naming the installed family, or None when neither
+        distribution is readable.
+    """
+
+    try:
+        metadata.version(AIRFLOW_DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        meta = _meta_distribution()
+        if meta.major is not None and meta.major < 3:
+            return AirflowFamily.V2
+        return None
+    except Exception:
+        return None
+    return AirflowFamily.V3
+
+
+def _running_python() -> tuple[int, int]:
+    """Report the running Python major and minor version.
+
+    Returns:
+        tuple[int, int] containing `sys.version_info[:2]`.
+    """
+
+    return sys.version_info[:2]
+
+
+def _installed_v2_release(
+    error: metadata.PackageNotFoundError,
+) -> tuple[str, Release, AirflowFamily]:
+    """Accept a certified Airflow 2.x monolith when the 3.x core is absent.
 
     Parameters:
         error: importlib.metadata.PackageNotFoundError raised for the core distribution.
 
+    Returns:
+        tuple[str, Release, AirflowFamily] containing the metadata version, parsed base
+        release, and `AirflowFamily.V2`.
+
     Raises:
-        AirflowCompatibilityError: Always, naming the installed family and the fix.
+        AirflowCompatibilityError: No usable Airflow family is installed, the running
+            Python exceeds the 2.x cap, or the 2.x release is not certified.
     """
 
     meta = _meta_distribution()
@@ -374,34 +533,63 @@ def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
             f"`{AIRFLOW_DISTRIBUTION}` is absent. Recreate the environment and install "
             f"`pytest-airflow-in-a-box[airflow3]` for a supported Airflow 3.x."
         ) from error
-    if meta.major is not None and meta.major < 3:
+    if meta.version is None:
         raise AirflowCompatibilityError(
-            f"Apache Airflow 2.x is installed (`{AIRFLOW_META_DISTRIBUTION}` "
-            f"'{meta.version}') but this release supports only Airflow 3.x. The 2.x "
-            f"compatibility tier is tracked in "
-            f"https://github.com/nredd/pytest-airflow-in-a-box/issues/25. Install "
-            f"`pytest-airflow-in-a-box[airflow3]` to use a supported Airflow."
+            f"No Airflow distribution is installed (`{AIRFLOW_DISTRIBUTION}` and "
+            f"`{AIRFLOW_META_DISTRIBUTION}` are both absent). The plugin does not "
+            f"depend on Airflow directly -- install the "
+            f"`pytest-airflow-in-a-box[airflow3]` or `pytest-airflow-in-a-box[airflow2]` "
+            f"extra, or pin Airflow yourself."
         ) from error
-    if meta.version is not None:
+    if meta.major is None or meta.major >= 3:
         raise AirflowCompatibilityError(
             f"Broken Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` "
             f"'{meta.version}' is installed without `{AIRFLOW_DISTRIBUTION}`. Reinstall "
             f"via `pytest-airflow-in-a-box[airflow3]` so the meta-package pins a "
             f"coherent core + task-sdk pair."
         ) from error
-    raise AirflowCompatibilityError(
-        f"No Airflow distribution is installed (`{AIRFLOW_DISTRIBUTION}` and "
-        f"`{AIRFLOW_META_DISTRIBUTION}` are both absent). The plugin does not depend on "
-        f"Airflow directly -- install the `pytest-airflow-in-a-box[airflow3]` extra or "
-        f"pin Airflow yourself."
-    ) from error
+    if _running_python() > MAX_V2_PYTHON:
+        running = ".".join(str(part) for part in _running_python())
+        raise AirflowCompatibilityError(
+            f"Apache Airflow 2.x (`{AIRFLOW_META_DISTRIBUTION}` '{meta.version}') does "
+            f"not support Python '{running}' -- its `requires-python` caps at "
+            f"{'.'.join(str(part) for part in MAX_V2_PYTHON)} but uses bare `!=` "
+            f"exclusions the installer does not enforce. Use Python 3.10-3.12 for the "
+            f"2.x tier, or upgrade to Airflow 3."
+        ) from error
+
+    match = VERSION_PATTERN.fullmatch(meta.version)
+    if match is None:
+        parse_error = ValueError("version is not a standard final, development, or local release")
+        _raise_compatibility_error(
+            meta.version, "parsing installed version for", AIRFLOW_META_DISTRIBUTION, parse_error
+        )
+    release = (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+    )
+    if release not in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]:
+        certified_error = ValueError("base release is not certified")
+        _raise_compatibility_error(
+            meta.version,
+            "validating installed version for",
+            AIRFLOW_META_DISTRIBUTION,
+            certified_error,
+        )
+    return meta.version, release, AirflowFamily.V2
 
 
-def _installed_release() -> tuple[str, Release]:
+def _installed_release() -> tuple[str, Release, AirflowFamily]:
     """Read and validate the installed Airflow base release without importing Airflow.
 
+    The 3.x core distribution decides the family: when present it must certify against
+    the 3.x contract table (after the corrupt-environment check), and when absent the
+    2.x monolith is accepted through `_installed_v2_release`.
+
     Returns:
-        tuple[str, Release] containing the metadata version and parsed base release.
+        tuple[str, Release, AirflowFamily] containing the metadata version, parsed base
+        release, and distribution family.
 
     Raises:
         AirflowCompatibilityError: The environment is corrupt or Airflow-free, or the
@@ -411,7 +599,7 @@ def _installed_release() -> tuple[str, Release]:
     try:
         installed_version = metadata.version(AIRFLOW_DISTRIBUTION)
     except metadata.PackageNotFoundError as error:
-        _diagnose_missing_core(error)
+        return _installed_v2_release(error)
     except Exception as error:
         _raise_compatibility_error(
             "<not installed>", "reading package metadata for", AIRFLOW_DISTRIBUTION, error
@@ -435,7 +623,7 @@ def _installed_release() -> tuple[str, Release]:
         _raise_compatibility_error(
             installed_version, "validating installed version for", AIRFLOW_DISTRIBUTION, error
         )
-    return installed_version, release
+    return installed_version, release, AirflowFamily.V3
 
 
 def _resolve_symbol(module_name: str, symbol_name: str, installed_version: str) -> object:
@@ -674,17 +862,28 @@ def _verify_contract(
             _CERTIFIED_SERIALIZED_DAG_LOCATIONS[observed.release],
             "SerializedDAG canonical location",
         ),
+        (observed.family, expected.family, "Airflow distribution family"),
     )
     for actual, certified, symbol in checks:
         _verify_value(actual, certified, symbol, installed_version)
+    _verify_value(observed, expected, "complete capability contract", installed_version)
 
 
-def _resolve_uncached(installed_version: str, release: Release) -> AirflowCapabilities:
+def _resolve_uncached(
+    installed_version: str, release: Release, family: AirflowFamily
+) -> AirflowCapabilities:
     """Import, probe, and validate every Airflow dependency used by eventual fixtures.
+
+    Both families share the DagBag, task-runner, and serialization probes; the Task SDK
+    probes run only on 3.x because the modules they inspect do not exist on 2.x, so the
+    corresponding capability fields observe as None there. Family-static fields (Task
+    SDK presence, structlog, DAG versioning, interface selections) come from the family
+    itself and are cross-checked against the certified row like every probed value.
 
     Parameters:
         installed_version: str reported by package metadata.
         release: tuple[int, int, int] containing the certified base release.
+        family: AirflowFamily naming the installed distribution family.
 
     Returns:
         AirflowCapabilities containing validated metadata only.
@@ -693,20 +892,37 @@ def _resolve_uncached(installed_version: str, release: Release) -> AirflowCapabi
         AirflowCompatibilityError: A symbol is unavailable or a probe violates the contract.
     """
 
+    is_v3 = family is AirflowFamily.V3
     dag_bag_location, dag_bag = _probe_dag_bag(installed_version)
     task_instance = _resolve_symbol(
         "airflow.models.taskinstance", "TaskInstance", installed_version
     )
-    startup_details = _resolve_symbol(
-        "airflow.sdk.execution_time.comms", "StartupDetails", installed_version
-    )
-    runtime_task_instance_dto = _resolve_symbol(
-        "airflow.sdk.api.datamodels._generated", "TaskInstance", installed_version
-    )
+    startup_details_supports_sentry: bool | None = None
+    runtime_task_instance_supports_queue: bool | None = None
+    if is_v3:
+        startup_details = _resolve_symbol(
+            "airflow.sdk.execution_time.comms", "StartupDetails", installed_version
+        )
+        runtime_task_instance_dto = _resolve_symbol(
+            "airflow.sdk.api.datamodels._generated", "TaskInstance", installed_version
+        )
+        startup_details_supports_sentry = _model_has_field(
+            startup_details,
+            "airflow.sdk.execution_time.comms.StartupDetails",
+            "sentry_integration",
+            installed_version,
+        )
+        runtime_task_instance_supports_queue = _model_has_field(
+            runtime_task_instance_dto,
+            "airflow.sdk.api.datamodels._generated.TaskInstance",
+            "queue",
+            installed_version,
+        )
     serialized_dag_location = _probe_serialized_dag(installed_version)
 
     observed = AirflowCapabilities(
         release=release,
+        family=family,
         dag_bag_location=dag_bag_location,
         dag_bag_supports_include_examples=_signature_has_parameter(
             dag_bag, f"{dag_bag_location.value}.DagBag", "include_examples", installed_version
@@ -718,21 +934,20 @@ def _resolve_uncached(installed_version: str, release: Release) -> AirflowCapabi
             "dag_run",
             installed_version,
         ),
-        startup_details_supports_sentry=_model_has_field(
-            startup_details,
-            "airflow.sdk.execution_time.comms.StartupDetails",
-            "sentry_integration",
-            installed_version,
+        startup_details_supports_sentry=startup_details_supports_sentry,
+        runtime_task_instance_supports_queue=runtime_task_instance_supports_queue,
+        has_task_sdk=is_v3,
+        uses_structlog=is_v3,
+        has_dag_versioning=is_v3,
+        dagrun_interface=(
+            DagRunInterface.LOGICAL_DATE if is_v3 else DagRunInterface.EXECUTION_DATE
         ),
-        runtime_task_instance_supports_queue=_model_has_field(
-            runtime_task_instance_dto,
-            "airflow.sdk.api.datamodels._generated.TaskInstance",
-            "queue",
-            installed_version,
-        ),
+        api_surface=ApiSurface.API_SERVER if is_v3 else ApiSurface.WEBSERVER,
+        params_location=ParamsLocation.SDK if is_v3 else ParamsLocation.MODELS,
+        timezone_location=TimezoneLocation.SDK if is_v3 else TimezoneLocation.UTILS,
     )
 
-    for module_name, symbol_name in _REQUIRED_SYMBOLS:
+    for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:
         _resolve_symbol(module_name, symbol_name, installed_version)
 
     _verify_contract(observed, serialized_dag_location, installed_version)
@@ -753,8 +968,8 @@ def resolve_capabilities() -> AirflowCapabilities:
     if _CAPABILITIES is not None:
         return _CAPABILITIES
 
-    installed_version, release = _installed_release()
-    capabilities = _resolve_uncached(installed_version, release)
+    installed_version, release, family = _installed_release()
+    capabilities = _resolve_uncached(installed_version, release, family)
     _CAPABILITIES = capabilities
     return capabilities
 
@@ -769,7 +984,12 @@ def _reset_capabilities_for_testing() -> None:
 __all__ = (
     "AirflowCapabilities",
     "AirflowCompatibilityError",
+    "AirflowFamily",
+    "ApiSurface",
     "DagBagLocation",
+    "DagRunInterface",
+    "ParamsLocation",
     "TaskInstanceRunner",
+    "TimezoneLocation",
     "resolve_capabilities",
 )

@@ -10,9 +10,12 @@ from __future__ import annotations
 import configparser
 from pathlib import Path
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
+
 SIMPLE_AUTH_MANAGER = (
     "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
 )
+BASIC_AUTH_BACKENDS = "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
 
 
 def sqlite_url(database_path: Path) -> str:
@@ -42,8 +45,13 @@ def write_airflow_config(
     password_file: Path,
     jwt_secret: str,
     fernet_key: str,
+    family: AirflowFamily = AirflowFamily.V3,
 ) -> None:
     """Write a deterministic Airflow configuration without importing Airflow.
+
+    On 3.x the auth surface is SimpleAuthManager plus a JWT secret; 2.x predates both,
+    so the same run secret becomes the `[webserver] secret_key` and the REST API uses
+    the basic-auth + session backends.
 
     Parameters:
         config_path: pathlib.Path receiving the generated configuration.
@@ -51,8 +59,10 @@ def write_airflow_config(
         logs_folder: pathlib.Path receiving Airflow logs.
         sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
         password_file: pathlib.Path containing SimpleAuthManager passwords.
-        jwt_secret: str used to sign Airflow API tokens.
+        jwt_secret: str used to sign Airflow API tokens (3.x) or as the webserver
+            secret key (2.x).
         fernet_key: str shared by every Airflow process encrypting metadata.
+        family: AirflowFamily selecting the configuration surface to write.
 
     Raises:
         ValueError: A path is relative, or the URL, JWT secret, or Fernet key is empty.
@@ -76,23 +86,33 @@ def write_airflow_config(
         raise ValueError("`fernet_key` must not be empty")
 
     cfg = configparser.ConfigParser(interpolation=None)
-    cfg["core"] = {
+    core = {
         "dags_folder": str(dags_folder),
         "unit_test_mode": "True",
         "load_examples": "False",
-        "auth_manager": SIMPLE_AUTH_MANAGER,
-        "simple_auth_manager_users": "admin:admin",
-        "simple_auth_manager_all_admins": "False",
-        "simple_auth_manager_passwords_file": str(password_file),
-        "fernet_key": fernet_key,
     }
+    if family is AirflowFamily.V3:
+        core |= {
+            "auth_manager": SIMPLE_AUTH_MANAGER,
+            "simple_auth_manager_users": "admin:admin",
+            "simple_auth_manager_all_admins": "False",
+            "simple_auth_manager_passwords_file": str(password_file),
+        }
+    # `fernet_key` stays last so the emitted 3.x file remains byte-identical to the
+    # pre-family-branch output.
+    core["fernet_key"] = fernet_key
+    cfg["core"] = core
     cfg["database"] = {"sql_alchemy_conn": sql_alchemy_conn}
     cfg["logging"] = {"base_log_folder": str(logs_folder)}
-    cfg["api_auth"] = {"jwt_secret": jwt_secret}
+    if family is AirflowFamily.V3:
+        cfg["api_auth"] = {"jwt_secret": jwt_secret}
+    else:
+        cfg["webserver"] = {"secret_key": jwt_secret}
+        cfg["api"] = {"auth_backends": BASIC_AUTH_BACKENDS}
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8", newline="\n") as config_file:
         cfg.write(config_file)
 
 
-__all__ = ("SIMPLE_AUTH_MANAGER", "sqlite_url", "write_airflow_config")
+__all__ = ("BASIC_AUTH_BACKENDS", "SIMPLE_AUTH_MANAGER", "sqlite_url", "write_airflow_config")
