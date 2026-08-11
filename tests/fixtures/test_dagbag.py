@@ -103,6 +103,43 @@ def test_ini_dag_folder_wins_over_bootstrap(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
 
 
+def test_ini_dag_folder_resolves_relative_to_rootpath(tmp_path: Path) -> None:
+    """Resolve a relative ini Dag folder against `config.rootpath`, not cwd."""
+
+    rootpath = tmp_path / "project"
+    rootpath.mkdir()
+    config: Any = SimpleNamespace(
+        getoption=lambda _name: None,
+        getini=lambda _name: "dags",
+        rootpath=rootpath,
+    )
+
+    assert fixtures_dagbag._dag_folder(config) == rootpath / "dags"
+
+
+def test_ini_dag_folder_relative_path_ignores_cwd(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Find a relative ini Dag folder when pytest is invoked from a subdirectory."""
+
+    _make_dag_folder(pytester.path / "dags", "from_ini")
+    pytester.makeini("[pytest]\nairflow_dags_folder = dags\n")
+    subdir = pytester.path / "tests"
+    subdir.mkdir()
+    (subdir / "test_dags.py").write_text(
+        "def test_dags(full_dag_bag):\n"
+        '    assert set(full_dag_bag.dags) == {"from_ini"}\n'
+        "    assert full_dag_bag.import_errors == {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(subdir)
+
+    result = pytester.runpytest_subprocess("-c", "../tox.ini", "-q", "test_dags.py")
+
+    result.assert_outcomes(passed=1)
+
+
 def test_cli_dag_folder_wins_over_ini(pytester: pytest.Pytester) -> None:
     """Give the command-line Dag directory precedence over the ini setting."""
 
