@@ -3642,6 +3642,7 @@ name = "pytest-airflow-in-a-box"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
@@ -3686,11 +3687,12 @@ requires-dist = [
     { name = "apache-airflow", marker = "extra == 'airflow3'", specifier = ">=3.1,<4" },
     { name = "apache-airflow-providers-sqlite", marker = "extra == 'airflow3'", specifier = ">=4.1,<5" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29,<1" },
+    { name = "packaging", specifier = ">=22" },
     { name = "psycopg2-binary", marker = "extra == 'postgres'", specifier = ">=2.9,<3" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-timeout", specifier = ">=2.4" },
     { name = "pytest-xdist", specifier = ">=3.8" },
-    { name = "sqlalchemy", specifier = ">=1.4.36" },
+    { name = "sqlalchemy", specifier = ">=1.4.36,<3" },
     { name = "testcontainers", marker = "extra == 'postgres'", specifier = ">=4.15,<5" },
 ]
 provides-extras = ["airflow3", "airflow2", "postgres"]

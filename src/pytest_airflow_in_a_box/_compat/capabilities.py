@@ -276,30 +276,42 @@ def _raise_compatibility_error(
 class _MetaDistribution:
     """Observed `apache-airflow` meta-distribution state.
 
-    `version` is None when the meta-distribution is absent; `major` is None when it is
-    absent or its version does not parse as PEP 440.
+    Parameters:
+        version: str | None containing the metadata version, or None when the
+            meta-distribution is absent or unreadable.
+        major: int | None containing the PEP 440 major component, or None when no
+            version is available or it does not parse.
+        unreadable: str | None describing a metadata read failure other than a clean
+            not-installed, or None when the read succeeded or found nothing.
     """
 
     version: str | None
     major: int | None
+    unreadable: str | None = None
 
 
 def _meta_distribution() -> _MetaDistribution:
     """Read the `apache-airflow` meta-distribution state without importing Airflow.
 
-    Any metadata failure beyond the version string being unparseable reports the
-    distribution as absent instead of propagating: this read supplies advisory context
-    for error messages and the corruption check, and the module's contract of raising
-    only `AirflowCompatibilityError` must survive a broken metadata backend.
+    A read failure other than a clean not-installed is reported as `unreadable` rather
+    than propagated: the module's contract of raising only `AirflowCompatibilityError`
+    must survive a broken metadata backend, and a half-clobbered dist-info is itself a
+    realistic signature of the dual-family corruption the callers guard against, so the
+    failure text is preserved for their messages instead of being swallowed.
 
     Returns:
-        _MetaDistribution containing the observed version string and PEP 440 major.
+        _MetaDistribution containing the observed version string, PEP 440 major, and
+        any read-failure description.
     """
 
     try:
         installed_version = metadata.version(AIRFLOW_META_DISTRIBUTION)
-    except Exception:
+    except metadata.PackageNotFoundError:
         return _MetaDistribution(version=None, major=None)
+    except Exception as error:
+        return _MetaDistribution(
+            version=None, major=None, unreadable=f"{type(error).__name__}: {error}"
+        )
     try:
         parsed = Version(installed_version)
     except InvalidVersion:
@@ -323,6 +335,15 @@ def _reject_corrupt_environment() -> None:
     """
 
     meta = _meta_distribution()
+    if meta.unreadable is not None:
+        raise AirflowCompatibilityError(
+            f"Corrupt Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` is present "
+            f"but its metadata is unreadable ({meta.unreadable}) next to "
+            f"`{AIRFLOW_DISTRIBUTION}` -- a half-clobbered install is the signature of "
+            f"both Airflow families sharing one environment. Recreate the environment "
+            f"and install `pytest-airflow-in-a-box[airflow3]` for a supported "
+            f"Airflow 3.x."
+        )
     if meta.version is None or (meta.major is not None and meta.major >= 3):
         return
     raise AirflowCompatibilityError(
@@ -330,7 +351,8 @@ def _reject_corrupt_environment() -> None:
         f"coexists with `{AIRFLOW_DISTRIBUTION}` -- both install the `airflow` package, "
         f"so any 2.x files are silently overwritten by the 3.x core. Recreate the "
         f"environment and install `pytest-airflow-in-a-box[airflow3]` for a supported "
-        f"Airflow 3.x."
+        f"Airflow 3.x. If `{AIRFLOW_META_DISTRIBUTION}` is a source checkout with a dev "
+        f"fallback version, install the core distribution alone instead."
     )
 
 
@@ -345,6 +367,13 @@ def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
     """
 
     meta = _meta_distribution()
+    if meta.unreadable is not None:
+        raise AirflowCompatibilityError(
+            f"Broken Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` is present "
+            f"but its metadata is unreadable ({meta.unreadable}), and "
+            f"`{AIRFLOW_DISTRIBUTION}` is absent. Recreate the environment and install "
+            f"`pytest-airflow-in-a-box[airflow3]` for a supported Airflow 3.x."
+        ) from error
     if meta.major is not None and meta.major < 3:
         raise AirflowCompatibilityError(
             f"Apache Airflow 2.x is installed (`{AIRFLOW_META_DISTRIBUTION}` "
