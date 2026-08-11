@@ -402,8 +402,10 @@ def _ensure_database_or_usage_error(root: Path) -> None:
 
     `AirflowCompatibilityError` describes an installation problem the user must fix
     (no Airflow, an unsupported family, or a corrupt environment). Left unhandled it
-    surfaces as a pytest `INTERNALERROR` traceback wall; `pytest.UsageError` renders
-    the same message as a single actionable `ERROR:` line instead.
+    surfaces as a pytest `INTERNALERROR` traceback wall. `pytest.UsageError` renders
+    it as a single actionable `ERROR:` line from `pytest_collection_finish`; from the
+    `pytest_runtest_setup` safety net it renders as a per-test setup error, still with
+    the message intact.
 
     Parameters:
         root: Path containing the bootstrap run directory.

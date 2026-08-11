@@ -174,6 +174,7 @@ def _install_fake_environment(
     version: str,
     modules: dict[str, SimpleNamespace],
     meta_version: str | None = None,
+    meta_error: Exception | None = None,
 ) -> None:
     """Patch metadata and imports to expose one isolated fake Airflow installation.
 
@@ -183,12 +184,16 @@ def _install_fake_environment(
         modules: dict[str, types.SimpleNamespace] containing fake Airflow modules.
         meta_version: str | None returned as installed `apache-airflow` meta-distribution
             metadata; None reports the meta-distribution as absent.
+        meta_error: Exception | None raised by the meta-distribution lookup instead of
+            returning or reporting absence; takes precedence over `meta_version`.
     """
 
     def fake_version(distribution_name: str) -> str:
         """Return fake metadata for exactly the two known Airflow distributions."""
 
         if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            if meta_error is not None:
+                raise meta_error
             if meta_version is None:
                 raise capability_module.metadata.PackageNotFoundError(distribution_name)
             return meta_version
@@ -535,42 +540,28 @@ def test_corrupt_dual_family_environment_is_rejected(
     assert f"'{meta_version}'" in str(caught.value)
 
 
-def test_meta_metadata_failure_is_treated_as_absent(
+def test_unreadable_meta_metadata_next_to_core_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resolve normally on a healthy core when the meta-distribution read explodes."""
+    """Treat an unreadable meta-distribution next to the core as corruption."""
 
-    modules = _fake_modules((3, 3, 0))
+    _install_fake_environment(
+        monkeypatch,
+        "3.3.0",
+        {},
+        meta_error=RuntimeError("metadata backend exploded"),
+    )
 
-    def fake_version(distribution_name: str) -> str:
-        """Fail the meta-distribution lookup with a non-PackageNotFoundError error."""
+    with pytest.raises(AirflowCompatibilityError, match="Corrupt Airflow installation") as caught:
+        capability_module.resolve_capabilities()
 
-        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
-            raise RuntimeError("metadata backend exploded")
-        assert distribution_name == AIRFLOW_DISTRIBUTION
-        return "3.3.0"
-
-    def fake_import_module(name: str, package: str | None = None) -> object:
-        """Resolve fake modules with importlib-compatible failure behavior."""
-
-        del package
-        try:
-            return modules[name]
-        except KeyError as error:
-            raise ModuleNotFoundError(f"No module named '{name}'", name=name) from error
-
-    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
-    monkeypatch.setattr(capability_module, "import_module", fake_import_module)
-
-    resolved = capability_module.resolve_capabilities()
-
-    assert resolved.release == (3, 3, 0)
+    assert "RuntimeError: metadata backend exploded" in str(caught.value)
 
 
-def test_meta_metadata_failure_keeps_the_no_airflow_diagnosis(
+def test_unreadable_meta_metadata_without_core_names_the_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep the friendly no-Airflow diagnosis when the meta-distribution read explodes."""
+    """Name the metadata read failure instead of claiming Airflow is absent."""
 
     missing = capability_module.metadata.PackageNotFoundError(AIRFLOW_DISTRIBUTION)
 
@@ -583,9 +574,12 @@ def test_meta_metadata_failure_keeps_the_no_airflow_diagnosis(
 
     monkeypatch.setattr(capability_module.metadata, "version", fake_version)
 
-    with pytest.raises(AirflowCompatibilityError, match="No Airflow distribution") as caught:
+    with pytest.raises(AirflowCompatibilityError, match="Broken Airflow installation") as caught:
         capability_module.resolve_capabilities()
 
+    message = str(caught.value)
+    assert "RuntimeError: metadata backend exploded" in message
+    assert "pytest-airflow-in-a-box[airflow3]" in message
     assert caught.value.__cause__ is missing
 
 
