@@ -25,8 +25,12 @@ using Airflow's published constraints files.
 ## Installation
 
 ```console
-uv add --dev pytest-airflow-in-a-box
+uv add --dev "pytest-airflow-in-a-box[airflow3]"
 ```
+
+The plugin does not depend on Airflow directly -- the `airflow3` extra pins
+`apache-airflow>=3.1,<4`, and projects that pin Airflow themselves (for example through
+Airflow's published constraints files) can install the plugin bare.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

@@ -38,6 +38,7 @@ SUPPORTED_VERSIONS = tuple(
     ".".join(str(part) for part in release) for release in SUPPORTED_RELEASES
 )
 AIRFLOW_DISTRIBUTION = "apache-airflow-core"
+AIRFLOW_META_DISTRIBUTION = "apache-airflow"
 VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
     r"(?:[-_.]?dev(?:[-_.]?\d+)?)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$",
@@ -269,6 +270,82 @@ def _raise_compatibility_error(
     ) from error
 
 
+def _meta_release() -> tuple[str, int] | None:
+    """Read the `apache-airflow` meta-distribution version without importing Airflow.
+
+    Returns:
+        tuple[str, int] | None containing the metadata version and its leading integer
+        component, or None when the meta-distribution is absent or its version has no
+        integer prefix.
+    """
+
+    try:
+        installed_version = metadata.version(AIRFLOW_META_DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        return None
+    prefix = installed_version.split(".", 1)[0]
+    if not prefix.isdigit():
+        return None
+    return installed_version, int(prefix)
+
+
+def _reject_corrupt_environment() -> None:
+    """Reject an Airflow 2.x monolith coexisting with the installed 3.x core.
+
+    Both majors install the same `airflow` package, so their coexistence is file-level
+    corruption that pip does not detect. This check runs before family classification;
+    a 3.x meta-package alongside the core is the normal shape, not an error.
+
+    Raises:
+        AirflowCompatibilityError: An `apache-airflow<3` distribution is installed next
+            to `apache-airflow-core`.
+    """
+
+    meta = _meta_release()
+    if meta is not None and meta[1] < 3:
+        raise AirflowCompatibilityError(
+            f"Corrupt Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` '{meta[0]}' "
+            f"coexists with `{AIRFLOW_DISTRIBUTION}` -- both install the `airflow` "
+            f"package, so the 2.x files are silently overwritten by the 3.x core. "
+            f"Recreate the environment with exactly one family extra: "
+            f"`pytest-airflow-in-a-box[airflow2]` or `pytest-airflow-in-a-box[airflow3]`."
+        )
+
+
+def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
+    """Explain a missing `apache-airflow-core` in terms of what is actually installed.
+
+    Parameters:
+        error: importlib.metadata.PackageNotFoundError raised for the core distribution.
+
+    Raises:
+        AirflowCompatibilityError: Always, naming the installed family and the fix.
+    """
+
+    meta = _meta_release()
+    if meta is not None and meta[1] < 3:
+        raise AirflowCompatibilityError(
+            f"Apache Airflow 2.x is installed (`{AIRFLOW_META_DISTRIBUTION}` "
+            f"'{meta[0]}') but this release supports only Airflow 3.x. The 2.x "
+            f"compatibility tier is tracked in "
+            f"https://github.com/nredd/pytest-airflow-in-a-box/issues/25. Install "
+            f"`pytest-airflow-in-a-box[airflow3]` to use a supported Airflow."
+        ) from error
+    if meta is not None:
+        raise AirflowCompatibilityError(
+            f"Broken Airflow 3.x installation: `{AIRFLOW_META_DISTRIBUTION}` "
+            f"'{meta[0]}' is installed without `{AIRFLOW_DISTRIBUTION}`. Reinstall via "
+            f"`pytest-airflow-in-a-box[airflow3]` so the meta-package pins a coherent "
+            f"core + task-sdk pair."
+        ) from error
+    raise AirflowCompatibilityError(
+        f"No Airflow distribution is installed (`{AIRFLOW_DISTRIBUTION}` and "
+        f"`{AIRFLOW_META_DISTRIBUTION}` are both absent). The plugin does not depend on "
+        f"Airflow directly -- install the `pytest-airflow-in-a-box[airflow3]` extra or "
+        f"pin Airflow yourself."
+    ) from error
+
+
 def _installed_release() -> tuple[str, Release]:
     """Read and validate the installed Airflow base release without importing Airflow.
 
@@ -276,15 +353,19 @@ def _installed_release() -> tuple[str, Release]:
         tuple[str, Release] containing the metadata version and parsed base release.
 
     Raises:
-        AirflowCompatibilityError: Package metadata is absent, malformed, or unsupported.
+        AirflowCompatibilityError: The environment is corrupt or Airflow-free, or the
+            package metadata is absent, malformed, or unsupported.
     """
 
     try:
         installed_version = metadata.version(AIRFLOW_DISTRIBUTION)
+    except metadata.PackageNotFoundError as error:
+        _diagnose_missing_core(error)
     except Exception as error:
         _raise_compatibility_error(
             "<not installed>", "reading package metadata for", AIRFLOW_DISTRIBUTION, error
         )
+    _reject_corrupt_environment()
 
     match = VERSION_PATTERN.fullmatch(installed_version)
     if match is None:

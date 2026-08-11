@@ -26,8 +26,8 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 ## Quickstart
 
 ```console
-uv add --dev pytest-airflow-in-a-box
-pip install pytest-airflow-in-a-box
+uv add --dev "pytest-airflow-in-a-box[airflow3]"
+pip install "pytest-airflow-in-a-box[airflow3]"
 ```
 
 ```python
@@ -86,9 +86,23 @@ using Airflow's published constraints files.
 ## Installation
 
 ```console
-uv add --dev pytest-airflow-in-a-box
+uv add --dev "pytest-airflow-in-a-box[airflow3]"
+pip install "pytest-airflow-in-a-box[airflow3]"
+```
+
+The plugin does not depend on Airflow directly: the Airflow 2.x monolith and the 3.x core both
+install the `airflow` package, so a hard plugin pin would corrupt whichever family you did not
+choose. The `airflow3` extra pins `apache-airflow>=3.1,<4` (the meta-package resolves a coherent
+core + task-sdk pair). Projects that already pin Airflow themselves -- for example through
+Airflow's published constraints files -- can install the plugin bare:
+
+```console
 pip install pytest-airflow-in-a-box
 ```
+
+An `airflow2` extra (`apache-airflow>=2.9,<3`) exists ahead of the planned Airflow 2.x
+compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)); on this
+release an Airflow 2.x environment fails session startup with an actionable error.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

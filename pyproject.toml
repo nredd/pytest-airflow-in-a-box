@@ -27,14 +27,22 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "apache-airflow-core>=3.1,<4",
-    "apache-airflow-providers-sqlite>=4.1,<5",
     "pytest>=8",
     "pytest-timeout>=2.4",
     "pytest-xdist>=3.8",
 ]
 
+# Airflow is deliberately absent from the base dependencies (pytest-django pattern): the
+# 2.x monolith and the 3.x core both install the `airflow` package, so a hard 3.x pin
+# would silently corrupt any 2.x environment. See issue #25.
 [project.optional-dependencies]
+airflow3 = [
+    "apache-airflow>=3.1,<4",
+    "apache-airflow-providers-sqlite>=4.1,<5",
+]
+airflow2 = [
+    "apache-airflow>=2.9,<3",
+]
 postgres = [
     "asyncpg>=0.29,<1",
     "psycopg2-binary>=2.9,<3",
@@ -52,7 +60,12 @@ Repository = "https://github.com/nredd/pytest-airflow-in-a-box"
 pytest_airflow_in_a_box = "pytest_airflow_in_a_box.plugin"
 
 [dependency-groups]
+# The dev group carries the 3.x pins directly so `uv sync` / `uv run` keep a working
+# Airflow without naming an extra; the mutually-exclusive `airflow2` extra stays
+# lockable via the [tool.uv] conflicts below.
 dev = [
+    "apache-airflow>=3.1,<4",
+    "apache-airflow-providers-sqlite>=4.1,<5",
     "build==1.5.0",
     "prek==0.4.12",
     "pytest-cov==7.1.0",
@@ -64,6 +77,19 @@ dev = [
 docs = [
     "mkdocs==1.6.1",
     "mkdocs-material==9.7.7",
+]
+
+[tool.uv]
+# One universal lock cannot resolve both Airflow majors into a single environment.
+conflicts = [
+    [
+        { extra = "airflow2" },
+        { extra = "airflow3" },
+    ],
+    [
+        { extra = "airflow2" },
+        { group = "dev" },
+    ],
 ]
 
 [tool.ruff]
