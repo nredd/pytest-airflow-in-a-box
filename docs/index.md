@@ -1,11 +1,5 @@
 # pytest-airflow-in-a-box
 
-[![CI](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml/badge.svg)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
-[![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/nredd/pytest-airflow-in-a-box/badges/coverage.json)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/pytest-airflow-in-a-box?logo=pypi&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
-[![Python versions](https://img.shields.io/pypi/pyversions/pytest-airflow-in-a-box?logo=python&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
-[![License](https://img.shields.io/pypi/l/pytest-airflow-in-a-box?cacheSeconds=3600)](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/LICENSE)
-
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
 Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
 small, typed testing surface.
@@ -57,31 +51,16 @@ To disable the plugin entirely for a run:
 pytest -p no:pytest_airflow_in_a_box
 ```
 
-## Documentation
+## Where to go next
 
-Task execution, deferrable operators, DB-free execution, Variable/Connection seeding, structlog
-capture, Dag collection, configuration overrides, smoke tests, database backends and cleanup, the
-live REST API, markers, and diagnostics are all covered on the
-[documentation site](https://nredd.github.io/pytest-airflow-in-a-box/).
-
-## Development
-
-```console
-uv sync
-uv run prek install
-make all
-```
-
-Run the GitHub Actions workflow locally on Linux with [act](https://nektosact.com/):
-
-```console
-act pull_request
-```
-
-`act` cannot reproduce native macOS or Windows behavior. See the
-[development guide](https://nredd.github.io/pytest-airflow-in-a-box/development/) for the
-compatibility suite and more.
+- [Task execution](guide/task-execution.md) and the `dag_maker` fixture
+- [Database backends](guide/database.md) -- SQLite by default, Postgres on request
+- [Markers](reference/markers.md) for a quick index of everything the plugin registers
+- [Development](development.md) to build the plugin itself
 
 ## License
 
-Apache License 2.0. See `LICENSE`, `NOTICE`, and `PROVENANCE.md`.
+Apache License 2.0. See
+[`LICENSE`](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/LICENSE),
+[`NOTICE`](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/NOTICE), and
+[`PROVENANCE.md`](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/PROVENANCE.md).

@@ -1,4 +1,4 @@
-.PHONY: help install install-postgres format lint type test lock build dist release clean all
+.PHONY: help install install-postgres format lint type test lock build dist release docs-build docs-serve clean all
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -38,6 +38,12 @@ dist:  ## Build a clean sdist + wheel and validate them with twine
 	uv run python -m build --installer uv
 	uvx twine@7.0.0 check --strict dist/*
 
+docs-build:  ## Build the documentation site, failing on broken links or nav entries
+	uv run --group docs mkdocs build --strict
+
+docs-serve:  ## Serve the documentation site locally with live reload
+	uv run --group docs mkdocs serve
+
 release:  ## Tag the current version and print the gh release command (does not publish)
 	@pyproject_version="$$(uv version --short)"; \
 	init_version="$$(sed -n 's/^__version__ = "\(.*\)"$$/\1/p' src/pytest_airflow_in_a_box/__init__.py)"; \
@@ -58,4 +64,4 @@ release:  ## Tag the current version and print the gh release command (does not 
 clean:  ## Remove every git-ignored file and directory
 	git clean -fdX
 
-all: format lint type test lock build  ## Run the complete development pipeline
+all: format lint type test lock build docs-build  ## Run the complete development pipeline
