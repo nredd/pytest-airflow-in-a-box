@@ -54,6 +54,7 @@ from pytest_airflow_in_a_box.logging import (
 from pytest_airflow_in_a_box.markers import (
     DATABASE_MARKER_NAMES,
     apply_environment_gate,
+    apply_family_gate,
     register_markers,
 )
 from pytest_airflow_in_a_box.reporting import configure_reporting
@@ -378,6 +379,7 @@ def _requires_database_at_collection(item: pytest.Item) -> bool:
     if not _requires_database(item):
         return False
     try:
+        apply_family_gate(item)
         apply_environment_gate(item)
     except pytest.skip.Exception:
         return False
@@ -439,6 +441,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         item: pytest.Item about to enter its setup phase.
     """
 
+    apply_family_gate(item)
     apply_environment_gate(item)
     if _requires_database(item):
         _ensure_database_or_usage_error(get_bootstrap_state(item.config).root)
