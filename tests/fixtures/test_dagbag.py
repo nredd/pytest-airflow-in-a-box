@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -193,6 +194,183 @@ def test_build_dag_bag_parses_single_file(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest_subprocess("-q")
 
     result.assert_outcomes(passed=1)
+
+
+def _fake_config(
+    *,
+    tmp_path: Path,
+    airflow_smoke: object = False,
+    parse_timeout: str = "30",
+    args: tuple[str, ...] = (),
+) -> Any:
+    """Create a minimal configuration double for `_cached_dag_bag` tests.
+
+    Parameters:
+        tmp_path: pathlib.Path used as the rootpath, bootstrap Dag folder, and invocation
+            directory.
+        airflow_smoke: object containing the ``airflow_smoke`` ini value.
+        parse_timeout: str containing the ``airflow_dag_parse_timeout`` ini value.
+        args: str positionals; non-empty selects `ArgsSource.ARGS`, matching a run pointed
+            at explicit files or node IDs, so `_smoke_in_scope` re-evaluates them.
+
+    Returns:
+        types.SimpleNamespace shaped like the configuration surface under test.
+    """
+
+    option_values = {"dag_folder": None, "airflow_smoke": None}
+    ini_values = {
+        "airflow_dags_folder": "",
+        "airflow_smoke": airflow_smoke,
+        "airflow_dag_parse_timeout": parse_timeout,
+    }
+    return SimpleNamespace(
+        getoption=lambda name: option_values[name],
+        getini=lambda name: ini_values[name],
+        rootpath=tmp_path,
+        stash=pytest.Stash(),
+        args_source=pytest.Config.ArgsSource.ARGS if args else pytest.Config.ArgsSource.TESTPATHS,
+        invocation_params=SimpleNamespace(dir=tmp_path),
+        args=args,
+    )
+
+
+def test_cached_dag_bag_builds_once_per_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Parse once per worker session and reuse the stashed DagBag on later calls."""
+
+    builds: list[object] = []
+    sentinel: Any = SimpleNamespace(dags={}, import_errors={})
+    config = _fake_config(tmp_path=tmp_path)
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "get_bootstrap_state",
+        lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
+    )
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "build_dag_bag",
+        lambda folder: (builds.append(folder), sentinel)[1],
+    )
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    first = fixtures_dagbag._cached_dag_bag(session, config)
+    second = fixtures_dagbag._cached_dag_bag(session, config)
+
+    assert first is sentinel
+    assert second is sentinel
+    assert builds == [tmp_path]
+
+
+def test_cached_dag_bag_never_touches_the_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Leave metadata-database initialization to `full_dag_bag` alone.
+
+    Regression test for issue #85: the shared cache must not give DB-free smoke items a
+    metadata-database dependency they never had before this fix. `_cached_dag_bag` parses
+    Dags only; `ensure_database` stays the caller's responsibility.
+    """
+
+    sentinel: Any = SimpleNamespace(dags={}, import_errors={})
+    config = _fake_config(tmp_path=tmp_path)
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("_cached_dag_bag must not call ensure_database")
+
+    monkeypatch.setattr(fixtures_dagbag, "ensure_database", _fail_if_called)
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "get_bootstrap_state",
+        lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
+    )
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    result = fixtures_dagbag._cached_dag_bag(session, config)
+
+    assert result is sentinel
+
+
+def test_cached_dag_bag_ignores_parse_timeout_when_smoke_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Leave the Dag import timeout untouched when the smoke catalog is off."""
+
+    sentinel: Any = SimpleNamespace(dags={}, import_errors={})
+    config = _fake_config(tmp_path=tmp_path, airflow_smoke=False)
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "get_bootstrap_state",
+        lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
+    )
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    result = fixtures_dagbag._cached_dag_bag(session, config)
+
+    assert result is sentinel
+    assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "999"
+
+
+def test_cached_dag_bag_applies_parse_timeout_when_smoke_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Apply the smoke catalog's per-file parse timeout before an opportunistic parse.
+
+    Regression test for issue #85: `full_dag_bag` may be the one to parse the Dag folder
+    while the smoke catalog is enabled, and the smoke corpus builder can later reuse that
+    DagBag -- the configured timeout must still be honored regardless of which one parses.
+    """
+
+    sentinel: Any = SimpleNamespace(dags={}, import_errors={})
+    config = _fake_config(tmp_path=tmp_path, airflow_smoke=True, parse_timeout="5")
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "get_bootstrap_state",
+        lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
+    )
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    result = fixtures_dagbag._cached_dag_bag(session, config)
+
+    assert result is sentinel
+    assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "5.0"
+
+
+def test_cached_dag_bag_ignores_parse_timeout_when_smoke_out_of_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Leave the Dag import timeout untouched when explicit selection drops the catalog.
+
+    Mirrors `_smoke_in_scope`: pointing pytest at a node ID scopes the run to it and drops
+    the bundled catalog from this session, so the catalog's parse timeout should not apply
+    even though `airflow_smoke` itself is enabled.
+    """
+
+    sentinel: Any = SimpleNamespace(dags={}, import_errors={})
+    config = _fake_config(
+        tmp_path=tmp_path,
+        airflow_smoke=True,
+        parse_timeout="5",
+        args=("tests/test_x.py::test_one",),
+    )
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "get_bootstrap_state",
+        lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
+    )
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    result = fixtures_dagbag._cached_dag_bag(session, config)
+
+    assert result is sentinel
+    assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "999"
 
 
 @pytest.mark.parametrize(

@@ -35,7 +35,7 @@ import pytest
 from pytest_airflow_in_a_box._compat import build_dag_bag
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
-from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
+from pytest_airflow_in_a_box.fixtures.dagbag import LIVE_DAG_BAG_KEY, _dag_folder
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -502,14 +502,19 @@ def _normalize_serialized_dag(encoded: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_smoke_corpus(config: pytest.Config) -> SmokeCorpus:
+def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> SmokeCorpus:
     """Parse and serialize the configured Dag folder in the elected process.
 
     Sets ``AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT`` immediately before construction so Airflow
     hard-kills any single file exceeding the configured timeout; the environment variable is read
-    per lookup, not cached at import, so this stays safe to set late and per-run.
+    per lookup, not cached at import, so this stays safe to set late and per-run. Reuses a
+    DagBag `full_dag_bag` already parsed for this process, if one exists, rather than parsing
+    the Dag folder a second time. A fresh parse here is deliberately not cached on the session
+    the way `full_dag_bag`'s is -- nothing else in a smoke-only run needs the live DagBag past
+    this function returning, only the portable SmokeCorpus it builds from it.
 
     Parameters:
+        session: pytest.Session used to reach a DagBag already parsed by `full_dag_bag`.
         config: pytest.Config containing plugin options and ini values.
 
     Returns:
@@ -518,7 +523,11 @@ def _build_smoke_corpus(config: pytest.Config) -> SmokeCorpus:
 
     timeout = _parse_timeout(config)
     os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(timeout)
-    dag_bag = build_dag_bag(_dag_folder(config))
+    dag_bag = (
+        session.stash[LIVE_DAG_BAG_KEY]
+        if LIVE_DAG_BAG_KEY in session.stash
+        else build_dag_bag(_dag_folder(config))
+    )
     serializer = _get_dag_serializer()
     sample_size = _serialization_sample_size(config)
     seed = _serialization_sample_seed(config)
@@ -688,10 +697,11 @@ def _write_smoke_corpus(path: Path, corpus: SmokeCorpus) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _shared_smoke_corpus(config: pytest.Config) -> SmokeCorpus:
+def _shared_smoke_corpus(session: pytest.Session, config: pytest.Config) -> SmokeCorpus:
     """Elect one process to parse Dags and share the result with local workers.
 
     Parameters:
+        session: pytest.Session used to reach a DagBag already parsed by `full_dag_bag`.
         config: pytest.Config carrying the shared bootstrap run root.
 
     Returns:
@@ -711,7 +721,7 @@ def _shared_smoke_corpus(config: pytest.Config) -> SmokeCorpus:
             if artifact.is_file():
                 payload = json.loads(artifact.read_text(encoding="utf-8"))
                 return _smoke_corpus_from_payload(payload)
-            corpus = _build_smoke_corpus(config)
+            corpus = _build_smoke_corpus(session, config)
             _write_smoke_corpus(artifact, corpus)
             LOGGER.info(
                 f"Worker `{corpus.producer_worker}` PID {corpus.producer_pid} "
@@ -734,7 +744,7 @@ def _smoke_corpus(session: pytest.Session, config: pytest.Config) -> SmokeCorpus
     """
 
     if SMOKE_CORPUS_KEY not in session.stash:
-        session.stash[SMOKE_CORPUS_KEY] = _shared_smoke_corpus(config)
+        session.stash[SMOKE_CORPUS_KEY] = _shared_smoke_corpus(session, config)
     return session.stash[SMOKE_CORPUS_KEY]
 
 
