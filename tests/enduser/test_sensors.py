@@ -10,7 +10,10 @@ The reschedule test pins `core.executor` to `SequentialExecutor` for its run: 2.
 `unit_test_mode` overlays Airflow's own `unit_tests.cfg`, which hard-codes
 `executor = LocalExecutor`, and the `ready_to_reschedule` dependency rejects that
 combination with SQLite. `SequentialExecutor` is single-threaded and Airflow
-allows it with any backend, so pinning it changes no test semantics.
+allows it with any backend, so pinning it changes no test semantics. 2.x's
+`ExecutorLoader` also caches the resolved executor in a module-level list on first
+use, so the pin clears that cache too -- otherwise an earlier test's default-executor
+lookup elsewhere in the same process would freeze the override out, order-dependently.
 """
 
 from __future__ import annotations
@@ -98,13 +101,19 @@ def test_reschedule_sensor_persists_task_reschedule(dag_maker: DagMaker) -> None
     with dag_maker(dag_id="compat_sensor_reschedule"):
         WaitingSensor(task_id="wait", mode="reschedule", poke_interval=60, timeout=300)
 
-    overrides = (
-        {("core", "executor"): "SequentialExecutor"}
-        if installed_family() is AirflowFamily.V2
-        else {}
-    )
+    is_v2 = installed_family() is AirflowFamily.V2
+    overrides = {("core", "executor"): "SequentialExecutor"} if is_v2 else {}
     with airflow_config(overrides):
-        ti = dag_maker.run_ti("wait")
+        if is_v2:
+            # Force a fresh lookup under the pinned override; an earlier test's
+            # default-executor lookup may have already frozen the stale cache.
+            executor_loader = import_module("airflow.executors.executor_loader")
+            executor_loader._executor_names = []
+        try:
+            ti = dag_maker.run_ti("wait")
+        finally:
+            if is_v2:
+                executor_loader._executor_names = []
     # 2.x keys `TaskReschedule` by the composite task instance identity; 3.x collapsed
     # that to a single `ti_id` foreign key.
     condition = (
