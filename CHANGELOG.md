@@ -25,6 +25,14 @@ All notable changes to this project will be documented in this file. The format 
   instead of the process working directory, matching normal pytest configuration-file
   semantics; the `--dag-folder` CLI option remains relative to the invocation directory
   ([#71](https://github.com/nredd/pytest-airflow-in-a-box/issues/71)).
+- `test_clear_db_triggers_clears_referencing_task_instances` and
+  `test_clear_db_scoped_selection_leaves_other_groups` (`tests/test_db.py`) are now
+  serial-only, matching their sibling whole-database-reset tests. Both call `clear_db`,
+  an unscoped delete against the one metadata database every xdist worker shares; running
+  either concurrently with another worker could delete a task instance a different worker
+  had just persisted, surfacing as a flaky `ServerResponseError` /
+  `RuntimeError: task failed to finish with a result` under `-n 4`
+  ([#78](https://github.com/nredd/pytest-airflow-in-a-box/issues/78)).
 
 ## [0.3.0] - 2026-08-10
 
