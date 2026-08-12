@@ -253,6 +253,10 @@ class DagRunResult:
             return False
         return all(other[key] == actual[key] for key in other)
 
+    # Defining `__eq__` sets `__hash__` to `None`; two snapshots only ever compare
+    # equal by identity, so the identity hash stays consistent with equality.
+    __hash__ = object.__hash__
+
     def __repr__(self) -> str:
         """Render one aligned per-task table for assertion output.
 

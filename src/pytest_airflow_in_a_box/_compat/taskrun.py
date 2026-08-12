@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TRIGGER_TIMEOUT = 10.0
+STRANDED_STATE_VALUES = frozenset({"up_for_retry", "up_for_reschedule"})
 
 
 class TaskResolutionError(RuntimeError):
@@ -678,6 +679,18 @@ def _snapshot_dag_run(
                 ti=ti,
             )
         )
+    stranded = [
+        result.key
+        for result in task_results
+        if getattr(result.state, "value", result.state) in STRANDED_STATE_VALUES
+    ]
+    if stranded:
+        stranded_keys = ", ".join(f"'{key}'" for key in stranded)
+        LOGGER.warning(
+            f"DagRun '{dag_run.run_id}' settled with task instances awaiting a retry or "
+            f"reschedule that `execute_dag_run` will not attempt again: {stranded_keys}; "
+            f"the DagRun stays non-terminal"
+        )
     state = dag_run.state
     return DagRunResult(
         dag_run=dag_run,
@@ -705,7 +718,9 @@ def execute_dag_run(
     scheduler-shaped: blocked downstreams settle as ``upstream_failed`` and the
     snapshot reports ``success=False``. Mapped tasks expand mid-run once their
     upstream values exist. A deferring task settles ``deferred`` unless
-    ``run_triggerer`` resumes it inline.
+    ``run_triggerer`` resumes it inline. One attempt means task ``retries`` are
+    never re-attempted: a retrying task settles ``up_for_retry``, the DagRun
+    stays non-terminal, and a warning names the stranded instances.
 
     Parameters:
         dag_run: airflow.models.dagrun.DagRun whose task instances are executed.

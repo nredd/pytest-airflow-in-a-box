@@ -186,6 +186,15 @@ def test_equality_compares_per_task_outcomes_against_a_mapping() -> None:
     assert result != 5
 
 
+def test_snapshots_stay_identity_hashable() -> None:
+    """Keep snapshots usable in sets and as dict keys despite the mapping equality."""
+
+    result = _dag_run_result(_task_result("produce"))
+
+    assert result in {result}
+    assert {result: "run"}[result] == "run"
+
+
 def test_repr_renders_an_aligned_per_task_table() -> None:
     """Render the header plus one aligned row per instance with error or xcom detail."""
 

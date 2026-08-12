@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -260,6 +261,26 @@ def test_run_resumes_a_deferred_task_with_the_triggerer(dag_maker: DagMaker) -> 
 
     assert result.success
     assert result.xcoms == {"deferred": 42}
+
+
+def test_run_strands_a_retrying_task_visibly(dag_maker: DagMaker) -> None:
+    """Settle a retry-configured failure as `up_for_retry` and keep the DagRun running."""
+
+    with dag_maker(dag_id="result_retry"):
+
+        @task(retries=1, retry_delay=timedelta(minutes=5))
+        def boom() -> None:
+            raise ValueError("nope")
+
+        boom()
+
+    result = dag_maker.run()
+
+    assert not result.success
+    assert result.state == DagRunState.RUNNING
+    assert result.states == {"boom": TaskInstanceState.UP_FOR_RETRY}
+    assert isinstance(result.errors["boom"], ValueError)
+    assert result.order == ["boom"]
 
 
 def test_run_accepts_an_explicit_dag_run(dag_maker: DagMaker) -> None:

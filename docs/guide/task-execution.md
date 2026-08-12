@@ -56,6 +56,11 @@ A deferring task settles as `deferred` (and the DagRun stays `running`) unless
 `run_triggerer=True` fires its persisted trigger inline. An explicit
 `dag_maker.create_dagrun(logical_date=...)` composes: pass it as `dag_maker.run(dag_run)`.
 
+Every task instance is attempted exactly *once* -- `retries` are never re-attempted. A
+retry-configured task that fails settles as `up_for_retry`, the DagRun stays `running`, and
+a warning names the stranded instances; drop `retries` from Dags under test (or assert
+`up_for_retry` deliberately).
+
 ## Bulk outcome matchers
 
 `pytest_airflow_in_a_box.matchers` asserts a whole DagRun in one expression. The mapping
