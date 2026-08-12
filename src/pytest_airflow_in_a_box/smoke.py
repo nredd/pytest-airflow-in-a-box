@@ -32,9 +32,10 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from pytest_airflow_in_a_box._compat import build_dag_bag
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
-from pytest_airflow_in_a_box.fixtures.dagbag import _cached_dag_bag, _dag_folder
+from pytest_airflow_in_a_box.fixtures.dagbag import LIVE_DAG_BAG_KEY, _dag_folder
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -507,11 +508,13 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
     Sets ``AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT`` immediately before construction so Airflow
     hard-kills any single file exceeding the configured timeout; the environment variable is read
     per lookup, not cached at import, so this stays safe to set late and per-run. Reuses a
-    DagBag already parsed for this process by `full_dag_bag`, if one exists, rather than
-    parsing the Dag folder a second time.
+    DagBag `full_dag_bag` already parsed for this process, if one exists, rather than parsing
+    the Dag folder a second time. A fresh parse here is deliberately not cached on the session
+    the way `full_dag_bag`'s is -- nothing else in a smoke-only run needs the live DagBag past
+    this function returning, only the portable SmokeCorpus it builds from it.
 
     Parameters:
-        session: pytest.Session used to reach the shared live-DagBag cache.
+        session: pytest.Session used to reach a DagBag already parsed by `full_dag_bag`.
         config: pytest.Config containing plugin options and ini values.
 
     Returns:
@@ -520,7 +523,11 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
 
     timeout = _parse_timeout(config)
     os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(timeout)
-    dag_bag = _cached_dag_bag(session, config)
+    dag_bag = (
+        session.stash[LIVE_DAG_BAG_KEY]
+        if LIVE_DAG_BAG_KEY in session.stash
+        else build_dag_bag(_dag_folder(config))
+    )
     serializer = _get_dag_serializer()
     sample_size = _serialization_sample_size(config)
     seed = _serialization_sample_seed(config)

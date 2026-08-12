@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,8 @@ from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box._compat.dagbag import DagBag
+
+LIVE_DAG_BAG_KEY = pytest.StashKey["DagBag"]()
 
 
 def _dag_folder(config: pytest.Config) -> Path:
@@ -50,15 +53,13 @@ def _dag_folder(config: pytest.Config) -> Path:
     return get_bootstrap_state(config).dags_folder
 
 
-LIVE_DAG_BAG_KEY = pytest.StashKey["DagBag"]()
-
-
 def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
     """Parse and process-cache a live DagBag for one worker session.
 
-    Shared between the `full_dag_bag` fixture and the bundled smoke catalog's corpus
-    builder (`smoke.py`) so whichever one runs first in a worker process pays for the
-    parse and the other reuses its result, instead of each parsing independently.
+    The bundled smoke catalog's corpus builder (`smoke.py`) reuses this DagBag instead of
+    parsing the Dag folder a second time, if `full_dag_bag` already ran in this process.
+    When the catalog is enabled, applies its configured per-file parse timeout before
+    parsing, so the timeout is honored regardless of which of the two parses first.
 
     Parameters:
         session: pytest.Session used to cache the parsed DagBag.
@@ -69,7 +70,11 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
     """
 
     if LIVE_DAG_BAG_KEY not in session.stash:
-        ensure_database(get_bootstrap_state(config).root)
+        # Local import breaks a cycle: smoke.py imports from this module at load time.
+        from pytest_airflow_in_a_box.smoke import _parse_timeout, _smoke_enabled
+
+        if _smoke_enabled(config):
+            os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(_parse_timeout(config))
         session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
     return session.stash[LIVE_DAG_BAG_KEY]
 
@@ -77,6 +82,11 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 @pytest.fixture(scope="session")
 def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) -> DagBag:
     """Parse all Dags from the configured Dag directory once per worker process.
+
+    Shared with the bundled smoke catalog when `--airflow-smoke` is enabled: whichever of
+    the two runs first in this process parses, and the other reuses the same live DagBag.
+    Treat the returned object as read-only in that case -- mutating it is visible to the
+    smoke catalog's checks too.
 
     Parameters:
         request: pytest.FixtureRequest used to reach the session-scoped DagBag cache.
@@ -86,6 +96,7 @@ def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) ->
         airflow.models.dagbag.DagBag containing parsed Dags and import errors.
     """
 
+    ensure_database(get_bootstrap_state(pytestconfig).root)
     return _cached_dag_bag(request.session, pytestconfig)
 
 
