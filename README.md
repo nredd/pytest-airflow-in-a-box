@@ -32,29 +32,42 @@ pip install pytest-airflow-in-a-box
 
 ```python
 from airflow.sdk import task
-from airflow.utils.state import TaskInstanceState
 
 
-def test_answer(dag_maker):
+def test_dag(dag_maker):
     with dag_maker():
 
         @task
-        def answer():
-            return 42
+        def produce():
+            return 21
 
-        answer()
+        @task
+        def consume(value):
+            return value * 2
 
-    assert dag_maker.run_ti("answer").state == TaskInstanceState.SUCCESS
+        consume(produce())
+
+    result = dag_maker.run()
+
+    assert result.success
+    assert result.xcoms == {"produce": 21, "consume": 42}
+    assert result.order == ["produce", "consume"]
 ```
 
 ```console
 pytest
 ```
 
+`dag_maker.run()` executes every task in dependency order and returns an inert
+`DagRunResult` snapshot: `states`, `xcoms`, `errors`, `order`, and per-task access via
+`result["task_id"]`. Single tasks run with `dag_maker.run_ti("produce")`, and
+`pytest_airflow_in_a_box.matchers` supports one-expression bulk assertions like
+`assert result == {"produce": succeeded(21), "consume": succeeded(42)}`.
+
 The `pytest11` entry point registers the plugin automatically -- no `pytest_plugins`
 declaration needed. See the [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/)
-for the full `dag_maker`/`run_ti` surface, sessions, DB-free task execution, deferrable operators,
-the REST API fixture, and bundled smoke checks.
+for the full `dag_maker`/`run`/`run_ti` surface, sessions, DB-free task execution, deferrable
+operators, the REST API fixture, and bundled smoke checks.
 
 ## Why not...
 

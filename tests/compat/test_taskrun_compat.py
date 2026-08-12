@@ -18,6 +18,7 @@ from pytest_airflow_in_a_box.taskinstance import (
     DEFAULT_TRIGGER_TIMEOUT,
     TaskResolutionError,
     TriggerExecutionError,
+    execute_dag_run,
     ordered_task_instances,
     run_task_instance,
     run_trigger,
@@ -779,3 +780,418 @@ def test_ordered_task_instances_rejects_unknown_task_ids() -> None:
     session: Any = object()
     with pytest.raises(ValueError, match="'missing_a', 'missing_b'"):
         ordered_task_instances(dag_run, dag, session=session)
+
+
+class _ExecutionTaskInstance:
+    """Expose the instance surface ``execute_dag_run`` reads and mutates."""
+
+    def __init__(
+        self,
+        task_id: str,
+        map_index: int = -1,
+        state: Any = None,
+        xcom: Any = None,
+    ) -> None:
+        """Store identity, state, and the value ``xcom_pull`` returns.
+
+        Parameters:
+            task_id: str identifying the task.
+            map_index: int identifying the mapped instance, or ``-1`` when unmapped.
+            state: Any containing the initial persisted state.
+            xcom: Any returned by ``xcom_pull``.
+        """
+
+        self.task_id = task_id
+        self.map_index = map_index
+        self.state = state
+        self.xcom = xcom
+        self.pull_kwargs: dict[str, Any] | None = None
+
+    def xcom_pull(self, **kwargs: Any) -> Any:
+        """Record the pull arguments and return the stored value.
+
+        Parameters:
+            kwargs: Any containing the pull keyword arguments.
+
+        Returns:
+            Any containing the stored xcom value.
+        """
+
+        self.pull_kwargs = kwargs
+        return self.xcom
+
+
+class _ExecutionDagRun:
+    """Expose the DagRun surface ``execute_dag_run`` drives, with a scripted settle."""
+
+    def __init__(self, tis: list[_ExecutionTaskInstance], settle: Any = None) -> None:
+        """Store the mutable instance list and the per-``update_state`` script.
+
+        Parameters:
+            tis: list[_ExecutionTaskInstance] returned by ``get_task_instances``.
+            settle: Any called with this run on every ``update_state``.
+        """
+
+        self.dag_id = "execute_dag"
+        self.run_id = "execute_run"
+        self.state: Any = "running"
+        self.tis = tis
+        self.update_calls = 0
+        self._settle = settle
+
+    def get_task_instances(self, **kwargs: Any) -> list[_ExecutionTaskInstance]:
+        """Return the current instance list.
+
+        Parameters:
+            kwargs: Any containing an optional session.
+
+        Returns:
+            list[_ExecutionTaskInstance] currently owned by the run.
+        """
+
+        del kwargs
+        return list(self.tis)
+
+    def update_state(self, **kwargs: Any) -> None:
+        """Record one settle pass and apply the scripted state changes.
+
+        Parameters:
+            kwargs: Any containing the settle keyword arguments.
+        """
+
+        del kwargs
+        self.update_calls += 1
+        if self._settle is not None:
+            self._settle(self)
+
+
+class _ExecutionSession:
+    """Record identity-map and transaction operations."""
+
+    def __init__(self) -> None:
+        """Initialize lifecycle counters."""
+
+        self.expirations = 0
+        self.rollbacks = 0
+        self.commits = 0
+
+    def expire_all(self) -> None:
+        """Record one identity-map expiration."""
+
+        self.expirations += 1
+
+    def rollback(self) -> None:
+        """Record one transaction rollback."""
+
+        self.rollbacks += 1
+
+    def commit(self) -> None:
+        """Record one transaction commit."""
+
+        self.commits += 1
+
+
+def _execution_dag(*tasks: SimpleNamespace) -> SimpleNamespace:
+    """Build one Dag fake exposing graph order and task lookup.
+
+    Parameters:
+        tasks: SimpleNamespace entries carrying ``task_id`` and ``is_mapped``.
+
+    Returns:
+        types.SimpleNamespace exposing ``topological_sort`` and ``get_task``.
+    """
+
+    by_id = {task.task_id: task for task in tasks}
+    return SimpleNamespace(
+        dag_id="execute_dag",
+        topological_sort=lambda: list(by_id.values()),
+        get_task=lambda task_id: by_id[task_id],
+    )
+
+
+def test_execute_dag_run_runs_every_instance_and_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run instances in graph order, settle, and capture states, xcoms, and order."""
+
+    upstream = _ExecutionTaskInstance("produce", xcom=21)
+    downstream = _ExecutionTaskInstance("consume", xcom=42)
+    dag_run: Any = _ExecutionDagRun(
+        [downstream, upstream],
+        settle=lambda run: setattr(run, "state", "success"),
+    )
+    dag = _execution_dag(
+        SimpleNamespace(task_id="produce", is_mapped=False),
+        SimpleNamespace(task_id="consume", is_mapped=False),
+    )
+    session: Any = _ExecutionSession()
+    executed: list[str] = []
+
+    def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del kwargs
+        executed.append(str(task.task_id))
+        ti.state = "success"
+        return ti
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
+
+    result = execute_dag_run(dag_run, dag, session=session)
+
+    assert result.success
+    assert executed == ["produce", "consume"]
+    assert result.order == ["produce", "consume"]
+    assert result.states == {"produce": "success", "consume": "success"}
+    assert result.xcoms == {"produce": 21, "consume": 42}
+    assert result.errors == {}
+    assert session.expirations == 1
+    assert session.commits == 1
+    assert dag_run.update_calls == 1
+    assert upstream.pull_kwargs == {"task_ids": "produce", "session": session}
+
+
+def test_execute_dag_run_captures_failures_and_leaves_blocked_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Capture a raising body, keep going, and let settle mark blocked instances."""
+
+    boom = _ExecutionTaskInstance("boom")
+    consume = _ExecutionTaskInstance("consume")
+
+    def settle(run: Any) -> None:
+        consume.state = "upstream_failed"
+        run.state = "failed"
+
+    dag_run: Any = _ExecutionDagRun([boom, consume], settle=settle)
+    dag = _execution_dag(
+        SimpleNamespace(task_id="boom", is_mapped=False),
+        SimpleNamespace(task_id="consume", is_mapped=False),
+    )
+
+    def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del task, kwargs
+        if ti.task_id == "boom":
+            ti.state = "failed"
+            raise ValueError("nope")
+        return ti  # Unmet dependencies: the instance keeps its `None` state.
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
+
+    result = execute_dag_run(dag_run, dag)
+
+    assert not result.success
+    assert result.order == ["boom"]
+    assert result.states == {"boom": "failed", "consume": "upstream_failed"}
+    assert isinstance(result.errors["boom"], ValueError)
+    assert consume.pull_kwargs == {"task_ids": "consume"}
+
+
+def test_execute_dag_run_never_reruns_presettled_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Record a pre-settled instance without executing it."""
+
+    skipped_ti = _ExecutionTaskInstance("branch_dropped", state="skipped")
+    dag_run: Any = _ExecutionDagRun([skipped_ti])
+    dag = _execution_dag(SimpleNamespace(task_id="branch_dropped", is_mapped=False))
+
+    def fail_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del ti, task, kwargs
+        raise AssertionError("pre-settled instances must not run")
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
+
+    result = execute_dag_run(dag_run, dag)
+
+    assert result.order == []
+    assert result.states == {"branch_dropped": "skipped"}
+    assert not result.success
+
+
+def test_execute_dag_run_expands_mapped_placeholders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replace one mapped placeholder mid-run and execute every expanded instance."""
+
+    placeholder = _ExecutionTaskInstance("double")
+    dag_run: Any = _ExecutionDagRun(
+        [placeholder],
+        settle=lambda run: setattr(run, "state", "success"),
+    )
+    dag = _execution_dag(
+        SimpleNamespace(task_id="double", is_mapped=True, upstream_task_ids=set())
+    )
+    session: Any = _ExecutionSession()
+    expanded = [
+        _ExecutionTaskInstance("double", map_index=0, xcom=10),
+        _ExecutionTaskInstance("double", map_index=1, xcom=20),
+    ]
+
+    def fake_expand(run: Any, task_id: str, expand_session: Any) -> bool:
+        del task_id, expand_session
+        run.tis = expanded
+        return True
+
+    def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del task, kwargs
+        ti.state = "success"
+        return ti
+
+    monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fake_expand)
+    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
+
+    result = execute_dag_run(dag_run, dag, session=session)
+
+    assert result.states == {"double[0]": "success", "double[1]": "success"}
+    assert result.xcoms == {"double": [10, 20]}
+    assert result.order == ["double[0]", "double[1]"]
+    assert expanded[1].pull_kwargs == {"task_ids": "double", "map_indexes": 1, "session": session}
+
+
+def test_execute_dag_run_leaves_unexpandable_placeholders_to_settle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Record a placeholder whose expansion failed without executing it."""
+
+    placeholder = _ExecutionTaskInstance("double")
+    dag_run: Any = _ExecutionDagRun(
+        [placeholder],
+        settle=lambda _run: setattr(placeholder, "state", "upstream_failed"),
+    )
+    dag = _execution_dag(
+        SimpleNamespace(task_id="double", is_mapped=True, upstream_task_ids=set())
+    )
+    session: Any = _ExecutionSession()
+
+    def fail_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del ti, task, kwargs
+        raise AssertionError("unexpandable placeholders must not run")
+
+    monkeypatch.setattr(taskrun, "_try_expand_mapped_task", lambda *_args: False)
+    monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
+
+    result = execute_dag_run(dag_run, dag, session=session)
+
+    assert result.order == []
+    assert result.states == {"double": "upstream_failed"}
+
+
+def test_execute_dag_run_waits_for_upstreams_before_expanding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leave a mapped placeholder untouched while a direct upstream is unsettled."""
+
+    producer = _ExecutionTaskInstance("produce")
+    placeholder = _ExecutionTaskInstance("double")
+    dag_run: Any = _ExecutionDagRun([producer, placeholder])
+    dag = _execution_dag(
+        SimpleNamespace(task_id="produce", is_mapped=False),
+        SimpleNamespace(task_id="double", is_mapped=True, upstream_task_ids={"produce"}),
+    )
+    session: Any = _ExecutionSession()
+
+    def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del task, kwargs
+        ti.state = "deferred"
+        return ti
+
+    def fail_expand(*args: Any) -> bool:
+        del args
+        raise AssertionError("expansion must wait for settled upstreams")
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
+    monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fail_expand)
+
+    result = execute_dag_run(dag_run, dag, session=session)
+
+    assert result.states == {"produce": "deferred", "double": None}
+    assert result.order == ["produce"]
+    assert not result.success
+
+
+def test_execute_dag_run_propagates_plugin_contract_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Surface task-resolution failures instead of recording them as Dag outcomes."""
+
+    dag_run: Any = _ExecutionDagRun([_ExecutionTaskInstance("orphan")])
+    dag = _execution_dag(SimpleNamespace(task_id="orphan", is_mapped=False))
+
+    def fail_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del ti, task, kwargs
+        raise TaskResolutionError("no executable task")
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
+
+    with pytest.raises(TaskResolutionError, match="no executable task"):
+        execute_dag_run(dag_run, dag)
+
+
+def test_try_expand_mapped_task_requires_a_session() -> None:
+    """Refuse mapped expansion without a metadata session."""
+
+    dag_run: Any = SimpleNamespace(dag_id="execute_dag", run_id="execute_run")
+
+    with pytest.raises(ValueError, match="requires a metadata `session`"):
+        taskrun._try_expand_mapped_task(dag_run, "double", None)
+
+
+def test_try_expand_mapped_task_reports_a_missing_scheduler_dag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roll back and report failure when the persisted scheduler Dag is absent."""
+
+    from airflow.models.serialized_dag import SerializedDagModel
+
+    monkeypatch.setattr(
+        SerializedDagModel,
+        "get_dag",
+        classmethod(lambda *_args, **_kwargs: None),
+    )
+    dag_run: Any = SimpleNamespace(dag_id="execute_dag", run_id="execute_run")
+    session: Any = _ExecutionSession()
+
+    assert taskrun._try_expand_mapped_task(dag_run, "double", session) is False
+    assert session.rollbacks == 1
+
+
+def test_try_expand_mapped_task_expands_the_scheduler_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expand through the persisted scheduler Dag's task."""
+
+    from airflow.models.serialized_dag import SerializedDagModel
+
+    scheduler_task = object()
+    scheduler_dag = SimpleNamespace(get_task=lambda _task_id: scheduler_task)
+    monkeypatch.setattr(
+        SerializedDagModel,
+        "get_dag",
+        classmethod(lambda *_args, **_kwargs: scheduler_dag),
+    )
+    calls: list[tuple[Any, str, Any]] = []
+    monkeypatch.setattr(
+        taskrun,
+        "expand_mapped_task_instances",
+        lambda task, run_id, session: calls.append((task, run_id, session)),
+    )
+    dag_run: Any = SimpleNamespace(dag_id="execute_dag", run_id="execute_run")
+    session: Any = _ExecutionSession()
+
+    assert taskrun._try_expand_mapped_task(dag_run, "double", session) is True
+    assert calls == [(scheduler_task, "execute_run", session)]
+    assert session.rollbacks == 0
+
+
+def test_settle_dag_run_bounds_states_that_never_stabilize() -> None:
+    """Stop settling after the bounded pass count when states keep changing."""
+
+    wobble = _ExecutionTaskInstance("wobble")
+    dag_run: Any = _ExecutionDagRun(
+        [wobble],
+        settle=lambda run: setattr(wobble, "state", run.update_calls),
+    )
+    dag = _execution_dag(SimpleNamespace(task_id="wobble", is_mapped=False))
+
+    taskrun._settle_dag_run(dag_run, dag, None)
+
+    assert dag_run.update_calls == 3
