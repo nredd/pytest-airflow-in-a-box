@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
+  certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
+  ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
+  `execution_date` interface, no bundles/DAG versioning), `run_ti`/`run_task_instance`,
+  `full_dag_bag`, `clear_db` (renamed `dataset*` tables, `BaseXCom`), seeding, params
+  validation via `airflow.models.param`, and the bundled smoke checks all run on both
+  families; `run_task`, `cap_structlog`, and the REST API fixtures fail on 2.x with
+  actionable errors naming the 2.x alternative.
+- `requires_airflow2` / `requires_airflow3` markers, auto-skipped on the other family,
+  plus three 2.x compat CI legs installed via the two-pass constraints pattern.
+- The bundled Dag corpus authors through a small dynamic resolver so the same files
+  parse on both Airflow families.
+
 ### Changed
 
 - BREAKING: Airflow is no longer a base dependency. The Airflow 2.x monolith and the 3.x
