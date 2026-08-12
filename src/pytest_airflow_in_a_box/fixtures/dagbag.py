@@ -58,8 +58,9 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 
     The bundled smoke catalog's corpus builder (`smoke.py`) reuses this DagBag instead of
     parsing the Dag folder a second time, if `full_dag_bag` already ran in this process.
-    When the catalog is enabled, applies its configured per-file parse timeout before
-    parsing, so the timeout is honored regardless of which of the two parses first.
+    When the catalog is enabled and in scope for this run, applies its configured per-file
+    parse timeout before parsing, so the timeout is honored regardless of which of the two
+    parses first.
 
     Parameters:
         session: pytest.Session used to cache the parsed DagBag.
@@ -67,13 +68,17 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 
     Returns:
         airflow.models.dagbag.DagBag containing parsed Dags and import errors.
+
+    Raises:
+        pytest.UsageError: A smoke-enablement, parse-timeout, or Dag-folder option has an
+            invalid type or value.
     """
 
     if LIVE_DAG_BAG_KEY not in session.stash:
         # Local import breaks a cycle: smoke.py imports from this module at load time.
-        from pytest_airflow_in_a_box.smoke import _parse_timeout, _smoke_enabled
+        from pytest_airflow_in_a_box.smoke import _parse_timeout, _smoke_enabled, _smoke_in_scope
 
-        if _smoke_enabled(config):
+        if _smoke_enabled(config) and _smoke_in_scope(config):
             os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(_parse_timeout(config))
         session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
     return session.stash[LIVE_DAG_BAG_KEY]
@@ -83,10 +88,11 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) -> DagBag:
     """Parse all Dags from the configured Dag directory once per worker process.
 
-    Shared with the bundled smoke catalog when `--airflow-smoke` is enabled: whichever of
-    the two runs first in this process parses, and the other reuses the same live DagBag.
-    Treat the returned object as read-only in that case -- mutating it is visible to the
-    smoke catalog's checks too.
+    Shared with the bundled smoke catalog when `--airflow-smoke` is enabled and in scope for
+    this run: if `full_dag_bag` parses first in this process, the catalog's corpus builder
+    reuses the same live DagBag instead of parsing again (the catalog is always collected
+    last, so this is the common case). Treat the returned object as read-only when that
+    applies -- mutating it is visible to the smoke catalog's checks too.
 
     Parameters:
         request: pytest.FixtureRequest used to reach the session-scoped DagBag cache.

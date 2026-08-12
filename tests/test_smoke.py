@@ -1516,7 +1516,7 @@ def test_smoke_corpus_build_extracts_portable_data(monkeypatch: pytest.MonkeyPat
             raise ValueError("cannot serialize callback")
         return {"dag_id": "good"}
 
-    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "unset")
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw2")
     monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
     monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder: dag_bag)
@@ -1551,7 +1551,7 @@ def test_smoke_corpus_reuses_dag_bag_parsed_by_full_dag_bag(
     def _fail_if_called(*_args: object, **_kwargs: object) -> Any:
         raise AssertionError("build_dag_bag must not run a second time in this process")
 
-    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "unset")
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "master")
     monkeypatch.setattr(smoke, "build_dag_bag", _fail_if_called)
     monkeypatch.setattr(
@@ -1580,7 +1580,7 @@ def test_smoke_corpus_does_not_pin_dag_bag_when_full_dag_bag_never_ran(
     dag_bag = SimpleNamespace(dags={"good": good}, import_errors={}, dagbag_stats=[])
     session: Any = SimpleNamespace(stash=pytest.Stash())
 
-    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "unset")
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "master")
     monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
     monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder: dag_bag)
@@ -1780,6 +1780,11 @@ def test_smoke_integrity_enforces_parse_timeout_after_full_dag_bag_parses(
 
     result.assert_outcomes(passed=5, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
+    # Distinguishes "the parse itself was hard-killed by the applied timeout" (this
+    # message, only possible if AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT was set before
+    # `full_dag_bag` parsed) from the post-hoc slowpoke/duration check alone, which
+    # would fail this item on `slow.py`'s 0.3s sleep regardless of whether the fix works.
+    result.stdout.fnmatch_lines(["*Dag file import check failed*slow.py*"])
 
 
 def test_ini_option_enables_the_catalog(pytester: pytest.Pytester) -> None:
