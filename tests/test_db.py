@@ -122,6 +122,7 @@ def test_clear_db_rejects_empty_selection() -> None:
         clear_db(tables=set())
 
 
+@SERIAL_ONLY
 def test_clear_db_scoped_selection_leaves_other_groups() -> None:
     """Clear only the requested group and keep unrelated rows."""
 
@@ -143,6 +144,7 @@ def test_clear_db_scoped_selection_leaves_other_groups() -> None:
         clear_db(tables={TableGroup.LOGS, TableGroup.CONNECTIONS})
 
 
+@SERIAL_ONLY
 def test_clear_db_triggers_clears_referencing_task_instances() -> None:
     """Clear trigger rows plus the task instances that reference them."""
 

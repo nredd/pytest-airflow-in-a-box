@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from airflow.models.renderedtifields import RenderedTaskInstanceFields
 from airflow.sdk import DAG, BaseOperator
 from airflow.sdk.exceptions import AirflowException
 from airflow.utils.state import TaskInstanceState
@@ -136,6 +137,32 @@ def test_nested_and_file_templates_render(run_task: RunTask, tmp_path: Path) -> 
         "payload": {"items": ["42"]},
         "query": "SELECT 42",
     }
+
+
+@pytest.mark.db_test
+def test_rendered_template_fields_are_queryable_after_a_run(
+    dag_maker: DagMaker, tmp_path: Path
+) -> None:
+    """Read a task's persisted rendered fields instead of its XCom result."""
+
+    (tmp_path / "query.sql").write_text("SELECT {{ params.value }}", encoding="utf-8")
+    with dag_maker(
+        dag_id="compat_operator_template_context",
+        template_searchpath=[str(tmp_path)],
+        params={"value": "42"},
+    ):
+        TemplateOperator(
+            task_id="render",
+            payload={"items": ["{{ params.value }}"]},
+            query="query.sql",
+        )
+
+    dag_run = dag_maker.create_dagrun()
+    ti = dag_maker.run_ti("render", dag_run)
+
+    rendered = RenderedTaskInstanceFields.get_templated_fields(ti, session=dag_maker.session)
+
+    assert rendered == {"payload": {"items": ["42"]}, "query": "SELECT 42"}
 
 
 def test_operator_lifecycle_hooks_run_in_order(run_task: RunTask) -> None:
