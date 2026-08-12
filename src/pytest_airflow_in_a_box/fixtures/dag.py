@@ -383,7 +383,9 @@ class _DagFactory:
         Parameters:
             run_id: str | None containing an explicit identifier or ``None`` for a derived one.
             logical_date: datetime.datetime | None overriding the current UTC logical date.
-            run_after: datetime.datetime | None overriding the current UTC run-after date.
+            run_after: datetime.datetime | None overriding the current UTC run-after
+                date; rejected with `ValueError` on the Airflow 2.x family, which has
+                no run-after concept.
             start_date: datetime.datetime | None overriding the current UTC start date.
             dag_run_kwargs: Any forwarded to Airflow's scheduler Dag creation method.
 

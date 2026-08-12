@@ -86,6 +86,41 @@ def test_taskflow_xcom_flows_between_tasks(dag_maker) -> None:
     assert ti.xcom_pull(task_ids="consume") == 42
 
 
+def test_dynamic_task_mapping_expands_and_runs(dag_maker) -> None:
+    """Expand a runtime-length mapped task and run one expanded instance.
+
+    Runtime-length mapping only materializes expanded instances through
+    `expand_mapped_task_instances`, so this holds the 2.x class-based mapped-task
+    detection that an attribute probe cannot cover (2.x `MappedOperator` has no
+    `is_mapped`); a literal-length `expand` would mask it via `verify_integrity`.
+
+    Parameters:
+        dag_maker: pytest_airflow_in_a_box.types.DagMaker building the Dag under test.
+    """
+
+    task = _symbol("airflow.decorators", "task")
+    from airflow.utils.state import TaskInstanceState
+
+    with dag_maker("airflow2_mapping"):
+
+        @task
+        def produce() -> list[int]:
+            return [7, 8, 9]
+
+        @task
+        def double(value: int) -> int:
+            return value * 2
+
+        double.expand(value=produce())
+
+    dag_run = dag_maker.create_dagrun()
+    dag_maker.run_ti("produce", dag_run)
+    ti = dag_maker.run_ti("double", dag_run, map_index=2)
+
+    assert ti.state == TaskInstanceState.SUCCESS
+    assert ti.xcom_pull(task_ids="double", map_indexes=2) == 18
+
+
 def test_execution_date_context_is_populated(dag_maker) -> None:
     """Expose the 2.x logical/execution date through the rendered task context.
 
@@ -112,6 +147,23 @@ def test_execution_date_context_is_populated(dag_maker) -> None:
     assert seen["execution_date"] is not None
     assert isinstance(seen["ds"], str)
     assert len(seen["ds"]) == 10
+
+
+def test_run_after_is_rejected_loudly(dag_maker) -> None:
+    """Reject the 3.x-only `run_after` kwarg instead of silently changing semantics.
+
+    Parameters:
+        dag_maker: pytest_airflow_in_a_box.types.DagMaker building the Dag under test.
+    """
+
+    python_operator = _symbol("airflow.operators.python", "PythonOperator")
+    from datetime import datetime, timezone
+
+    with dag_maker("airflow2_run_after"):
+        python_operator(task_id="noop", python_callable=lambda: None)
+
+    with pytest.raises(ValueError, match=r"no 2\.x equivalent"):
+        dag_maker.create_dagrun(run_after=datetime(2021, 5, 5, tzinfo=timezone.utc))
 
 
 def test_declared_params_reject_a_bad_pinned_case(dag_maker) -> None:

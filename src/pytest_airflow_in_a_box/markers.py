@@ -32,6 +32,12 @@ FAMILY_MARKERS: dict[str, AirflowFamily] = {
     "requires_airflow2": AirflowFamily.V2,
     "requires_airflow3": AirflowFamily.V3,
 }
+# `AirflowFamily` values are distribution names, which read ambiguously in a skip
+# reason (`apache-airflow` is installed on both families via the 3.x meta-package).
+_FAMILY_LABELS: dict[AirflowFamily, str] = {
+    AirflowFamily.V2: "Airflow 2.x",
+    AirflowFamily.V3: "Airflow 3.x",
+}
 _ENVIRONMENTS_KEY = pytest.StashKey[dict[str, Path]]()
 
 
@@ -185,8 +191,10 @@ def apply_family_gate(item: pytest.Item) -> None:
             continue
         family = installed_family()
         if family is not required:
-            installed = family.value if family is not None else "no Airflow"
-            pytest.skip(f"`{name}` requires the `{required.value}` family; installed: {installed}")
+            installed = _FAMILY_LABELS[family] if family is not None else "no Airflow"
+            pytest.skip(
+                f"`{name}` requires the {_FAMILY_LABELS[required]} family; installed: {installed}"
+            )
 
 
 __all__ = (
