@@ -195,6 +195,39 @@ def test_build_dag_bag_parses_single_file(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
 
 
+def test_cached_dag_bag_builds_once_per_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Parse once per worker session and reuse the stashed DagBag on later calls."""
+
+    builds: list[object] = []
+    sentinel: Any = SimpleNamespace(dags={}, import_errors={})
+    config: Any = SimpleNamespace(
+        getoption=lambda _name: None,
+        getini=lambda _name: "",
+        rootpath=tmp_path,
+    )
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "get_bootstrap_state",
+        lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
+    )
+    monkeypatch.setattr(fixtures_dagbag, "ensure_database", lambda _root: None)
+    monkeypatch.setattr(
+        fixtures_dagbag,
+        "build_dag_bag",
+        lambda folder: (builds.append(folder), sentinel)[1],
+    )
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    first = fixtures_dagbag._cached_dag_bag(session, config)
+    second = fixtures_dagbag._cached_dag_bag(session, config)
+
+    assert first is sentinel
+    assert second is sentinel
+    assert builds == [tmp_path]
+
+
 @pytest.mark.parametrize(
     ("option_value", "ini_value", "match"),
     [

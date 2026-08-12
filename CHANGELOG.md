@@ -69,6 +69,11 @@ All notable changes to this project will be documented in this file. The format 
   had just persisted, surfacing as a flaky `ServerResponseError` /
   `RuntimeError: task failed to finish with a result` under `-n 4`
   ([#78](https://github.com/nredd/pytest-airflow-in-a-box/issues/78)).
+- `full_dag_bag` no longer reparses the configured Dag folder from scratch when the
+  bundled `--airflow-smoke` catalog already parsed it (or is about to) in the same worker
+  process. Both now share one process-cached `DagBag`, whichever runs first -- at most one
+  full-corpus parse per process instead of one per consumer
+  ([#85](https://github.com/nredd/pytest-airflow-in-a-box/issues/85)).
 
 ## [0.3.0] - 2026-08-10
 

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from pytest_airflow_in_a_box import smoke
+from pytest_airflow_in_a_box.fixtures import dagbag
 
 
 def _config(
@@ -1517,19 +1518,50 @@ def test_smoke_corpus_build_extracts_portable_data(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.delenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", raising=False)
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw2")
-    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
-    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder: dag_bag)
+    monkeypatch.setattr(smoke, "_cached_dag_bag", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=serialize)
     )
 
-    corpus = smoke._build_smoke_corpus(_config(parse_timeout="12.5"))
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+    corpus = smoke._build_smoke_corpus(session, _config(parse_timeout="12.5"))
 
     assert corpus.dags["good"].serialized == {"dag_id": "good"}
     assert corpus.dags["broken"].serialization_error == "cannot serialize callback"
     assert corpus.dags["broken"].tasks[0].pool == "custom"
     assert corpus.producer_worker == "gw2"
     assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "12.5"
+
+
+def test_smoke_corpus_reuses_dag_bag_parsed_by_full_dag_bag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reuse a DagBag already parsed by `full_dag_bag` in this process, per issue #85."""
+
+    good = SimpleNamespace(
+        tags=set(),
+        tasks=[],
+        timetable=SimpleNamespace(can_be_scheduled=True),
+    )
+    dag_bag = SimpleNamespace(dags={"good": good}, import_errors={}, dagbag_stats=[])
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+    session.stash[dagbag.LIVE_DAG_BAG_KEY] = dag_bag
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("build_dag_bag must not run a second time in this process")
+
+    monkeypatch.delenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", raising=False)
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "master")
+    monkeypatch.setattr(dagbag, "build_dag_bag", _fail_if_called)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=lambda _dag: {}),
+    )
+
+    corpus = smoke._build_smoke_corpus(session, _config(parse_timeout="1"))
+
+    assert set(corpus.dags) == {"good"}
 
 
 def test_smoke_corpus_is_built_once_and_cached_per_process(
@@ -1544,7 +1576,9 @@ def test_smoke_corpus_is_built_once_and_cached_per_process(
         smoke, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
     )
     monkeypatch.setattr(
-        smoke, "_build_smoke_corpus", lambda value: (builds.append(value), corpus)[1]
+        smoke,
+        "_build_smoke_corpus",
+        lambda _session, config: (builds.append(config), corpus)[1],
     )
     first_session: Any = SimpleNamespace(stash=pytest.Stash())
 
@@ -1645,6 +1679,47 @@ def test_airflow_smoke_option_enables_the_catalog(pytester: pytest.Pytester) -> 
             "*::smoke::test_pool_references_exist PASSED*",
         ]
     )
+
+
+def test_full_dag_bag_reuses_smoke_corpus_parse(pytester: pytest.Pytester) -> None:
+    """Parse the Dag folder once when a `full_dag_bag` consumer runs with the catalog.
+
+    Regression test for issue #85: a Dag module that records every time it is imported
+    proves the folder is not parsed independently by the smoke corpus builder and by
+    `full_dag_bag` in the same worker process.
+    """
+
+    counter = pytester.path / "parses.txt"
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "counted.py").write_text(
+        f"""
+from pathlib import Path
+from airflow.sdk import DAG, task
+
+with Path({str(counter)!r}).open("a", encoding="utf-8") as handle:
+    handle.write("x")
+
+with DAG(dag_id="counted_dag", schedule=None, tags=["team-a"]) as dag:
+    @task
+    def t():
+        pass
+
+    t()
+""",
+        encoding="utf-8",
+    )
+    pytester.makepyfile(
+        test_consumer="""
+        def test_consumer(full_dag_bag):
+            assert set(full_dag_bag.dags) == {"counted_dag"}
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
+
+    result.assert_outcomes(passed=6)
+    assert counter.read_text(encoding="utf-8").count("x") == 1
 
 
 def test_ini_option_enables_the_catalog(pytester: pytest.Pytester) -> None:
