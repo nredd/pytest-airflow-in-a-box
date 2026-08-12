@@ -68,6 +68,19 @@ class SmokeTask:
 
 
 @dataclass(frozen=True)
+class PoolSeed:
+    """One consumer-defined pool seeded before `test_pool_references_exist` runs.
+
+    Parameters:
+        name: str containing the pool name.
+        slots: int containing the pool's slot capacity.
+    """
+
+    name: str
+    slots: int
+
+
+@dataclass(frozen=True)
 class SmokeDag:
     """Serialized Dag plus metadata needed without the authoring process."""
 
@@ -376,6 +389,46 @@ def _required_dag_tags(config: pytest.Config) -> frozenset[str]:
     if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
         raise pytest.UsageError("Ini option `airflow_required_dag_tags` must be a list of tags")
     return frozenset(lines)
+
+
+def _pool_seeds(config: pytest.Config) -> tuple[PoolSeed, ...]:
+    """Read the pools seeded before `test_pool_references_exist` runs.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_pools`` ini value.
+
+    Returns:
+        tuple[PoolSeed, ...] containing the configured pools; empty when unset.
+
+    Raises:
+        pytest.UsageError: A line is malformed, a name repeats, or slots is not a
+            positive integer.
+    """
+
+    lines: object = config.getini("airflow_pools")
+    if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
+        raise pytest.UsageError("Ini option `airflow_pools` must be a list of lines")
+    seen: set[str] = set()
+    pools: list[PoolSeed] = []
+    for line in lines:
+        name, separator, value = (part.strip() for part in line.partition("="))
+        if not separator or not name or not value:
+            raise pytest.UsageError(
+                f"Ini option `airflow_pools` line must be `name = slots`: '{line}'"
+            )
+        if name in seen:
+            raise pytest.UsageError(f"Duplicate `airflow_pools` pool name: `{name}`")
+        try:
+            slots = int(value)
+        except ValueError as error:
+            raise pytest.UsageError(
+                f"Ini option `airflow_pools` slots must be an integer: '{line}'"
+            ) from error
+        if slots <= 0:
+            raise pytest.UsageError(f"Ini option `airflow_pools` slots must be positive: '{line}'")
+        seen.add(name)
+        pools.append(PoolSeed(name=name, slots=slots))
+    return tuple(pools)
 
 
 def _forbid_default_owner(config: pytest.Config) -> bool:
@@ -1232,24 +1285,39 @@ class ScheduleSanityItem(pytest.Item):
 class PoolReferencesExistItem(pytest.Item):
     """Fail when a task references a pool absent from the metadata database."""
 
-    def __init__(self, *, name: str, parent: SmokeCollector) -> None:
+    def __init__(
+        self,
+        *,
+        name: str,
+        parent: SmokeCollector,
+        pools: tuple[PoolSeed, ...] = (),
+    ) -> None:
         """Create the item and mark it as a metadata-database smoke test.
 
         Parameters:
             name: str containing the pytest item name.
             parent: SmokeCollector that collected this item.
+            pools: tuple[PoolSeed, ...] containing pools to seed before checking references.
         """
 
         super().__init__(name=name, parent=parent)
         self.add_marker(pytest.mark.smoke)
         self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
         self.add_marker(pytest.mark.db_test)
+        self.pools = pools
 
     def runtest(self) -> None:
-        """Resolve every task's declared pool against the metadata database.
+        """Seed configured pools, then resolve every task's pool against the database.
+
+        Seeding is idempotent: a configured pool already present with the same slot
+        count is treated as already seeded rather than an error, so this item stays
+        safe to execute more than once against the same database -- under
+        ``pytest-xdist --dist each``, every worker runs this item, and a rerun tool
+        may execute it again after a failure.
 
         Raises:
-            SmokeCheckFailure: A task references a pool the database does not contain.
+            SmokeCheckFailure: A configured pool already exists with a different slot
+                count, or a task references a pool the database does not contain.
         """
 
         # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
@@ -1259,7 +1327,30 @@ class PoolReferencesExistItem(pytest.Item):
         dag_bag = _smoke_corpus(self.session, self.config)
         failures: list[str] = []
         with create_session() as database_session:
-            known = {pool.pool for pool in Pool.get_pools(session=database_session)}
+            existing: dict[str, int] = {
+                name: slots
+                for pool in Pool.get_pools(session=database_session)
+                if isinstance(name := pool.pool, str) and isinstance(slots := pool.slots, int)
+            }
+            conflicts = sorted(
+                seed.name
+                for seed in self.pools
+                if seed.name in existing and existing[seed.name] != seed.slots
+            )
+            if conflicts:
+                names = ", ".join(f"`{name}`" for name in conflicts)
+                raise SmokeCheckFailure(
+                    f"`airflow_pools` cannot seed {names}; a pool with that name already "
+                    "exists with a different slot count. Remove it from `airflow_pools` "
+                    "or match its existing slots"
+                )
+            to_seed = [seed for seed in self.pools if seed.name not in existing]
+            if to_seed:
+                database_session.add_all(
+                    Pool(pool=seed.name, slots=seed.slots, include_deferred=False)
+                    for seed in to_seed
+                )
+            known = set(existing) | {seed.name for seed in self.pools}
             for dag_id, dag in sorted(dag_bag.dags.items()):
                 for task in dag.tasks:
                     if task.pool not in known:
@@ -1508,7 +1599,11 @@ class SmokeCollector(pytest.Collector):
         )
         yield NoDuplicateDagIdsItem.from_parent(self, name="test_no_duplicate_dag_ids")
         yield ScheduleSanityItem.from_parent(self, name="test_schedule_sanity")
-        yield PoolReferencesExistItem.from_parent(self, name="test_pool_references_exist")
+        yield PoolReferencesExistItem.from_parent(
+            self,
+            name="test_pool_references_exist",
+            pools=_pool_seeds(self.config),
+        )
 
         pattern = _dag_id_pattern(self.config)
         if pattern is not None:
@@ -1567,6 +1662,7 @@ __all__ = (
     "ForbidDefaultOwnerItem",
     "NoDuplicateDagIdsItem",
     "PoolReferencesExistItem",
+    "PoolSeed",
     "RequiredDagTagsItem",
     "ScheduleSanityItem",
     "SerializedDagEntry",

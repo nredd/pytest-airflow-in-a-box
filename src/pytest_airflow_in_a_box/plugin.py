@@ -149,6 +149,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=[],
     )
     parser.addini(
+        "airflow_pools",
+        "Pools seeded before `test_pool_references_exist` runs, as `name = slots` lines.",
+        type="linelist",
+        default=[],
+    )
+    parser.addini(
         "allow_network_airflow_home",
         "Allow explicit Airflow storage on a network filesystem.",
         type="bool",
