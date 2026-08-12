@@ -19,8 +19,10 @@ from pytest_airflow_in_a_box import (
     fixtures,
     logging,
     markers,
+    matchers,
     plugin,
     reporting,
+    results,
     taskinstance,
     types,
 )
@@ -104,9 +106,25 @@ def test_public_surface_is_explicit() -> None:
         "DEFAULT_TRIGGER_TIMEOUT",
         "TaskResolutionError",
         "TriggerExecutionError",
+        "execute_dag_run",
         "ordered_task_instances",
         "run_task_instance",
         "run_trigger",
+    )
+    assert results.__all__ == (
+        "DagRunResult",
+        "TaskResult",
+        "assertrepr_compare",
+        "task_key",
+    )
+    assert matchers.__all__ == (
+        "ANY",
+        "TaskOutcome",
+        "deferred",
+        "failed",
+        "skipped",
+        "succeeded",
+        "upstream_failed",
     )
     assert types.__all__ == (
         "AirflowConnections",

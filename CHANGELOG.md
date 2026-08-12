@@ -8,6 +8,19 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `dag_maker.run()`, executing every task instance of one DagRun in dependency order
+  (creating the DagRun when omitted, expanding mapped tasks mid-run, resuming deferrals with
+  `run_triggerer=True`) and returning an inert `DagRunResult` snapshot with `states`, `xcoms`,
+  `errors`, `order`, per-task `result["task_id"]` access, and an aligned per-task `repr`. Task
+  failures are captured scheduler-shaped: downstreams settle `upstream_failed` and
+  `result.success` reports `False`. The engine is public as
+  `pytest_airflow_in_a_box.taskinstance.execute_dag_run`
+  ([#90](https://github.com/nredd/pytest-airflow-in-a-box/issues/90)).
+- `pytest_airflow_in_a_box.matchers` with `succeeded`, `failed`, `skipped`, `deferred`, and
+  `upstream_failed` outcome matchers, `DagRunResult` equality against plain mappings for
+  one-expression bulk assertions (`assert result == {"answer": succeeded(42)}`), and a
+  `pytest_assertrepr_compare` hook rendering a per-task diff on mismatch
+  ([#90](https://github.com/nredd/pytest-airflow-in-a-box/issues/90)).
 - Ini option `airflow_pools`, seeding consumer-defined pools as `name = slots` lines before
   `test_pool_references_exist` runs, so a task's custom pool no longer needs private bootstrap
   code or deselecting the item. Seeding is idempotent, so the item stays safe under

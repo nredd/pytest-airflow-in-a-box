@@ -29,7 +29,11 @@ from pytest_airflow_in_a_box._compat.dag import (
     persist_dag,
     select_task_instance,
 )
-from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT, run_task_instance
+from pytest_airflow_in_a_box._compat.taskrun import (
+    DEFAULT_TRIGGER_TIMEOUT,
+    execute_dag_run,
+    run_task_instance,
+)
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.markers import read_bool_marker
 from pytest_airflow_in_a_box.types import DagMaker, SerializedDag
@@ -43,6 +47,8 @@ if TYPE_CHECKING:
     from airflow.models.taskinstance import TaskInstance
     from airflow.sdk import DAG
     from sqlalchemy.orm import Session
+
+    from pytest_airflow_in_a_box.results import DagRunResult
 
 DAG_ID_MAX_LENGTH = 250
 RUN_ID_MAX_LENGTH = 250
@@ -497,6 +503,41 @@ class _DagFactory:
             run_triggerer=run_triggerer,
             trigger_timeout=trigger_timeout,
             session=self.session,
+        )
+
+    def run(
+        self,
+        dag_run: DagRun | None = None,
+        *,
+        dag_run_kwargs: dict[str, Any] | None = None,
+        run_triggerer: bool = False,
+        trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+    ) -> DagRunResult:
+        """Execute every task instance of one DagRun and return an inert snapshot.
+
+        Parameters:
+            dag_run: airflow.models.dagrun.DagRun | None created by this factory,
+                or ``None`` to create one.
+            dag_run_kwargs: dict[str, Any] | None used when creating an omitted DagRun.
+            run_triggerer: bool running persisted trigger events and resuming deferrals.
+            trigger_timeout: float seconds allowed for each trigger's first event.
+
+        Returns:
+            pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+
+        Raises:
+            ValueError: Both ``dag_run`` and ``dag_run_kwargs`` are supplied.
+        """
+
+        if dag_run is not None and dag_run_kwargs is not None:
+            raise ValueError("`dag_run_kwargs` cannot be supplied with an existing `dag_run`")
+        resolved_dag_run = dag_run or self.create_dagrun(**(dag_run_kwargs or {}))
+        return execute_dag_run(
+            resolved_dag_run,
+            self.dag,
+            session=self.session,
+            run_triggerer=run_triggerer,
+            trigger_timeout=trigger_timeout,
         )
 
     def close(self) -> None:
