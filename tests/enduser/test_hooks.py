@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
 import pytest
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
@@ -104,6 +105,18 @@ def test_custom_hook_reads_a_seeded_connection(run_task: RunTask) -> None:
     )
 
     assert result.xcoms["return_value"] == _expected_connection()
+
+
+def test_custom_hook_mocked_with_unittest_mock(run_task: RunTask) -> None:
+    """Patch a custom hook's connection resolution instead of seeding one."""
+
+    with DAG(dag_id="compat_hook_mocked", schedule=None) as dag:
+        HookOperator(task_id="connect", conn_id="unused")
+
+    with mock.patch.object(ClientHook, "get_conn", return_value={"region": "mocked"}):
+        result = run_task(dag.get_task("connect"))
+
+    assert result.xcoms["return_value"] == {"region": "mocked"}
 
 
 def _fetch_scalar(cursor: Any) -> int:
