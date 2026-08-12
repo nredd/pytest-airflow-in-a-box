@@ -20,7 +20,8 @@
 ``run_task_instance`` is adapted from Apache Airflow and modified to defer every
 Airflow import, resolve optional tasks, preserve dependency semantics, implement
 ``mark_success``, and return the refreshed caller-owned ORM task instance.
-``ordered_task_instances`` and ``run_trigger`` are locally authored.
+``ordered_task_instances``, ``run_trigger``, and ``execute_dag_run`` are locally
+authored.
 
 References:
     https://github.com/apache/airflow/blob/2d374f71bc81202204ac0208df07b07c280668fa/devel-common/src/tests_common/test_utils/taskinstance.py
@@ -32,11 +33,14 @@ References:
 from __future__ import annotations
 
 import asyncio
+import logging
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
+from pytest_airflow_in_a_box._compat.dag import expand_mapped_task_instances
 from pytest_airflow_in_a_box._compat.registry import lookup_authoring_dag
+from pytest_airflow_in_a_box.results import DagRunResult, TaskResult, task_key
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -44,7 +48,14 @@ if TYPE_CHECKING:
     from airflow.sdk.types import Operator
     from sqlalchemy.orm import Session
 
+LOGGER = logging.getLogger(__name__)
+
 DEFAULT_TRIGGER_TIMEOUT = 10.0
+STRANDED_STATE_VALUES = frozenset({"up_for_retry", "up_for_reschedule"})
+TERMINAL_RUN_STATE_VALUES = frozenset({"success", "failed"})
+TERMINAL_TASK_STATE_VALUES = frozenset(
+    {"success", "failed", "skipped", "upstream_failed", "removed"}
+)
 
 
 class TaskResolutionError(RuntimeError):
@@ -505,10 +516,323 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
         ti.refresh_from_task(task, dag_run=dag_run)
 
 
+def _task_identity(ti: Any) -> tuple[str, int]:
+    """Return one task instance's ``(task_id, map_index)`` identity.
+
+    Parameters:
+        ti: Any containing an ORM TaskInstance.
+
+    Returns:
+        tuple[str, int] identifying the instance within its DagRun.
+    """
+
+    return (str(ti.task_id), int(ti.map_index))
+
+
+def _next_pending_task_instance(
+    dag_run: DagRun,
+    dag: Any,
+    session: Session | None,
+    attempted: set[tuple[str, int]],
+) -> TaskInstance | None:
+    """Return the first unattempted task instance in dependency-safe order.
+
+    The instance list is re-fetched on every call because mapped expansion
+    replaces placeholder instances mid-run.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun being executed.
+        dag: Any exposing Airflow's ``topological_sort`` method.
+        session: sqlalchemy.orm.Session | None used to fetch task instances.
+        attempted: set[tuple[str, int]] containing already-processed identities.
+
+    Returns:
+        airflow.models.taskinstance.TaskInstance | None when every instance settled.
+    """
+
+    for ti in ordered_task_instances(dag_run, dag, session=session):
+        if _task_identity(ti) not in attempted:
+            return ti
+    return None
+
+
+def _try_expand_mapped_task(dag_run: DagRun, task_id: str, session: Session | None) -> bool:
+    """Expand one persisted mapped task once its upstream values exist.
+
+    Expansion failure is expected when an upstream the mapping depends on did
+    not succeed; the placeholder instance is left for ``update_state`` to mark
+    ``upstream_failed`` exactly as the scheduler would.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun owning the mapped placeholder.
+        task_id: str identifying the mapped task.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+
+    Returns:
+        bool reporting whether expansion succeeded.
+
+    Raises:
+        ValueError: ``session`` is absent, so mapped metadata cannot be expanded.
+    """
+
+    if session is None:
+        raise ValueError(f"Mapped task '{task_id}' requires a metadata `session` to expand")
+    try:
+        from airflow.models.serialized_dag import SerializedDagModel
+
+        scheduler_dag = SerializedDagModel.get_dag(str(dag_run.dag_id), session=session)
+        if scheduler_dag is None:
+            raise RuntimeError("Airflow did not return the persisted scheduler Dag")
+        expand_mapped_task_instances(scheduler_dag.get_task(task_id), str(dag_run.run_id), session)
+    except Exception as error:
+        LOGGER.warning(
+            f"Could not expand mapped task '{task_id}' for DagRun '{dag_run.run_id}': {error}"
+        )
+        session.rollback()
+        return False
+    return True
+
+
+def _settle_dag_run(dag_run: DagRun, dag: Any, session: Session | None) -> None:
+    """Drive DagRun state and unrunnable task instances to a fixed point.
+
+    One ``update_state`` pass marks only the ``upstream_failed`` instances whose
+    upstreams are already terminal, so failure chains settle over several passes.
+    Settling stops at the first pass that reaches a terminal DagRun state so
+    state-change listeners observe exactly one transition, and the pass count is
+    bounded by the instance count plus the final DagRun pass.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun being settled.
+        dag: Any exposing Airflow's ``topological_sort`` method.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+    """
+
+    previous: list[tuple[str, int, Any]] | None = None
+    bound = len(ordered_task_instances(dag_run, dag, session=session)) + 2
+    for _ in range(bound):
+        dag_run.update_state(**_session_kwargs(session), execute_callbacks=False)
+        run_state = dag_run.state
+        if getattr(run_state, "value", run_state) in TERMINAL_RUN_STATE_VALUES:
+            return
+        current = [
+            (*_task_identity(ti), ti.state)
+            for ti in ordered_task_instances(dag_run, dag, session=session)
+        ]
+        if current == previous:
+            return
+        previous = current
+    LOGGER.warning(
+        f"DagRun '{dag_run.run_id}' task states did not stabilize within '{bound}' passes"
+    )
+
+
+def _upstreams_settled(dag_run: DagRun, dag: Any, task_id: str, session: Session | None) -> bool:
+    """Report whether every direct upstream of one task reached a terminal state.
+
+    Mapped expansion reads upstream XCom values, and Airflow persists
+    ``upstream_failed`` on the placeholder when they are missing, so expansion
+    must wait for upstreams the way the scheduler's readiness gate does.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun owning the task instances.
+        dag: Any containing the authoring Dag with the task graph.
+        task_id: str identifying the downstream task.
+        session: sqlalchemy.orm.Session | None used to fetch task instances.
+
+    Returns:
+        bool reporting whether every direct upstream instance is terminal.
+    """
+
+    upstream_ids = set(dag.get_task(task_id).upstream_task_ids)
+    if not upstream_ids:
+        return True
+    return all(
+        getattr(ti.state, "value", ti.state) in TERMINAL_TASK_STATE_VALUES
+        for ti in ordered_task_instances(dag_run, dag, session=session)
+        if str(ti.task_id) in upstream_ids
+    )
+
+
+def _pull_return_value(
+    ti: TaskInstance,
+    task_id: str,
+    map_index: int,
+    session: Session | None,
+) -> Any:
+    """Pull one instance's default ``return_value`` XCom.
+
+    Parameters:
+        ti: airflow.models.taskinstance.TaskInstance whose XCom is pulled.
+        task_id: str identifying the task.
+        map_index: int identifying the mapped instance, or ``-1`` when unmapped.
+        session: sqlalchemy.orm.Session | None used for the metadata query.
+
+    Returns:
+        Any containing the pulled value, or ``None`` when nothing was pushed.
+    """
+
+    kwargs: dict[str, Any] = {"task_ids": task_id, **_session_kwargs(session)}
+    if map_index >= 0:
+        kwargs["map_indexes"] = map_index
+    return ti.xcom_pull(**kwargs)
+
+
+def _snapshot_dag_run(
+    dag_run: DagRun,
+    dag: Any,
+    session: Session | None,
+    *,
+    errors: dict[str, BaseException],
+    executed: list[str],
+) -> DagRunResult:
+    """Capture one settled DagRun into an inert result snapshot.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun that finished settling.
+        dag: Any exposing Airflow's ``topological_sort`` method.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        errors: dict[str, BaseException] containing captured task-body exceptions.
+        executed: list[str] containing task keys in actual execution order.
+
+    Returns:
+        pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+    """
+
+    if session is not None:
+        session.expire_all()
+    task_results = []
+    for ti in ordered_task_instances(dag_run, dag, session=session):
+        task_id, map_index = _task_identity(ti)
+        key = task_key(task_id, map_index)
+        task_results.append(
+            TaskResult(
+                task_id=task_id,
+                map_index=map_index,
+                state=ti.state,
+                xcom=_pull_return_value(ti, task_id, map_index, session),
+                error=errors.get(key),
+                ti=ti,
+            )
+        )
+    stranded = [
+        result.key
+        for result in task_results
+        if getattr(result.state, "value", result.state) in STRANDED_STATE_VALUES
+    ]
+    if stranded:
+        stranded_keys = ", ".join(f"'{key}'" for key in stranded)
+        LOGGER.warning(
+            f"DagRun '{dag_run.run_id}' settled with task instances awaiting a retry or "
+            f"reschedule that `execute_dag_run` will not attempt again: {stranded_keys}; "
+            f"the DagRun stays non-terminal"
+        )
+    state = dag_run.state
+    return DagRunResult(
+        dag_run=dag_run,
+        dag_id=str(dag_run.dag_id),
+        run_id=str(dag_run.run_id),
+        state=state,
+        success=bool(getattr(state, "value", state) == "success"),
+        tasks=tuple(task_results),
+        executed=tuple(executed),
+    )
+
+
+def execute_dag_run(
+    dag_run: DagRun,
+    dag: Any,
+    *,
+    session: Session | None = None,
+    run_triggerer: bool = False,
+    trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+) -> DagRunResult:
+    """Execute every task instance of one DagRun and return an inert snapshot.
+
+    Instances run in dependency-safe order with default dependency semantics,
+    one attempt each. A raising task body is captured and execution continues,
+    scheduler-shaped: with default trigger rules blocked downstreams settle as
+    ``upstream_failed`` and ``success`` reports ``False``. The DagRun state
+    keeps Airflow's leaf-task semantics, so a run whose failures are absorbed
+    by an ``all_done``-style leaf still settles ``success``; assert
+    ``result.errors`` for "no task raised". Mapped tasks expand mid-run once
+    every direct upstream settled. A deferring task settles ``deferred``
+    unless ``run_triggerer`` resumes it inline. One attempt means task
+    ``retries`` are never re-attempted: a retrying task settles
+    ``up_for_retry``, the DagRun stays non-terminal, and a warning names the
+    stranded instances.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
+        dag: Any containing the authoring Dag with executable task objects.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        run_triggerer: bool running persisted trigger events and resuming deferrals.
+        trigger_timeout: float seconds allowed for each persisted trigger's first event.
+
+    Returns:
+        pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+
+    Raises:
+        ValueError: A mapped task must expand but no ``session`` was supplied, or a
+            fetched task instance is absent from the supplied Dag graph.
+        TaskResolutionError: No executable task can be resolved for an instance.
+        TriggerExecutionError: ``run_triggerer`` cannot drive a persisted trigger
+            to an event; the plugin-contract failure propagates instead of being
+            recorded as a task outcome.
+    """
+
+    errors: dict[str, BaseException] = {}
+    executed: list[str] = []
+    attempted: set[tuple[str, int]] = set()
+    expansion_attempted: set[str] = set()
+    while (ti := _next_pending_task_instance(dag_run, dag, session, attempted)) is not None:
+        task_id, map_index = _task_identity(ti)
+        state = ti.state
+        if state is not None:
+            # Pre-settled instances (for example branch-skipped downstreams) never run.
+            attempted.add((task_id, map_index))
+            continue
+        if (
+            map_index < 0
+            and task_id not in expansion_attempted
+            and getattr(dag.get_task(task_id), "is_mapped", False)
+        ):
+            expansion_attempted.add(task_id)
+            if not _upstreams_settled(dag_run, dag, task_id, session) or not (
+                _try_expand_mapped_task(dag_run, task_id, session)
+            ):
+                attempted.add((task_id, map_index))
+            continue
+        attempted.add((task_id, map_index))
+        key = task_key(task_id, map_index)
+        try:
+            run_task_instance(
+                ti,
+                dag.get_task(task_id),
+                run_triggerer=run_triggerer,
+                trigger_timeout=trigger_timeout,
+                session=session,
+            )
+        except (TaskResolutionError, TriggerExecutionError):
+            # Plugin-contract failures are not Dag outcomes; surface them.
+            raise
+        except Exception as error:
+            errors[key] = error
+        # An instance whose dependencies were unmet keeps its `None` state: not executed.
+        if ti.state != state:
+            executed.append(key)
+    _settle_dag_run(dag_run, dag, session)
+    if session is not None:
+        # `update_state` writes through the caller's session without committing.
+        session.commit()
+    return _snapshot_dag_run(dag_run, dag, session, errors=errors, executed=executed)
+
+
 __all__ = (
     "DEFAULT_TRIGGER_TIMEOUT",
     "TaskResolutionError",
     "TriggerExecutionError",
+    "execute_dag_run",
     "ordered_task_instances",
     "run_task_instance",
     "run_trigger",

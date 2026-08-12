@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from airflow.sdk import DAG
     from sqlalchemy.orm import Session
 
+    from pytest_airflow_in_a_box.results import DagRunResult
+
 
 class AirflowVariables(Protocol):
     """Seed fixture-owned Airflow Variable rows for one database-backed test."""
@@ -151,6 +153,27 @@ class DagMaker(Protocol):
         trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
     ) -> TaskInstance:
         """Create and execute one task instance through the compatibility shim."""
+
+    def run(
+        self,
+        dag_run: DagRun | None = None,
+        *,
+        dag_run_kwargs: dict[str, Any] | None = None,
+        run_triggerer: bool = False,
+        trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+    ) -> DagRunResult:
+        """Execute every task instance of one DagRun and return an inert snapshot.
+
+        Parameters:
+            dag_run: airflow.models.dagrun.DagRun | None created by this factory,
+                or ``None`` to create one.
+            dag_run_kwargs: dict[str, Any] | None used when creating an omitted DagRun.
+            run_triggerer: bool running persisted trigger events and resuming deferrals.
+            trigger_timeout: float seconds allowed for each trigger's first event.
+
+        Returns:
+            pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+        """
 
 
 class TaskRunResult(Protocol):

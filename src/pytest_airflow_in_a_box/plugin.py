@@ -57,6 +57,7 @@ from pytest_airflow_in_a_box.markers import (
     register_markers,
 )
 from pytest_airflow_in_a_box.reporting import configure_reporting
+from pytest_airflow_in_a_box.results import assertrepr_compare
 from pytest_airflow_in_a_box.smoke import collect_smoke_items
 
 __all__ = (
@@ -418,6 +419,29 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     apply_environment_gate(item)
     if _requires_database(item):
         ensure_database(get_bootstrap_state(item.config).root)
+
+
+def pytest_assertrepr_compare(
+    config: pytest.Config,
+    op: str,
+    left: object,
+    right: object,
+) -> list[str] | None:
+    """Render a per-task diff for one failed ``DagRunResult == Mapping`` assertion.
+
+    Parameters:
+        config: pytest.Config for the active test session.
+        op: str containing the comparison operator pytest evaluated.
+        left: object containing one side of the failed comparison.
+        right: object containing the other side of the failed comparison.
+
+    Returns:
+        list[str] | None containing explanation lines for a bulk-outcome
+        comparison, or ``None`` to keep pytest's default rendering.
+    """
+
+    del config
+    return assertrepr_compare(op, left, right)
 
 
 @pytest.hookimpl(optionalhook=True)

@@ -8,7 +8,6 @@ import pytest
 from airflow.sdk import DAG, task
 from airflow.utils.state import DagRunState, TaskInstanceState
 
-from pytest_airflow_in_a_box.taskinstance import ordered_task_instances, run_task_instance
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
@@ -139,9 +138,9 @@ def test_nested_task_group_ids_survive_persistence(dag_maker: DagMaker) -> None:
 
 @pytest.mark.db_test
 def test_complete_taskflow_dag_reaches_success(dag_maker: DagMaker) -> None:
-    """Execute all task instances in graph order and finish the DagRun."""
+    """Execute all task instances through `dag_maker.run` and finish the DagRun."""
 
-    with dag_maker(dag_id="compat_complete_dag") as dag:
+    with dag_maker(dag_id="compat_complete_dag"):
 
         @task
         def produce() -> int:
@@ -154,9 +153,8 @@ def test_complete_taskflow_dag_reaches_success(dag_maker: DagMaker) -> None:
         produced: Any = produce()
         consume(produced)
 
-    dag_run = dag_maker.create_dagrun()
-    for ti in ordered_task_instances(dag_run, dag, session=dag_maker.session):
-        run_task_instance(ti, dag.get_task(str(ti.task_id)), session=dag_maker.session)
-    dag_run.update_state(session=dag_maker.session, execute_callbacks=False)
+    result = dag_maker.run()
 
-    assert dag_run.state == DagRunState.SUCCESS
+    assert result.success
+    assert result.dag_run.state == DagRunState.SUCCESS
+    assert result.xcoms == {"produce": 21, "consume": 42}
