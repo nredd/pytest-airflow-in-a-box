@@ -701,7 +701,7 @@ def _shared_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smok
     """Elect one process to parse Dags and share the result with local workers.
 
     Parameters:
-        session: pytest.Session used to reach the shared live-DagBag cache.
+        session: pytest.Session used to reach a DagBag already parsed by `full_dag_bag`.
         config: pytest.Config carrying the shared bootstrap run root.
 
     Returns:
