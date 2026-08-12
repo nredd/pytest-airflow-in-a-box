@@ -94,7 +94,11 @@ Airflow support.
 
 The released compatibility matrix is exercised against Airflow 3.1.0, 3.1.1, 3.1.2, 3.1.3,
 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, and 3.3.0 across CPython 3.10 through 3.14
-using Airflow's published constraints files.
+using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.9.3,
+2.10.5, and 2.11.2 on CPython 3.10-3.12 (Airflow 2.x never supported 3.13). On the 2.x
+family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable errors
+naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip on
+the other family so one suite runs green on both sides of a migration.
 
 ## Installation
 
@@ -113,12 +117,13 @@ Airflow's published constraints files -- can install the plugin bare:
 pip install pytest-airflow-in-a-box
 ```
 
-An `airflow2` extra (`apache-airflow>=2.9,<3`, which also caps Python at 3.12 because Airflow
-2.x never supported 3.13) exists ahead of the planned Airflow 2.x compatibility tier
-([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)); on this release the first
-Airflow-facing test in a 2.x environment fails with a single actionable error. The two Airflow
-extras are declared mutually exclusive for `uv` projects via `[tool.uv] conflicts`; wheel
-metadata cannot express that exclusivity, so plain `pip` relies on the same runtime check.
+The `airflow2` extra (`apache-airflow>=2.9,<3`, which also caps Python at 3.12 because Airflow
+2.x never supported 3.13) installs the certified Airflow 2.x compatibility tier
+([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`, `run_ti`,
+`full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run against 2.9.3, 2.10.5,
+and 2.11.2. The two Airflow extras are declared mutually exclusive for `uv` projects via
+`[tool.uv] conflicts`; wheel metadata cannot express that exclusivity, so plain `pip` relies
+on the same runtime check.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
