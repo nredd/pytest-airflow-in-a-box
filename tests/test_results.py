@@ -186,6 +186,29 @@ def test_equality_compares_per_task_outcomes_against_a_mapping() -> None:
     assert result != 5
 
 
+def test_equality_accepts_tuple_keys_for_mapped_instances() -> None:
+    """Normalize ``(task_id, map_index)`` mapping keys onto snapshot task keys."""
+
+    first = _task_result("double", map_index=0, xcom=14)
+    second = _task_result("double", map_index=1, xcom=16)
+    result = _dag_run_result(first, second)
+
+    assert result == {("double", 0): first, ("double", 1): second}
+    assert result == {("double", 0): first, "double[1]": second}
+    assert result != {("double", 0): first, ("double", 9): second}
+
+
+def test_assertrepr_compare_survives_tuple_and_exotic_keys() -> None:
+    """Keep the global hook crash-free for unsortable expected keys."""
+
+    result = _dag_run_result(_task_result("double", map_index=0, xcom=14))
+
+    lines = assertrepr_compare("==", result, {("double", 0): 1, 7: 2})
+
+    assert lines is not None
+    assert lines[0] == "DagRunResult does not match the expected task outcomes:"
+
+
 def test_snapshots_stay_identity_hashable() -> None:
     """Keep snapshots usable in sets and as dict keys despite the mapping equality."""
 

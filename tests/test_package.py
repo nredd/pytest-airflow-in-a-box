@@ -122,6 +122,7 @@ def test_public_surface_is_explicit() -> None:
         "TaskOutcome",
         "deferred",
         "failed",
+        "not_run",
         "skipped",
         "succeeded",
         "upstream_failed",

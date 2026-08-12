@@ -12,6 +12,7 @@ from pytest_airflow_in_a_box.matchers import (
     TaskOutcome,
     deferred,
     failed,
+    not_run,
     skipped,
     succeeded,
     upstream_failed,
@@ -76,11 +77,13 @@ def test_failed_narrows_the_captured_exception_type() -> None:
 
 
 def test_state_only_factories_match_their_states() -> None:
-    """Match skipped, deferred, and upstream_failed states exactly."""
+    """Match skipped, deferred, upstream_failed, and never-ran states exactly."""
 
     assert skipped() == _snapshot(state="skipped")
     assert deferred() == _snapshot(state="deferred")
     assert upstream_failed() == _snapshot(state="upstream_failed")
+    assert not_run() == _snapshot(state=None)
+    assert not_run() != _snapshot(state="success")
     assert skipped() != _snapshot(state="deferred")
 
 
@@ -111,6 +114,7 @@ def test_reprs_render_the_factory_call() -> None:
     assert repr(succeeded(42)) == "succeeded(42)"
     assert repr(failed(ValueError)) == "failed(ValueError)"
     assert repr(skipped()) == "skipped()"
+    assert repr(not_run()) == "not_run()"
     assert repr(TaskOutcome("removed")) == "TaskOutcome('removed')"
     assert repr(TaskOutcome("removed", xcom=1)) == "TaskOutcome('removed', 1)"
     assert repr(ANY) == "ANY"

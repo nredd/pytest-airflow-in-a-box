@@ -873,6 +873,7 @@ class _ExecutionSession:
 
         self.expirations = 0
         self.rollbacks = 0
+        self.commits = 0
 
     def expire_all(self) -> None:
         """Record one identity-map expiration."""
@@ -883,6 +884,11 @@ class _ExecutionSession:
         """Record one transaction rollback."""
 
         self.rollbacks += 1
+
+    def commit(self) -> None:
+        """Record one transaction commit."""
+
+        self.commits += 1
 
 
 def _execution_dag(*tasks: SimpleNamespace) -> SimpleNamespace:
@@ -938,6 +944,8 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
     assert result.xcoms == {"produce": 21, "consume": 42}
     assert result.errors == {}
     assert session.expirations == 1
+    assert session.commits == 1
+    assert dag_run.update_calls == 1
     assert upstream.pull_kwargs == {"task_ids": "produce", "session": session}
 
 
@@ -1009,7 +1017,9 @@ def test_execute_dag_run_expands_mapped_placeholders(
         [placeholder],
         settle=lambda run: setattr(run, "state", "success"),
     )
-    dag = _execution_dag(SimpleNamespace(task_id="double", is_mapped=True))
+    dag = _execution_dag(
+        SimpleNamespace(task_id="double", is_mapped=True, upstream_task_ids=set())
+    )
     session: Any = _ExecutionSession()
     expanded = [
         _ExecutionTaskInstance("double", map_index=0, xcom=10),
@@ -1047,7 +1057,9 @@ def test_execute_dag_run_leaves_unexpandable_placeholders_to_settle(
         [placeholder],
         settle=lambda _run: setattr(placeholder, "state", "upstream_failed"),
     )
-    dag = _execution_dag(SimpleNamespace(task_id="double", is_mapped=True))
+    dag = _execution_dag(
+        SimpleNamespace(task_id="double", is_mapped=True, upstream_task_ids=set())
+    )
     session: Any = _ExecutionSession()
 
     def fail_run(ti: Any, task: Any, **kwargs: Any) -> Any:
@@ -1061,6 +1073,57 @@ def test_execute_dag_run_leaves_unexpandable_placeholders_to_settle(
 
     assert result.order == []
     assert result.states == {"double": "upstream_failed"}
+
+
+def test_execute_dag_run_waits_for_upstreams_before_expanding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leave a mapped placeholder untouched while a direct upstream is unsettled."""
+
+    producer = _ExecutionTaskInstance("produce")
+    placeholder = _ExecutionTaskInstance("double")
+    dag_run: Any = _ExecutionDagRun([producer, placeholder])
+    dag = _execution_dag(
+        SimpleNamespace(task_id="produce", is_mapped=False),
+        SimpleNamespace(task_id="double", is_mapped=True, upstream_task_ids={"produce"}),
+    )
+    session: Any = _ExecutionSession()
+
+    def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del task, kwargs
+        ti.state = "deferred"
+        return ti
+
+    def fail_expand(*args: Any) -> bool:
+        del args
+        raise AssertionError("expansion must wait for settled upstreams")
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
+    monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fail_expand)
+
+    result = execute_dag_run(dag_run, dag, session=session)
+
+    assert result.states == {"produce": "deferred", "double": None}
+    assert result.order == ["produce"]
+    assert not result.success
+
+
+def test_execute_dag_run_propagates_plugin_contract_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Surface task-resolution failures instead of recording them as Dag outcomes."""
+
+    dag_run: Any = _ExecutionDagRun([_ExecutionTaskInstance("orphan")])
+    dag = _execution_dag(SimpleNamespace(task_id="orphan", is_mapped=False))
+
+    def fail_run(ti: Any, task: Any, **kwargs: Any) -> Any:
+        del ti, task, kwargs
+        raise TaskResolutionError("no executable task")
+
+    monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
+
+    with pytest.raises(TaskResolutionError, match="no executable task"):
+        execute_dag_run(dag_run, dag)
 
 
 def test_try_expand_mapped_task_requires_a_session() -> None:

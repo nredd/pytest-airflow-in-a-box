@@ -526,11 +526,17 @@ class _DagFactory:
             pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
 
         Raises:
-            ValueError: Both ``dag_run`` and ``dag_run_kwargs`` are supplied.
+            ValueError: Both ``dag_run`` and ``dag_run_kwargs`` are supplied, or the
+                supplied ``dag_run`` is not owned by the factory's current Dag.
         """
 
         if dag_run is not None and dag_run_kwargs is not None:
             raise ValueError("`dag_run_kwargs` cannot be supplied with an existing `dag_run`")
+        record, _scheduler_dag = self._require_persisted()
+        if dag_run is not None and dag_run.id not in record.dag_run_ids:
+            raise ValueError(
+                f"DagRun '{dag_run.run_id}' is not owned by `dag_maker` for Dag '{record.dag_id}'"
+            )
         resolved_dag_run = dag_run or self.create_dagrun(**(dag_run_kwargs or {}))
         return execute_dag_run(
             resolved_dag_run,

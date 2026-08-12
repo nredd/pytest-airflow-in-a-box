@@ -11,7 +11,14 @@ from airflow.sdk import BaseOperator, task
 from airflow.triggers.base import BaseTrigger, TriggerEvent
 from airflow.utils.state import DagRunState, TaskInstanceState
 
-from pytest_airflow_in_a_box.matchers import failed, skipped, succeeded, upstream_failed
+from pytest_airflow_in_a_box.matchers import (
+    deferred,
+    failed,
+    not_run,
+    skipped,
+    succeeded,
+    upstream_failed,
+)
 from pytest_airflow_in_a_box.types import DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
@@ -261,6 +268,101 @@ def test_run_resumes_a_deferred_task_with_the_triggerer(dag_maker: DagMaker) -> 
 
     assert result.success
     assert result.xcoms == {"deferred": 42}
+
+
+def test_run_commits_the_settled_state_for_other_sessions(
+    dag_maker: DagMaker,
+    session: Any,
+) -> None:
+    """Leave no open write transaction: settle results are visible cross-session."""
+
+    from airflow.models.taskinstance import TaskInstance
+    from sqlalchemy import select
+
+    with dag_maker(dag_id="result_commit"):
+
+        @task
+        def boom() -> None:
+            raise ValueError("nope")
+
+        @task
+        def consume() -> None:
+            pass
+
+        boom() >> consume()
+
+    result = dag_maker.run()
+
+    observed = {
+        str(ti.task_id): ti.state
+        for ti in session.scalars(
+            select(TaskInstance).where(
+                TaskInstance.dag_id == result.dag_id,
+                TaskInstance.run_id == result.run_id,
+            )
+        )
+    }
+    assert observed == {
+        "boom": TaskInstanceState.FAILED,
+        "consume": TaskInstanceState.UPSTREAM_FAILED,
+    }
+
+
+def test_run_waits_for_upstreams_before_expanding_mapped_tasks(
+    dag_maker: DagMaker,
+) -> None:
+    """Keep a mapped task pending, not `upstream_failed`, behind a deferred upstream."""
+
+    with dag_maker(dag_id="result_deferred_mapping"):
+
+        @task
+        def double(value: int) -> int:
+            return value * 2
+
+        double.expand(value=DeferredOperator(task_id="defer").output)
+
+    result = dag_maker.run()
+
+    assert not result.success
+    assert result.state == DagRunState.RUNNING
+    assert result.states == {"defer": TaskInstanceState.DEFERRED, "double": None}
+    assert result == {"defer": deferred(), "double": not_run()}
+
+
+def test_run_success_follows_airflow_leaf_semantics(dag_maker: DagMaker) -> None:
+    """Report `success` from the DagRun state even when an absorbed task failed."""
+
+    with dag_maker(dag_id="result_leaf_semantics"):
+
+        @task
+        def boom() -> None:
+            raise ValueError("nope")
+
+        @task(trigger_rule="all_done")
+        def cleanup() -> None:
+            pass
+
+        boom() >> cleanup()
+
+    result = dag_maker.run()
+
+    assert result.success
+    assert result.states == {
+        "boom": TaskInstanceState.FAILED,
+        "cleanup": TaskInstanceState.SUCCESS,
+    }
+    assert isinstance(result.errors["boom"], ValueError)
+
+
+def test_run_rejects_a_foreign_dag_run(dag_maker: DagMaker) -> None:
+    """Refuse a DagRun the factory's current Dag does not own."""
+
+    _linear_dag(dag_maker, "result_first_dag")
+    first_dag_run = dag_maker.create_dagrun()
+    _linear_dag(dag_maker, "result_second_dag")
+
+    with pytest.raises(ValueError, match="is not owned by `dag_maker`"):
+        dag_maker.run(first_dag_run)
 
 
 def test_run_strands_a_retrying_task_visibly(dag_maker: DagMaker) -> None:

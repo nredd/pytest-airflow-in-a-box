@@ -48,6 +48,21 @@ def _state_label(state: Any) -> str:
     return str(getattr(state, "value", state))
 
 
+def _normalized_expected(expected: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Normalize one expected-outcome mapping's keys to snapshot task keys.
+
+    Parameters:
+        expected: Mapping[Any, Any] keyed by task keys or ``(task_id, map_index)``.
+
+    Returns:
+        dict[Any, Any] with tuple keys rendered through ``task_key``.
+    """
+
+    return {
+        task_key(*key) if isinstance(key, tuple) else key: value for key, value in expected.items()
+    }
+
+
 def _truncate(detail: str) -> str:
     """Bound one repr detail so failing-assert output stays scannable.
 
@@ -239,7 +254,8 @@ class DagRunResult:
         """Compare per-task outcomes against a mapping of expected outcomes.
 
         Parameters:
-            other: object containing a ``Mapping`` from task keys to expected outcomes.
+            other: object containing a ``Mapping`` from task keys (or
+                ``(task_id, map_index)`` tuples) to expected outcomes.
 
         Returns:
             bool reporting whether the mapping covers exactly this snapshot's task
@@ -248,10 +264,11 @@ class DagRunResult:
 
         if not isinstance(other, Mapping):
             return NotImplemented
+        expected = _normalized_expected(other)
         actual = {result.key: result for result in self.tasks}
-        if set(other) != set(actual):
+        if set(expected) != set(actual):
             return False
-        return all(other[key] == actual[key] for key in other)
+        return all(expected[key] == actual[key] for key in expected)
 
     # Defining `__eq__` sets `__hash__` to `None`; two snapshots only ever compare
     # equal by identity, so the identity hash stays consistent with equality.
@@ -301,15 +318,16 @@ def assertrepr_compare(op: str, left: object, right: object) -> list[str] | None
     if op != "==":
         return None
     if isinstance(left, DagRunResult) and isinstance(right, Mapping):
-        result, expected = left, right
+        result, expected = left, _normalized_expected(right)
     elif isinstance(right, DagRunResult) and isinstance(left, Mapping):
-        result, expected = right, left
+        result, expected = right, _normalized_expected(left)
     else:
         return None
 
     actual = {task_result.key: task_result for task_result in result.tasks}
     lines = ["DagRunResult does not match the expected task outcomes:"]
-    for key in sorted(set(actual) | set(expected)):
+    # `repr` keying keeps the global hook crash-free for exotic expected keys.
+    for key in sorted(set(actual) | set(expected), key=repr):
         if key not in expected:
             lines.append(f"  {key}: not in the expected mapping; got {actual[key]!r}")
         elif key not in actual:

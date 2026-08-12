@@ -23,6 +23,7 @@ _FACTORY_NAMES = {
     "skipped": "skipped",
     "deferred": "deferred",
     "upstream_failed": "upstream_failed",
+    None: "not_run",
 }
 _MISSING = object()
 
@@ -48,7 +49,7 @@ class TaskOutcome:
 
     def __init__(
         self,
-        state: str,
+        state: str | None,
         *,
         xcom: Any = ANY,
         error_type: type[BaseException] | None = None,
@@ -56,19 +57,20 @@ class TaskOutcome:
         """Store one expected outcome.
 
         Parameters:
-            state: str containing the expected ``TaskInstanceState`` value.
+            state: str | None containing the expected ``TaskInstanceState`` value,
+                or ``None`` for an instance that never ran.
             xcom: Any containing the expected ``return_value`` XCom, or ``ANY``.
             error_type: type[BaseException] | None narrowing the captured exception.
 
         Raises:
-            TypeError: ``state`` is not a string or ``error_type`` is not an
-                exception type.
-            ValueError: ``state`` is empty.
+            TypeError: ``state`` is not a string or ``None``, or ``error_type`` is
+                not an exception type.
+            ValueError: ``state`` is an empty string.
         """
 
-        if not isinstance(state, str):
-            raise TypeError(f"`state` must be a string: '{state}'")
-        if not state:
+        if state is not None and not isinstance(state, str):
+            raise TypeError(f"`state` must be a string or `None`: '{state}'")
+        if state == "":
             raise ValueError("`state` must be non-empty")
         if error_type is not None and not (
             isinstance(error_type, type) and issubclass(error_type, BaseException)
@@ -174,11 +176,24 @@ def upstream_failed() -> TaskOutcome:
     return TaskOutcome("upstream_failed")
 
 
+def not_run() -> TaskOutcome:
+    """Expect one task instance that never ran, keeping its ``None`` state.
+
+    Blocked downstreams of a still-deferred or retrying upstream settle this way.
+
+    Returns:
+        TaskOutcome comparing state against a ``TaskResult``.
+    """
+
+    return TaskOutcome(None)
+
+
 __all__ = (
     "ANY",
     "TaskOutcome",
     "deferred",
     "failed",
+    "not_run",
     "skipped",
     "succeeded",
     "upstream_failed",

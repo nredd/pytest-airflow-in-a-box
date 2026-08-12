@@ -52,6 +52,10 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TRIGGER_TIMEOUT = 10.0
 STRANDED_STATE_VALUES = frozenset({"up_for_retry", "up_for_reschedule"})
+TERMINAL_RUN_STATE_VALUES = frozenset({"success", "failed"})
+TERMINAL_TASK_STATE_VALUES = frozenset(
+    {"success", "failed", "skipped", "upstream_failed", "removed"}
+)
 
 
 class TaskResolutionError(RuntimeError):
@@ -594,7 +598,9 @@ def _settle_dag_run(dag_run: DagRun, dag: Any, session: Session | None) -> None:
 
     One ``update_state`` pass marks only the ``upstream_failed`` instances whose
     upstreams are already terminal, so failure chains settle over several passes.
-    The pass count is bounded by the instance count plus the final DagRun pass.
+    Settling stops at the first pass that reaches a terminal DagRun state so
+    state-change listeners observe exactly one transition, and the pass count is
+    bounded by the instance count plus the final DagRun pass.
 
     Parameters:
         dag_run: airflow.models.dagrun.DagRun being settled.
@@ -606,6 +612,9 @@ def _settle_dag_run(dag_run: DagRun, dag: Any, session: Session | None) -> None:
     bound = len(ordered_task_instances(dag_run, dag, session=session)) + 2
     for _ in range(bound):
         dag_run.update_state(**_session_kwargs(session), execute_callbacks=False)
+        run_state = dag_run.state
+        if getattr(run_state, "value", run_state) in TERMINAL_RUN_STATE_VALUES:
+            return
         current = [
             (*_task_identity(ti), ti.state)
             for ti in ordered_task_instances(dag_run, dag, session=session)
@@ -615,6 +624,33 @@ def _settle_dag_run(dag_run: DagRun, dag: Any, session: Session | None) -> None:
         previous = current
     LOGGER.warning(
         f"DagRun '{dag_run.run_id}' task states did not stabilize within '{bound}' passes"
+    )
+
+
+def _upstreams_settled(dag_run: DagRun, dag: Any, task_id: str, session: Session | None) -> bool:
+    """Report whether every direct upstream of one task reached a terminal state.
+
+    Mapped expansion reads upstream XCom values, and Airflow persists
+    ``upstream_failed`` on the placeholder when they are missing, so expansion
+    must wait for upstreams the way the scheduler's readiness gate does.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun owning the task instances.
+        dag: Any containing the authoring Dag with the task graph.
+        task_id: str identifying the downstream task.
+        session: sqlalchemy.orm.Session | None used to fetch task instances.
+
+    Returns:
+        bool reporting whether every direct upstream instance is terminal.
+    """
+
+    upstream_ids = set(dag.get_task(task_id).upstream_task_ids)
+    if not upstream_ids:
+        return True
+    return all(
+        getattr(ti.state, "value", ti.state) in TERMINAL_TASK_STATE_VALUES
+        for ti in ordered_task_instances(dag_run, dag, session=session)
+        if str(ti.task_id) in upstream_ids
     )
 
 
@@ -715,12 +751,16 @@ def execute_dag_run(
 
     Instances run in dependency-safe order with default dependency semantics,
     one attempt each. A raising task body is captured and execution continues,
-    scheduler-shaped: blocked downstreams settle as ``upstream_failed`` and the
-    snapshot reports ``success=False``. Mapped tasks expand mid-run once their
-    upstream values exist. A deferring task settles ``deferred`` unless
-    ``run_triggerer`` resumes it inline. One attempt means task ``retries`` are
-    never re-attempted: a retrying task settles ``up_for_retry``, the DagRun
-    stays non-terminal, and a warning names the stranded instances.
+    scheduler-shaped: with default trigger rules blocked downstreams settle as
+    ``upstream_failed`` and ``success`` reports ``False``. The DagRun state
+    keeps Airflow's leaf-task semantics, so a run whose failures are absorbed
+    by an ``all_done``-style leaf still settles ``success``; assert
+    ``result.errors`` for "no task raised". Mapped tasks expand mid-run once
+    every direct upstream settled. A deferring task settles ``deferred``
+    unless ``run_triggerer`` resumes it inline. One attempt means task
+    ``retries`` are never re-attempted: a retrying task settles
+    ``up_for_retry``, the DagRun stays non-terminal, and a warning names the
+    stranded instances.
 
     Parameters:
         dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
@@ -736,6 +776,9 @@ def execute_dag_run(
         ValueError: A mapped task must expand but no ``session`` was supplied, or a
             fetched task instance is absent from the supplied Dag graph.
         TaskResolutionError: No executable task can be resolved for an instance.
+        TriggerExecutionError: ``run_triggerer`` cannot drive a persisted trigger
+            to an event; the plugin-contract failure propagates instead of being
+            recorded as a task outcome.
     """
 
     errors: dict[str, BaseException] = {}
@@ -755,7 +798,9 @@ def execute_dag_run(
             and getattr(dag.get_task(task_id), "is_mapped", False)
         ):
             expansion_attempted.add(task_id)
-            if not _try_expand_mapped_task(dag_run, task_id, session):
+            if not _upstreams_settled(dag_run, dag, task_id, session) or not (
+                _try_expand_mapped_task(dag_run, task_id, session)
+            ):
                 attempted.add((task_id, map_index))
             continue
         attempted.add((task_id, map_index))
@@ -768,14 +813,18 @@ def execute_dag_run(
                 trigger_timeout=trigger_timeout,
                 session=session,
             )
+        except (TaskResolutionError, TriggerExecutionError):
+            # Plugin-contract failures are not Dag outcomes; surface them.
+            raise
         except Exception as error:
             errors[key] = error
+        # An instance whose dependencies were unmet keeps its `None` state: not executed.
+        if ti.state != state:
             executed.append(key)
-        else:
-            # An instance whose dependencies were unmet keeps its `None` state: not executed.
-            if ti.state != state:
-                executed.append(key)
     _settle_dag_run(dag_run, dag, session)
+    if session is not None:
+        # `update_state` writes through the caller's session without committing.
+        session.commit()
     return _snapshot_dag_run(dag_run, dag, session, errors=errors, executed=executed)
 
 

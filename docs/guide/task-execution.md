@@ -37,8 +37,10 @@ topology), `tis`, `dag_run`, and per-task access via `result["task_id"]` or
 exist, and keys expand with them: `states` gains `"double[0]"`, `"double[1]"`, and so on.
 
 Failure is captured scheduler-shaped: a raising task body lands in `result.errors`, blocked
-downstreams settle as `upstream_failed`, and `result.success` reports `False` -- testing an
-intentional-failure Dag needs no extra flag:
+downstreams settle as `upstream_failed`, and with default trigger rules `result.success`
+reports `False` -- testing an intentional-failure Dag needs no extra flag. `success` mirrors
+Airflow's leaf-task DagRun semantics, so a failure absorbed by an `all_done`-style leaf still
+settles `success`; assert `not result.errors` for "no task raised":
 
 ```python
 result = dag_maker.run()
@@ -76,8 +78,10 @@ assert result == {
 }
 ```
 
-`succeeded(xcom=ANY)`, `failed(error_type=None)`, `skipped()`, `deferred()`, and
-`upstream_failed()` are the built-in outcomes; `TaskOutcome` builds custom ones.
+`succeeded(xcom=ANY)`, `failed(error_type=None)`, `skipped()`, `deferred()`,
+`upstream_failed()`, and `not_run()` (an instance that never ran, e.g. blocked behind a
+still-deferred upstream) are the built-in outcomes; `TaskOutcome` builds custom ones. Mapped
+instances address as `"double[0]"` keys or `("double", 0)` tuples.
 
 ## Single-task execution
 
