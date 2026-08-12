@@ -103,7 +103,8 @@ def test_family_gate_skips_on_the_other_family(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(pytest.skip.Exception, match="requires_airflow2") as caught:
         markers.apply_family_gate(_item_with_marker("requires_airflow2"))
 
-    assert "apache-airflow-core" in str(caught.value)
+    assert "requires the Airflow 2.x family" in str(caught.value)
+    assert "installed: Airflow 3.x" in str(caught.value)
 
 
 def test_family_gate_skips_without_any_airflow(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -220,8 +221,36 @@ def test_create_dag_run_uses_the_execution_date_interface(
 
 
 @pytest.mark.usefixtures("v2_capabilities")
-def test_expand_mapped_task_uses_the_operator_method_on_v2() -> None:
-    """Expand through the 2.x mapped operator's own method."""
+def test_create_dag_run_rejects_run_after_on_v2() -> None:
+    """Refuse the 3.x-only `run_after` kwarg instead of silently ignoring it."""
+
+    record = _record(session=None)
+    scheduler_dag: Any = SimpleNamespace()
+    authoring_dag: Any = SimpleNamespace()
+
+    with pytest.raises(ValueError, match=r"no 2\.x equivalent"):
+        dag_module.create_dag_run(
+            scheduler_dag,
+            authoring_dag,
+            record,
+            run_id="run-1",
+            logical_date=None,
+            run_after=datetime(2021, 5, 5, tzinfo=timezone.utc),
+            start_date=None,
+            dag_run_kwargs={},
+        )
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_expand_mapped_task_uses_the_operator_method_on_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detect 2.x mapped operators by class and expand through their own method.
+
+    The 2.x `MappedOperator` carries no `is_mapped` attribute, so the fake must
+    pass the real `isinstance` probe -- an attribute-only fake would paper over
+    the detection path this test exists to hold.
+    """
 
     calls: list[tuple[str, Any]] = []
 
@@ -233,55 +262,79 @@ def test_expand_mapped_task_uses_the_operator_method_on_v2() -> None:
         def commit(self) -> None:
             self.committed = True
 
-    class FakeMappedTask:
-        """Expose the 2.x expansion entry point."""
-
-        is_mapped = True
+    class FakeMappedOperator:
+        """Expose the 2.x expansion entry point without `is_mapped`."""
 
         def expand_mapped_task(self, run_id: str, session: Any = None) -> None:
             calls.append((run_id, session))
 
+    monkeypatch.setitem(
+        sys.modules,
+        "airflow.models.mappedoperator",
+        SimpleNamespace(MappedOperator=FakeMappedOperator),
+    )
     session = FakeSession()
 
-    mapped_task: Any = FakeMappedTask()
+    mapped_task: Any = FakeMappedOperator()
     fake_session: Any = session
     dag_module.expand_mapped_task_instances(mapped_task, "run-1", fake_session)
 
     assert calls == [("run-1", session)]
     assert session.committed is True
 
+    calls.clear()
+    unmapped_task: Any = SimpleNamespace(is_mapped=True)
+    dag_module.expand_mapped_task_instances(unmapped_task, "run-1", fake_session)
+
+    assert calls == []
+
+
+class _FakeV2CleanupSession:
+    """Record ORM and core delete traffic for v2 `_cleanup_dag` probes.
+
+    Parameters:
+        fileloc: str | None reported as the Dag model's source location.
+        fileloc_still_used: bool reporting another Dag model sharing the fileloc.
+    """
+
+    def __init__(self, fileloc: str | None, fileloc_still_used: bool) -> None:
+        self.fileloc = fileloc
+        self.fileloc_still_used = fileloc_still_used
+        self.deleted: list[Any] = []
+        self.executed: list[str] = []
+        self.committed = False
+
+    def rollback(self) -> None:
+        return None
+
+    def get(self, model: Any, key: Any) -> Any:
+        name = getattr(model, "__name__", str(model))
+        if name == "DagModel":
+            return SimpleNamespace(kind=f"{name}:{key}", fileloc=self.fileloc)
+        return f"{name}:{key}"
+
+    def delete(self, row: Any) -> None:
+        self.deleted.append(row)
+
+    def flush(self) -> None:
+        return None
+
+    def execute(self, statement: Any) -> None:
+        self.executed.append(str(statement))
+
+    def scalars(self, statement: Any) -> Any:
+        del statement
+        return SimpleNamespace(first=lambda: "other_dag" if self.fileloc_still_used else None)
+
+    def commit(self) -> None:
+        self.committed = True
+
 
 @pytest.mark.usefixtures("v2_capabilities")
 def test_cleanup_dag_deletes_the_v2_row_set() -> None:
-    """Delete runs, serialized rows, and the Dag model without version tables."""
+    """Delete runs, serialized rows, the Dag model, and the orphaned code row."""
 
-    class FakeSession:
-        """Record ORM and core delete traffic."""
-
-        def __init__(self) -> None:
-            self.deleted: list[Any] = []
-            self.executed: list[str] = []
-            self.committed = False
-
-        def rollback(self) -> None:
-            return None
-
-        def get(self, model: Any, key: Any) -> Any:
-            return f"{getattr(model, '__name__', model)}:{key}"
-
-        def delete(self, row: Any) -> None:
-            self.deleted.append(row)
-
-        def flush(self) -> None:
-            return None
-
-        def execute(self, statement: Any) -> None:
-            self.executed.append(str(statement))
-
-        def commit(self) -> None:
-            self.committed = True
-
-    session = FakeSession()
+    session = _FakeV2CleanupSession(fileloc="/suite/test_module.py", fileloc_still_used=False)
     record = _record(session=session)
     record.dag_run_ids.add(5)
 
@@ -289,7 +342,21 @@ def test_cleanup_dag_deletes_the_v2_row_set() -> None:
 
     assert session.deleted[0].endswith(":5")
     assert any("serialized_dag" in statement for statement in session.executed)
-    assert session.deleted[-1].endswith(":fake_dag")
+    assert session.deleted[-1].kind.endswith(":fake_dag")
+    assert any("dag_code" in statement for statement in session.executed)
+    assert session.committed is True
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_cleanup_dag_keeps_a_shared_v2_code_row() -> None:
+    """Leave the `dag_code` row alone while another Dag still shares the fileloc."""
+
+    session = _FakeV2CleanupSession(fileloc="/suite/test_module.py", fileloc_still_used=True)
+    record = _record(session=session)
+
+    dag_module._cleanup_dag(record)
+
+    assert not any("dag_code" in statement for statement in session.executed)
     assert session.committed is True
 
 
@@ -334,31 +401,42 @@ def test_cleanup_dag_tolerates_an_absent_dag_model() -> None:
     assert session.committed is True
 
 
-def test_register_v2_orm_models_falls_back_and_tolerates_absence(
+def test_register_v2_orm_models_imports_the_fab_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Try the provider path first, the legacy path second, and give up quietly."""
+    """Import the FAB provider models once and succeed silently."""
 
     attempts: list[str] = []
 
     def fake_import(name: str) -> Any:
         attempts.append(name)
-        if name.endswith("fab_security.sqla.models"):
-            return SimpleNamespace()
-        raise ImportError(name)
+        return SimpleNamespace()
 
     monkeypatch.setattr(dag_module, "import_module", fake_import)
     dag_module._register_v2_orm_models()
-    assert attempts == [
-        "airflow.providers.fab.auth_manager.models",
-        "airflow.www.fab_security.sqla.models",
-    ]
 
-    attempts.clear()
+    assert attempts == ["airflow.providers.fab.auth_manager.models"]
+
+
+def test_register_v2_orm_models_logs_a_stripped_install(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Name the missing FAB models module instead of failing the fixture.
+
+    Every certified 2.x release depends on `apache-airflow-providers-fab`
+    unconditionally, so this only fires on a hand-stripped install -- the log line
+    is the diagnostic breadcrumb for the mapper failure that follows.
+    """
+
     monkeypatch.setattr(
         dag_module, "import_module", lambda name: (_ for _ in ()).throw(ImportError(name))
     )
-    dag_module._register_v2_orm_models()
+
+    with caplog.at_level("INFO", logger=dag_module.__name__):
+        dag_module._register_v2_orm_models()
+
+    assert any("`ab_user`" in message for message in caplog.messages)
 
 
 def test_is_v2_reports_the_v3_family(monkeypatch: pytest.MonkeyPatch) -> None:

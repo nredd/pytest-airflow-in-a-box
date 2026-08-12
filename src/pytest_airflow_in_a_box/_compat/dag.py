@@ -9,6 +9,7 @@ References:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,8 @@ from pytest_airflow_in_a_box._compat.registry import (
     register_authoring_dag,
     unregister_authoring_dag,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -117,15 +120,18 @@ def _register_v2_orm_models() -> None:
     imported first.
     """
 
-    for fab_models in (
-        "airflow.providers.fab.auth_manager.models",
-        "airflow.www.fab_security.sqla.models",
-    ):
-        try:
-            import_module(fab_models)
-            return
-        except ImportError:
-            continue
+    try:
+        # Every certified 2.x release depends on `apache-airflow-providers-fab`
+        # unconditionally, so this import only fails on a hand-stripped install.
+        import_module("airflow.providers.fab.auth_manager.models")
+    except ImportError:
+        # INFO because Airflow's dictConfig caps handlers at INFO; a DEBUG line
+        # would vanish exactly when this diagnostic matters.
+        LOGGER.info(
+            "`airflow.providers.fab.auth_manager.models` is not importable; 2.x "
+            "note-mapper configuration may fail to resolve the `ab_user` table on "
+            "ORM flushes"
+        )
 
 
 def open_dag_session(dag_id: str) -> Session:
@@ -376,7 +382,8 @@ def create_dag_run(
         record: DagPersistenceRecord receiving exact metadata ownership.
         run_id: str containing the validated collision-safe run identifier.
         logical_date: datetime.datetime | None overriding the current UTC logical date.
-        run_after: datetime.datetime | None overriding the current UTC run-after date.
+        run_after: datetime.datetime | None overriding the current UTC run-after date;
+            rejected on the 2.x family, which has no run-after concept.
         start_date: datetime.datetime | None overriding the current UTC start date.
         dag_run_kwargs: dict[str, Any] forwarded to Airflow's scheduler Dag.
 
@@ -384,8 +391,16 @@ def create_dag_run(
         airflow.models.dagrun.DagRun committed with verified task instances.
 
     Raises:
+        ValueError: `run_after` was passed on the Airflow 2.x family.
         DagRunCreationError: Airflow cannot create or verify the DagRun metadata.
     """
+
+    if run_after is not None and _is_v2():
+        raise ValueError(
+            "`run_after` is an Airflow 3.x scheduling concept with no 2.x equivalent; "
+            "silently ignoring it would change run semantics between families. Pass "
+            "`logical_date` on the 2.x family instead."
+        )
 
     # The 2.x module is dynamically resolved so static checking stays valid against an
     # installed 3.x tree, which has no `airflow.utils.timezone`.
@@ -401,7 +416,6 @@ def create_dag_run(
     try:
         now = utcnow()
         resolved_logical_date = convert_to_utc(coerce_datetime(logical_date or now))
-        resolved_run_after = convert_to_utc(coerce_datetime(run_after or now))
         resolved_start_date = convert_to_utc(coerce_datetime(start_date or now))
         dag_version: Any = None
         if not is_v2:
@@ -437,6 +451,7 @@ def create_dag_run(
         else:
             from airflow.utils.types import DagRunTriggeredByType
 
+            resolved_run_after = convert_to_utc(coerce_datetime(run_after or now))
             kwargs.setdefault("triggered_by", DagRunTriggeredByType.TEST)
             dag_run = scheduler_dag.create_dagrun(
                 run_id=run_id,
@@ -559,10 +574,28 @@ def select_task_instance(
         ) from error
 
 
+def _task_is_mapped(task: Any) -> bool:
+    """Report whether one task participates in dynamic task mapping.
+
+    Parameters:
+        task: Any containing an authoring or serialized operator.
+
+    Returns:
+        bool marking the task as a mapped operator on the installed family.
+    """
+
+    if _is_v2():
+        # 2.x `MappedOperator` predates the `is_mapped` attribute, so an attribute
+        # probe is always False there; detect by class instead.
+        mapped_module = import_module("airflow.models.mappedoperator")
+        return isinstance(task, mapped_module.MappedOperator)
+    return bool(getattr(task, "is_mapped", False))
+
+
 def expand_mapped_task_instances(task: Any, run_id: str, session: Session) -> None:
     """Expand a persisted mapped task for one DagRun when mapping applies."""
 
-    if not getattr(task, "is_mapped", False):
+    if not _task_is_mapped(task):
         return
 
     if _is_v2():
@@ -613,13 +646,23 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
     session.flush()
 
     if _is_v2():
-        # 2.x has no DagVersion/DagCode/bundle rows; serialized rows key on `dag_id`.
+        from airflow.models.dagcode import DagCode
+
+        # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id` and
+        # `dag_code` rows key on `fileloc`, shared by every Dag in one source file.
         session.execute(
             delete(SerializedDagModel).where(SerializedDagModel.dag_id == record.dag_id)
         )
         dag_model = session.get(DagModel, record.dag_id)
         if dag_model is not None:
+            fileloc = dag_model.fileloc
             session.delete(dag_model)
+            session.flush()
+            still_used = session.scalars(
+                select(DagModel.dag_id).where(DagModel.fileloc == fileloc)
+            ).first()
+            if fileloc is not None and still_used is None:
+                session.execute(delete(DagCode).where(DagCode.fileloc == fileloc))
         session.commit()
         return
 
