@@ -48,6 +48,11 @@ All notable changes to this project will be documented in this file. The format 
   corrupt case of `apache-airflow<3` coexisting with `apache-airflow-core`. Runs without
   Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
   diagnosis ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
+- The corpus `_resolve()` dynamic-import helper moves out of the 9 Dag files that each
+  copy-pasted it into a shared `tests/dags/_family.py`, reached the same way `provider.py`
+  already reaches `provider_package` (`sys.path` insertion plus `import_module`) since
+  DagBag imports every corpus file as a standalone module
+  ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
 
 ### Fixed
 
