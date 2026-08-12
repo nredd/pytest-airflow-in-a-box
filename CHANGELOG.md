@@ -69,10 +69,14 @@ All notable changes to this project will be documented in this file. The format 
   had just persisted, surfacing as a flaky `ServerResponseError` /
   `RuntimeError: task failed to finish with a result` under `-n 4`
   ([#78](https://github.com/nredd/pytest-airflow-in-a-box/issues/78)).
-- `full_dag_bag` no longer reparses the configured Dag folder from scratch when the
-  bundled `--airflow-smoke` catalog already parsed it (or is about to) in the same worker
-  process. Both now share one process-cached `DagBag`, whichever runs first -- at most one
-  full-corpus parse per process instead of one per consumer
+- The bundled `--airflow-smoke` catalog no longer reparses the configured Dag folder from
+  scratch when a `full_dag_bag` consumer already parsed it in the same worker process (the
+  catalog is always collected last, so this is the common case). `full_dag_bag` caches its
+  live `DagBag` on the session, and the smoke corpus builder reuses it when present instead
+  of parsing again -- one full-corpus parse per process instead of one per consumer, with
+  the catalog's configured `airflow_dag_parse_timeout` still applied either way. A `DagBag`
+  shared this way should be treated as read-only, since mutating it is now visible to the
+  smoke catalog's checks too
   ([#85](https://github.com/nredd/pytest-airflow-in-a-box/issues/85)).
 
 ## [0.3.0] - 2026-08-10
