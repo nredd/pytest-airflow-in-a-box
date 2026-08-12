@@ -32,6 +32,8 @@ References:
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -44,7 +46,11 @@ if TYPE_CHECKING:
     from airflow.sdk.types import Operator
     from sqlalchemy.orm import Session
 
+LOGGER = logging.getLogger(__name__)
+
 DEFAULT_TRIGGER_TIMEOUT = 10.0
+SDK_TASK_RUN_RETRIES = 3
+SDK_TASK_RUN_RETRY_DELAY_SECONDS = 0.5
 
 
 class TaskResolutionError(RuntimeError):
@@ -217,6 +223,11 @@ def _run_sdk_task_instance(
 ) -> TaskInstance:
     """Execute one task through Airflow 3.2+'s private Task SDK runner.
 
+    Retries up to ``SDK_TASK_RUN_RETRIES`` times when Airflow's in-process Execution API
+    server swallows an unexpected exception and returns no result, which happens
+    intermittently under concurrent xdist load when a pooled metadata connection observes a
+    stale pre-commit snapshot of the persisted task instance.
+
     Parameters:
         ti: airflow.models.taskinstance.TaskInstance to execute.
         task: airflow.sdk.types.Operator containing executable authoring code.
@@ -230,7 +241,7 @@ def _run_sdk_task_instance(
         airflow.models.taskinstance.TaskInstance containing refreshed state.
 
     Raises:
-        RuntimeError: Airflow finishes execution without a task-run result.
+        RuntimeError: Airflow finishes every retry without a task-run result.
         BaseException: Airflow reports the task execution error.
     """
 
@@ -283,9 +294,20 @@ def _run_sdk_task_instance(
         session=active_session,
     )
     # Some tests don't save the ti at all, in which case new_ti is None.
+    # NOTE(redd): https://github.com/nredd/pytest-airflow-in-a-box/issues/78
     taskrun_result: Any = None
     try:
-        taskrun_result = _run_task(ti=new_ti or ti, task=task)
+        for attempt in range(1, SDK_TASK_RUN_RETRIES + 1):
+            taskrun_result = _run_task(ti=new_ti or ti, task=task)
+            if taskrun_result is not None:
+                break
+            if attempt < SDK_TASK_RUN_RETRIES:
+                LOGGER.warning(
+                    f"Airflow's in-process Execution API returned no result for task instance "
+                    f"'{ti.task_id}' on attempt {attempt}/{SDK_TASK_RUN_RETRIES}; retrying "
+                    f"after a possible stale metadata read"
+                )
+                time.sleep(SDK_TASK_RUN_RETRY_DELAY_SECONDS)
     finally:
         _refresh_task_instance(ti, active_session)  # Some tests expect side effects.
     if not taskrun_result:

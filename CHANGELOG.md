@@ -34,6 +34,11 @@ All notable changes to this project will be documented in this file. The format 
   instead of the process working directory, matching normal pytest configuration-file
   semantics; the `--dag-folder` CLI option remains relative to the invocation directory
   ([#71](https://github.com/nredd/pytest-airflow-in-a-box/issues/71)).
+- `run_task_instance` retries Airflow 3.2+'s private Task SDK runner up to three times when
+  Airflow's in-process Execution API server swallows an unexpected exception and returns no
+  result, absorbing an intermittent race under concurrent xdist load where a pooled metadata
+  connection observes a stale pre-commit snapshot of the persisted task instance
+  ([#78](https://github.com/nredd/pytest-airflow-in-a-box/issues/78)).
 
 ## [0.3.0] - 2026-08-10
 
