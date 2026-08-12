@@ -12,20 +12,33 @@ from pytest_airflow_in_a_box import doctor
 from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowCapabilities,
     AirflowCompatibilityError,
+    AirflowFamily,
+    ApiSurface,
     DagBagLocation,
+    DagRunInterface,
+    ParamsLocation,
     TaskInstanceRunner,
+    TimezoneLocation,
 )
 from pytest_airflow_in_a_box.airflow_cfg import sqlite_url
 from pytest_airflow_in_a_box.bootstrap import STATE_VERSION, BootstrapState
 
 CAPABILITIES = AirflowCapabilities(
     release=(3, 3, 0),
+    family=AirflowFamily.V3,
     dag_bag_location=DagBagLocation.DAG_PROCESSING,
     dag_bag_supports_include_examples=False,
     task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
     refresh_from_task_supports_dag_run=True,
     startup_details_supports_sentry=True,
     runtime_task_instance_supports_queue=True,
+    has_task_sdk=True,
+    uses_structlog=True,
+    has_dag_versioning=True,
+    dagrun_interface=DagRunInterface.LOGICAL_DATE,
+    api_surface=ApiSurface.API_SERVER,
+    params_location=ParamsLocation.SDK,
+    timezone_location=TimezoneLocation.SDK,
 )
 
 
@@ -66,6 +79,7 @@ def _state(
         network_storage=network_storage,
         sql_alchemy_conn=sql_alchemy_conn or sqlite_url(root / "airflow.db"),
         db_backend=db_backend,
+        family="apache-airflow-core",
     )
 
 
@@ -239,3 +253,9 @@ def test_airflow_doctor_reports_explicit_storage_reason_and_still_cleans_up(
     result.stdout.fnmatch_lines(["*Reason: `explicit`*"])
     remaining = list(explicit_base.iterdir())
     assert remaining == []
+
+
+def test_format_capability_value_marks_unprobed_fields() -> None:
+    """Render None capability fields as unprobed rather than a bare `None`."""
+
+    assert doctor._format_capability_value(None) == "unprobed on this family"

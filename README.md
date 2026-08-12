@@ -26,8 +26,8 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 ## Quickstart
 
 ```console
-uv add --dev pytest-airflow-in-a-box
-pip install pytest-airflow-in-a-box
+uv add --dev "pytest-airflow-in-a-box[airflow3]"
+pip install "pytest-airflow-in-a-box[airflow3]"
 ```
 
 ```python
@@ -81,14 +81,37 @@ Airflow support.
 
 The released compatibility matrix is exercised against Airflow 3.1.0, 3.1.1, 3.1.2, 3.1.3,
 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, and 3.3.0 across CPython 3.10 through 3.14
-using Airflow's published constraints files.
+using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.9.3,
+2.10.5, and 2.11.2 on CPython 3.10-3.12, exercised through the end-user consumer contract
+(Airflow 2.x never supported 3.13). On the 2.x
+family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable errors
+naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip on
+the other family so one suite runs green on both sides of a migration.
 
 ## Installation
 
 ```console
-uv add --dev pytest-airflow-in-a-box
+uv add --dev "pytest-airflow-in-a-box[airflow3]"
+pip install "pytest-airflow-in-a-box[airflow3]"
+```
+
+The plugin does not depend on Airflow directly: the Airflow 2.x monolith and the 3.x core both
+install the `airflow` package, so a hard plugin pin would corrupt whichever family you did not
+choose. The `airflow3` extra pins `apache-airflow>=3.1,<4` (the meta-package resolves a coherent
+core + task-sdk pair). Projects that already pin Airflow themselves -- for example through
+Airflow's published constraints files -- can install the plugin bare:
+
+```console
 pip install pytest-airflow-in-a-box
 ```
+
+The `airflow2` extra (`apache-airflow>=2.9,<3`, which also caps Python at 3.12 because Airflow
+2.x never supported 3.13) installs the certified Airflow 2.x compatibility tier
+([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`, `run_ti`,
+`full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run against 2.9.3, 2.10.5,
+and 2.11.2. The two Airflow extras are declared mutually exclusive for `uv` projects via
+`[tool.uv] conflicts`; wheel metadata cannot express that exclusivity, so plain `pip` relies
+on the same runtime check.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

@@ -8,6 +8,20 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
+  certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
+  ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
+  `execution_date` interface, no bundles/DAG versioning), `run_ti`/`run_task_instance`,
+  `full_dag_bag`, `clear_db` (renamed `dataset*` tables, `BaseXCom`), seeding, params
+  validation via `airflow.models.param`, and the bundled smoke checks all run on both
+  families; `run_task`, `cap_structlog`, and the REST API fixtures fail on 2.x with
+  actionable errors naming the 2.x alternative.
+- `requires_airflow2` / `requires_airflow3` markers, auto-skipped on the other family,
+  plus three 2.x CI legs (two-pass constraints install) running the end-user consumer
+  contract; widening the 2.x-collectable surface is tracked in
+  [#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83).
+- The bundled Dag corpus authors through a small dynamic resolver so the same files
+  parse on both Airflow families.
 - Ini option `airflow_pools`, seeding consumer-defined pools as `name = slots` lines before
   `test_pool_references_exist` runs, so a task's custom pool no longer needs private bootstrap
   code or deselecting the item. Seeding is idempotent, so the item stays safe under
@@ -18,6 +32,28 @@ All notable changes to this project will be documented in this file. The format 
   deferrable operators, and asset outlet/consumer testing; four are adapted from a real test in
   `tests/enduser/` and two cross-reference existing guide pages
   ([#33](https://github.com/nredd/pytest-airflow-in-a-box/issues/33)).
+
+### Changed
+
+- BREAKING: Airflow is no longer a base dependency. The Airflow 2.x monolith and the 3.x
+  core both install the `airflow` package, so the previous hard `apache-airflow-core>=3.1,<4`
+  pin would silently corrupt any Airflow 2.x environment the plugin was installed into --
+  the packaging prerequisite for the planned 2.x compatibility tier, superseding the 0.2.0
+  note that 2.x support would require a parallel implementation
+  ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)). Install the new
+  `airflow3` extra (`apache-airflow>=3.1,<4` plus the sqlite provider) for the previous
+  behavior, or keep pinning Airflow yourself; `sqlalchemy` stays a direct dependency
+  because the storage layer imports it at plugin load. An `airflow2` extra
+  (`apache-airflow>=2.9,<3`) ships ahead of the tier; the two extras are declared mutually
+  exclusive under `[tool.uv] conflicts` (a uv-project affordance -- wheel metadata cannot
+  express exclusivity, so pip users get only the runtime check below).
+- The first test that needs the metadata database now distinguishes the possible Airflow
+  installation states with actionable single-line errors (`pytest.UsageError`, not an
+  `INTERNALERROR` traceback): no Airflow at all, Airflow 2.x without the tier that
+  supports it, an `apache-airflow` meta-package without `apache-airflow-core`, and the
+  corrupt case of `apache-airflow<3` coexisting with `apache-airflow-core`. Runs without
+  Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
+  diagnosis ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
 
 ### Fixed
 
@@ -33,6 +69,15 @@ All notable changes to this project will be documented in this file. The format 
   had just persisted, surfacing as a flaky `ServerResponseError` /
   `RuntimeError: task failed to finish with a result` under `-n 4`
   ([#78](https://github.com/nredd/pytest-airflow-in-a-box/issues/78)).
+- The bundled `--airflow-smoke` catalog no longer reparses the configured Dag folder from
+  scratch when a `full_dag_bag` consumer already parsed it in the same worker process (the
+  catalog is always collected last, so this is the common case). `full_dag_bag` caches its
+  live `DagBag` on the session, and the smoke corpus builder reuses it when present instead
+  of parsing again -- one full-corpus parse per process instead of one per consumer, with
+  the catalog's configured `airflow_dag_parse_timeout` still applied either way. A `DagBag`
+  shared this way should be treated as read-only, since mutating it is now visible to the
+  smoke catalog's checks too
+  ([#85](https://github.com/nredd/pytest-airflow-in-a-box/issues/85)).
 
 ## [0.3.0] - 2026-08-10
 

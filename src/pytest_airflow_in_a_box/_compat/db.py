@@ -10,6 +10,12 @@ some certified releases (asset partition tables arrived in 3.2, the
 ``asset_trigger`` association left after 3.1) and are skipped where absent;
 the compat suite pins expected presence per release.
 
+The registry is family-parallel: ``_V2_TABLE_REGISTRY`` mirrors the 3.x group
+sequence exactly (so ``TableGroup`` stays family-independent) with ``assets``
+mapped to the renamed 2.x ``dataset*`` tables, ``deadlines``/``bundles``
+vacuously satisfied, and its own optional-spec set for symbols that arrived in
+2.10. ``clear_tables`` selects the registry from the resolved family.
+
 Out of scope: ``deadline_alert`` definitions (user configuration, like asset
 definitions) and Airflow-internal bookkeeping tables; clearing ``dags``
 without ``assets`` leaves asset definitions and their Dag reference rows in
@@ -26,12 +32,15 @@ import importlib
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, resolve_capabilities
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 ModelSpec = tuple[str, str]
+Registry = tuple[tuple[str, tuple[ModelSpec, ...]], ...]
 
-_TABLE_REGISTRY: tuple[tuple[str, tuple[ModelSpec, ...]], ...] = (
+_TABLE_REGISTRY: Registry = (
     ("xcom", (("airflow.models.xcom", "XComModel"),)),
     (
         "task_instances",
@@ -121,7 +130,98 @@ _OPTIONAL_SPECS: frozenset[ModelSpec] = frozenset(
     }
 )
 
+# The 2.x registry mirrors the 3.x group sequence exactly so shared suites and the
+# `TableGroup` enum stay family-independent: `deadlines` and `bundles` are vacuously
+# satisfied (the tables arrived in 3.x), `assets` maps to the renamed `dataset*`
+# tables, and the XCom delete target is the `BaseXCom` ORM model because 2.x `XCom`
+# is a backend-resolved alias. Spike-verified on 2.9.3/2.10.5/2.11.2 (2026-08-11);
+# `dataset_alias_dataset_event_assocation_table` spells "assocation" as upstream does.
+_V2_TABLE_REGISTRY: Registry = (
+    ("xcom", (("airflow.models.xcom", "BaseXCom"),)),
+    (
+        "task_instances",
+        (
+            ("airflow.models.renderedtifields", "RenderedTaskInstanceFields"),
+            ("airflow.models.taskreschedule", "TaskReschedule"),
+            ("airflow.models.taskmap", "TaskMap"),
+            ("airflow.models.taskinstancehistory", "TaskInstanceHistory"),
+            ("airflow.models.taskinstance", "TaskInstance"),
+        ),
+    ),
+    ("deadlines", ()),
+    (
+        "runs",
+        (
+            ("airflow.models.dataset", "association_table"),
+            ("airflow.models.dagrun", "DagRun"),
+        ),
+    ),
+    (
+        "serialized_dags",
+        (
+            ("airflow.models.serialized_dag", "SerializedDagModel"),
+            ("airflow.models.dagcode", "DagCode"),
+        ),
+    ),
+    (
+        "assets",
+        (
+            ("airflow.models.dataset", "dataset_alias_dataset_event_assocation_table"),
+            ("airflow.models.dataset", "association_table"),
+            ("airflow.models.dataset", "DatasetDagRunQueue"),
+            ("airflow.models.dataset", "DatasetEvent"),
+            ("airflow.models.dataset", "TaskOutletDatasetReference"),
+            ("airflow.models.dataset", "DagScheduleDatasetAliasReference"),
+            ("airflow.models.dataset", "DagScheduleDatasetReference"),
+            ("airflow.models.dataset", "alias_association_table"),
+            ("airflow.models.dataset", "DatasetAliasModel"),
+            ("airflow.models.dataset", "DatasetModel"),
+        ),
+    ),
+    ("triggers", (("airflow.models.trigger", "Trigger"),)),
+    (
+        "dags",
+        (
+            ("airflow.models.dag", "DagTag"),
+            ("airflow.models.dag", "DagOwnerAttributes"),
+            ("airflow.models.dagwarning", "DagWarning"),
+            ("airflow.models.dag", "DagModel"),
+        ),
+    ),
+    ("bundles", ()),
+    ("logs", (("airflow.models.log", "Log"),)),
+    ("variables", (("airflow.models.variable", "Variable"),)),
+    ("connections", (("airflow.models.connection", "Connection"),)),
+)
+
+# Dataset aliases and task-instance history arrived in 2.10; absent on 2.9.3.
+_OPTIONAL_SPECS_V2: frozenset[ModelSpec] = frozenset(
+    {
+        ("airflow.models.taskinstancehistory", "TaskInstanceHistory"),
+        ("airflow.models.dataset", "dataset_alias_dataset_event_assocation_table"),
+        ("airflow.models.dataset", "DagScheduleDatasetAliasReference"),
+        ("airflow.models.dataset", "alias_association_table"),
+        ("airflow.models.dataset", "DatasetAliasModel"),
+    }
+)
+
+# The group-sequence equality between the two registries is pinned by
+# `test_v2_registry_mirrors_the_group_sequence`, not a module-level assert
+# (stripped under `python -O`).
 REGISTRY_GROUPS: tuple[str, ...] = tuple(group for group, _specs in _TABLE_REGISTRY)
+
+
+def _active_registry() -> tuple[Registry, frozenset[ModelSpec]]:
+    """Select the table registry and optional-spec set for the installed family.
+
+    Returns:
+        tuple[Registry, frozenset[ModelSpec]] containing the family's registry and the
+        specs allowed to be absent on some of its certified releases.
+    """
+
+    if resolve_capabilities().family is AirflowFamily.V2:
+        return _V2_TABLE_REGISTRY, _OPTIONAL_SPECS_V2
+    return _TABLE_REGISTRY, _OPTIONAL_SPECS
 
 
 class DatabaseCleanupError(RuntimeError):
@@ -186,6 +286,8 @@ def clear_tables(groups: Collection[str]) -> None:
 
     Raises:
         ValueError: A requested group is not a registered group name.
+        AirflowCompatibilityError: The installed Airflow cannot be certified when the
+            family is resolved for registry selection.
         DatabaseCleanupError: A registry target cannot be resolved or deleted.
     """
 
@@ -199,13 +301,14 @@ def clear_tables(groups: Collection[str]) -> None:
     from sqlalchemy import delete
 
     requested = set(groups)
+    registry, optional_specs = _active_registry()
     try:
         with create_session() as session:
-            for group, specs in _TABLE_REGISTRY:
+            for group, specs in registry:
                 if group not in requested:
                     continue
                 for spec in specs:
-                    if spec in _OPTIONAL_SPECS:
+                    if spec in optional_specs:
                         try:
                             target = _resolve_spec(spec)
                         except (ImportError, AttributeError):

@@ -1,5 +1,9 @@
 # DB-free task execution
 
+`run_task` drives the Task SDK in-process runner, which Airflow 2.x predates -- on the 2.x
+family the fixture fails with an actionable error; use `dag_maker.run_ti` or
+`run_task_instance` for DB-backed execution there.
+
 `run_task` executes one operator through the Task SDK in process, with no metadata database. XCom,
 Variable, and Connection traffic is answered from seeded dictionaries; unseeded lookups fail
 exactly like a live deployment. Task callbacks and listeners stay silent unless the call passes
