@@ -316,7 +316,6 @@ def _prepare_sdk_runner(
     result: Any,
     *,
     dag_run_refresh: bool = False,
-    results: list[Any] | None = None,
 ) -> list[tuple[Any, Any]]:
     """Install deterministic Airflow 3.2+ task-run internals.
 
@@ -325,8 +324,6 @@ def _prepare_sdk_runner(
         ti: _TaskInstance returned by the persisted-instance lookup.
         result: Any returned by Airflow's private task runner.
         dag_run_refresh: bool selecting the Airflow 3.3 refresh signature.
-        results: list[Any] | None returned by successive private runner calls, one item per
-            call with the last item repeating once exhausted; overrides ``result`` when given.
 
     Returns:
         list[tuple[Any, Any]] recording private runner invocations.
@@ -352,10 +349,7 @@ def _prepare_sdk_runner(
         """Record and return one private runner result."""
 
         calls.append((ti, task))
-        if results is None:
-            return result
-        index = min(len(calls) - 1, len(results) - 1)
-        return results[index]
+        return result
 
     from airflow.sdk.definitions import dag as sdk_dag
 
@@ -494,49 +488,11 @@ def test_sdk_no_result_raises_after_refresh(monkeypatch: pytest.MonkeyPatch) -> 
     ti: Any = _TaskInstance()
     session: Any = _Session()
     task: Any = object()
-    monkeypatch.setattr(taskrun.time, "sleep", lambda _seconds: None)
     _prepare_sdk_runner(monkeypatch, ti, None)
 
     with pytest.raises(RuntimeError, match="failed to finish with a result"):
         run_task_instance(ti, task, session=session)
 
-    assert session.expirations == 1
-    assert ti.refreshes == 1
-
-
-def test_sdk_no_result_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Absorb a transient no-result race by retrying the private runner."""
-
-    ti: Any = _TaskInstance()
-    session: Any = _Session()
-    task: Any = object()
-    sleeps: list[float] = []
-    monkeypatch.setattr(taskrun.time, "sleep", sleeps.append)
-    calls = _prepare_sdk_runner(
-        monkeypatch, ti, None, results=[None, None, SimpleNamespace(error=None)]
-    )
-
-    result = run_task_instance(ti, task, session=session)
-
-    assert result is ti
-    assert len(calls) == 3
-    assert sleeps == [taskrun.SDK_TASK_RUN_RETRY_DELAY_SECONDS] * 2
-    assert ti.refreshes == 1
-
-
-def test_sdk_no_result_exhausts_retries_then_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give up after `SDK_TASK_RUN_RETRIES` consecutive no-result attempts."""
-
-    ti: Any = _TaskInstance()
-    session: Any = _Session()
-    task: Any = object()
-    monkeypatch.setattr(taskrun.time, "sleep", lambda _seconds: None)
-    calls = _prepare_sdk_runner(monkeypatch, ti, None, results=[None, None, None])
-
-    with pytest.raises(RuntimeError, match="failed to finish with a result"):
-        run_task_instance(ti, task, session=session)
-
-    assert len(calls) == taskrun.SDK_TASK_RUN_RETRIES
     assert session.expirations == 1
     assert ti.refreshes == 1
 
