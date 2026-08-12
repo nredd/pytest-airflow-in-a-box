@@ -50,19 +50,43 @@ def _dag_folder(config: pytest.Config) -> Path:
     return get_bootstrap_state(config).dags_folder
 
 
-@pytest.fixture(scope="session")
-def full_dag_bag(pytestconfig: pytest.Config) -> DagBag:
-    """Parse all Dags from the configured Dag directory once per test session.
+LIVE_DAG_BAG_KEY = pytest.StashKey["DagBag"]()
+
+
+def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
+    """Parse and process-cache a live DagBag for one worker session.
+
+    Shared between the `full_dag_bag` fixture and the bundled smoke catalog's corpus
+    builder (`smoke.py`) so whichever one runs first in a worker process pays for the
+    parse and the other reuses its result, instead of each parsing independently.
 
     Parameters:
+        session: pytest.Session used to cache the parsed DagBag.
+        config: pytest.Config containing plugin options and bootstrap state.
+
+    Returns:
+        airflow.models.dagbag.DagBag containing parsed Dags and import errors.
+    """
+
+    if LIVE_DAG_BAG_KEY not in session.stash:
+        ensure_database(get_bootstrap_state(config).root)
+        session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
+    return session.stash[LIVE_DAG_BAG_KEY]
+
+
+@pytest.fixture(scope="session")
+def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) -> DagBag:
+    """Parse all Dags from the configured Dag directory once per worker process.
+
+    Parameters:
+        request: pytest.FixtureRequest used to reach the session-scoped DagBag cache.
         pytestconfig: pytest.Config containing plugin options and bootstrap state.
 
     Returns:
         airflow.models.dagbag.DagBag containing parsed Dags and import errors.
     """
 
-    ensure_database(get_bootstrap_state(pytestconfig).root)
-    return build_dag_bag(_dag_folder(pytestconfig))
+    return _cached_dag_bag(request.session, pytestconfig)
 
 
 __all__ = ("full_dag_bag",)
