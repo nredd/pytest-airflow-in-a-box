@@ -62,23 +62,6 @@ jobs:
           - airflow-version: "3.3.0"
             python-version: "3.12"
             os: ubuntu-24.04-arm
-          # The Airflow 2.x tier (#25): certified releases per #41, on the Python each
-          # leg's constraints file targets. 2.x caps Python at 3.12, so the matrix is
-          # deliberately ragged. The legs run only the consumer contract -- the
-          # certified 2.x surface -- because the inner unit suite imports 3.x-only
-          # modules at module scope and does not collect on 2.x (#83 tracks widening).
-          - airflow-version: "2.11.2"
-            python-version: "3.12"
-            airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
-          - airflow-version: "2.10.5"
-            python-version: "3.11"
-            airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
-          - airflow-version: "2.9.3"
-            python-version: "3.10"
-            airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -95,23 +78,10 @@ jobs:
           curl --fail --location --silent --show-error \
             "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
             --output airflow-constraints.txt
-          if [ "${{ matrix.airflow-family }}" = "airflow2" ]; then
-            # Two-pass install (#41): Airflow under its constraints first, then the
-            # plugin without them -- 2.x constraints pin pytest as low as 7.4.4,
-            # below the plugin's `pytest>=8` floor. pytest gets an explicit ceiling
-            # because no constraints file governs pass two; `pytest>=8,<9` is what
-            # certified the tier.
-            uv pip install --python .venv-ci/bin/python \
-              --constraint airflow-constraints.txt \
-              "apache-airflow==${AIRFLOW_VERSION}"
-            uv pip install --python .venv-ci/bin/python --editable . "pytest>=8,<9"
-          else
-            uv pip install --python .venv-ci/bin/python \
-              --constraint airflow-constraints.txt \
-              --editable . \
-              "apache-airflow-core==${AIRFLOW_VERSION}" \
-              "apache-airflow-providers-sqlite>=4.1,<5"
-          fi
+          uv pip install --python .venv-ci/bin/python \
+            --constraint airflow-constraints.txt \
+            --editable . \
+            "apache-airflow-core==${AIRFLOW_VERSION}"
           if [ -n "${{ matrix.pytest-spec }}" ]; then
             uv pip install --python .venv-ci/bin/python "${{ matrix.pytest-spec }}"
           fi
@@ -121,7 +91,7 @@ jobs:
         env:
           COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
-        run: .venv-ci/bin/python -m coverage run -m pytest -v ${{ matrix.pytest-args }} ${{ matrix.pytest-paths }}
+        run: .venv-ci/bin/python -m coverage run -m pytest -v ${{ matrix.pytest-args }}
       - name: Upload coverage data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -153,8 +123,7 @@ jobs:
           uv pip install --python .venv-ci/bin/python \
             --constraint airflow-constraints.txt \
             --editable . \
-            "apache-airflow-core==${AIRFLOW_VERSION}" \
-            "apache-airflow-providers-sqlite>=4.1,<5"
+            "apache-airflow-core==${AIRFLOW_VERSION}"
           uv pip install --python .venv-ci/bin/python coverage
           .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests

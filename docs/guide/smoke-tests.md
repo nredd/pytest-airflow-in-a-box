@@ -19,13 +19,6 @@ to need the corpus parses it once and publishes a serialized artifact below the 
 the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
 no scheduling effect, so user-authored smoke tests remain fully parallel too.
 
-A test using the `full_dag_bag` fixture in the same worker process shares that parse too: if
-`full_dag_bag` already parsed in this process, the corpus builder reuses that live `DagBag` instead
-of parsing again (the catalog is always collected last, so this is the common case). While the
-catalog is enabled this way, `airflow_dag_parse_timeout` also governs `full_dag_bag`'s own parse, so
-a Dag file that exceeds it lands in `full_dag_bag.import_errors` instead of `full_dag_bag.dags`.
-Treat a shared `DagBag` as read-only: a consumer's mutation is visible to the catalog's checks too.
-
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with

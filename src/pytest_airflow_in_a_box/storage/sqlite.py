@@ -21,15 +21,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError
 
-from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
-
 MIB = 1024 * 1024
 PAGE_SIZE = 8192
 MAX_MMAP_SIZE = 256 * MIB
 MAX_CACHE_SIZE_KIB = 128 * 1024
 BUSY_TIMEOUT_MILLISECONDS = 30_000
 FALLBACK_MEMORY_BYTES = 512 * MIB
-AIRFLOW_CORE_DISTRIBUTION = AirflowFamily.V3.value
+AIRFLOW_CORE_DISTRIBUTION = "apache-airflow-core"
 SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
 LOCAL_SETTINGS_SOURCE = '''"""Configure the Airflow metadata engine for isolated tests."""
 
@@ -293,8 +291,6 @@ def install_legacy_sqlite_listener() -> None:
 
     Airflow 3.1 and 3.2.0 import ``airflow_local_settings.py`` before creating the
     metadata engine but do not apply the ``create_metadata_engine`` override reliably.
-    Airflow 2.x has no ``create_metadata_engine`` override point at all, so every 2.x
-    release takes this listener path.
 
     Raises:
         ValueError: Airflow has an invalid configured database URL or SQLite path.
@@ -303,12 +299,9 @@ def install_legacy_sqlite_listener() -> None:
     try:
         installed_version = metadata.version(AIRFLOW_CORE_DISTRIBUTION)
     except metadata.PackageNotFoundError:
-        installed_version = None
-    if installed_version is not None:
-        uses_fallback = installed_version.startswith(("3.1.", "3.2.0"))
-        if not uses_fallback:
-            return
-    elif installed_family() is not AirflowFamily.V2:
+        return
+    uses_fallback = installed_version.startswith(("3.1.", "3.2.0"))
+    if not uses_fallback:
         return
 
     global _LEGACY_SQLITE_LISTENER

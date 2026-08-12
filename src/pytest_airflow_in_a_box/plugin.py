@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
+from pytest_airflow_in_a_box._compat import ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
     XdistNode,
@@ -54,7 +54,6 @@ from pytest_airflow_in_a_box.logging import (
 from pytest_airflow_in_a_box.markers import (
     DATABASE_MARKER_NAMES,
     apply_environment_gate,
-    apply_family_gate,
     register_markers,
 )
 from pytest_airflow_in_a_box.reporting import configure_reporting
@@ -378,7 +377,6 @@ def _requires_database_at_collection(item: pytest.Item) -> bool:
     if not _requires_database(item):
         return False
     try:
-        apply_family_gate(item)
         apply_environment_gate(item)
     except pytest.skip.Exception:
         return False
@@ -402,30 +400,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     """
 
     if any(_requires_database_at_collection(item) for item in session.items):
-        _ensure_database_or_usage_error(get_bootstrap_state(session.config).root)
-
-
-def _ensure_database_or_usage_error(root: Path) -> None:
-    """Initialize the metadata database, rendering incompatibility as a usage error.
-
-    `AirflowCompatibilityError` describes an installation problem the user must fix
-    (no Airflow, an unsupported family, or a corrupt environment). Left unhandled it
-    surfaces as a pytest `INTERNALERROR` traceback wall. `pytest.UsageError` renders
-    it as a single actionable `ERROR:` line from `pytest_collection_finish`; from the
-    `pytest_runtest_setup` safety net it renders as a per-test setup error, still with
-    the message intact.
-
-    Parameters:
-        root: Path containing the bootstrap run directory.
-
-    Raises:
-        pytest.UsageError: The installed Airflow environment is unusable.
-    """
-
-    try:
-        ensure_database(root)
-    except AirflowCompatibilityError as error:
-        raise pytest.UsageError(str(error)) from error
+        ensure_database(get_bootstrap_state(session.config).root)
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
@@ -440,10 +415,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         item: pytest.Item about to enter its setup phase.
     """
 
-    apply_family_gate(item)
     apply_environment_gate(item)
     if _requires_database(item):
-        _ensure_database_or_usage_error(get_bootstrap_state(item.config).root)
+        ensure_database(get_bootstrap_state(item.config).root)
 
 
 @pytest.hookimpl(optionalhook=True)

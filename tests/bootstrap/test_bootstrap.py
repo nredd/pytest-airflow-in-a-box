@@ -180,7 +180,7 @@ def test_stale_inherited_state_fails_loudly(
 
     missing = pytester.path / "missing-root"
     payload = {
-        "version": 4,
+        "version": 3,
         "owner_pid": 1,
         "root": str(missing),
         "dags_folder": str(missing / "dags"),
@@ -194,7 +194,6 @@ def test_stale_inherited_state_fails_loudly(
         "network_storage": False,
         "sql_alchemy_conn": sqlite_url(missing / "airflow.db"),
         "db_backend": "sqlite",
-        "family": "apache-airflow-core",
     }
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     monkeypatch.setenv(STATE_ENVIRONMENT_VARIABLE, json.dumps(payload))
@@ -217,7 +216,7 @@ def test_inherited_state_requires_derived_local_settings(
     (root / "passwords.json").write_text("{}", encoding="utf-8")
     (root / "airflow.cfg").write_text("", encoding="utf-8")
     payload = {
-        "version": 4,
+        "version": 3,
         "owner_pid": 1,
         "root": str(root),
         "dags_folder": str(root / "dags"),
@@ -231,7 +230,6 @@ def test_inherited_state_requires_derived_local_settings(
         "network_storage": False,
         "sql_alchemy_conn": sqlite_url(root / "airflow.db"),
         "db_backend": "sqlite",
-        "family": "apache-airflow-core",
     }
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     monkeypatch.setenv(STATE_ENVIRONMENT_VARIABLE, json.dumps(payload))

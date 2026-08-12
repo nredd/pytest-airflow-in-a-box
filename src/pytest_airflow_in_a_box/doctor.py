@@ -72,8 +72,6 @@ def _format_capability_value(value: object) -> str:
         value's default string form.
     """
 
-    if value is None:
-        return "unprobed on this family"
     if isinstance(value, Enum):
         return str(value.value)
     if isinstance(value, tuple):

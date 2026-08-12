@@ -59,7 +59,6 @@ def _artifact_state(root: Path, *, owner_pid: int = 1234) -> BootstrapState:
         network_storage=False,
         sql_alchemy_conn=sqlite_url(root / "airflow.db"),
         db_backend="sqlite",
-        family="apache-airflow-core",
     )
 
 
@@ -106,10 +105,6 @@ def test_require_bool_rejects_bad_values(payload: dict[str, object]) -> None:
         (lambda payload: {**payload, "extra": 1}, "missing or unexpected"),
         (lambda payload: {**payload, "version": 99}, "Unsupported bootstrap state version"),
         (
-            lambda payload: {**payload, "family": "apache-hadoop"},
-            "`family` must be a supported family",
-        ),
-        (
             lambda payload: {**payload, "dags_folder": "relative/dags"},
             "paths must be absolute",
         ),
@@ -130,55 +125,6 @@ def test_state_from_payload_rejects_malformed_payloads(
 
     with pytest.raises(ValueError, match=match):
         bootstrap._state_from_payload(mutate(dict(payload)), validate_files=False)
-
-
-def test_v2_environment_swaps_the_auth_surface(tmp_path: Path) -> None:
-    """Install webserver + basic-auth variables and no 3.x auth keys on the 2.x family."""
-
-    state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
-
-    variables = bootstrap._environment(state)
-
-    assert variables["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
-    assert variables["AIRFLOW__API__AUTH_BACKENDS"] == bootstrap.BASIC_AUTH_BACKENDS
-    assert "AIRFLOW__CORE__AUTH_MANAGER" not in variables
-    assert "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS" not in variables
-    assert "AIRFLOW__API_AUTH__JWT_SECRET" not in variables
-    v3_variables = bootstrap._environment(_artifact_state(tmp_path / "run3"))
-    assert "AIRFLOW__WEBSERVER__SECRET_KEY" not in v3_variables
-    assert "AIRFLOW__CORE__AUTH_MANAGER" in v3_variables
-
-
-def test_install_environment_owns_the_other_family_surface(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Evict ambient variables of the family this run does not use.
-
-    `_install_environment` mutates `os.environ` directly, and this suite runs inside
-    the plugin's own bootstrapped session, so the complete owned surface is snapshotted
-    and restored manually -- monkeypatch only tracks names it set itself.
-    """
-
-    owned = (*bootstrap._environment_names(), bootstrap.STATE_ENVIRONMENT_VARIABLE)
-    original = {name: os.environ.get(name) for name in owned}
-    monkeypatch.setenv("AIRFLOW__CORE__AUTH_MANAGER", "ambient.AuthManager")
-    monkeypatch.setenv("AIRFLOW__API_AUTH__JWT_SECRET", "ambient-secret")
-    monkeypatch.setenv("AIRFLOW__API__AUTH_BACKENDS", "ambient.backend")
-    state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
-
-    try:
-        bootstrap._install_environment(state)
-
-        assert "AIRFLOW__CORE__AUTH_MANAGER" not in os.environ
-        assert "AIRFLOW__API_AUTH__JWT_SECRET" not in os.environ
-        assert os.environ["AIRFLOW__API__AUTH_BACKENDS"] == bootstrap.BASIC_AUTH_BACKENDS
-        assert os.environ["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
-    finally:
-        for name, value in original.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
 
 
 def test_state_from_environment_requires_the_variable(

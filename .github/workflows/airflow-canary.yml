@@ -71,8 +71,7 @@ jobs:
           uv pip install --python .venv-ci/bin/python \
             --constraint airflow-constraints.txt \
             --editable . \
-            apache-airflow-core \
-            apache-airflow-providers-sqlite
+            apache-airflow-core
           printf 'complete=true\n' >> "$GITHUB_OUTPUT"
       - name: Record resolved package set
         id: environment

@@ -24,7 +24,6 @@ from collections.abc import Iterator
 
 import pytest
 
-from pytest_airflow_in_a_box._compat.capabilities import v2_gate_message
 from pytest_airflow_in_a_box.logging import (
     StructlogCapture,
     _install_structlog_capture_interceptor,
@@ -55,13 +54,6 @@ def cap_structlog() -> Iterator[StructlogCapture]:
         StructlogCapture recording every event emitted while installed.
     """
 
-    message = v2_gate_message(
-        "cap_structlog",
-        "Airflow 2.x logs through stdlib logging, not structlog. Use pytest's builtin "
-        "`caplog` fixture instead.",
-    )
-    if message is not None:
-        pytest.fail(message, pytrace=False)
     yield from _capture_structlog()
 
 

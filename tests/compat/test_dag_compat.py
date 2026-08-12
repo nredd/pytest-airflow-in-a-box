@@ -9,7 +9,6 @@ import pytest
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
 from pytest_airflow_in_a_box._compat import registry
-from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, TimezoneLocation
 from pytest_airflow_in_a_box._compat.dag import (
     DagCleanupError,
     DagPersistenceError,
@@ -85,11 +84,7 @@ def test_open_session_rejects_uninitialized_factory(monkeypatch: pytest.MonkeyPa
 
     from airflow import settings
 
-    monkeypatch.setattr(
-        dag_compat,
-        "resolve_capabilities",
-        lambda: SimpleNamespace(family=AirflowFamily.V3),
-    )
+    monkeypatch.setattr(dag_compat, "resolve_capabilities", lambda: None)
     monkeypatch.setattr(settings, "Session", None)
 
     with pytest.raises(DagPersistenceError, match="not initialized") as caught:
@@ -471,11 +466,7 @@ def test_legacy_refresh_and_explicit_data_interval(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         dag_compat,
         "resolve_capabilities",
-        lambda: SimpleNamespace(
-            family=AirflowFamily.V3,
-            timezone_location=TimezoneLocation.SDK,
-            refresh_from_task_supports_dag_run=False,
-        ),
+        lambda: SimpleNamespace(refresh_from_task_supports_dag_run=False),
     )
     record = _record(session)
 

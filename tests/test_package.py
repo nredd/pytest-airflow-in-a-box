@@ -78,7 +78,6 @@ def test_public_surface_is_explicit() -> None:
     assert markers.__all__ == (
         "MarkedNode",
         "apply_environment_gate",
-        "apply_family_gate",
         "environment_sentinels",
         "read_bool_marker",
         "register_markers",

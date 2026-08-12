@@ -14,14 +14,6 @@ Running checks manually (`make lint`, etc.) does not replace them -- install the
 first, always. For the Postgres backend extra, see the "Development" section of
 `README.md`.
 
-The dev environment carries Airflow 3.x through the `dev` dependency group. To experiment
-against an Airflow 2.x resolution instead (the `airflow2` extra conflicts with the default
-`dev` group by design):
-
-```console
-uv sync --no-default-groups --extra airflow2
-```
-
 ## Before opening a pull request
 
 ```console

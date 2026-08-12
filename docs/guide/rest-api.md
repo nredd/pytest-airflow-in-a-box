@@ -1,10 +1,7 @@
 # Live REST API
 
 `api_client` lazily starts one isolated `airflow api-server` per test process on a loopback
-ephemeral port and returns a typed client authenticated through SimpleAuthManager. Airflow
-2.x has no `airflow api-server`, so on the 2.x family the REST API fixtures fail with an
-actionable error (a FAB `airflow webserver` tier is demand-driven, tracked in
-[#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)):
+ephemeral port and returns a typed client authenticated through SimpleAuthManager:
 
 ```python
 import pytest
