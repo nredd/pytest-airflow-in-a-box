@@ -1,13 +1,21 @@
-"""Exercise a custom trigger and deferrable operator."""
+"""Exercise a custom trigger and deferrable operator.
+
+`run_trigger` and `run_task_instance` are family-branched in `_compat.taskrun`, and
+`BaseTrigger`/`TriggerEvent` live at the same `airflow.triggers.base` path on both
+Airflow families, so the whole module runs on both without a `requires_airflow3`
+marker. Only `BaseOperator` moved (from `airflow.models` to `airflow.sdk`), so it
+resolves dynamically ON PURPOSE: a static `from airflow.sdk import BaseOperator`
+would fail to import on the 2.x family.
+"""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from importlib import import_module
 from typing import Any
 
 import pytest
-from airflow.sdk import BaseOperator
 from airflow.triggers.base import BaseTrigger, TriggerEvent
 from airflow.utils.state import TaskInstanceState
 
@@ -15,6 +23,27 @@ from pytest_airflow_in_a_box.taskinstance import TriggerExecutionError, run_trig
 from pytest_airflow_in_a_box.types import DagMaker
 
 pytestmark = pytest.mark.compat
+
+
+def _resolve(*candidates: str) -> Any:
+    """Import the first available module; the module collects on both Airflow families.
+
+    Parameters:
+        candidates: str module paths ordered newest family first.
+
+    Returns:
+        Any containing the first importable module.
+    """
+
+    for name in candidates[:-1]:
+        try:
+            return import_module(name)
+        except ImportError:
+            continue
+    return import_module(candidates[-1])
+
+
+BaseOperator = _resolve("airflow.sdk", "airflow.models").BaseOperator
 
 
 class ImmediateTrigger(BaseTrigger):

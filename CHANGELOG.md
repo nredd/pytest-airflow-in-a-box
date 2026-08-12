@@ -53,6 +53,13 @@ All notable changes to this project will be documented in this file. The format 
   already reaches `provider_package` (`sys.path` insertion plus `import_module`) since
   DagBag imports every corpus file as a standalone module
   ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
+- Seven of the ten 3.x-only `tests/enduser/` contract modules now author dynamically
+  through the same `_resolve()` shape as the Dag corpus and collect on the 2.x family too,
+  gating only the tests that touch a genuinely 3.x-only surface (the Task SDK's `run_task`
+  runner) with `requires_airflow3` instead of the whole module; `test_assets.py`,
+  `test_rest_api_compat.py`, and `test_structlog_events.py` stay `collect_ignore`'d, since
+  Asset ORM persistence, the REST API server, and structlog capture have no 2.x equivalent
+  ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 
 ### Fixed
 

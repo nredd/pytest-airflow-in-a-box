@@ -1,18 +1,57 @@
-"""Exercise custom sensors in poke and reschedule modes."""
+"""Exercise custom sensors in poke and reschedule modes.
+
+`DAG`, `BaseSensorOperator`, and `PokeReturnValue` resolve dynamically ON PURPOSE:
+`DAG` moved from `airflow.models` (2.x) to `airflow.sdk` (3.x), and while
+`BaseSensorOperator`/`PokeReturnValue` are reachable from `airflow.sdk` on 3.x,
+their canonical 2.x home is `airflow.sensors.base`. Only the DB-free poke test
+needs the Task SDK's `run_task` runner, so it alone carries `requires_airflow3`.
+
+The reschedule test pins `core.executor` to `SequentialExecutor` for its run: 2.x's
+`unit_test_mode` overlays Airflow's own `unit_tests.cfg`, which hard-codes
+`executor = LocalExecutor`, and the `ready_to_reschedule` dependency rejects that
+combination with SQLite. `SequentialExecutor` is single-threaded and Airflow
+allows it with any backend, so pinning it changes no test semantics.
+"""
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 import pytest
 from airflow.models.taskreschedule import TaskReschedule
-from airflow.sdk import DAG, BaseSensorOperator, PokeReturnValue
 from airflow.utils.state import TaskInstanceState
 from sqlalchemy import select
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
+from pytest_airflow_in_a_box.config import airflow_config
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
+
+
+def _resolve(*candidates: str) -> Any:
+    """Import the first available module; the module collects on both Airflow families.
+
+    Parameters:
+        candidates: str module paths ordered newest family first.
+
+    Returns:
+        Any containing the first importable module.
+    """
+
+    for name in candidates[:-1]:
+        try:
+            return import_module(name)
+        except ImportError:
+            continue
+    return import_module(candidates[-1])
+
+
+DAG = _resolve("airflow.sdk", "airflow.models").DAG
+_sensors = _resolve("airflow.sdk", "airflow.sensors.base")
+BaseSensorOperator = _sensors.BaseSensorOperator
+PokeReturnValue = _sensors.PokeReturnValue
 
 
 class ReturningSensor(BaseSensorOperator):
@@ -39,6 +78,7 @@ class WaitingSensor(BaseSensorOperator):
         return False
 
 
+@pytest.mark.requires_airflow3
 def test_poke_return_value_runs_without_metadata(run_task: RunTask) -> None:
     """Return a sensor XCom payload through the DB-free runner."""
 
@@ -58,8 +98,26 @@ def test_reschedule_sensor_persists_task_reschedule(dag_maker: DagMaker) -> None
     with dag_maker(dag_id="compat_sensor_reschedule"):
         WaitingSensor(task_id="wait", mode="reschedule", poke_interval=60, timeout=300)
 
-    ti = dag_maker.run_ti("wait")
-    row = dag_maker.session.scalar(select(TaskReschedule).where(TaskReschedule.ti_id == ti.id))
+    overrides = (
+        {("core", "executor"): "SequentialExecutor"}
+        if installed_family() is AirflowFamily.V2
+        else {}
+    )
+    with airflow_config(overrides):
+        ti = dag_maker.run_ti("wait")
+    # 2.x keys `TaskReschedule` by the composite task instance identity; 3.x collapsed
+    # that to a single `ti_id` foreign key.
+    condition = (
+        TaskReschedule.ti_id == ti.id
+        if hasattr(TaskReschedule, "ti_id")
+        else (
+            (TaskReschedule.dag_id == ti.dag_id)
+            & (TaskReschedule.task_id == ti.task_id)
+            & (TaskReschedule.run_id == ti.run_id)
+            & (TaskReschedule.map_index == ti.map_index)
+        )
+    )
+    row = dag_maker.session.scalar(select(TaskReschedule).where(condition))
 
     assert ti.state == TaskInstanceState.UP_FOR_RESCHEDULE
     assert row is not None
