@@ -18,6 +18,7 @@ if installed_family() is AirflowFamily.V2:
     collect_ignore = [
         "test_assets.py",
         "test_callbacks.py",
+        "test_dag_run_result.py",
         "test_hooks.py",
         "test_operators.py",
         "test_provider_package.py",

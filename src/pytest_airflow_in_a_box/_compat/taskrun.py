@@ -38,7 +38,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
-from pytest_airflow_in_a_box._compat.dag import expand_mapped_task_instances
+from pytest_airflow_in_a_box._compat.dag import expand_mapped_task_instances, task_is_mapped
 from pytest_airflow_in_a_box._compat.registry import lookup_authoring_dag
 from pytest_airflow_in_a_box.results import DagRunResult, TaskResult, task_key
 
@@ -795,7 +795,7 @@ def execute_dag_run(
         if (
             map_index < 0
             and task_id not in expansion_attempted
-            and getattr(dag.get_task(task_id), "is_mapped", False)
+            and task_is_mapped(dag.get_task(task_id))
         ):
             expansion_attempted.add(task_id)
             if not _upstreams_settled(dag_run, dag, task_id, session) or not (

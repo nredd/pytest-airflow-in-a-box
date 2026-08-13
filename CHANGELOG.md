@@ -49,6 +49,18 @@ All notable changes to this project will be documented in this file. The format 
   Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
   diagnosis ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
 
+### Fixed
+
+- `dag_maker.run()`'s mid-run mapped-task expansion (`execute_dag_run`) now goes through
+  the family-aware `task_is_mapped()` probe instead of a raw `is_mapped` attribute check,
+  which is always absent on 2.x's `MappedOperator` -- a mapped task previously never
+  expanded on 2.x, leaving the DagRun stuck `running` with no error recorded
+  ([#90](https://github.com/nredd/pytest-airflow-in-a-box/issues/90)).
+- `tests/enduser/test_dag_run_result.py` (a 3.x-only module authored against `airflow.sdk`
+  at module scope) is now `collect_ignore`'d on the 2.x family alongside its siblings,
+  instead of aborting collection of the whole end-user suite with a bare
+  `ModuleNotFoundError` ([#90](https://github.com/nredd/pytest-airflow-in-a-box/issues/90)).
+
 ## [0.4.0] - 2026-08-12
 
 ### Added

@@ -574,7 +574,7 @@ def select_task_instance(
         ) from error
 
 
-def _task_is_mapped(task: Any) -> bool:
+def task_is_mapped(task: Any) -> bool:
     """Report whether one task participates in dynamic task mapping.
 
     Parameters:
@@ -595,7 +595,7 @@ def _task_is_mapped(task: Any) -> bool:
 def expand_mapped_task_instances(task: Any, run_id: str, session: Session) -> None:
     """Expand a persisted mapped task for one DagRun when mapping applies."""
 
-    if not _task_is_mapped(task):
+    if not task_is_mapped(task):
         return
 
     if _is_v2():
