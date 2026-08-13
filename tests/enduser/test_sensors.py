@@ -6,14 +6,11 @@
 their canonical 2.x home is `airflow.sensors.base`. Only the DB-free poke test
 needs the Task SDK's `run_task` runner, so it alone carries `requires_airflow3`.
 
-The reschedule test pins `core.executor` to `SequentialExecutor` for its run: 2.x's
-`unit_test_mode` overlays Airflow's own `unit_tests.cfg`, which hard-codes
-`executor = LocalExecutor`, and the `ready_to_reschedule` dependency rejects that
-combination with SQLite. `SequentialExecutor` is single-threaded and Airflow
-allows it with any backend, so pinning it changes no test semantics. 2.x's
-`ExecutorLoader` also caches the resolved executor in a module-level list on first
-use, so the pin clears that cache too -- otherwise an earlier test's default-executor
-lookup elsewhere in the same process would freeze the override out, order-dependently.
+The reschedule test needs no executor handling of its own: bootstrap env-pins
+`AIRFLOW__CORE__EXECUTOR=SequentialExecutor` on the 2.x family (see
+`bootstrap._environment()`), which outranks the `unit_tests.cfg` overlay whose
+hard-coded `LocalExecutor` the `ready_to_reschedule` dependency would reject
+against SQLite.
 """
 
 from __future__ import annotations
@@ -26,29 +23,13 @@ from airflow.models.taskreschedule import TaskReschedule
 from airflow.utils.state import TaskInstanceState
 from sqlalchemy import select
 
-from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
-from pytest_airflow_in_a_box.config import airflow_config
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
 
 
-def _resolve(*candidates: str) -> Any:
-    """Import the first available module; the module collects on both Airflow families.
-
-    Parameters:
-        candidates: str module paths ordered newest family first.
-
-    Returns:
-        Any containing the first importable module.
-    """
-
-    for name in candidates[:-1]:
-        try:
-            return import_module(name)
-        except ImportError:
-            continue
-    return import_module(candidates[-1])
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
 
 
 DAG = _resolve("airflow.sdk", "airflow.models").DAG
@@ -101,19 +82,7 @@ def test_reschedule_sensor_persists_task_reschedule(dag_maker: DagMaker) -> None
     with dag_maker(dag_id="compat_sensor_reschedule"):
         WaitingSensor(task_id="wait", mode="reschedule", poke_interval=60, timeout=300)
 
-    is_v2 = installed_family() is AirflowFamily.V2
-    overrides = {("core", "executor"): "SequentialExecutor"} if is_v2 else {}
-    with airflow_config(overrides):
-        if is_v2:
-            # Force a fresh lookup under the pinned override; an earlier test's
-            # default-executor lookup may have already frozen the stale cache.
-            executor_loader = import_module("airflow.executors.executor_loader")
-            executor_loader._executor_names = []
-        try:
-            ti = dag_maker.run_ti("wait")
-        finally:
-            if is_v2:
-                executor_loader._executor_names = []
+    ti = dag_maker.run_ti("wait")
     # 2.x keys `TaskReschedule` by the composite task instance identity; 3.x collapsed
     # that to a single `ti_id` foreign key.
     condition = (

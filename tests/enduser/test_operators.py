@@ -23,43 +23,9 @@ from pytest_airflow_in_a_box.types import DagMaker, RunTask
 pytestmark = pytest.mark.compat
 
 
-def _resolve(*candidates: str) -> Any:
-    """Import the first available module; the module collects on both Airflow families.
-
-    Parameters:
-        candidates: str module paths ordered newest family first.
-
-    Returns:
-        Any containing the first importable module.
-    """
-
-    for name in candidates[:-1]:
-        try:
-            return import_module(name)
-        except ImportError:
-            continue
-    return import_module(candidates[-1])
-
-
-def _resolve_exception(name: str) -> Any:
-    """Resolve one exception class, preferring the Task SDK's re-export.
-
-    `airflow.sdk.exceptions` (3.x) has not always re-exported every exception, so
-    an absent module or attribute both fall back to the classic
-    `airflow.exceptions` location, which every certified 2.x and 3.x release has.
-
-    Parameters:
-        name: str containing the exception class name.
-
-    Returns:
-        Any containing the resolved exception class.
-    """
-
-    try:
-        return getattr(import_module("airflow.sdk.exceptions"), name)
-    except (ImportError, AttributeError):
-        return getattr(import_module("airflow.exceptions"), name)
-
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+_resolve_exception = import_module("_authoring")._resolve_exception
 
 _authoring = _resolve("airflow.sdk", "airflow.models")
 DAG = _authoring.DAG

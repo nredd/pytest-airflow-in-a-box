@@ -64,9 +64,11 @@ jobs:
             os: ubuntu-24.04-arm
           # The Airflow 2.x tier (#25): certified releases per #41, on the Python each
           # leg's constraints file targets. 2.x caps Python at 3.12, so the matrix is
-          # deliberately ragged. The legs run only the consumer contract -- the
-          # certified 2.x surface -- because the inner unit suite imports 3.x-only
-          # modules at module scope and does not collect on 2.x (#83 tracks widening).
+          # deliberately ragged. The legs run only `tests/enduser` -- the consumer
+          # contract, dual-family since #83 -- because the inner unit suite (`tests/`
+          # proper) exercises the plugin's own internals against 3.x-only modules at
+          # module scope and does not collect on 2.x; its 2.x branches are covered by
+          # fake probes on the 3.x legs, and the coverage job unions all of it.
           - airflow-version: "2.11.2"
             python-version: "3.12"
             airflow-family: "airflow2"
