@@ -9,6 +9,7 @@ References:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import pytest
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
+    XDIST_WORKER_ENVIRONMENT_VARIABLE,
     XdistNode,
     configure_node,
     get_bootstrap_state,
@@ -395,13 +397,21 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
     Runs after deselection so `pytest -k unrelated` stays free, and before the
     run phase so test execution never absorbs the one-time migration cost.
-    Environment-gated items that
-    will skip do not trigger initialization.
+    Family- and environment-gated items that will skip do not trigger
+    initialization.
+
+    On an xdist worker the eager initialization is skipped: a `pytest.UsageError`
+    raised from this hook escapes through execnet as a crashed-node traceback wall,
+    once per worker, while the `pytest_runtest_setup` safety net renders the same
+    message as ordinary per-test errors. Workers initialize on first database use
+    through that path instead.
 
     Parameters:
         session: pytest.Session whose deselected item list is final.
     """
 
+    if os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE) is not None:
+        return
     if any(_requires_database_at_collection(item) for item in session.items):
         _ensure_database_or_usage_error(get_bootstrap_state(session.config).root)
 
@@ -411,10 +421,11 @@ def _ensure_database_or_usage_error(root: Path) -> None:
 
     `AirflowCompatibilityError` describes an installation problem the user must fix
     (no Airflow, an unsupported family, or a corrupt environment). Left unhandled it
-    surfaces as a pytest `INTERNALERROR` traceback wall. `pytest.UsageError` renders
-    it as a single actionable `ERROR:` line from `pytest_collection_finish`; from the
-    `pytest_runtest_setup` safety net it renders as a per-test setup error, still with
-    the message intact.
+    surfaces as a pytest `INTERNALERROR` traceback wall. In a single-process run
+    `pytest.UsageError` renders it as a single actionable `ERROR:` line from
+    `pytest_collection_finish`; on xdist workers that hook defers to the
+    `pytest_runtest_setup` safety net, where the same message renders as per-test
+    errors instead of a crashed node.
 
     Parameters:
         root: Path containing the bootstrap run directory.
@@ -430,12 +441,12 @@ def _ensure_database_or_usage_error(root: Path) -> None:
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Gate environment-marked tests, then lazily initialize the database.
+    """Gate family- and environment-marked tests, then lazily initialize the database.
 
-    The environment gate runs first so a skipped test never pays the Airflow
-    import and migration cost. The database check is a safety net for items
-    injected after collection; ordinary runs initialize during
-    ``pytest_collection_finish``.
+    The family and environment gates run first so a skipped test never pays the
+    Airflow import and migration cost. The database check is a safety net for items
+    injected after collection and the primary path on xdist workers; single-process
+    runs initialize during ``pytest_collection_finish``.
 
     Parameters:
         item: pytest.Item about to enter its setup phase.

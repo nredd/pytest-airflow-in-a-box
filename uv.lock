@@ -42,15 +42,15 @@ name = "aiohttp"
 version = "3.14.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohappyeyeballs", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "aiosignal", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "aiohappyeyeballs", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "aiosignal", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "async-timeout", marker = "(python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "attrs", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "frozenlist", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "multidict", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "propcache", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "attrs", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "frozenlist", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "multidict", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "propcache", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "typing-extensions", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "yarl", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "yarl", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/58/d9/22ce5786ac0c1653ae8b6c23bded02c1686d11f0dbb45b31ce128e0df985/aiohttp-3.14.3.tar.gz", hash = "sha256:9491196535a88924a60afd5b5f434b5b203b6cc616250878dbdb223a8f7844bc", size = 7971213, upload-time = "2026-07-23T01:57:27.037Z" }
 wheels = [
@@ -179,8 +179,8 @@ name = "aiohttp-jinja2"
 version = "1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohttp", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "aiohttp", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e6/39/da5a94dd89b1af7241fb7fc99ae4e73505b5f898b540b6aba6dc7afe600e/aiohttp-jinja2-1.6.tar.gz", hash = "sha256:a3a7ff5264e5bca52e8ae547bbfd0761b72495230d438d05b6c0915be619b0e2", size = 53057, upload-time = "2023-11-18T15:30:52.559Z" }
 wheels = [
@@ -192,7 +192,7 @@ name = "aiosignal"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "frozenlist", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "frozenlist", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "typing-extensions", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
@@ -226,11 +226,11 @@ name = "alembic"
 version = "1.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mako" },
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "mako", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "sqlalchemy", version = "2.0.51", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fb/01/a48dab7827ac4421272399f7ed9a2ec17edd12c8bcde4417bd7b6821b71a/alembic-1.19.0.tar.gz", hash = "sha256:6487c612fc719dcfa22b17d2dd5b2b458929641e6aa2f0b65b135727f5e6d501", size = 2069906, upload-time = "2026-08-04T18:57:04.599Z" }
 wheels = [
@@ -261,7 +261,7 @@ version = "4.14.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
-    { name = "idna" },
+    { name = "idna", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/cc/a381afa6efea9f496eff839d4a6a1aed3bfafc7b3ab4b0d1b243a12573dd/anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f", size = 260176, upload-time = "2026-07-12T20:29:07.082Z" }
@@ -274,81 +274,79 @@ name = "apache-airflow"
 version = "2.11.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*'",
     "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "alembic", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-io", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-sql", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-fab", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-ftp", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-http", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-imap", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-smtp", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-sqlite", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "argcomplete", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "asgiref", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "attrs", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "blinker", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "colorlog", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "configupdater", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "connexion", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "cron-descriptor", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "croniter", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "cryptography", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "deprecated", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "dill", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-caching", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-session", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-wtf", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "fsspec", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "google-re2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "gunicorn", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "httpx", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "alembic", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-compat", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-io", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-sql", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-fab", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-ftp", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-http", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-imap", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-smtp", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-sqlite", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "argcomplete", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "asgiref", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "attrs", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "blinker", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "colorlog", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "configupdater", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "connexion", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "cron-descriptor", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "croniter", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "cryptography", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "deprecated", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "dill", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-caching", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-session", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-wtf", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "fsspec", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "google-re2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "gunicorn", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "httpx", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "importlib-metadata", marker = "(python_full_version < '3.12' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "itsdangerous", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jsonschema", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "lazy-object-proxy", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "linkify-it-py", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "lockfile", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "markdown-it-py", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "markupsafe", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "marshmallow-oneofschema", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "mdit-py-plugins", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "methodtools", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "opentelemetry-api", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "opentelemetry-exporter-otlp", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pathspec", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pendulum", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pluggy", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "psutil", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pygments", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pyjwt", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-daemon", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-dateutil", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-nvd3", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-slugify", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "requests", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "requests-toolbelt", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "rfc3339-validator", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "rich", version = "13.9.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "rich-argparse", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "setproctitle", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy-jsonfield", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "tabulate", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "tenacity", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "termcolor", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "universal-pathlib", version = "0.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "werkzeug", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "itsdangerous", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jsonschema", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "lazy-object-proxy", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "linkify-it-py", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "lockfile", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "markdown-it-py", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "markupsafe", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "marshmallow-oneofschema", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "mdit-py-plugins", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "methodtools", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-api", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-exporter-otlp", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pathspec", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pendulum", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pluggy", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "psutil", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pygments", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pyjwt", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-daemon", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-dateutil", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-nvd3", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-slugify", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "requests", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "requests-toolbelt", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "rfc3339-validator", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "rich", version = "13.9.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "rich-argparse", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "setproctitle", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy-jsonfield", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "tabulate", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "tenacity", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "termcolor", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "universal-pathlib", version = "0.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "werkzeug", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/79/d8/43db014dbf0b7885af9fb2a2987de9f443f8784c0e02e474448701e66843/apache_airflow-2.11.2.tar.gz", hash = "sha256:8866183faba86fa11fc40eac9eebad57d84ab17614cdb14165e8a8f7feb05aae", size = 10839896, upload-time = "2026-03-14T18:07:41.639Z" }
 wheels = [
@@ -456,9 +454,9 @@ name = "apache-airflow-providers-common-compat"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "apache-airflow", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "asgiref" },
+    { name = "asgiref", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/60/a1/3d652ebee5dff5768062a2e38587d091e738c0a050a88e0791b9a4b4ae93/apache_airflow_providers_common_compat-1.17.0.tar.gz", hash = "sha256:64baaf99ada7fa21c60bef001ce93da52ea9f258d7015855f981eb20ce237f0a", size = 42515, upload-time = "2026-07-28T06:38:35.686Z" }
 wheels = [
@@ -470,9 +468,9 @@ name = "apache-airflow-providers-common-io"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "apache-airflow", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat" },
+    { name = "apache-airflow-providers-common-compat", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/16/b3bce1c50f830e614d02926ecff99b0d55a5c1fe5bb79bcbe693443d06ee/apache_airflow_providers_common_io-1.8.0.tar.gz", hash = "sha256:174a8a1d1d140a647a1f6457337d75217ae4c68ea2540cb0de47afa949cf80b5", size = 28658, upload-time = "2026-07-04T18:17:24.917Z" }
 wheels = [
@@ -484,12 +482,12 @@ name = "apache-airflow-providers-common-sql"
 version = "2.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "apache-airflow", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat" },
-    { name = "methodtools" },
-    { name = "more-itertools" },
-    { name = "sqlparse" },
+    { name = "apache-airflow-providers-common-compat", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "methodtools", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "more-itertools", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlparse", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b5/51/1d35f22bf554aeaea13b9c6ab60cb3d22e632a626e3bcffc1ad037676637/apache_airflow_providers_common_sql-2.0.3.tar.gz", hash = "sha256:3341e191cc8659f58f6c106e429c644c87ccf5dd9174c43b8ec617c6ea679a18", size = 143407, upload-time = "2026-07-28T06:38:36.82Z" }
 wheels = [
@@ -501,14 +499,14 @@ name = "apache-airflow-providers-fab"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-appbuilder", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-login", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-session", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "google-re2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jmespath", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-compat", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-appbuilder", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-login", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-session", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "google-re2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jmespath", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/95/10/325261a48f0888d61e259a1124e6a55ddabbe6acaeb69f77bc746ecba5a8/apache_airflow_providers_fab-1.5.4.tar.gz", hash = "sha256:3884d1f57f61e9fe13b47e699b58edbe7fe79cc0c10b228516f27271aa1237e3", size = 63052, upload-time = "2026-02-21T00:13:33.874Z" }
 wheels = [
@@ -520,8 +518,8 @@ name = "apache-airflow-providers-ftp"
 version = "3.15.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-compat", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/2e/7cb31e5441cf730f1ffb56359a186dd5ae535970b59ce58a3416a4534e65/apache_airflow_providers_ftp-3.15.2.tar.gz", hash = "sha256:0355ea366f3bc1fee0c5d48d6d2c6a65555863659bbd998e3ddeafcb88461526", size = 70414, upload-time = "2026-07-10T16:28:36.327Z" }
 wheels = [
@@ -533,13 +531,13 @@ name = "apache-airflow-providers-http"
 version = "6.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohttp", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "asgiref", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pydantic", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "requests", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "requests-toolbelt", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "aiohttp", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-compat", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "asgiref", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pydantic", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "requests", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "requests-toolbelt", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bc/32/de5a495385f371a4d9d1a6047779161b2d276efcfc40de32c426366a65d3/apache_airflow_providers_http-6.0.5.tar.gz", hash = "sha256:35d0a8e8ec7ab7aa81fec5b8255327a6792ec85928ae319dbab9e8eb011c8bf8", size = 72314, upload-time = "2026-07-28T06:38:45.735Z" }
 wheels = [
@@ -551,8 +549,8 @@ name = "apache-airflow-providers-imap"
 version = "3.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow-providers-common-compat", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f2/8e/01de114735a95b7d4d1e4d2c4697b81998deb24923d7a1cf8ffb2c9aeac5/apache_airflow_providers_imap-3.12.1.tar.gz", hash = "sha256:9c2b0cf6f1a6003f36666ac2c47cf363e11dee4eec6100a670dfb57c33bffde9", size = 28219, upload-time = "2026-08-08T03:17:21.067Z" }
 wheels = [
@@ -564,10 +562,10 @@ name = "apache-airflow-providers-smtp"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiosmtplib" },
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "aiosmtplib", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "apache-airflow", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-compat" },
+    { name = "apache-airflow-providers-common-compat", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/20/a4/e150e61141cf18d99178af544cb89353d4f628690f2d58f891c3923cc226/apache_airflow_providers_smtp-3.0.2.tar.gz", hash = "sha256:69138116969c03609bcfad9d2cc3b95c5426f9ca10be3673d2bfcefe7b3ac53c", size = 47965, upload-time = "2026-07-10T16:28:49.615Z" }
 wheels = [
@@ -579,9 +577,9 @@ name = "apache-airflow-providers-sqlite"
 version = "4.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "apache-airflow", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "apache-airflow-providers-common-sql" },
+    { name = "apache-airflow-providers-common-sql", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c2/e2/661b59a838918d76a32c9f9baf94bf01a402a23376959dd7df3f6a6f8a17/apache_airflow_providers_sqlite-4.3.3.tar.gz", hash = "sha256:4a4cae6dd9b26cc74ce887635f4903ff71b17ff540024468aa8059a3dfe6c2c6", size = 33588, upload-time = "2026-06-07T09:44:32.782Z" }
 wheels = [
@@ -643,7 +641,7 @@ name = "apispec"
 version = "6.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4a/f1/1f5a9332df3ecd90cc5ab69bc58a4174b8ba2ac1720c4c26b01d20751bf5/apispec-6.10.0.tar.gz", hash = "sha256:0a888555cd4aa5fb7176041be15684154fd8961055e1672e703abf737e8761bf", size = 80631, upload-time = "2026-03-06T21:48:40.916Z" }
 wheels = [
@@ -652,7 +650,7 @@ wheels = [
 
 [package.optional-dependencies]
 yaml = [
-    { name = "pyyaml", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "pyyaml", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 
 [[package]]
@@ -839,8 +837,6 @@ name = "cachelib"
 version = "0.15.4"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*'",
     "python_full_version == '3.11.*'",
 ]
@@ -890,7 +886,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+    { name = "pycparser", marker = "(python_full_version < '3.13' and implementation_name != 'PyPy') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (implementation_name != 'PyPy' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (implementation_name == 'PyPy' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (implementation_name == 'PyPy' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -1099,8 +1095,8 @@ name = "clickclick"
 version = "20.10.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pyyaml", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "click", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pyyaml", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c6/19/f91d85941b79964d569a3729bf9f8b7f85ab47240248e77b7c0c8ed6ecc3/clickclick-20.10.2.tar.gz", hash = "sha256:4efb13e62353e34c5eef7ed6582c4920b418d7dedc86d819e22ee089ba01802c", size = 9914, upload-time = "2020-10-03T13:36:47.966Z" }
 wheels = [
@@ -1121,7 +1117,7 @@ name = "colorlog"
 version = "6.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "colorama", marker = "(python_full_version < '3.13' and sys_platform == 'win32') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (sys_platform == 'win32' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (sys_platform != 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (sys_platform != 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8c/55/ba79756cb90c8d69d599d57785398ac87bba7b19c80e87f4e8a562197c93/colorlog-6.12.0.tar.gz", hash = "sha256:2a7924c1dadf18b22a0eb8b06d1c7b01d5341707ec1641eb6fcc4fde0c3e8e5f", size = 18151, upload-time = "2026-07-23T13:40:40.71Z" }
 wheels = [
@@ -1142,19 +1138,19 @@ name = "connexion"
 version = "2.15.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohttp", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "aiohttp-jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "clickclick", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "inflection", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jsonschema", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "markupsafe", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-multipart", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pyyaml", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "requests", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "werkzeug", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "aiohttp", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "aiohttp-jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "clickclick", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "inflection", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jsonschema", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "markupsafe", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-multipart", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pyyaml", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "requests", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "werkzeug", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/fd/29/9beb85c193c0bfe38ffdeafc89a2171135e15d24340419f0081ba496859f/connexion-2.15.1.tar.gz", hash = "sha256:ff489f9dcd384aa53c53149e88d0a777f07660b98cf6488003cdcd270928c93b", size = 78967, upload-time = "2025-10-13T12:32:19.823Z" }
 wheels = [
@@ -1299,7 +1295,7 @@ name = "cron-descriptor"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/91/75/b44b05ae7d1e49b59a27a917c44e04ce9aa4cebdd05dac42ba7df06a91b4/cron_descriptor-2.1.0.tar.gz", hash = "sha256:ecddb8b2f6c5286398949aaefe185364666af74f33b01877c61378e1fd4e38e6", size = 50221, upload-time = "2026-06-02T16:26:28.223Z" }
 wheels = [
@@ -1311,7 +1307,7 @@ name = "croniter"
 version = "6.2.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "python-dateutil" },
+    { name = "python-dateutil", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/37/57/2e2a65aee2a70483cb28e2b7e15a072d00a523207593b44400d4717bb100/croniter-6.2.4.tar.gz", hash = "sha256:fc124f751b1b04805c2a04b061898b436b45ab2320b045e1e052ea895de65189", size = 166267, upload-time = "2026-07-10T09:52:59.955Z" }
 wheels = [
@@ -1323,7 +1319,7 @@ name = "cryptography"
 version = "50.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
+    { name = "cffi", marker = "(python_full_version < '3.13' and platform_python_implementation != 'PyPy') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_python_implementation != 'PyPy' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_python_implementation == 'PyPy' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_python_implementation == 'PyPy' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/41/6cbdcf9142d00fe82836fbb51e503e58088575cf7a0fe1dbff6695bf0840/cryptography-50.0.0.tar.gz", hash = "sha256:eeac2acb5a20ed25e0ad6d1df9891a520b78b404266b6d11778f25d5d691a6c9", size = 880201, upload-time = "2026-07-31T14:25:10.11Z" }
@@ -1380,7 +1376,7 @@ name = "deprecated"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "wrapt" },
+    { name = "wrapt", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
 wheels = [
@@ -1424,8 +1420,8 @@ name = "email-validator"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "dnspython" },
-    { name = "idna" },
+    { name = "dnspython", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "idna", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
 wheels = [
@@ -1506,11 +1502,11 @@ name = "flask"
 version = "2.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "blinker", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "click", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "itsdangerous", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "werkzeug", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "blinker", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "click", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "itsdangerous", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "werkzeug", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/46/b7/4ace17e37abd9c21715dea5ee11774a25e404c486a7893fa18e764326ead/flask-2.3.3.tar.gz", hash = "sha256:09c347a92aa7ff4a8e7f3206795f30d826654baf38b873d0744cd571ca609efc", size = 672756, upload-time = "2023-08-21T19:52:35.012Z" }
 wheels = [
@@ -1522,27 +1518,27 @@ name = "flask-appbuilder"
 version = "4.5.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "apispec", extra = ["yaml"], marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "click", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "colorama", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "email-validator", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-babel", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-jwt-extended", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-limiter", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-login", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-sqlalchemy", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask-wtf", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jsonschema", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "marshmallow", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "marshmallow-sqlalchemy", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "prison", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pyjwt", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-dateutil", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy-utils", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "werkzeug", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "wtforms", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "apispec", extra = ["yaml"], marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "click", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "colorama", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "email-validator", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-babel", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-jwt-extended", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-limiter", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-login", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-sqlalchemy", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask-wtf", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jsonschema", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "marshmallow", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "marshmallow-sqlalchemy", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "prison", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pyjwt", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-dateutil", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy-utils", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "werkzeug", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "wtforms", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/23/22/2738b272f4b4468b84dfcf927466c1734076058b01d0f77ba8eb2aed851b/Flask-AppBuilder-4.5.4.tar.gz", hash = "sha256:eed98f23b13ce893b5030714f51d1464189a6fbadcb4adfdbe0bf7ca7a00092e", size = 7359564, upload-time = "2025-02-20T11:17:44.202Z" }
 wheels = [
@@ -1554,10 +1550,10 @@ name = "flask-babel"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "babel", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pytz", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "babel", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pytz", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d7/fe/655e6a5a99ceb815fe839f0698956a9d6c7d5bcc06ca1ee7c6eb6dac154b/Flask-Babel-2.0.0.tar.gz", hash = "sha256:f9faf45cdb2e1a32ea2ec14403587d4295108f35017a7821a2b1acb8cfd9257d", size = 19588, upload-time = "2020-08-27T03:14:13.932Z" }
 wheels = [
@@ -1570,8 +1566,8 @@ version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachelib", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "cachelib", version = "0.15.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "cachelib", version = "0.15.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/89/15/d2852e86419c6c1416cba00c177b2cf609b5c2935372933684f84111c631/flask_caching-2.4.1.tar.gz", hash = "sha256:ecef4ca80b9cb1fa01d461373a0fce441527cd57eecee1aa71c1f6d750d7ff77", size = 165380, upload-time = "2026-07-08T19:23:57.264Z" }
 wheels = [
@@ -1583,9 +1579,9 @@ name = "flask-jwt-extended"
 version = "4.7.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pyjwt", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "werkzeug", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pyjwt", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "werkzeug", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/20/bf/75189cf38cd391dddeb097001be3bc9ec24a8cae5a5a3698cd0a3fcaa182/flask_jwt_extended-4.7.4.tar.gz", hash = "sha256:78fd0f460317facf3a0084a6457ffaf2f1dda9eefbd576f94cea35b0eadd5531", size = 34672, upload-time = "2026-05-13T15:23:17.664Z" }
 wheels = [
@@ -1597,10 +1593,10 @@ name = "flask-limiter"
 version = "3.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "limits", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "ordered-set", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "rich", version = "13.9.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "limits", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "ordered-set", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "rich", version = "13.9.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/70/75/92b237dd4f6e19196bc73007fff288ab1d4c64242603f3c401ff8fc58a42/flask_limiter-3.12.tar.gz", hash = "sha256:f9e3e3d0c4acd0d1ffbfa729e17198dd1042f4d23c130ae160044fc930e21300", size = 303162, upload-time = "2025-03-15T02:23:10.734Z" }
 wheels = [
@@ -1612,8 +1608,8 @@ name = "flask-login"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "werkzeug", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "werkzeug", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c3/6e/2f4e13e373bb49e68c02c51ceadd22d172715a06716f9299d9df01b6ddb2/Flask-Login-0.6.3.tar.gz", hash = "sha256:5e23d14a607ef12806c699590b89d0f0e0d67baeec599d75947bf9c147330333", size = 48834, upload-time = "2023-10-30T14:53:21.151Z" }
 wheels = [
@@ -1626,9 +1622,9 @@ version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachelib", version = "0.14.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "cachelib", version = "0.15.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "msgspec", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "cachelib", version = "0.15.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "msgspec", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/d7/0ba4180513abe28eadc208123c76f9f09e290d5939fb2eb68323b9733354/flask_session-0.8.0.tar.gz", hash = "sha256:20e045eb01103694e70be4a49f3a80dbb1b57296a22dc6f44bbf3f83ef0742ff", size = 940269, upload-time = "2024-03-26T07:56:13.747Z" }
 wheels = [
@@ -1640,8 +1636,8 @@ name = "flask-sqlalchemy"
 version = "2.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/35/f0/39dd2d8e7e5223f78a5206d7020dc0e16718a964acfb3564d89e9798ab9b/Flask-SQLAlchemy-2.5.1.tar.gz", hash = "sha256:2bda44b43e7cacb15d4e05ff3cc1f8bc97936cc464623424102bfc2c35e95912", size = 132750, upload-time = "2021-03-18T19:03:02.733Z" }
 wheels = [
@@ -1653,9 +1649,9 @@ name = "flask-wtf"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flask", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "itsdangerous", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "wtforms", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "flask", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "itsdangerous", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "wtforms", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/91/f1/605a56d4ea217b307f3e6f4d663e0351253d85d841edc93ba559f0648e19/flask_wtf-1.3.0.tar.gz", hash = "sha256:61d5dabc50c3df885c297dcbd80810443a5d632106c8a69cab8ce740f0cdd7cc", size = 50414, upload-time = "2026-04-23T07:41:55.096Z" }
 wheels = [
@@ -1871,7 +1867,7 @@ name = "googleapis-common-protos"
 version = "1.75.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "protobuf" },
+    { name = "protobuf", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/72/73/74bcab964c9a7a61f2bb71e8179b0f13e6fa98f7ce00fd168aab291e4a2e/googleapis_common_protos-1.75.1.tar.gz", hash = "sha256:d3042c6c5a2d4e67113104d6b6818b59b6bd92a197f2a91508e801fe815cf071", size = 150967, upload-time = "2026-08-06T06:24:51.972Z" }
 wheels = [
@@ -1983,7 +1979,7 @@ name = "grpcio"
 version = "1.83.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0c/98/304898ac4e04e2d5e4e4c2eadc178b1f2a16d5f4bc2f91306c87d64680b9/grpcio-1.83.0.tar.gz", hash = "sha256:7674587248fbbb2ac6e4eecf83a8a0f3d91a928f941de571acfd3a2f007fbc24", size = 13428824, upload-time = "2026-07-23T15:20:37.759Z" }
 wheels = [
@@ -2044,7 +2040,7 @@ name = "gunicorn"
 version = "26.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6d/b7/a4a3f632f823e432ce6bc65f62961b7980c898c77f075a2f7118cb3846fe/gunicorn-26.0.0.tar.gz", hash = "sha256:ca9346f85e3a4aeeb64d491045c16b9a35647abd37ea15efe53080eb8b090baf", size = 727286, upload-time = "2026-05-05T06:38:25.529Z" }
 wheels = [
@@ -2065,8 +2061,8 @@ name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "certifi" },
-    { name = "h11" },
+    { name = "certifi", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "h11", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/94/82699a10bca87a5556c9c59b5963f2d039dbd239f25bc2a63907a05a14cb/httpcore-1.0.9.tar.gz", hash = "sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8", size = 85484, upload-time = "2025-04-24T22:06:22.219Z" }
 wheels = [
@@ -2128,10 +2124,10 @@ name = "httpx"
 version = "0.28.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio" },
-    { name = "certifi" },
-    { name = "httpcore" },
-    { name = "idna" },
+    { name = "anyio", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "certifi", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "httpcore", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "idna", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
 wheels = [
@@ -2224,11 +2220,11 @@ name = "jsonschema"
 version = "4.26.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "attrs" },
-    { name = "jsonschema-specifications" },
-    { name = "referencing" },
+    { name = "attrs", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "jsonschema-specifications", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "referencing", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "rpds-py", version = "0.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (python_full_version >= '3.13' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b3/fc/e067678238fa451312d4c62bf6e6cf5ec56375422aee02f9cb5f909b3047/jsonschema-4.26.0.tar.gz", hash = "sha256:0c26707e2efad8aa1bfc5b7ce170f3fccc2e4918ff85989ba9ffa9facb2be326", size = 366583, upload-time = "2026-01-07T13:41:07.246Z" }
 wheels = [
@@ -2240,7 +2236,7 @@ name = "jsonschema-specifications"
 version = "2025.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "referencing" },
+    { name = "referencing", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/19/74/a633ee74eb36c44aa6d1095e7cc5569bebf04342ee146178e2d36600708b/jsonschema_specifications-2025.9.1.tar.gz", hash = "sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d", size = 32855, upload-time = "2025-09-08T01:34:59.186Z" }
 wheels = [
@@ -2365,9 +2361,9 @@ name = "limits"
 version = "5.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "deprecated", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "typing-extensions", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "deprecated", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/71/69/826a5d1f45426c68d8f6539f8d275c0e4fcaa57f0c017ec3100986558a41/limits-5.8.0.tar.gz", hash = "sha256:c9e0d74aed837e8f6f50d1fcebcf5fd8130957287206bc3799adaee5092655da", size = 226104, upload-time = "2026-02-05T07:17:35.859Z" }
 wheels = [
@@ -2379,7 +2375,7 @@ name = "linkify-it-py"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "uc-micro-py" },
+    { name = "uc-micro-py", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/c9/06ea13676ef354f0af6169587ae292d3e2406e212876a413bf9eece4eb23/linkify_it_py-2.1.0.tar.gz", hash = "sha256:43360231720999c10e9328dc3691160e27a718e280673d444c38d7d3aaa3b98b", size = 29158, upload-time = "2026-03-01T07:48:47.683Z" }
 wheels = [
@@ -2400,7 +2396,7 @@ name = "mako"
 version = "1.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe" },
+    { name = "markupsafe", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2a/12/b5fa2353e2754cd67fb9f83793fa48ff42c213a5da7e719869d2301f6ab8/mako-1.4.1.tar.gz", hash = "sha256:d7904710b662996425a21627710c4777c45053146942cf8a7aebf757c92b8c27", size = 410165, upload-time = "2026-08-05T06:10:56.611Z" }
 wheels = [
@@ -2421,7 +2417,7 @@ name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mdurl" },
+    { name = "mdurl", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454, upload-time = "2026-05-07T12:08:28.36Z" }
 wheels = [
@@ -2518,7 +2514,7 @@ name = "marshmallow"
 version = "3.26.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/55/79/de6c16cc902f4fc372236926b0ce2ab7845268dcc30fb2fbb7f71b418631/marshmallow-3.26.2.tar.gz", hash = "sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57", size = 222095, upload-time = "2025-12-22T06:53:53.309Z" }
 wheels = [
@@ -2530,7 +2526,7 @@ name = "marshmallow-oneofschema"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marshmallow", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "marshmallow", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/42/a0e00dea6a831acfe9d3fe664d695b7cefc02c27dd69d9ccb4bdc3c3d1a7/marshmallow_oneofschema-3.2.0.tar.gz", hash = "sha256:c06c8d9f14d51ffff152d66d85bd5f27d55cff10752a3b1f8c1f948bf5f597a0", size = 9096, upload-time = "2025-05-08T13:49:34.798Z" }
 wheels = [
@@ -2542,9 +2538,9 @@ name = "marshmallow-sqlalchemy"
 version = "0.28.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "marshmallow", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "packaging", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "marshmallow", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "packaging", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/07/84/9cced63c2e1bbd4f243f5aed0a4eaf018ef97475e4eecf388bed4d5033b8/marshmallow-sqlalchemy-0.28.2.tar.gz", hash = "sha256:2ab0f1280c793e5aec81deab3e63ec23688ddfe05e5f38ac960368a1079520a1", size = 52156, upload-time = "2023-02-23T22:39:08.931Z" }
 wheels = [
@@ -2556,7 +2552,7 @@ name = "mdit-py-plugins"
 version = "0.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "markdown-it-py", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/59/fc/f8d0863f8862f25602c0404d75568e89fb6b4109804645e5cdfb1be5cf56/mdit_py_plugins-0.6.1.tar.gz", hash = "sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0", size = 56114, upload-time = "2026-05-13T09:03:38.91Z" }
 wheels = [
@@ -2586,7 +2582,7 @@ name = "methodtools"
 version = "0.4.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "wirerope" },
+    { name = "wirerope", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/3b/c21b74ac17befdf17b286494b02221b7a84affb1d410ff86e38ba0e14b13/methodtools-0.4.7.tar.gz", hash = "sha256:e213439dd64cfe60213f7015da6efe5dd4003fd89376db3baa09fe13ec2bb0ba", size = 3586, upload-time = "2023-02-05T13:17:54.473Z" }
 wheels = [
@@ -2879,7 +2875,7 @@ name = "opentelemetry-api"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ee/8b/aa9e2d8b8dfa7c946f7dec5d1f8f6ba8eca062f43509a06bdb5ce93d26c0/opentelemetry_api-1.44.0.tar.gz", hash = "sha256:67647e5e9566edcf421166fdf022b3537f818635daa852b289e34604dc6fb33a", size = 72406, upload-time = "2026-07-16T15:25:32.678Z" }
 wheels = [
@@ -2891,8 +2887,8 @@ name = "opentelemetry-exporter-otlp"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f2/45/7af37fe54e5d3e66e7dcd7ba8b8aeee73f202bfac909cc94b8c4e428f9ac/opentelemetry_exporter_otlp-1.44.0.tar.gz", hash = "sha256:af1cde7c33ea8ed624bf04ac49a885730fe44c1f1ad698656e592c38f70ce106", size = 6090, upload-time = "2026-07-16T15:25:34.585Z" }
 wheels = [
@@ -2904,7 +2900,7 @@ name = "opentelemetry-exporter-otlp-proto-common"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-proto", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/09/4d717852c1cf3f854b76c7110a5d00883bc3c99288b9b0dbcbeb9e306eb6/opentelemetry_exporter_otlp_proto_common-1.44.0.tar.gz", hash = "sha256:dc87a5a5bc58f149a56d1547e4691588fa12994cdc3bc039a694ccb3375862ac", size = 20202, upload-time = "2026-07-16T15:25:37.658Z" }
 wheels = [
@@ -2916,13 +2912,13 @@ name = "opentelemetry-exporter-otlp-proto-grpc"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "grpcio" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-common" },
-    { name = "opentelemetry-proto" },
-    { name = "opentelemetry-sdk" },
-    { name = "typing-extensions" },
+    { name = "googleapis-common-protos", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "grpcio", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-api", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-exporter-otlp-proto-common", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-proto", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-sdk", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/47/80d9e9d468dc5de3af5096f5ccdb065fa4dd1470f74495cc53e59e397f47/opentelemetry_exporter_otlp_proto_grpc-1.44.0.tar.gz", hash = "sha256:40d1ae9e03fcc36de3cbac610cc99f35894938bff9cfd90fc4ec68bd85448463", size = 27225, upload-time = "2026-07-16T15:25:38.308Z" }
 wheels = [
@@ -2934,13 +2930,13 @@ name = "opentelemetry-exporter-otlp-proto-http"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-common" },
-    { name = "opentelemetry-proto" },
-    { name = "opentelemetry-sdk" },
-    { name = "requests" },
-    { name = "typing-extensions" },
+    { name = "googleapis-common-protos", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-api", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-exporter-otlp-proto-common", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-proto", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-sdk", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "requests", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1a/87/95e2a5aaa795b4e2260d74e16df2d5541deb2ea9de010bcd615f4dee2654/opentelemetry_exporter_otlp_proto_http-1.44.0.tar.gz", hash = "sha256:c633d7270ad6b57cd4cfbe8b0007a9e2e7c0cb50bd6c50fe2a7b245f721a09d8", size = 25806, upload-time = "2026-07-16T15:25:39.162Z" }
 wheels = [
@@ -2952,7 +2948,7 @@ name = "opentelemetry-proto"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "protobuf" },
+    { name = "protobuf", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/64/01/40ac4ae9a149263cc52c2cee200ddd80cb6d8db1a4610abf8eabce0fe771/opentelemetry_proto-1.44.0.tar.gz", hash = "sha256:c547a79c2f8c0c515d31509154682e5921c7cfd5ca67b70e1f9266e2c3e103f3", size = 46488, upload-time = "2026-07-16T15:25:45.34Z" }
 wheels = [
@@ -2964,9 +2960,9 @@ name = "opentelemetry-sdk"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-semantic-conventions" },
-    { name = "typing-extensions" },
+    { name = "opentelemetry-api", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "opentelemetry-semantic-conventions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5d/77/a6592cbc7c8d9bcc9d6757a9df45e04a7c585e3e6e7a13456da522b21109/opentelemetry_sdk-1.44.0.tar.gz", hash = "sha256:cebe7f65dc12f26ead75c6064de12fd2a9052e5060c0272d402cfa203aae123b", size = 208624, upload-time = "2026-07-16T15:25:46.078Z" }
 wheels = [
@@ -2978,8 +2974,8 @@ name = "opentelemetry-semantic-conventions"
 version = "0.65b0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "opentelemetry-api" },
-    { name = "typing-extensions" },
+    { name = "opentelemetry-api", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8f/73/0cbdebcb4cf545fdd328da14f5137e37d0770c3f26185e478b0d15d94f50/opentelemetry_semantic_conventions-0.65b0.tar.gz", hash = "sha256:f9b2b81e9d5b64f11bc952075e7e9c7fb0aab075c7fd1c46d597f1b919852d60", size = 148774, upload-time = "2026-07-16T15:25:46.902Z" }
 wheels = [
@@ -3048,8 +3044,8 @@ name = "pendulum"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "python-dateutil" },
-    { name = "tzdata" },
+    { name = "python-dateutil", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "tzdata", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cb/72/9a51afa0a822b09e286c4cb827ed7b00bc818dac7bd11a5f161e493a217d/pendulum-3.2.0.tar.gz", hash = "sha256:e80feda2d10fa3ff8b1526715f7d33dcb7e08494b3088f2c8a3ac92d4a4331ce", size = 86912, upload-time = "2026-01-30T11:22:24.093Z" }
 wheels = [
@@ -3159,7 +3155,7 @@ name = "prison"
 version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "six", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/65/4456caa4e9bbd1d4d4b5eecaea41bb2cd31efe0e7e423c7a9ad8e2be75ea/prison-0.2.1.tar.gz", hash = "sha256:e6cd724044afcb1a8a69340cad2f1e3151a5839fd3a8027fd1357571e797c599", size = 12040, upload-time = "2021-08-26T18:58:48.128Z" }
 wheels = [
@@ -3414,10 +3410,10 @@ name = "pydantic"
 version = "2.13.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-types" },
-    { name = "pydantic-core" },
-    { name = "typing-extensions" },
-    { name = "typing-inspection" },
+    { name = "annotated-types", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pydantic-core", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-inspection", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/18/a5/b60d21ac674192f8ab0ba4e9fd860690f9b4a6e51ca5df118733b487d8d6/pydantic-2.13.4.tar.gz", hash = "sha256:c40756b57adaa8b1efeeced5c196f3f3b7c435f90e84ea7f443901bec8099ef6", size = 844775, upload-time = "2026-05-06T13:43:05.343Z" }
 wheels = [
@@ -3429,7 +3425,7 @@ name = "pydantic-core"
 version = "2.46.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz", hash = "sha256:62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1", size = 471464, upload-time = "2026-05-06T13:37:06.98Z" }
 wheels = [
@@ -3646,13 +3642,13 @@ dependencies = [
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "sqlalchemy", version = "2.0.51", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "sqlalchemy", version = "2.0.51", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 
 [package.optional-dependencies]
 airflow2 = [
-    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" } },
+    { name = "apache-airflow", version = "2.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
 ]
 airflow3 = [
     { name = "apache-airflow", version = "3.3.0", source = { registry = "https://pypi.org/simple" } },
@@ -3683,7 +3679,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apache-airflow", marker = "extra == 'airflow2'", specifier = ">=2.9,<3" },
+    { name = "apache-airflow", marker = "python_full_version < '3.13' and extra == 'airflow2'", specifier = ">=2.9,<3" },
     { name = "apache-airflow", marker = "extra == 'airflow3'", specifier = ">=3.1,<4" },
     { name = "apache-airflow-providers-sqlite", marker = "extra == 'airflow3'", specifier = ">=4.1,<5" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29,<1" },
@@ -3758,7 +3754,7 @@ name = "python-daemon"
 version = "3.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "lockfile" },
+    { name = "lockfile", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3d/37/4f10e37bdabc058a32989da2daf29e57dc59dbc5395497f3d36d5f5e2694/python_daemon-3.1.2.tar.gz", hash = "sha256:f7b04335adc473de877f5117e26d5f1142f4c9f7cd765408f0877757be5afbf4", size = 71576, upload-time = "2024-12-03T08:41:07.843Z" }
 wheels = [
@@ -3800,8 +3796,8 @@ name = "python-nvd3"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "python-slugify", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "jinja2", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "python-slugify", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/54/e7/2a0bf4d9209d23a9121ab3f84e2689695d1ceba417f279f480af2948abef/python-nvd3-0.16.0.tar.gz", hash = "sha256:0115887289b3f751716ddd05c7b53ac5f05e71201e52496decdac453a50dcf7e", size = 34060, upload-time = "2024-04-22T07:55:15.856Z" }
 
@@ -3810,7 +3806,7 @@ name = "python-slugify"
 version = "8.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "text-unidecode" },
+    { name = "text-unidecode", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/87/c7/5e1547c44e31da50a460df93af11a535ace568ef89d7a811069ead340c4a/python-slugify-8.0.4.tar.gz", hash = "sha256:59202371d1d05b54a9e7720c5e038f928f45daaffe41dd10822f3907b937c856", size = 10921, upload-time = "2024-02-08T18:32:45.488Z" }
 wheels = [
@@ -3956,9 +3952,9 @@ name = "referencing"
 version = "0.37.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "attrs" },
+    { name = "attrs", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "rpds-py", version = "0.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "rpds-py", version = "2026.6.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13') or (python_full_version >= '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version >= '3.13' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (python_full_version >= '3.13' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
@@ -3986,7 +3982,7 @@ name = "requests-toolbelt"
 version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "requests", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "requests", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
 wheels = [
@@ -3998,7 +3994,7 @@ name = "rfc3339-validator"
 version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "six", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/28/ea/a9387748e2d111c3c2b275ba970b735e04e15cdb1eb30693b6b5708c4dbd/rfc3339_validator-0.1.4.tar.gz", hash = "sha256:138a2abdf93304ad60530167e51d2dfb9549521a836871b88d7f4695d0022f6b", size = 5513, upload-time = "2021-05-12T16:37:54.178Z" }
 wheels = [
@@ -4010,15 +4006,13 @@ name = "rich"
 version = "13.9.4"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*'",
     "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "markdown-it-py", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "pygments", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "markdown-it-py", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "pygments", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "typing-extensions", marker = "(python_full_version < '3.11' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ab/3a/0316b28d0761c6734d6bc14e770d85506c986c85ffb239e688eeaab2c2bc/rich-13.9.4.tar.gz", hash = "sha256:439594978a49a09530cff7ebc4b5c7103ef57baf48d5ea3184f21d9a2befa098", size = 223149, upload-time = "2024-11-01T16:43:57.873Z" }
@@ -4051,7 +4045,7 @@ name = "rich-argparse"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "rich", version = "13.9.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "rich", version = "13.9.4", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "rich", version = "15.0.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/6a/e5/1064c43203a357d668cd42435f7a15fe6af51512d85b2104fecb937aa861/rich_argparse-1.8.0.tar.gz", hash = "sha256:679df3d832fa94ad6e4bdb07ded088cd7ea2dddc58ae9b2b46346a40b06cbc0c", size = 38940, upload-time = "2026-05-01T15:18:43.604Z" }
@@ -4468,14 +4462,12 @@ name = "sqlalchemy"
 version = "1.4.54"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*'",
     "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "greenlet", marker = "(platform_machine == 'AMD64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'WIN32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'aarch64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'amd64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'ppc64le' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "greenlet", marker = "(python_full_version < '3.13' and platform_machine == 'AMD64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.13' and platform_machine == 'WIN32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.13' and platform_machine == 'aarch64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.13' and platform_machine == 'amd64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.13' and platform_machine == 'ppc64le' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.13' and platform_machine == 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (python_full_version < '3.13' and platform_machine == 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine != 'AMD64' and platform_machine != 'WIN32' and platform_machine != 'aarch64' and platform_machine != 'amd64' and platform_machine != 'ppc64le' and platform_machine != 'win32' and platform_machine != 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine != 'AMD64' and platform_machine != 'WIN32' and platform_machine != 'aarch64' and platform_machine != 'amd64' and platform_machine != 'ppc64le' and platform_machine != 'win32' and platform_machine != 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'AMD64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'AMD64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'WIN32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'WIN32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'aarch64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'aarch64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'amd64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'amd64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'ppc64le' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'ppc64le' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ce/af/20290b55d469e873cba9d41c0206ab5461ff49d759989b3fe65010f9d265/sqlalchemy-1.4.54.tar.gz", hash = "sha256:4470fbed088c35dc20b78a39aaf4ae54fe81790c783b3264872a0224f437c31a", size = 8470350, upload-time = "2024-09-05T15:54:10.398Z" }
 wheels = [
@@ -4510,8 +4502,8 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "greenlet", marker = "(platform_machine == 'AMD64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'WIN32' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'aarch64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'amd64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'ppc64le' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'win32' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'x86_64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
-    { name = "typing-extensions", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow3' or extra == 'group-23-pytest-airflow-in-a-box-dev' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "greenlet", marker = "(python_full_version >= '3.13' and platform_machine == 'AMD64') or (python_full_version >= '3.13' and platform_machine == 'WIN32') or (python_full_version >= '3.13' and platform_machine == 'aarch64') or (python_full_version >= '3.13' and platform_machine == 'amd64') or (python_full_version >= '3.13' and platform_machine == 'ppc64le') or (python_full_version >= '3.13' and platform_machine == 'win32') or (python_full_version >= '3.13' and platform_machine == 'x86_64') or (platform_machine != 'AMD64' and platform_machine != 'WIN32' and platform_machine != 'aarch64' and platform_machine != 'amd64' and platform_machine != 'ppc64le' and platform_machine != 'win32' and platform_machine != 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine != 'AMD64' and platform_machine != 'WIN32' and platform_machine != 'aarch64' and platform_machine != 'amd64' and platform_machine != 'ppc64le' and platform_machine != 'win32' and platform_machine != 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'AMD64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'WIN32' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'aarch64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'amd64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'ppc64le' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'win32' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'x86_64' and extra != 'extra-23-pytest-airflow-in-a-box-airflow2') or (platform_machine == 'AMD64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'AMD64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'WIN32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'WIN32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'aarch64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'aarch64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'amd64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'amd64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'ppc64le' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'ppc64le' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'win32' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev') or (platform_machine == 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (platform_machine == 'x86_64' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/f1/a7a892f18d4d224e6b26f706531eafccc41e37594d37d304786969ee13cb/sqlalchemy-2.0.51.tar.gz", hash = "sha256:804dccd8a4a6242c4e30ad961e540e18a588f6527202f2d6791b01845d59fdc9", size = 9912201, upload-time = "2026-06-15T15:41:20.012Z" }
 wheels = [
@@ -4570,7 +4562,7 @@ name = "sqlalchemy-jsonfield"
 version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bc/15/9555c858379eaa76853722a4d63c6d9d4227c5889c0f9080d6b759c19100/sqlalchemy_jsonfield-1.0.3.tar.gz", hash = "sha256:162099ff6b6f475105afff90b15da114cbd87fd18df94e7d091df9f9d0e4f69f", size = 15495, upload-time = "2026-05-11T19:54:11.833Z" }
 wheels = [
@@ -4582,7 +4574,7 @@ name = "sqlalchemy-utils"
 version = "0.42.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0f/7d/eb9565b6a49426552a5bf5c57e7c239c506dc0e4e5315aec6d1e8241dc7c/sqlalchemy_utils-0.42.1.tar.gz", hash = "sha256:881f9cd9e5044dc8f827bccb0425ce2e55490ce44fc0bb848c55cc8ee44cc02e", size = 130789, upload-time = "2025-12-13T03:14:13.591Z" }
 wheels = [
@@ -4796,7 +4788,7 @@ name = "typing-inspection"
 version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
@@ -4826,14 +4818,12 @@ name = "universal-pathlib"
 version = "0.2.6"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version == '3.13.*'",
     "python_full_version == '3.12.*'",
     "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
 ]
 dependencies = [
-    { name = "fsspec", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "fsspec", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/21/dd871495af3933e585261adce42678dcdf1168c9d6fa0a8f7b6565e54472/universal_pathlib-0.2.6.tar.gz", hash = "sha256:50817aaeaa9f4163cb1e76f5bdf84207fa05ce728b23fd779479b3462e5430ac", size = 175427, upload-time = "2024-12-13T00:58:27.514Z" }
 wheels = [
@@ -5393,7 +5383,7 @@ name = "werkzeug"
 version = "3.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "markupsafe", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/dd/b2/381be8cfdee792dd117872481b6e378f85c957dd7c5bca38897b08f765fd/werkzeug-3.1.8.tar.gz", hash = "sha256:9bad61a4268dac112f1c5cd4630a56ede601b6ed420300677a869083d70a4c44", size = 875852, upload-time = "2026-04-02T18:49:14.268Z" }
 wheels = [
@@ -5405,7 +5395,7 @@ name = "wirerope"
 version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six" },
+    { name = "six", marker = "python_full_version < '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8e/f1/d0a4c936ba77eb1050da6ea5e7cd80aa36add343d9e5f7f9cf79a206c5b8/wirerope-1.0.0.tar.gz", hash = "sha256:7da8bb6feeff9dd939bd7141ef0dc392674e43ba662e20909d6729db81a7c8d0", size = 10930, upload-time = "2025-01-16T11:01:25.427Z" }
 wheels = [
@@ -5503,7 +5493,7 @@ name = "wtforms"
 version = "3.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "markupsafe", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e9/91/ed9b517da898e3fb747566aa3c12a734bd64ea7449a0d25ec74ce8f8b8eb/wtforms-3.2.2.tar.gz", hash = "sha256:7b00c73f8670f35d4edb0293dcd81b980528bee72fd662b182aaba27ae570b93", size = 139583, upload-time = "2026-05-03T05:53:44.147Z" }
 wheels = [
@@ -5515,9 +5505,9 @@ name = "yarl"
 version = "1.24.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "idna", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "multidict", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
-    { name = "propcache", marker = "extra == 'extra-23-pytest-airflow-in-a-box-airflow2'" },
+    { name = "idna", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "multidict", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
+    { name = "propcache", marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/31/33/ebe9e3d1f86c7a0b51094c0a146392045ca1631d2664889539dec8088a33/yarl-1.24.5.tar.gz", hash = "sha256:e81b83143bee16329c23db3c1b2d82b29892fcbcb849186d2f6e98a5abe9a57f", size = 228679, upload-time = "2026-07-20T02:07:45.435Z" }
 wheels = [

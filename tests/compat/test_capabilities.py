@@ -816,6 +816,62 @@ def test_corrupt_dual_family_environment_is_rejected(
     assert f"'{meta_version}'" in str(caught.value)
 
 
+def test_corruption_check_escape_hatch_bypasses_the_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a self-verified dual-metadata environment when the escape hatch is set.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating metadata and environment state.
+    """
+
+    modules = _fake_modules((3, 3, 0))
+    _install_fake_environment(monkeypatch, "3.3.0", modules, meta_version="0.1.dev0+g1234567")
+    monkeypatch.setenv(capability_module.SKIP_CORRUPTION_CHECK_ENVIRONMENT_VARIABLE, "1")
+
+    resolved = capability_module.resolve_capabilities()
+
+    assert resolved.release == (3, 3, 0)
+
+
+def test_airflow1_environment_fails_certification_naming_supported_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a legacy 1.x monolith through certification, never as `Airflow 2.x`.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating metadata state.
+    """
+
+    def fake_version(distribution_name: str) -> str:
+        """Expose only a legacy 1.x monolith distribution.
+
+        Parameters:
+            distribution_name: str naming the queried distribution.
+
+        Returns:
+            str containing the fake metadata version.
+
+        Raises:
+            importlib.metadata.PackageNotFoundError: The distribution is not the
+                legacy monolith.
+        """
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            return "1.10.15"
+        raise capability_module.metadata.PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match="base release is not certified") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert "'1.10.15'" in message
+    assert "Airflow 2.x" not in message
+    assert "2.9.3" in message
+
+
 def test_unreadable_meta_metadata_next_to_core_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -937,12 +993,12 @@ def _backport_serialized_dag_location(modules: dict[str, SimpleNamespace]) -> No
 @pytest.mark.parametrize(
     ("release", "mutate", "symbol"),
     [
-        ((3, 2, 2), _replace_dag_bag_with_old_location, "capability `dag_bag_location`"),
-        ((3, 3, 0), _add_include_examples, "capability `dag_bag_supports_include_examples`"),
-        ((3, 2, 2), _restore_legacy_runner, "capability `task_instance_runner`"),
-        ((3, 3, 0), _remove_dag_run_refresh, "capability `refresh_from_task_supports_dag_run`"),
-        ((3, 2, 2), _remove_sentry_field, "capability `startup_details_supports_sentry`"),
-        ((3, 3, 0), _remove_queue_field, "capability `runtime_task_instance_supports_queue`"),
+        ((3, 2, 2), _replace_dag_bag_with_old_location, "DagBag canonical location"),
+        ((3, 3, 0), _add_include_examples, "DagBag.__init__.include_examples"),
+        ((3, 2, 2), _restore_legacy_runner, "TaskInstance task runner"),
+        ((3, 3, 0), _remove_dag_run_refresh, "TaskInstance.refresh_from_task.dag_run"),
+        ((3, 2, 2), _remove_sentry_field, "StartupDetails.sentry_integration"),
+        ((3, 3, 0), _remove_queue_field, "TaskInstance DTO queue"),
         ((3, 1, 8), _backport_serialized_dag_location, "SerializedDAG canonical location"),
     ],
 )

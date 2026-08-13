@@ -15,13 +15,6 @@ from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 SIMPLE_AUTH_MANAGER = (
     "airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager"
 )
-# The FAB-provider paths, not the deprecated `airflow.api.auth.backend.*` shims: the
-# provider is a hard dependency of every certified 2.x monolith and these import without
-# a `RemovedInAirflow3Warning`.
-BASIC_AUTH_BACKENDS = (
-    "airflow.providers.fab.auth_manager.api.auth.backend.basic_auth,"
-    "airflow.providers.fab.auth_manager.api.auth.backend.session"
-)
 
 
 def sqlite_url(database_path: Path) -> str:
@@ -56,8 +49,14 @@ def write_airflow_config(
     """Write a deterministic Airflow configuration without importing Airflow.
 
     On 3.x the auth surface is SimpleAuthManager plus a JWT secret; 2.x predates both,
-    so the same run secret becomes the `[webserver] secret_key` and the REST API uses
-    the basic-auth + session backends.
+    so the same run secret becomes the `[webserver] secret_key`. On 2.x this file is
+    documentation and tooling parity, not the live surface: `unit_test_mode` makes 2.x's
+    `initialize_config()` short-circuit to its internal `unit_tests.cfg` template
+    without ever reading `AIRFLOW_CONFIG`, so every setting the plugin must control on
+    2.x is ALSO env-pinned in `bootstrap._environment()`, the one channel that outranks
+    the overlay. No REST API auth backends are configured on 2.x -- there is no 2.x
+    server tier yet, and the FAB backend paths trip 2.x's substring-based
+    `_upgrade_auth_backends` deprecation rewrite.
 
     Parameters:
         config_path: pathlib.Path receiving the generated configuration.
@@ -114,11 +113,11 @@ def write_airflow_config(
         cfg["api_auth"] = {"jwt_secret": jwt_secret}
     else:
         cfg["webserver"] = {"secret_key": jwt_secret}
-        cfg["api"] = {"auth_backends": BASIC_AUTH_BACKENDS}
+        cfg["core"]["executor"] = "SequentialExecutor"
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8", newline="\n") as config_file:
         cfg.write(config_file)
 
 
-__all__ = ("BASIC_AUTH_BACKENDS", "SIMPLE_AUTH_MANAGER", "sqlite_url", "write_airflow_config")
+__all__ = ("SIMPLE_AUTH_MANAGER", "sqlite_url", "write_airflow_config")
