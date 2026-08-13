@@ -18,10 +18,10 @@ All notable changes to this project will be documented in this file. The format 
   actionable errors naming the 2.x alternative.
 - `requires_airflow2` / `requires_airflow3` markers, auto-skipped on the other family,
   plus three 2.x CI legs (two-pass constraints install) running the end-user consumer
-  contract; widening the 2.x-collectable surface is tracked in
-  [#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83).
+  contract; the 2.x-collectable surface is widened below
+  ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 - The bundled Dag corpus authors through a small dynamic resolver so the same files
-  parse on both Airflow families.
+  parse on both Airflow families ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
 
 ### Changed
 
