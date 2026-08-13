@@ -2,6 +2,9 @@
 
 References:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_cmdline_main
+    https://github.com/apache/airflow/blob/2.11.2/airflow/executors/executor_loader.py
+    https://github.com/apache/airflow/blob/2.11.2/airflow/config_templates/unit_tests.cfg
+    https://airflow.apache.org/docs/apache-airflow/2.10.0/core-concepts/executor/index.html#using-multiple-executors-concurrently
 """
 
 from __future__ import annotations
@@ -92,11 +95,13 @@ def _resolve_executor() -> str:
 def _executor_section(state: BootstrapState) -> list[str]:
     """Render the resolved `core.executor` and flag the 2.x SQLite executor conflict.
 
-    Airflow 2.x's `unit_test_mode` overlays its own internal `unit_tests.cfg`, which
-    hard-codes `executor = LocalExecutor` regardless of this plugin's `airflow.cfg`. The
-    `ready_to_reschedule` sensor dependency rejects that combination with SQLite for both
-    poke- and reschedule-mode sensors, with no indication of the actual cause. Degrades to
-    a resolution-failure bullet, never raises, matching every other section in this module.
+    Bootstrap env-pins `SequentialExecutor` on the 2.x family (see
+    `bootstrap._environment()`), so a multi-threaded executor resolving here means
+    consumer configuration overrode the pin -- and Airflow 2.x's `ready_to_reschedule`
+    sensor dependency rejects that combination with SQLite for poke- and
+    reschedule-mode sensors alike, with no indication of the actual cause. Degrades to
+    a resolution-failure bullet, never raises, matching every other section in this
+    module.
 
     Parameters:
         state: BootstrapState containing the resolved database backend and Airflow family.
@@ -116,9 +121,11 @@ def _executor_section(state: BootstrapState) -> list[str]:
     lines = [f"- `core.executor`: `{executor}`"]
     # `core.executor` accepts a comma-separated multi-executor list since Airflow 2.10
     # (AIP-61); the first entry is the default `ready_to_reschedule` actually loads, and
-    # may be a bare name, a `alias:module.Class` pair, or a bare import path.
+    # may be a bare name, an `alias:module.Class` or `alias:CoreName` pair, or a bare
+    # import path -- strip any alias before reducing to the class name.
     primary = executor.split(",")[0].strip()
-    executor_name = primary.rpartition(".")[2] or primary
+    unaliased = primary.rpartition(":")[2]
+    executor_name = unaliased.rpartition(".")[2] or unaliased
     if not executor_name:
         return lines
 
@@ -127,15 +134,14 @@ def _executor_section(state: BootstrapState) -> list[str]:
     skip_check = os.environ.get(_SKIP_CHECK_ENVIRONMENT_VARIABLE) == "1"
     if is_v2 and is_sqlite and not skip_check and executor_name not in _SINGLE_THREADED_EXECUTORS:
         lines.append(
-            f"- INCOMPATIBLE: Airflow 2.x's `unit_test_mode` overlays its own "
-            f"`unit_tests.cfg`, which hard-codes `executor = LocalExecutor` regardless of "
-            f"this plugin's `airflow.cfg` -- the `ready_to_reschedule` sensor dependency "
-            f"rejects `{executor_name}` with SQLite for poke- and reschedule-mode sensors "
-            f"alike. Pin `core.executor` to `SequentialExecutor` or `DebugExecutor` with "
-            f"`airflow_config`, and clear `airflow.executors.executor_loader._executor_names` "
-            f"if anything already resolved a default executor this process (see "
-            f"`tests/enduser/test_sensors.py`); or set "
-            f"`{_SKIP_CHECK_ENVIRONMENT_VARIABLE}=1` to bypass Airflow's own check entirely."
+            f"- INCOMPATIBLE: `{executor_name}` overrides this plugin's 2.x default of "
+            f"`SequentialExecutor`, and Airflow 2.x's `ready_to_reschedule` sensor "
+            f"dependency rejects it with SQLite for poke- and reschedule-mode sensors "
+            f"alike. Pin `core.executor` back to `SequentialExecutor` or `DebugExecutor` "
+            f"with `airflow_config`, switch to `--airflow-db-backend=postgres`, or set "
+            f"`{_SKIP_CHECK_ENVIRONMENT_VARIABLE}=1` (Airflow's own escape hatch, exact "
+            f"string '1') if the executor is single-threaded and merely named "
+            f"unconventionally."
         )
     return lines
 

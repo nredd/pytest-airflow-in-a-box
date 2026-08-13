@@ -24,8 +24,9 @@ All notable changes to this project will be documented in this file. The format 
   ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 - The bundled Dag corpus authors through a small dynamic resolver so the same files
   parse on both Airflow families ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
-- `--airflow-doctor` now reports the resolved `core.executor` and flags the 2.x SQLite +
-  non-single-threaded-executor conflict caused by Airflow's `unit_test_mode` overlay
+- `--airflow-doctor` now reports the resolved `core.executor` and flags a 2.x SQLite run
+  whose configuration overrides the plugin's `SequentialExecutor` default with a
+  multi-threaded executor, which Airflow's `ready_to_reschedule` dependency rejects
   ([#105](https://github.com/nredd/pytest-airflow-in-a-box/issues/105)).
 
 ### Changed

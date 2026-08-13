@@ -125,7 +125,7 @@ def test_executor_section_reports_resolved_executor(
 def test_executor_section_flags_2x_sqlite_local_executor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Flag the 2.x SQLite + `LocalExecutor` conflict from the `unit_tests.cfg` overlay."""
+    """Flag a 2.x SQLite override that resolved past the plugin's default pin."""
 
     state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
     monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
@@ -133,7 +133,7 @@ def test_executor_section_flags_2x_sqlite_local_executor(
     lines = doctor._executor_section(state)
 
     assert any(
-        "INCOMPATIBLE" in line and "unit_tests.cfg" in line and "ready_to_reschedule" in line
+        "INCOMPATIBLE" in line and "ready_to_reschedule" in line and "SequentialExecutor" in line
         for line in lines
     )
 
@@ -226,17 +226,26 @@ def test_executor_section_handles_fully_qualified_and_multi_executor_values(
     assert any("INCOMPATIBLE" in line and "`LocalExecutor`" in line for line in lines)
 
 
+@pytest.mark.parametrize(
+    "resolved",
+    [
+        "myalias:airflow.executors.sequential_executor.SequentialExecutor",
+        "myalias:SequentialExecutor",
+    ],
+)
 def test_executor_section_handles_aliased_multi_executor_values(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolved: str
 ) -> None:
-    """Resolve an `alias:module.Class` primary entry to its bare class name."""
+    """Resolve `alias:module.Class` and `alias:CoreName` entries to the bare class name.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the executor resolution seam.
+        tmp_path: pathlib.Path providing a throwaway bootstrap root.
+        resolved: str containing one aliased `core.executor` primary entry.
+    """
 
     state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
-    monkeypatch.setattr(
-        doctor,
-        "_resolve_executor",
-        lambda: "myalias:airflow.executors.sequential_executor.SequentialExecutor",
-    )
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: resolved)
 
     lines = doctor._executor_section(state)
 
