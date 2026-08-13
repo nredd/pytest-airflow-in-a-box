@@ -182,6 +182,33 @@ def test_executor_section_does_not_flag_2x_postgres_local_executor(
     assert not any("INCOMPATIBLE" in line for line in lines)
 
 
+def test_executor_section_does_not_flag_2x_sqlite_debug_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`DebugExecutor` is single-threaded too; Airflow allows it with any backend."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "DebugExecutor")
+
+    lines = doctor._executor_section(state)
+
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
+def test_executor_section_respects_the_skip_check_environment_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Do not flag a combination the consumer already told Airflow's own check to skip."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
+    monkeypatch.setenv("_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK", "1")
+
+    lines = doctor._executor_section(state)
+
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
 def test_executor_section_handles_fully_qualified_and_multi_executor_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -197,6 +224,37 @@ def test_executor_section_handles_fully_qualified_and_multi_executor_values(
     lines = doctor._executor_section(state)
 
     assert any("INCOMPATIBLE" in line and "`LocalExecutor`" in line for line in lines)
+
+
+def test_executor_section_handles_aliased_multi_executor_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Resolve an `alias:module.Class` primary entry to its bare class name."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(
+        doctor,
+        "_resolve_executor",
+        lambda: "myalias:airflow.executors.sequential_executor.SequentialExecutor",
+    )
+
+    lines = doctor._executor_section(state)
+
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
+def test_executor_section_does_not_flag_an_unparseable_empty_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Render the raw value without a garbage bullet when the executor is blank."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "   ")
+
+    lines = doctor._executor_section(state)
+
+    assert lines == ["- `core.executor`: `   `"]
+    assert not any("INCOMPATIBLE" in line for line in lines)
 
 
 def test_executor_section_reports_resolution_failure_without_raising(
@@ -341,16 +399,17 @@ def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> No
             "*## AIRFLOW_HOME and database*",
             "*AIRFLOW_HOME*",
             "*Database URL scheme:*",
-            "*## Executor*",
-            "*core.executor*",
             "*## Versions and capabilities*",
             "*pytest-airflow-in-a-box*",
             "*Apache Airflow:*",
+            "*## Executor*",
+            "*core.executor*: `*`",
             "*## API server*",
             "*Not started*",
         ]
     )
     assert "test_never_runs" not in result.stdout.str()
+    assert "could not resolve" not in result.stdout.str()
 
 
 def test_airflow_doctor_reports_explicit_storage_reason_and_still_cleans_up(

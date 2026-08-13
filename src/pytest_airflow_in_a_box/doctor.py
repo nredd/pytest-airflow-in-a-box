@@ -6,6 +6,7 @@ References:
 
 from __future__ import annotations
 
+import os
 import platform
 import urllib.parse
 from dataclasses import fields
@@ -24,8 +25,13 @@ from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_stat
 from pytest_airflow_in_a_box.storage.provision import DbBackend
 
 REPORT_TITLE = "# pytest-airflow-in-a-box diagnostics"
-# The one executor Airflow documents as safe with SQLite's single-writer constraint.
-_SINGLE_THREADED_EXECUTORS = frozenset({"SequentialExecutor"})
+# Airflow 2.x gates SQLite compatibility on `Executor.is_single_threaded`, not a name
+# list; `SequentialExecutor` and `DebugExecutor` are the two core executors setting it
+# True (`ExecutorLoader.validate_database_executor_compatibility`).
+_SINGLE_THREADED_EXECUTORS = frozenset({"SequentialExecutor", "DebugExecutor"})
+# Airflow's own escape hatch for this exact check; set by a consumer who has already
+# decided SQLite + their executor is fine for their test.
+_SKIP_CHECK_ENVIRONMENT_VARIABLE = "_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK"
 
 
 def _storage_section(state: BootstrapState) -> list[str]:
@@ -70,6 +76,11 @@ def _resolve_executor() -> str:
 
     Returns:
         str containing the resolved executor name, import path, or multi-executor list.
+
+    Raises:
+        Exception: Airflow is not importable, or its configuration cannot be read. Left
+            unnarrowed because the caller degrades on any failure here rather than
+            distinguishing them.
     """
 
     # Deferred to keep this module importable before Airflow bootstrap completes.
@@ -84,7 +95,8 @@ def _executor_section(state: BootstrapState) -> list[str]:
     Airflow 2.x's `unit_test_mode` overlays its own internal `unit_tests.cfg`, which
     hard-codes `executor = LocalExecutor` regardless of this plugin's `airflow.cfg`. The
     `ready_to_reschedule` sensor dependency rejects that combination with SQLite for both
-    poke- and reschedule-mode sensors, with no indication of the actual cause.
+    poke- and reschedule-mode sensors, with no indication of the actual cause. Degrades to
+    a resolution-failure bullet, never raises, matching every other section in this module.
 
     Parameters:
         state: BootstrapState containing the resolved database backend and Airflow family.
@@ -94,24 +106,36 @@ def _executor_section(state: BootstrapState) -> list[str]:
     """
 
     try:
+        # Broad on purpose: an unresolvable executor (bad import, a malformed override) is
+        # exactly as reportable as a resolved one, and this section must never abort the
+        # rest of the report over it.
         executor = _resolve_executor()
     except Exception as error:
         return [f"- `core.executor`: could not resolve: {error}"]
 
     lines = [f"- `core.executor`: `{executor}`"]
-    # `core.executor` accepts a comma-separated multi-executor list since Airflow 2.7; the
-    # first entry is the default, and each entry may be a short name or an import path.
-    executor_name = executor.split(",")[0].strip().rpartition(".")[2] or executor
+    # `core.executor` accepts a comma-separated multi-executor list since Airflow 2.10
+    # (AIP-61); the first entry is the default `ready_to_reschedule` actually loads, and
+    # may be a bare name, a `alias:module.Class` pair, or a bare import path.
+    primary = executor.split(",")[0].strip()
+    executor_name = primary.rpartition(".")[2] or primary
+    if not executor_name:
+        return lines
+
     is_sqlite = state.db_backend == DbBackend.SQLITE
-    is_v2 = AirflowFamily(state.family) is AirflowFamily.V2
-    if is_v2 and is_sqlite and executor_name not in _SINGLE_THREADED_EXECUTORS:
+    is_v2 = state.family == AirflowFamily.V2.value
+    skip_check = os.environ.get(_SKIP_CHECK_ENVIRONMENT_VARIABLE) == "1"
+    if is_v2 and is_sqlite and not skip_check and executor_name not in _SINGLE_THREADED_EXECUTORS:
         lines.append(
             f"- INCOMPATIBLE: Airflow 2.x's `unit_test_mode` overlays its own "
             f"`unit_tests.cfg`, which hard-codes `executor = LocalExecutor` regardless of "
             f"this plugin's `airflow.cfg` -- the `ready_to_reschedule` sensor dependency "
             f"rejects `{executor_name}` with SQLite for poke- and reschedule-mode sensors "
-            f"alike. Pin `core.executor` to `SequentialExecutor` with `airflow_config` for "
-            f"the affected test."
+            f"alike. Pin `core.executor` to `SequentialExecutor` or `DebugExecutor` with "
+            f"`airflow_config`, and clear `airflow.executors.executor_loader._executor_names` "
+            f"if anything already resolved a default executor this process (see "
+            f"`tests/enduser/test_sensors.py`); or set "
+            f"`{_SKIP_CHECK_ENVIRONMENT_VARIABLE}=1` to bypass Airflow's own check entirely."
         )
     return lines
 
@@ -206,8 +230,8 @@ def render_doctor_report(config: pytest.Config) -> str:
     sections = (
         ("Storage", _storage_section(state)),
         ("AIRFLOW_HOME and database", _database_section(state)),
-        ("Executor", _executor_section(state)),
         ("Versions and capabilities", _version_section()),
+        ("Executor", _executor_section(state)),
         ("API server", _api_server_section()),
     )
     lines = [REPORT_TITLE, ""]
