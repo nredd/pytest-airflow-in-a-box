@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import subprocess
 import sys
@@ -326,7 +327,10 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
     while True:
         port = _free_port()
         base_url = f"http://127.0.0.1:{port}"
-        log_path = state.logs_folder / f"api-server-{port}.log"
+        # `state.logs_folder` is shared across every xdist worker (bootstrap.py
+        # propagates one path via workerinput), so racing workers that are handed
+        # the same advisory port must not also collide on the log filename.
+        log_path = state.logs_folder / f"api-server-{port}-{os.getpid()}.log"
         command = [
             sys.executable,
             "-m",
@@ -347,8 +351,13 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
             try:
                 deadline = time.monotonic() + API_SERVER_STARTUP_TIMEOUT_SECONDS
                 lost_bind_race = False
-                while not _server_responds(base_url):
-                    if process.poll() is not None:
+                while True:
+                    # Check our own process before trusting a response on this
+                    # port: two workers can share one advisory port, and a dead
+                    # process must never be mistaken for the worker that's
+                    # actually listening, however briefly, before it exits.
+                    exit_code = process.poll()
+                    if exit_code is not None:
                         tail = _log_tail(log_path)
                         if _lost_port_bind_race(tail) and attempt < API_SERVER_BIND_RETRIES:
                             LOGGER.warning(
@@ -359,9 +368,11 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
                             attempt += 1
                             break
                         raise ApiServerError(
-                            f"Airflow API server exited with code {process.returncode} before "
+                            f"Airflow API server exited with code {exit_code} before "
                             f"responding; log tail:\n{tail}"
                         )
+                    if _server_responds(base_url):
+                        break
                     if time.monotonic() > deadline:
                         raise ApiServerError(
                             f"Airflow API server did not respond within "

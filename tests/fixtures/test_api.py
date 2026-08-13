@@ -332,7 +332,48 @@ def test_launch_retries_after_losing_a_bind_race(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Retry with a freshly probed port after another worker wins the bind race."""
+    """Retry with a freshly probed, distinct port after losing the bind race."""
+
+    losers = _FakeProcess(returncode=1)
+    winner = _FakeProcess(returncode=None)
+    processes = iter([losers, winner])
+    launched_ports: list[str] = []
+
+    def fake_popen(command: list[str], *, stdout: Any, stderr: Any) -> _FakeProcess:
+        del stderr
+        launched_ports.append(command[command.index("--port") + 1])
+        process = next(processes)
+        if process is losers:
+            stdout.write(b"OSError: [Errno 98] Address already in use\n")
+            stdout.flush()
+        return process
+
+    monkeypatch.setattr(api.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(api, "_server_responds", lambda _url: True)
+
+    launcher = api._launch_api_server(_fake_state(tmp_path))
+    base_url = next(launcher)
+
+    assert base_url.startswith("http://127.0.0.1:")
+    assert len(launched_ports) == 2
+    assert len(set(launched_ports)) == 2
+    assert base_url.endswith(launched_ports[1])
+    assert losers.calls[:1] == ["poll"]
+    assert "terminate" in losers.calls
+
+
+def test_launch_does_not_trust_a_response_while_its_own_process_is_dead(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never yield a URL for a dead subprocess, even if that port already answers.
+
+    Regression test for the scenario `#103` actually reports: two workers share
+    one advisory port, the loser's subprocess dies on bind, but the port still
+    answers because the *winner's* server is listening there. The loser must
+    notice its own process died rather than mistake the winner's response for
+    its own and yield the shared URL.
+    """
 
     losers = _FakeProcess(returncode=1)
     winner = _FakeProcess(returncode=None)
@@ -347,15 +388,16 @@ def test_launch_retries_after_losing_a_bind_race(
         return process
 
     monkeypatch.setattr(api.subprocess, "Popen", fake_popen)
-    responded = iter([False, True])
-    monkeypatch.setattr(api, "_server_responds", lambda _url: next(responded, True))
+    # Always responds, as if another worker's server already owns the port --
+    # this must never be read as the loser's own subprocess succeeding.
+    monkeypatch.setattr(api, "_server_responds", lambda _url: True)
 
     launcher = api._launch_api_server(_fake_state(tmp_path))
     base_url = next(launcher)
 
     assert base_url.startswith("http://127.0.0.1:")
-    assert losers.calls[:1] == ["poll"]
     assert "terminate" in losers.calls
+    assert winner.calls[0] == "poll"
 
 
 def test_launch_gives_up_after_exhausting_bind_retries(
