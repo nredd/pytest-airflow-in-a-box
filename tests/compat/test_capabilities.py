@@ -993,12 +993,12 @@ def _backport_serialized_dag_location(modules: dict[str, SimpleNamespace]) -> No
 @pytest.mark.parametrize(
     ("release", "mutate", "symbol"),
     [
-        ((3, 2, 2), _replace_dag_bag_with_old_location, "capability `dag_bag_location`"),
-        ((3, 3, 0), _add_include_examples, "capability `dag_bag_supports_include_examples`"),
-        ((3, 2, 2), _restore_legacy_runner, "capability `task_instance_runner`"),
-        ((3, 3, 0), _remove_dag_run_refresh, "capability `refresh_from_task_supports_dag_run`"),
-        ((3, 2, 2), _remove_sentry_field, "capability `startup_details_supports_sentry`"),
-        ((3, 3, 0), _remove_queue_field, "capability `runtime_task_instance_supports_queue`"),
+        ((3, 2, 2), _replace_dag_bag_with_old_location, "DagBag canonical location"),
+        ((3, 3, 0), _add_include_examples, "DagBag.__init__.include_examples"),
+        ((3, 2, 2), _restore_legacy_runner, "TaskInstance task runner"),
+        ((3, 3, 0), _remove_dag_run_refresh, "TaskInstance.refresh_from_task.dag_run"),
+        ((3, 2, 2), _remove_sentry_field, "StartupDetails.sentry_integration"),
+        ((3, 3, 0), _remove_queue_field, "TaskInstance DTO queue"),
         ((3, 1, 8), _backport_serialized_dag_location, "SerializedDAG canonical location"),
     ],
 )

@@ -27,6 +27,15 @@ All notable changes to this project will be documented in this file. The format 
   resolution for pip and uv alike because the version ranges are disjoint; this repo's
   own `[tool.uv] conflicts` table additionally keeps the two extras lockable here (it is
   not wheel metadata and does not travel to consumers).
+- The capability seam, bootstrap, config writer, storage ladder, and DB cleanup registry
+  are family-aware (`AirflowFamily`, `BootstrapState.family`, bootstrap state version 4)
+  ahead of the 2.x fixture tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
+  On the 2.x family bootstrap env-pins `AIRFLOW__CORE__EXECUTOR=SequentialExecutor`:
+  Airflow 2.x's `unit_test_mode` overlays its internal `unit_tests.cfg` (which hard-codes
+  `LocalExecutor`) over any written `airflow.cfg`, and the `ready_to_reschedule`
+  dependency rejects that combination with SQLite for poke- and reschedule-mode sensors
+  alike; environment variables are the one channel that outranks the overlay, and
+  `airflow_config` overrides still win for tests that need another executor.
 - The first test that needs the metadata database now distinguishes the possible Airflow
   installation states with actionable single-line errors (`pytest.UsageError`, not an
   `INTERNALERROR` traceback; under `pytest-xdist` the same message renders as per-test

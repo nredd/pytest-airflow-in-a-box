@@ -133,19 +133,28 @@ def test_state_from_payload_rejects_malformed_payloads(
 
 
 def test_v2_environment_swaps_the_auth_surface(tmp_path: Path) -> None:
-    """Install webserver + basic-auth variables and no 3.x auth keys on the 2.x family."""
+    """Env-pin the webserver secret and executor and no 3.x auth keys on the 2.x family.
+
+    The executor pin is load-bearing: 2.x's `unit_test_mode` overlays `unit_tests.cfg`
+    (`executor = LocalExecutor`), which the `ready_to_reschedule` dependency rejects
+    against SQLite, and only environment variables outrank that overlay.
+
+    Parameters:
+        tmp_path: pathlib.Path providing isolated run roots.
+    """
 
     state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
 
     variables = bootstrap._environment(state)
 
     assert variables["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
-    assert variables["AIRFLOW__API__AUTH_BACKENDS"] == bootstrap.BASIC_AUTH_BACKENDS
+    assert variables["AIRFLOW__CORE__EXECUTOR"] == "SequentialExecutor"
     assert "AIRFLOW__CORE__AUTH_MANAGER" not in variables
     assert "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS" not in variables
     assert "AIRFLOW__API_AUTH__JWT_SECRET" not in variables
     v3_variables = bootstrap._environment(_artifact_state(tmp_path / "run3"))
     assert "AIRFLOW__WEBSERVER__SECRET_KEY" not in v3_variables
+    assert "AIRFLOW__CORE__EXECUTOR" not in v3_variables
     assert "AIRFLOW__CORE__AUTH_MANAGER" in v3_variables
 
 
@@ -163,7 +172,7 @@ def test_install_environment_owns_the_other_family_surface(
     original = {name: os.environ.get(name) for name in owned}
     monkeypatch.setenv("AIRFLOW__CORE__AUTH_MANAGER", "ambient.AuthManager")
     monkeypatch.setenv("AIRFLOW__API_AUTH__JWT_SECRET", "ambient-secret")
-    monkeypatch.setenv("AIRFLOW__API__AUTH_BACKENDS", "ambient.backend")
+    monkeypatch.setenv("AIRFLOW__CORE__EXECUTOR", "ambient.Executor")
     state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
 
     try:
@@ -171,7 +180,7 @@ def test_install_environment_owns_the_other_family_surface(
 
         assert "AIRFLOW__CORE__AUTH_MANAGER" not in os.environ
         assert "AIRFLOW__API_AUTH__JWT_SECRET" not in os.environ
-        assert os.environ["AIRFLOW__API__AUTH_BACKENDS"] == bootstrap.BASIC_AUTH_BACKENDS
+        assert os.environ["AIRFLOW__CORE__EXECUTOR"] == "SequentialExecutor"
         assert os.environ["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
     finally:
         for name, value in original.items():

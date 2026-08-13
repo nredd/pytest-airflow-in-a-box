@@ -842,12 +842,36 @@ def _verify_value(
     )
 
 
+# Human-readable error labels for the genuinely probed fields; a mismatch here is a
+# real runtime observation contradicting the certified row.
+_PROBED_FIELD_LABELS: dict[str, str] = {
+    "dag_bag_location": "DagBag canonical location",
+    "dag_bag_supports_include_examples": "DagBag.__init__.include_examples",
+    "task_instance_runner": "TaskInstance task runner",
+    "refresh_from_task_supports_dag_run": "TaskInstance.refresh_from_task.dag_run",
+    "startup_details_supports_sentry": "StartupDetails.sentry_integration",
+    "runtime_task_instance_supports_queue": "TaskInstance DTO queue",
+}
+
+
 def _verify_contract(
     observed: AirflowCapabilities,
     serialized_dag_location: _SerializedDagLocation,
     installed_version: str,
 ) -> None:
     """Verify all probes against the exact certified release contract.
+
+    Iterating the dataclass fields keeps the comparison complete by construction: a
+    field added to `AirflowCapabilities` is compared without touching this function.
+    Honesty note on strength: only the `_PROBED_FIELD_LABELS` fields (plus the
+    serialized-Dag location) are real runtime observations that can contradict the
+    certified row. The family-derived fields (`family`, `has_task_sdk`,
+    `uses_structlog`, `has_dag_versioning`, `dagrun_interface`, `api_surface`,
+    `params_location`, `timezone_location`) are computed from the same family on both
+    sides, so their comparison is a self-consistency guard, not a probe. The real
+    enforcement for the module-valued fields is `_REQUIRED_SYMBOLS_BY_FAMILY`, which
+    imports each named module and fails resolution when upstream moves it;
+    `api_surface` is exercised only when the API fixtures actually launch the server.
 
     Parameters:
         observed: AirflowCapabilities produced from runtime probes.
@@ -865,13 +889,11 @@ def _verify_contract(
         "SerializedDAG canonical location",
         installed_version,
     )
-    # Iterating the dataclass fields keeps the contract complete by construction: a
-    # field added to `AirflowCapabilities` is verified without touching this function.
     for field in fields(observed):
         _verify_value(
             getattr(observed, field.name),
             getattr(expected, field.name),
-            f"capability `{field.name}`",
+            _PROBED_FIELD_LABELS.get(field.name, f"capability `{field.name}`"),
             installed_version,
         )
 
@@ -885,7 +907,7 @@ def _resolve_uncached(
     probes run only on 3.x because the modules they inspect do not exist on 2.x, so the
     corresponding capability fields observe as None there. Family-static fields (Task
     SDK presence, structlog, DAG versioning, interface selections) come from the family
-    itself and are cross-checked against the certified row like every probed value.
+    itself; see `_verify_contract` for what their comparison does and does not prove.
 
     Parameters:
         installed_version: str reported by package metadata.
