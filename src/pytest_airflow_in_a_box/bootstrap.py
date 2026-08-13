@@ -372,9 +372,12 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         # 2.x's `unit_tests.cfg` overlay hard-codes `executor = LocalExecutor`, which the
         # `ready_to_reschedule` dependency rejects against SQLite for poke- and
         # reschedule-mode sensors alike. `SequentialExecutor` is single-threaded, valid
-        # for every backend, and matches the storage ladder's SQLite-by-default posture;
-        # `airflow_config` overrides still win for a test that needs another executor.
-        variables["AIRFLOW__CORE__EXECUTOR"] = "SequentialExecutor"
+        # for every backend, and matches the storage ladder's SQLite-by-default posture.
+        # An ambient `AIRFLOW__CORE__EXECUTOR` is deliberate consumer configuration and
+        # wins over the pin (`--airflow-doctor` flags an incompatible choice);
+        # `airflow_config` overrides win over both for a single test.
+        if "AIRFLOW__CORE__EXECUTOR" not in os.environ:
+            variables["AIRFLOW__CORE__EXECUTOR"] = "SequentialExecutor"
     else:
         variables["AIRFLOW__CORE__AUTH_MANAGER"] = SIMPLE_AUTH_MANAGER
         variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] = "admin:admin"
