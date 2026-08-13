@@ -19,14 +19,18 @@ All notable changes to this project will be documented in this file. The format 
   note that 2.x support would require a parallel implementation
   ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)). Install the new
   `airflow3` extra (`apache-airflow>=3.1,<4` plus the sqlite provider) for the previous
-  behavior, or keep pinning Airflow yourself; `sqlalchemy` stays a direct dependency
-  because the storage layer imports it at plugin load. An `airflow2` extra
-  (`apache-airflow>=2.9,<3`) ships ahead of the tier; the two extras are declared mutually
-  exclusive under `[tool.uv] conflicts` (a uv-project affordance -- wheel metadata cannot
-  express exclusivity, so pip users get only the runtime check below).
+  behavior, or keep pinning Airflow yourself. `sqlalchemy>=1.4.36,<3` and `packaging>=22`
+  are newly direct base dependencies (previously transitive via Airflow): the storage
+  layer imports `sqlalchemy` at plugin load and the capability probe parses versions
+  with `packaging`. An `airflow2` extra (`apache-airflow>=2.9,<3`, resolving only on
+  Python <= 3.12) ships ahead of the tier. Requesting both Airflow extras fails at
+  resolution for pip and uv alike because the version ranges are disjoint; this repo's
+  own `[tool.uv] conflicts` table additionally keeps the two extras lockable here (it is
+  not wheel metadata and does not travel to consumers).
 - The first test that needs the metadata database now distinguishes the possible Airflow
   installation states with actionable single-line errors (`pytest.UsageError`, not an
-  `INTERNALERROR` traceback): no Airflow at all, Airflow 2.x without the tier that
+  `INTERNALERROR` traceback; under `pytest-xdist` the same message renders as per-test
+  setup errors instead of crashed workers): no Airflow at all, Airflow 2.x without the tier that
   supports it, an `apache-airflow` meta-package without `apache-airflow-core`, and the
   corrupt case of `apache-airflow<3` coexisting with `apache-airflow-core`. Runs without
   Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
