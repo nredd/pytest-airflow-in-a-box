@@ -132,7 +132,9 @@ def test_state_from_payload_rejects_malformed_payloads(
         bootstrap._state_from_payload(mutate(dict(payload)), validate_files=False)
 
 
-def test_v2_environment_swaps_the_auth_surface(tmp_path: Path) -> None:
+def test_v2_environment_swaps_the_auth_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Env-pin the webserver secret and executor and no 3.x auth keys on the 2.x family.
 
     The executor pin is load-bearing: 2.x's `unit_test_mode` overlays `unit_tests.cfg`
@@ -141,8 +143,10 @@ def test_v2_environment_swaps_the_auth_surface(tmp_path: Path) -> None:
 
     Parameters:
         tmp_path: pathlib.Path providing isolated run roots.
+        monkeypatch: pytest.MonkeyPatch isolating the ambient executor variable.
     """
 
+    monkeypatch.delenv("AIRFLOW__CORE__EXECUTOR", raising=False)
     state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
 
     variables = bootstrap._environment(state)
@@ -156,6 +160,28 @@ def test_v2_environment_swaps_the_auth_surface(tmp_path: Path) -> None:
     assert "AIRFLOW__WEBSERVER__SECRET_KEY" not in v3_variables
     assert "AIRFLOW__CORE__EXECUTOR" not in v3_variables
     assert "AIRFLOW__CORE__AUTH_MANAGER" in v3_variables
+
+
+def test_v2_environment_defers_to_an_ambient_executor_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Leave a deliberate ambient `AIRFLOW__CORE__EXECUTOR` in charge on 2.x.
+
+    A consumer running the 2.x tier against Postgres may legitimately want
+    `LocalExecutor`; the pin is a safe default, not a mandate, and `--airflow-doctor`
+    flags an incompatible choice instead of the plugin silently overriding it.
+
+    Parameters:
+        tmp_path: pathlib.Path providing an isolated run root.
+        monkeypatch: pytest.MonkeyPatch setting the ambient executor variable.
+    """
+
+    monkeypatch.setenv("AIRFLOW__CORE__EXECUTOR", "LocalExecutor")
+    state = replace(_artifact_state(tmp_path / "run"), family=bootstrap.AirflowFamily.V2.value)
+
+    variables = bootstrap._environment(state)
+
+    assert "AIRFLOW__CORE__EXECUTOR" not in variables
 
 
 def test_install_environment_owns_the_other_family_surface(
@@ -180,7 +206,8 @@ def test_install_environment_owns_the_other_family_surface(
 
         assert "AIRFLOW__CORE__AUTH_MANAGER" not in os.environ
         assert "AIRFLOW__API_AUTH__JWT_SECRET" not in os.environ
-        assert os.environ["AIRFLOW__CORE__EXECUTOR"] == "SequentialExecutor"
+        # The ambient executor is deliberate consumer configuration, not owned surface.
+        assert os.environ["AIRFLOW__CORE__EXECUTOR"] == "ambient.Executor"
         assert os.environ["AIRFLOW__WEBSERVER__SECRET_KEY"] == state.jwt_secret
     finally:
         for name, value in original.items():
