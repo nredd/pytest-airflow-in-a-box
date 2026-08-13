@@ -34,10 +34,11 @@ The plugin does not depend on Airflow directly -- the `airflow3` extra pins
 `apache-airflow>=3.1,<4`, and projects that pin Airflow themselves (for example through
 Airflow's published constraints files) can install the plugin bare. The `airflow2` extra
 (`apache-airflow>=2.9,<3`) installs the certified Airflow 2.x compatibility tier
-([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`,
-`run_ti`, `full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run on both
-families, while `run_task`, `cap_structlog`, and the REST API fixtures fail on 2.x with
-actionable errors naming the 2.x alternative.
+([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`
+(including whole-DagRun execution through `dag_maker.run()`), `run_ti`, `full_dag_bag`,
+`clear_db`, seeding, and the bundled smoke checks run on both families, while `run_task`,
+`cap_structlog`, and the REST API fixtures fail on 2.x with actionable errors naming the
+2.x alternative.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

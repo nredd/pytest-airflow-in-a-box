@@ -2,8 +2,10 @@
 
 from importlib import import_module
 
-# `provider.py` puts `tests/dags` on `sys.path` before importing this package, the same
-# path `_family` itself is reached through.
+# Both entry points into this package prime `sys.path` with `tests/dags` first --
+# `provider.py` for DagBag parsing, and `tests/enduser/test_provider_package.py`'s
+# direct `syspath_prepend` + `import_module("provider_package")` -- which is also how
+# `_family` itself is reached.
 _resolve = import_module("_family")._resolve
 
 # Airflow 2.x carries the base class in `airflow.hooks.base`.

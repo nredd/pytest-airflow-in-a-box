@@ -1,10 +1,13 @@
-"""Shared Airflow-family resolution helper for the corpus Dag files.
+"""Shared dual-family authoring resolver for the end-user contract modules.
 
-Bundled fixture data, not a Dag module -- `tests/dags/.airflowignore` excludes it from
-DagBag discovery. DagBag imports every corpus file as a standalone module, so a plain
-relative import will not survive that; sibling corpus files reach this helper the same
-way `provider.py` reaches `provider_package`: insert `tests/dags` onto `sys.path`, then
-`import_module("_family")`.
+pytest's default prepend import mode puts `tests/enduser` on `sys.path` before importing
+any sibling module, so contract modules reach this helper the same way the corpus
+reaches `tests/dags/_family.py`: `import_module("_authoring")`. The name is `_authoring`
+rather than `_family` ON PURPOSE -- both directories' helpers load as top-level modules
+in one process, and two same-named top-level modules would collide in `sys.modules`.
+
+References:
+    https://docs.pytest.org/en/stable/explanation/pythonpath.html#import-modes
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ def _absent(name: str, error: ModuleNotFoundError) -> bool:
 
 
 def _resolve(*candidates: str) -> Any:
-    """Import the first available module; the corpus parses on both Airflow families.
+    """Import the first available module; the contract collects on both Airflow families.
 
     Parameters:
         candidates: str module paths ordered newest family first.
@@ -54,3 +57,23 @@ def _resolve(*candidates: str) -> Any:
                 raise
             continue
     return import_module(candidates[-1])
+
+
+def _resolve_exception(name: str) -> Any:
+    """Resolve one exception class, preferring the Task SDK's re-export.
+
+    `airflow.sdk.exceptions` (3.x) has not always re-exported every exception, so an
+    absent module or attribute both fall back to the classic `airflow.exceptions`
+    location, which every certified 2.x and 3.x release has.
+
+    Parameters:
+        name: str containing the exception class name.
+
+    Returns:
+        Any containing the resolved exception class.
+    """
+
+    try:
+        return getattr(import_module("airflow.sdk.exceptions"), name)
+    except (ImportError, AttributeError):
+        return getattr(import_module("airflow.exceptions"), name)

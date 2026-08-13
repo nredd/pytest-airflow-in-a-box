@@ -142,7 +142,12 @@ def test_write_serialized_dag_uses_the_v2_signature(
 def test_create_dag_run_uses_the_execution_date_interface(
     v2_capabilities: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Create the run with `execution_date`, no `triggered_by`, and explicit integrity."""
+    """Create the run with `execution_date`, no `triggered_by`, and no second integrity pass.
+
+    The fake mirrors real 2.x behavior: `DAG.create_dagrun` itself ends with
+    `run.verify_integrity(session=...)`, so the plugin must NOT repeat the pass -- the
+    fake raises if anything calls `verify_integrity` again after creation returns.
+    """
 
     assert v2_capabilities.timezone_location is TimezoneLocation.UTILS
     fixed_now = object()
@@ -159,19 +164,23 @@ def test_create_dag_run_uses_the_execution_date_interface(
     created: dict[str, Any] = {}
 
     class FakeDagRun:
-        """Record integrity verification and expose owned identities."""
+        """Reject repeated integrity verification and expose owned identities."""
 
         id = 77
 
         def verify_integrity(self, session: Any = None) -> None:
-            created["verified_session"] = session
+            del session
+            raise AssertionError(
+                "2.x `DAG.create_dagrun` already verified integrity; the plugin must "
+                "not run a second pass"
+            )
 
         def get_task_instances(self, session: Any = None) -> list[Any]:
             del session
             return []
 
     class FakeSchedulerDag:
-        """Record the 2.x `create_dagrun` call shape."""
+        """Record the 2.x `create_dagrun` call shape, verifying like real 2.x."""
 
         timetable = SimpleNamespace(
             infer_manual_data_interval=lambda run_after: ("interval", run_after)
@@ -179,6 +188,9 @@ def test_create_dag_run_uses_the_execution_date_interface(
 
         def create_dagrun(self, **kwargs: Any) -> FakeDagRun:
             created["kwargs"] = kwargs
+            # Real 2.x verifies inside `create_dagrun`; record it the same way so the
+            # test also proves the session the run would verify against.
+            created["verified_session"] = kwargs.get("session")
             return FakeDagRun()
 
     class FakeSession:

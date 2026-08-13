@@ -437,8 +437,11 @@ def create_dag_run(
         kwargs.setdefault("state", DagRunState.RUNNING)
         operation = "calling the persisted scheduler Dag's create_dagrun"
         if is_v2:
-            # 2.x: `execution_date` interface, no `triggered_by`/`run_after`, and task
-            # instances materialize through the explicit `verify_integrity` below.
+            # 2.x: `execution_date` interface, no `triggered_by`/`run_after`. No
+            # explicit `verify_integrity` call: 2.x's `DAG.create_dagrun` already ends
+            # with `run.verify_integrity(session=...)`, so task instances have
+            # materialized by the time it returns and a second pass would only repeat
+            # `_check_for_removed_or_restored_tasks` and mapped-task counting.
             dag_run: Any = scheduler_dag.create_dagrun(
                 run_id=run_id,
                 execution_date=resolved_logical_date,
@@ -446,8 +449,6 @@ def create_dag_run(
                 session=record.session,
                 **kwargs,
             )
-            operation = "verifying task-instance integrity"
-            dag_run.verify_integrity(session=record.session)
         else:
             from airflow.utils.types import DagRunTriggeredByType
 
@@ -739,4 +740,5 @@ __all__ = (
     "open_dag_session",
     "persist_dag",
     "select_task_instance",
+    "task_is_mapped",
 )

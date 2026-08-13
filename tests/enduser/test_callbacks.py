@@ -21,22 +21,8 @@ from pytest_airflow_in_a_box.types import DagMaker, RunTask
 pytestmark = pytest.mark.compat
 
 
-def _resolve(*candidates: str) -> Any:
-    """Import the first available module; the module collects on both Airflow families.
-
-    Parameters:
-        candidates: str module paths ordered newest family first.
-
-    Returns:
-        Any containing the first importable module.
-    """
-
-    for name in candidates[:-1]:
-        try:
-            return import_module(name)
-        except ImportError:
-            continue
-    return import_module(candidates[-1])
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
 
 
 _authoring = _resolve("airflow.sdk", "airflow.models")
