@@ -6,6 +6,14 @@ uv run prek install
 make all
 ```
 
+The `dev` dependency group carries Airflow 3.x, so a plain `uv sync` is a working 3.x
+environment. To experiment against an Airflow 2.x resolution instead (the `airflow2` extra
+conflicts with the default `dev` group by design):
+
+```console
+uv sync --no-default-groups --extra airflow2
+```
+
 Run the GitHub Actions workflow locally on Linux with [act](https://nektosact.com/):
 
 ```console

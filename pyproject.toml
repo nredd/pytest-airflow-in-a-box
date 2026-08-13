@@ -43,7 +43,9 @@ airflow3 = [
     "apache-airflow-providers-sqlite>=4.1,<5",
 ]
 airflow2 = [
-    "apache-airflow>=2.9,<3",
+    # The explicit marker is the cap: Airflow 2.11's own `Requires-Python` uses bare
+    # `!=3.13,!=3.14` exclusions that do not stop patch releases like 3.13.2.
+    "apache-airflow>=2.9,<3; python_version < '3.13'",
 ]
 postgres = [
     "asyncpg>=0.29,<1",

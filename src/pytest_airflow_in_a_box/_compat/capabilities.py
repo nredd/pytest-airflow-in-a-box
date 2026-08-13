@@ -11,6 +11,7 @@ References:
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -41,6 +42,10 @@ SUPPORTED_VERSIONS = tuple(
 )
 AIRFLOW_DISTRIBUTION = "apache-airflow-core"
 AIRFLOW_META_DISTRIBUTION = "apache-airflow"
+# Escape hatch for the fail-closed metadata corruption check: an Airflow source
+# checkout can legitimately expose `apache-airflow` with a dev-fallback version next to
+# a real core. Set to "1" by a consumer who has verified their environment themselves.
+SKIP_CORRUPTION_CHECK_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_SKIP_CORRUPTION_CHECK"
 VERSION_PATTERN = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)"
     r"(?:[-_.]?dev(?:[-_.]?\d+)?)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$",
@@ -327,13 +332,18 @@ def _reject_corrupt_environment() -> None:
     a 3.x meta-package alongside the core is the normal shape, not an error. The check
     fails closed: a meta-distribution version that does not parse, or parses below
     major 3 (including dev fallbacks like '0.1.dev0'), is treated as corruption and the
-    offending version is named so a false positive stays debuggable.
+    offending version is named so a false positive stays debuggable. Setting
+    `PYTEST_AIRFLOW_IN_A_BOX_SKIP_CORRUPTION_CHECK=1` bypasses the check for
+    environments (an Airflow source checkout with a dev fallback version) the consumer
+    has verified themselves.
 
     Raises:
         AirflowCompatibilityError: A non-3.x or unparseable `apache-airflow`
             distribution is installed next to `apache-airflow-core`.
     """
 
+    if os.environ.get(SKIP_CORRUPTION_CHECK_ENVIRONMENT_VARIABLE) == "1":
+        return
     meta = _meta_distribution()
     if meta.unreadable is not None:
         raise AirflowCompatibilityError(
@@ -349,10 +359,12 @@ def _reject_corrupt_environment() -> None:
     raise AirflowCompatibilityError(
         f"Corrupt Airflow installation: `{AIRFLOW_META_DISTRIBUTION}` '{meta.version}' "
         f"coexists with `{AIRFLOW_DISTRIBUTION}` -- both install the `airflow` package, "
-        f"so any 2.x files are silently overwritten by the 3.x core. Recreate the "
-        f"environment and install `pytest-airflow-in-a-box[airflow3]` for a supported "
-        f"Airflow 3.x. If `{AIRFLOW_META_DISTRIBUTION}` is a source checkout with a dev "
-        f"fallback version, install the core distribution alone instead."
+        f"so the older family's files are silently overwritten by the 3.x core. "
+        f"Recreate the environment and install `pytest-airflow-in-a-box[airflow3]` for "
+        f"a supported Airflow 3.x. If `{AIRFLOW_META_DISTRIBUTION}` is a source "
+        f"checkout with a dev fallback version, install the core distribution alone or "
+        f"set `{SKIP_CORRUPTION_CHECK_ENVIRONMENT_VARIABLE}=1` after verifying the "
+        f"environment yourself."
     )
 
 
@@ -375,12 +387,16 @@ def _diagnose_missing_core(error: metadata.PackageNotFoundError) -> NoReturn:
             f"`pytest-airflow-in-a-box[airflow3]` for a supported Airflow 3.x."
         ) from error
     if meta.major is not None and meta.major < 3:
+        tier_hint = (
+            " The 2.x compatibility tier is tracked in "
+            "https://github.com/nredd/pytest-airflow-in-a-box/issues/25."
+            if meta.major == 2
+            else ""
+        )
         raise AirflowCompatibilityError(
-            f"Apache Airflow 2.x is installed (`{AIRFLOW_META_DISTRIBUTION}` "
-            f"'{meta.version}') but this release supports only Airflow 3.x. The 2.x "
-            f"compatibility tier is tracked in "
-            f"https://github.com/nredd/pytest-airflow-in-a-box/issues/25. Install "
-            f"`pytest-airflow-in-a-box[airflow3]` to use a supported Airflow."
+            f"Apache Airflow {meta.major}.x is installed (`{AIRFLOW_META_DISTRIBUTION}` "
+            f"'{meta.version}') but this release supports only Airflow 3.x.{tier_hint} "
+            f"Install `pytest-airflow-in-a-box[airflow3]` to use a supported Airflow."
         ) from error
     if meta.version is not None:
         raise AirflowCompatibilityError(

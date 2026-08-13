@@ -540,6 +540,61 @@ def test_corrupt_dual_family_environment_is_rejected(
     assert f"'{meta_version}'" in str(caught.value)
 
 
+def test_corruption_check_escape_hatch_bypasses_the_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a self-verified dual-metadata environment when the escape hatch is set.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating metadata and environment state.
+    """
+
+    modules = _fake_modules((3, 3, 0))
+    _install_fake_environment(monkeypatch, "3.3.0", modules, meta_version="0.1.dev0+g1234567")
+    monkeypatch.setenv(capability_module.SKIP_CORRUPTION_CHECK_ENVIRONMENT_VARIABLE, "1")
+
+    resolved = capability_module.resolve_capabilities()
+
+    assert resolved.release == (3, 3, 0)
+
+
+def test_airflow1_environment_is_named_without_the_tier_pointer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Name the actual pre-2.x major instead of claiming Airflow 2.x is installed.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating metadata state.
+    """
+
+    def fake_version(distribution_name: str) -> str:
+        """Expose only a legacy 1.x monolith distribution.
+
+        Parameters:
+            distribution_name: str naming the queried distribution.
+
+        Returns:
+            str containing the fake metadata version.
+
+        Raises:
+            importlib.metadata.PackageNotFoundError: The distribution is not the
+                legacy monolith.
+        """
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            return "1.10.15"
+        raise capability_module.metadata.PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match=r"Airflow 1\.x is installed") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert "'1.10.15'" in message
+    assert "issues/25" not in message
+
+
 def test_unreadable_meta_metadata_next_to_core_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
