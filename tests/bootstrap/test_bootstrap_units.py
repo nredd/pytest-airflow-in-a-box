@@ -259,6 +259,62 @@ def test_configure_node_rejects_remote_gateways(tmp_path: Path) -> None:
         configure_node(node)
 
 
+def test_local_controller_handoff_validates_on_the_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Send controller state through the inherited environment and worker input.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the controller's run artifacts.
+        monkeypatch: pytest.MonkeyPatch installing the simulated worker environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    controller_stash = pytest.Stash()
+    controller_stash[STATE_KEY] = state
+    workerinput: dict[str, object] = {}
+    node: Any = SimpleNamespace(
+        gateway=SimpleNamespace(spec=SimpleNamespace(popen=True)),
+        config=SimpleNamespace(stash=controller_stash),
+        workerinput=workerinput,
+    )
+
+    configure_node(node)
+
+    assert workerinput == {WORKER_INPUT_KEY: state.to_payload()}
+    for name in bootstrap._environment_names():
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+    bootstrap._install_environment(state)
+    monkeypatch.setenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, "gw0")
+    monkeypatch.delitem(sys.modules, "airflow", raising=False)
+
+    def reject_owner_state(_config: pytest.Config, _args: list[str]) -> BootstrapState:
+        """Reject accidental worker-side state provisioning.
+
+        Parameters:
+            _config: pytest.Config that must remain unused.
+            _args: list[str] that must remain unused.
+
+        Raises:
+            AssertionError: Always, because workers must inherit controller state.
+        """
+
+        raise AssertionError("an xdist worker must not provision controller state")
+
+    monkeypatch.setattr(bootstrap, "_owner_state", reject_owner_state)
+    early_config: Any = SimpleNamespace()
+
+    inherited_state = bootstrap.load_initial_state(early_config, [])
+
+    worker_stash = pytest.Stash()
+    worker_stash[STATE_KEY] = inherited_state
+    worker_config: Any = SimpleNamespace(stash=worker_stash, workerinput=workerinput)
+
+    validate_configure(worker_config)
+    assert inherited_state == state
+
+
 def test_validate_configure_rejects_malformed_workerinput(tmp_path: Path) -> None:
     """Wrap workerinput payload validation failures with context."""
 

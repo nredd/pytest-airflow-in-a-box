@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- Controller-to-worker `pytest-xdist` bootstrap handoff now has focused happy-path unit coverage
+  in every leg of the full Airflow/Python compatibility matrix, complementing the live
+  nested-worker scenarios added by [#45](https://github.com/nredd/pytest-airflow-in-a-box/issues/45)
+  ([#102](https://github.com/nredd/pytest-airflow-in-a-box/issues/102)).
+
 ## [0.4.0] - 2026-08-12
 
 ### Added
