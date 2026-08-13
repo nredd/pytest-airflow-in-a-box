@@ -11,11 +11,13 @@ All notable changes to this project will be documented in this file. The format 
 - The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
   certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
   ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
-  `execution_date` interface, no bundles/DAG versioning), `run_ti`/`run_task_instance`,
-  `full_dag_bag`, `clear_db` (renamed `dataset*` tables, `BaseXCom`), seeding, params
-  validation via `airflow.models.param`, and the bundled smoke checks all run on both
-  families; `run_task`, `cap_structlog`, and the REST API fixtures fail on 2.x with
-  actionable errors naming the 2.x alternative.
+  `execution_date` interface, no bundles/DAG versioning), `dag_maker.run()` whole-DagRun
+  execution with family-aware mapped-task expansion (2.x `MappedOperator` predates the
+  `is_mapped` attribute, so detection is class-based there),
+  `run_ti`/`run_task_instance`, `full_dag_bag`, `clear_db` (renamed `dataset*` tables,
+  `BaseXCom`), seeding, params validation via `airflow.models.param`, and the bundled
+  smoke checks all run on both families; `run_task`, `cap_structlog`, and the REST API
+  fixtures fail on 2.x with actionable errors naming the 2.x alternative.
 - `requires_airflow2` / `requires_airflow3` markers, auto-skipped on the other family,
   plus three 2.x CI legs (two-pass constraints install) running the end-user consumer
   contract; the 2.x-collectable surface is widened below
@@ -36,14 +38,27 @@ All notable changes to this project will be documented in this file. The format 
   note that 2.x support would require a parallel implementation
   ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)). Install the new
   `airflow3` extra (`apache-airflow>=3.1,<4` plus the sqlite provider) for the previous
-  behavior, or keep pinning Airflow yourself; `sqlalchemy` stays a direct dependency
-  because the storage layer imports it at plugin load. An `airflow2` extra
-  (`apache-airflow>=2.9,<3`) ships ahead of the tier; the two extras are declared mutually
-  exclusive under `[tool.uv] conflicts` (a uv-project affordance -- wheel metadata cannot
-  express exclusivity, so pip users get only the runtime check below).
+  behavior, or keep pinning Airflow yourself. `sqlalchemy>=1.4.36,<3` and `packaging>=22`
+  are newly direct base dependencies (previously transitive via Airflow): the storage
+  layer imports `sqlalchemy` at plugin load and the capability probe parses versions
+  with `packaging`. An `airflow2` extra (`apache-airflow>=2.9,<3`, resolving only on
+  Python <= 3.12) ships ahead of the tier. Requesting both Airflow extras fails at
+  resolution for pip and uv alike because the version ranges are disjoint; this repo's
+  own `[tool.uv] conflicts` table additionally keeps the two extras lockable here (it is
+  not wheel metadata and does not travel to consumers).
+- The capability seam, bootstrap, config writer, storage ladder, and DB cleanup registry
+  are family-aware (`AirflowFamily`, `BootstrapState.family`, bootstrap state version 4)
+  ahead of the 2.x fixture tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
+  On the 2.x family bootstrap env-pins `AIRFLOW__CORE__EXECUTOR=SequentialExecutor`:
+  Airflow 2.x's `unit_test_mode` overlays its internal `unit_tests.cfg` (which hard-codes
+  `LocalExecutor`) over any written `airflow.cfg`, and the `ready_to_reschedule`
+  dependency rejects that combination with SQLite for poke- and reschedule-mode sensors
+  alike; environment variables are the one channel that outranks the overlay, and
+  `airflow_config` overrides still win for tests that need another executor.
 - The first test that needs the metadata database now distinguishes the possible Airflow
   installation states with actionable single-line errors (`pytest.UsageError`, not an
-  `INTERNALERROR` traceback): no Airflow at all, Airflow 2.x without the tier that
+  `INTERNALERROR` traceback; under `pytest-xdist` the same message renders as per-test
+  setup errors instead of crashed workers): no Airflow at all, Airflow 2.x without the tier that
   supports it, an `apache-airflow` meta-package without `apache-airflow-core`, and the
   corrupt case of `apache-airflow<3` coexisting with `apache-airflow-core`. Runs without
   Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
@@ -60,18 +75,6 @@ All notable changes to this project will be documented in this file. The format 
   `test_rest_api_compat.py`, and `test_structlog_events.py` stay `collect_ignore`'d, since
   Asset ORM persistence, the REST API server, and structlog capture have no 2.x equivalent
   ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
-
-### Fixed
-
-- `dag_maker.run()`'s mid-run mapped-task expansion (`execute_dag_run`) now goes through
-  the family-aware `task_is_mapped()` probe instead of a raw `is_mapped` attribute check,
-  which is always absent on 2.x's `MappedOperator` -- a mapped task previously never
-  expanded on 2.x, leaving the DagRun stuck `running` with no error recorded
-  ([#90](https://github.com/nredd/pytest-airflow-in-a-box/issues/90)).
-- `tests/enduser/test_dag_run_result.py` (a 3.x-only module authored against `airflow.sdk`
-  at module scope) is now `collect_ignore`'d on the 2.x family alongside its siblings,
-  instead of aborting collection of the whole end-user suite with a bare
-  `ModuleNotFoundError` ([#90](https://github.com/nredd/pytest-airflow-in-a-box/issues/90)).
 
 ## [0.4.0] - 2026-08-12
 

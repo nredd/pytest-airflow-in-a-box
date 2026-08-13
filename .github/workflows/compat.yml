@@ -8,7 +8,7 @@ jobs:
     name: >-
       ${{ matrix.os || 'ubuntu-latest' }} /
       Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
-      ${{ matrix.pytest-args }}${{ matrix.pytest-label }}
+      ${{ matrix.pytest-args }}${{ matrix.pytest-label }}${{ matrix.pytest-paths && ' / consumer contract only' || '' }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
@@ -125,7 +125,7 @@ jobs:
       - name: Upload coverage data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}${{ matrix.pytest-spec && '-pytest8' || '' }}
+          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}${{ matrix.pytest-spec && '-pytest8' || '' }}${{ matrix.pytest-paths && '-enduser' || '' }}
           path: .coverage.*
           include-hidden-files: true
           if-no-files-found: error

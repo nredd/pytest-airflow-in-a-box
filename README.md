@@ -118,13 +118,14 @@ Airflow's published constraints files -- can install the plugin bare:
 pip install pytest-airflow-in-a-box
 ```
 
-The `airflow2` extra (`apache-airflow>=2.9,<3`, which also caps Python at 3.12 because Airflow
-2.x never supported 3.13) installs the certified Airflow 2.x compatibility tier
-([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`, `run_ti`,
+The `airflow2` extra (`apache-airflow>=2.9,<3`, carrying an explicit `python_version < '3.13'`
+marker because Airflow 2.x never supported 3.13 -- on newer interpreters the extra resolves to
+nothing and the plugin's runtime check names the fix) installs the certified Airflow 2.x
+compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)):
+`dag_maker` (including whole-DagRun execution through `dag_maker.run()`), `run_ti`,
 `full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run against 2.9.3, 2.10.5,
-and 2.11.2. The two Airflow extras are declared mutually exclusive for `uv` projects via
-`[tool.uv] conflicts`; wheel metadata cannot express that exclusivity, so plain `pip` relies
-on the same runtime check.
+and 2.11.2. Requesting both Airflow extras together fails at resolution for pip and uv alike,
+since the `apache-airflow` version ranges are disjoint.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

@@ -79,16 +79,18 @@ class DagMaker(Protocol):
     """Build and persist isolated Airflow Dags for one pytest test.
 
     Calling the fixture returns a context manager. The context always yields the mutable
-    ``airflow.sdk.DAG`` authoring object so operators and decorated tasks can be defined naturally.
-    Metadata is persisted only after a successful context exit. When ``serialized=True`` or the
-    ``need_serialized_dag`` marker requests serialization, ``serialized_dag`` exposes Airflow's
-    persisted scheduler representation after exit; no mutable proxy or task execution behavior is
-    implied. Metadata remains available until the function-scoped fixture is finalized.
+    authoring Dag object -- ``airflow.sdk.DAG`` on the 3.x family,
+    ``airflow.models.dag.DAG`` on the certified 2.x family -- so operators and decorated
+    tasks can be defined naturally. Metadata is persisted only after a successful context
+    exit. When ``serialized=True`` or the ``need_serialized_dag`` marker requests
+    serialization, ``serialized_dag`` exposes Airflow's persisted scheduler
+    representation after exit; no mutable proxy or task execution behavior is implied.
+    Metadata remains available until the function-scoped fixture is finalized.
     """
 
     @property
     def dag(self) -> DAG:
-        """Return the most recently created mutable SDK Dag."""
+        """Return the most recently created mutable authoring Dag."""
 
     @property
     def session(self) -> Session:
@@ -105,16 +107,18 @@ class DagMaker(Protocol):
         serialized: bool | None = None,
         **dag_kwargs: Any,
     ) -> AbstractContextManager[DAG]:
-        """Create one context manager accepting SDK ``DAG`` keyword arguments.
+        """Create one context manager accepting authoring ``DAG`` keyword arguments.
 
         Parameters:
             dag_id: str | None containing an explicit bounded identifier, or ``None`` for a
                 deterministic test- and worker-specific identifier.
             serialized: bool | None overriding the ``need_serialized_dag`` marker when supplied.
-            dag_kwargs: Any containing keyword arguments forwarded to ``airflow.sdk.DAG``.
+            dag_kwargs: Any containing keyword arguments forwarded to the installed
+                family's authoring ``DAG`` constructor.
 
         Returns:
-            contextlib.AbstractContextManager[airflow.sdk.DAG] yielding the mutable authoring Dag.
+            contextlib.AbstractContextManager[airflow.sdk.DAG] yielding the mutable
+            authoring Dag (the 2.x ``airflow.models.dag.DAG`` on that family).
         """
 
     def create_dagrun(
@@ -126,7 +130,23 @@ class DagMaker(Protocol):
         start_date: datetime | None = None,
         **dag_run_kwargs: Any,
     ) -> DagRun:
-        """Create and own one persisted running manual DagRun."""
+        """Create and own one persisted running manual DagRun.
+
+        Parameters:
+            run_id: str | None containing an explicit identifier, or ``None`` for a
+                derived one.
+            logical_date: datetime.datetime | None overriding the current UTC logical
+                date.
+            run_after: datetime.datetime | None overriding the current UTC run-after
+                date. Airflow 3.x only -- the 2.x family has no run-after concept, and
+                passing it there raises ``ValueError`` rather than silently changing
+                run semantics.
+            start_date: datetime.datetime | None overriding the current UTC start date.
+            dag_run_kwargs: Any forwarded to Airflow's scheduler Dag creation method.
+
+        Raises:
+            ValueError: ``run_after`` was passed on the Airflow 2.x family.
+        """
 
     def create_ti(
         self,

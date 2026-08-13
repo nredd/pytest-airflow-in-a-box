@@ -22,7 +22,6 @@ import pytest
 
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 from pytest_airflow_in_a_box.airflow_cfg import (
-    BASIC_AUTH_BACKENDS,
     SIMPLE_AUTH_MANAGER,
     sqlite_url,
     write_airflow_config,
@@ -346,6 +345,11 @@ def generate_fernet_key() -> str:
 def _environment(state: BootstrapState) -> dict[str, str]:
     """Build the minimum pre-import Airflow environment.
 
+    Every setting the plugin owns on 2.x MUST live here, not only in the written
+    `airflow.cfg`: 2.x's `unit_test_mode` short-circuits `initialize_config()` to its
+    internal `unit_tests.cfg` template and never reads `AIRFLOW_CONFIG`, so environment
+    variables are the only channel that outranks the overlay.
+
     Parameters:
         state: BootstrapState containing run paths and secrets.
 
@@ -365,7 +369,12 @@ def _environment(state: BootstrapState) -> dict[str, str]:
     }
     if state.family == AirflowFamily.V2.value:
         variables["AIRFLOW__WEBSERVER__SECRET_KEY"] = state.jwt_secret
-        variables["AIRFLOW__API__AUTH_BACKENDS"] = BASIC_AUTH_BACKENDS
+        # 2.x's `unit_tests.cfg` overlay hard-codes `executor = LocalExecutor`, which the
+        # `ready_to_reschedule` dependency rejects against SQLite for poke- and
+        # reschedule-mode sensors alike. `SequentialExecutor` is single-threaded, valid
+        # for every backend, and matches the storage ladder's SQLite-by-default posture;
+        # `airflow_config` overrides still win for a test that needs another executor.
+        variables["AIRFLOW__CORE__EXECUTOR"] = "SequentialExecutor"
     else:
         variables["AIRFLOW__CORE__AUTH_MANAGER"] = SIMPLE_AUTH_MANAGER
         variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] = "admin:admin"
@@ -610,6 +619,10 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
 def _environment_names() -> tuple[str, ...]:
     """List every environment variable owned during bootstrap.
 
+    `AIRFLOW__CORE__EXECUTOR` is deliberately NOT owned: the V2 branch sets it (so the
+    assignment overwrites any ambient value there), but on 3.x an ambient executor
+    choice is legitimate consumer configuration and must survive bootstrap unscrubbed.
+
     Returns:
         tuple[str, ...] containing Airflow and handoff variable names.
     """
@@ -628,7 +641,6 @@ def _environment_names() -> tuple[str, ...]:
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER",
         "AIRFLOW__API_AUTH__JWT_SECRET",
         "AIRFLOW__WEBSERVER__SECRET_KEY",
-        "AIRFLOW__API__AUTH_BACKENDS",
         "AIRFLOW__CORE__FERNET_KEY",
         STATE_ENVIRONMENT_VARIABLE,
     )

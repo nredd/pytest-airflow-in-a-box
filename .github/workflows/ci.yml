@@ -53,6 +53,18 @@ jobs:
           printf 'def test_trivial() -> None:\n    assert True\n' > /tmp/bare-suite/test_trivial.py
           (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q test_trivial.py)
           (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q --airflow-doctor | grep -F "No Airflow distribution is installed")
+      - name: Smoke-test the wheel through the airflow3 extra
+        # Every install snippet in the docs names the `airflow3` extra, yet the compat
+        # matrix pins `apache-airflow-core` explicitly -- this is the one leg that
+        # resolves the extra itself, so specifier drift (a 3.4 release slipping the
+        # `<4` bound past `SUPPORTED_RELEASES`, a diverging meta-package pin) fails
+        # here instead of on a user (#25).
+        run: |
+          uv venv --python "$PYTHON_VERSION" .venv-extra
+          uv pip install --python .venv-extra/bin/python "$(ls dist/*.whl)[airflow3]"
+          mkdir -p /tmp/extra-suite
+          printf 'import pytest\n\n\n@pytest.mark.db_test\ndef test_migrates() -> None:\n    assert True\n' > /tmp/extra-suite/test_extra.py
+          (cd /tmp/extra-suite && "$GITHUB_WORKSPACE/.venv-extra/bin/pytest" -q test_extra.py)
       - name: Sync docs dependencies
         run: uv sync --locked --group docs
       - name: Build docs
@@ -135,8 +147,11 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
       - name: Combine and report
-        # Every leg runs the full suite with fake-libc/windll probes, so the
-        # union carries the same 100 bar as the local gate.
+        # Every 3.x leg runs the full suite with fake-libc/windll probes; the three
+        # `airflow2` legs run only `tests/enduser` (the consumer contract -- labeled
+        # `consumer contract only` in the checks list and `-enduser` in artifact
+        # names), so the 100% bar holds as the UNION across legs, with the 2.x-only
+        # src/ branches reached live by the 2.x legs and by fake probes elsewhere.
         run: |
           set -euo pipefail
           uv run coverage combine
