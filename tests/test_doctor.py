@@ -49,6 +49,7 @@ def _state(
     network_storage: bool = False,
     db_backend: str = "sqlite",
     sql_alchemy_conn: str | None = None,
+    family: str = AirflowFamily.V3.value,
 ) -> BootstrapState:
     """Build a fabricated bootstrap state for report-section unit tests.
 
@@ -59,6 +60,7 @@ def _state(
         db_backend: str containing the fabricated backend tier.
         sql_alchemy_conn: str | None containing the fabricated database URL, defaulting
             to a SQLite URL below `root`.
+        family: str containing the fabricated `AirflowFamily` value.
 
     Returns:
         BootstrapState containing fabricated but internally consistent fields.
@@ -79,7 +81,7 @@ def _state(
         network_storage=network_storage,
         sql_alchemy_conn=sql_alchemy_conn or sqlite_url(root / "airflow.db"),
         db_backend=db_backend,
-        family="apache-airflow-core",
+        family=family,
     )
 
 
@@ -104,6 +106,117 @@ def test_database_section_reports_home_backend_and_scheme(tmp_path: Path) -> Non
     assert f"- `AIRFLOW_HOME`: `{tmp_path}`" in lines
     assert "- Backend tier: `postgres`" in lines
     assert "- Database URL scheme: `postgresql`" in lines
+
+
+def test_executor_section_reports_resolved_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Render the resolved `core.executor` value without flagging a compatible setup."""
+
+    state = _state(tmp_path, db_backend="postgres", family=AirflowFamily.V3.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
+
+    lines = doctor._executor_section(state)
+
+    assert "- `core.executor`: `LocalExecutor`" in lines
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
+def test_executor_section_flags_2x_sqlite_local_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Flag the 2.x SQLite + `LocalExecutor` conflict from the `unit_tests.cfg` overlay."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
+
+    lines = doctor._executor_section(state)
+
+    assert any(
+        "INCOMPATIBLE" in line and "unit_tests.cfg" in line and "ready_to_reschedule" in line
+        for line in lines
+    )
+
+
+def test_executor_section_does_not_flag_2x_sqlite_sequential_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Do not flag the 2.x SQLite combination once `SequentialExecutor` is pinned."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "SequentialExecutor")
+
+    lines = doctor._executor_section(state)
+
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
+def test_executor_section_does_not_flag_3x_sqlite_local_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Scope the conflict bullet to 2.x only, not the general SQLite + executor case."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V3.value)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
+
+    lines = doctor._executor_section(state)
+
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
+def test_executor_section_does_not_flag_2x_postgres_local_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Do not flag 2.x with a non-single-threaded executor once Postgres backs it."""
+
+    state = _state(
+        tmp_path,
+        db_backend="postgres",
+        sql_alchemy_conn="postgresql://u:p@h/db",
+        family=AirflowFamily.V2.value,
+    )
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
+
+    lines = doctor._executor_section(state)
+
+    assert not any("INCOMPATIBLE" in line for line in lines)
+
+
+def test_executor_section_handles_fully_qualified_and_multi_executor_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Match the primary executor by class name whether given a path or a list."""
+
+    state = _state(tmp_path, db_backend="sqlite", family=AirflowFamily.V2.value)
+    monkeypatch.setattr(
+        doctor,
+        "_resolve_executor",
+        lambda: "airflow.executors.local_executor.LocalExecutor,CustomExecutor",
+    )
+
+    lines = doctor._executor_section(state)
+
+    assert any("INCOMPATIBLE" in line and "`LocalExecutor`" in line for line in lines)
+
+
+def test_executor_section_reports_resolution_failure_without_raising(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Report an unresolvable executor instead of crashing the whole report."""
+
+    state = _state(tmp_path)
+    error = RuntimeError("Airflow is not importable")
+
+    def _raise() -> str:
+        """Simulate a broken Airflow configuration import."""
+
+        raise error
+
+    monkeypatch.setattr(doctor, "_resolve_executor", _raise)
+
+    lines = doctor._executor_section(state)
+
+    assert any("could not resolve" in line and str(error) in line for line in lines)
 
 
 def test_format_capability_value_handles_enum() -> None:
@@ -189,6 +302,7 @@ def test_render_doctor_report_combines_every_section(
 
     state = _state(tmp_path)
     monkeypatch.setattr(doctor, "resolve_capabilities", lambda: CAPABILITIES)
+    monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
 
     def _fake_get_bootstrap_state(config: Any) -> Any:
         """Return the fabricated state regardless of the passed configuration."""
@@ -204,6 +318,7 @@ def test_render_doctor_report_combines_every_section(
     assert report.startswith(doctor.REPORT_TITLE)
     assert "## Storage" in report
     assert "## AIRFLOW_HOME and database" in report
+    assert "## Executor" in report
     assert "## Versions and capabilities" in report
     assert "## API server" in report
     assert report.endswith("\n")
@@ -226,6 +341,8 @@ def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> No
             "*## AIRFLOW_HOME and database*",
             "*AIRFLOW_HOME*",
             "*Database URL scheme:*",
+            "*## Executor*",
+            "*core.executor*",
             "*## Versions and capabilities*",
             "*pytest-airflow-in-a-box*",
             "*Apache Airflow:*",
