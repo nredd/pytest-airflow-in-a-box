@@ -195,14 +195,38 @@ def test_smoke_in_scope_keeps_catalog_for_directory_arg(tmp_path: Path) -> None:
         ("", False),
         ("smoke", True),
         ("not smoke", False),
-        ("smoke or db_test", True),
-        ("db_test", False),
+        ("smoke or unrelated_marker", True),
+        ("unrelated_marker", False),
+        # `timeout` and `db_test` are real markers every/some smoke items carry too --
+        # standalone or conjoined with `smoke`, they must still resolve to the catalog.
+        ("timeout", True),
+        ("db_test", True),
+        ("smoke and timeout", True),
+        ("smoke and db_test", True),
+        # Only the 7 non-`db_test` items match; a flat union-of-names matcher would
+        # wrongly return False here since `db_test` is present on *some* smoke item.
+        ("smoke and not db_test", True),
+        # No real smoke item carries `db_test` without `timeout`.
+        ("db_test and not timeout", False),
         ("smoke(", False),
     ],
-    ids=["empty", "bare", "negated", "or-clause", "unrelated", "malformed"],
+    ids=[
+        "empty",
+        "bare",
+        "negated",
+        "or-clause",
+        "unrelated",
+        "timeout-alone",
+        "db-test-alone",
+        "smoke-and-timeout",
+        "smoke-and-db-test",
+        "smoke-and-not-db-test",
+        "impossible-combo",
+        "malformed",
+    ],
 )
 def test_markexpr_wants_smoke(markexpr: str, expected: bool, tmp_path: Path) -> None:
-    """Resolve whether a `-m` expression would select a smoke-only marker set."""
+    """Resolve whether a `-m` expression would select at least one real smoke item's marks."""
 
     config = _scope_config(
         args_source=pytest.Config.ArgsSource.ARGS,
@@ -2203,6 +2227,47 @@ def test_explicit_mark_expression_overrides_positional_exclusion(
     )
     file_excluded.assert_outcomes(passed=1)
     file_excluded.stdout.no_fnmatch_line("*::smoke*")
+
+
+def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
+    pytester: pytest.Pytester,
+) -> None:
+    """Let a conjunction with a non-`smoke` marker a real item carries win too.
+
+    A flat matcher over the union of every known smoke marker name would wrongly resolve
+    `-m "smoke and not db_test"`: `db_test` names a marker on *some* smoke items
+    (`DagBagIntegrityItem`, `PoolReferencesExistItem`), so the union sees it as "present"
+    and negating it evaluates to `False` -- even though the other seven bundled items
+    genuinely lack `db_test` and the expression does select them.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    with_db_test = pytester.runpytest_subprocess(
+        "-q",
+        "--airflow-smoke",
+        "--dag-folder=dags",
+        "-m",
+        "smoke and db_test",
+        "test_regular.py",
+    )
+    with_db_test.assert_outcomes(passed=2, deselected=4)
+
+    without_db_test = pytester.runpytest_subprocess(
+        "-q",
+        "--airflow-smoke",
+        "--dag-folder=dags",
+        "-m",
+        "smoke and not db_test",
+        "test_regular.py",
+    )
+    without_db_test.assert_outcomes(passed=3, deselected=3)
 
 
 def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:

@@ -208,42 +208,54 @@ def _smoke_enabled(config: pytest.Config) -> bool:
     return enabled
 
 
-def _matches_smoke_identifier(name: str, /, **kwargs: str | int | bool | None) -> bool:
-    """Match only the bare ``smoke`` identifier, per the ``ExpressionMatcher`` protocol.
-
-    Parameters:
-        name: str identifier from the compiled `-m` expression.
-        kwargs: str | int | bool | None keyword-call arguments; smoke items take none.
-
-    Returns:
-        bool indicating whether `name` is exactly ``smoke`` with no keyword arguments.
-    """
-
-    return name == "smoke" and not kwargs
+# The two concrete mark-name combinations every synthesized smoke item actually carries
+# (`smoke` + `timeout` always, plus `db_test` on `DagBagIntegrityItem` and
+# `PoolReferencesExistItem`). Kept in sync with the `add_marker` calls in each item's
+# `__init__`; `test_smoke_and_db_test_mark_expression_overrides_positional_exclusion`
+# collects the real catalog and would start failing its exact pass counts if an item's
+# marks ever drifted from this pair.
+_SMOKE_ITEM_MARK_SETS: tuple[frozenset[str], ...] = (
+    frozenset({"smoke", "timeout"}),
+    frozenset({"smoke", "timeout", "db_test"}),
+)
 
 
 def _markexpr_wants_smoke(config: pytest.Config) -> bool:
-    """Report whether ``-m``/ini ``markexpr`` would select an item bearing only ``smoke``.
+    """Report whether ``-m``/ini ``markexpr`` would select at least one real smoke item.
 
     An explicit ``-m`` expression is unambiguous opt-in to the smoke catalog and must win
-    over the file/node-ID scoping in `_smoke_in_scope`, or ``-m smoke`` combined with an
-    explicit positional silently selects nothing.
+    over the file/node-ID scoping in `_smoke_in_scope`, or ``-m smoke`` (or any other
+    expression a real smoke item's marks would satisfy, e.g. ``-m "smoke and timeout"``)
+    combined with an explicit positional silently selects nothing. A single flat matcher
+    over the union of known marker names is not enough here: e.g. ``-m "smoke and not
+    db_test"`` genuinely selects the seven smoke items that lack ``db_test``, but a union
+    matcher sees ``db_test`` as present and wrongly evaluates the expression to ``False``.
+    Evaluating against each concrete mark set in `_SMOKE_ITEM_MARK_SETS` in turn avoids that.
 
     Parameters:
         config: pytest.Config carrying the resolved ``-m`` mark expression.
 
     Returns:
-        bool indicating whether the expression matches a smoke-only marker set.
+        bool indicating whether the expression matches any real smoke item's marker set.
     """
 
     markexpr: str = config.option.markexpr
     if not markexpr:
         return False
     try:
+        # `Expression.compile` raises `SyntaxError` on pytest >= 9 and the private,
+        # version-specific `_pytest.mark.expression.ParseError` (unrelated to `SyntaxError`)
+        # on pytest 8.x, the floor this plugin supports. Catching broadly here is safe: this
+        # is the only statement in the block, and an unparsable `markexpr` is caught again,
+        # correctly typed as `pytest.UsageError`, by pytest's own `-m` handling right after
+        # this `tryfirst` hook returns.
         expression = Expression.compile(markexpr)
-    except SyntaxError:
+    except Exception:
         return False
-    return expression.evaluate(_matches_smoke_identifier)
+    return any(
+        expression.evaluate(lambda name, /, mark_set=mark_set, **_kwargs: name in mark_set)
+        for mark_set in _SMOKE_ITEM_MARK_SETS
+    )
 
 
 def _smoke_in_scope(config: pytest.Config) -> bool:
