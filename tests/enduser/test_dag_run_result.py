@@ -1,13 +1,20 @@
-"""Exercise whole-DagRun execution and bulk outcome assertions."""
+"""Exercise whole-DagRun execution and bulk outcome assertions.
+
+`BaseOperator` and `task` resolve dynamically ON PURPOSE: they moved from
+`airflow.models`/`airflow.decorators` (2.x) to `airflow.sdk` (3.x), and
+`dag_maker.run()` is family-branched in `_compat.taskrun`, so the whole module
+collects and runs on both families. `airflow.triggers.base` and the matchers are
+family-independent and stay static imports.
+"""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from importlib import import_module
 from typing import Any
 
 import pytest
-from airflow.sdk import BaseOperator, task
 from airflow.triggers.base import BaseTrigger, TriggerEvent
 from airflow.utils.state import DagRunState, TaskInstanceState
 
@@ -22,6 +29,13 @@ from pytest_airflow_in_a_box.matchers import (
 from pytest_airflow_in_a_box.types import DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
+
+# Shared with the sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+
+_authoring = _resolve("airflow.sdk", "airflow.models")
+BaseOperator = _authoring.BaseOperator
+task = _resolve("airflow.sdk", "airflow.decorators").task
 
 
 class ImmediateTrigger(BaseTrigger):

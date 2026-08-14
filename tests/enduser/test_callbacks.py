@@ -1,18 +1,33 @@
-"""Exercise task state callbacks through both public runners."""
+"""Exercise task state callbacks through both public runners.
+
+`DAG`/`BaseOperator` resolve dynamically ON PURPOSE: they moved from
+`airflow.models` (2.x) to `airflow.sdk` (3.x). `airflow.listeners.hookimpl` is
+unchanged across families and stays a static import. Only the DB-free tests need
+the Task SDK's `run_task` runner, so they alone carry `requires_airflow3`.
+"""
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
 from airflow.listeners import hookimpl
-from airflow.sdk import DAG, BaseOperator
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
+
+
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+
+
+_authoring = _resolve("airflow.sdk", "airflow.models")
+DAG = _authoring.DAG
+BaseOperator = _authoring.BaseOperator
 
 
 def _record(context: Any, outcome: str) -> None:
@@ -69,6 +84,7 @@ class RecordingListener:
         self.calls.append("success")
 
 
+@pytest.mark.requires_airflow3
 @pytest.mark.parametrize(
     ("outcome", "retries", "state"),
     [
@@ -129,6 +145,7 @@ def test_persisted_callbacks_follow_task_state(
     assert callback_path.read_text(encoding="utf-8") == outcome
 
 
+@pytest.mark.requires_airflow3
 def test_db_free_runner_dispatches_listeners(run_task: RunTask) -> None:
     """Notify a registered listener when finalization is requested."""
 

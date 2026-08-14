@@ -1,24 +1,37 @@
-"""Exercise representative custom operator unit tests."""
+"""Exercise representative custom operator unit tests.
+
+`DAG`/`BaseOperator` and the exception types resolve dynamically ON PURPOSE:
+`DAG`/`BaseOperator` moved from `airflow.models` (2.x) to `airflow.sdk` (3.x), and
+`AirflowException`/`AirflowSkipException` moved from `airflow.exceptions` (2.x,
+still importable on 3.x) to `airflow.sdk.exceptions`. `RenderedTaskInstanceFields`
+is unchanged across families and stays a static import. Only the DB-free tests
+need the Task SDK's `run_task` runner, so they alone carry `requires_airflow3`.
+"""
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
 from airflow.models.renderedtifields import RenderedTaskInstanceFields
-from airflow.sdk import DAG, BaseOperator
-from airflow.sdk.exceptions import AirflowException
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
 
-try:
-    from airflow.sdk.exceptions import AirflowSkipException
-except ImportError:
-    from airflow.exceptions import AirflowSkipException
+
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+_resolve_exception = import_module("_authoring")._resolve_exception
+
+_authoring = _resolve("airflow.sdk", "airflow.models")
+DAG = _authoring.DAG
+BaseOperator = _authoring.BaseOperator
+AirflowException = _resolve_exception("AirflowException")
+AirflowSkipException = _resolve_exception("AirflowSkipException")
 
 
 class ContextOperator(BaseOperator):
@@ -104,6 +117,7 @@ def test_custom_operator_reads_runtime_context(dag_maker: DagMaker) -> None:
     assert value["try_number"] >= 0
 
 
+@pytest.mark.requires_airflow3
 def test_db_free_context_uses_requested_attempt(run_task: RunTask) -> None:
     """Populate logical interval and attempt context without metadata."""
 
@@ -118,6 +132,7 @@ def test_db_free_context_uses_requested_attempt(run_task: RunTask) -> None:
     )
 
 
+@pytest.mark.requires_airflow3
 def test_nested_and_file_templates_render(run_task: RunTask, tmp_path: Path) -> None:
     """Render dict/list values and a template-extension file without metadata."""
 
@@ -165,6 +180,7 @@ def test_rendered_template_fields_are_queryable_after_a_run(
     assert rendered == {"payload": {"items": ["42"]}, "query": "SELECT 42"}
 
 
+@pytest.mark.requires_airflow3
 def test_operator_lifecycle_hooks_run_in_order(run_task: RunTask) -> None:
     """Invoke pre-execute, execute, and post-execute in author order."""
 
@@ -187,6 +203,7 @@ def test_custom_operator_constructs_without_metadata() -> None:
     assert operator.retries == 0
 
 
+@pytest.mark.requires_airflow3
 @pytest.mark.parametrize(
     ("airflow_error", "error_type"), [(True, AirflowException), (False, ValueError)]
 )

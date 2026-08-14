@@ -1,16 +1,32 @@
-"""Exercise TaskFlow, mapping, branching, and task groups."""
+"""Exercise TaskFlow, mapping, branching, and task groups.
+
+`DAG` and `task` resolve dynamically ON PURPOSE: `DAG` moved from
+`airflow.models` (2.x) to `airflow.sdk` (3.x), and TaskFlow's `task` decorator
+moved from `airflow.decorators` (2.x, still importable on 3.x) to `airflow.sdk`.
+`ordered_task_instances`/`run_task_instance` are family-branched in
+`_compat.taskrun`, so only the DB-free multiple-outputs test needs the Task SDK's
+`run_task` runner and carries `requires_airflow3`.
+"""
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 import pytest
-from airflow.sdk import DAG, task
 from airflow.utils.state import DagRunState, TaskInstanceState
 
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
+
+
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+
+
+DAG = _resolve("airflow.sdk", "airflow.models").DAG
+task = _resolve("airflow.sdk", "airflow.decorators").task
 
 
 @pytest.mark.db_test
@@ -31,6 +47,7 @@ def test_multiple_outputs_persist_per_key_xcoms(dag_maker: DagMaker) -> None:
     assert ti.xcom_pull(task_ids="split", key="right", session=dag_maker.session) == 22
 
 
+@pytest.mark.requires_airflow3
 def test_multiple_outputs_work_without_metadata(run_task: RunTask) -> None:
     """Emit per-key XComs through the DB-free Task SDK runner."""
 
@@ -120,7 +137,7 @@ def test_xcom_dynamic_mapping_selects_map_index(dag_maker: DagMaker) -> None:
 def test_nested_task_group_ids_survive_persistence(dag_maker: DagMaker) -> None:
     """Address nested group tasks by their fully qualified identifiers."""
 
-    from airflow.sdk import TaskGroup
+    TaskGroup = _resolve("airflow.sdk", "airflow.utils.task_group").TaskGroup
 
     with dag_maker(dag_id="compat_task_groups"), TaskGroup("outer"), TaskGroup("inner"):
 

@@ -1,20 +1,37 @@
-"""Exercise custom hooks, connections, and an installed SQL provider."""
+"""Exercise custom hooks, connections, and an installed SQL provider.
+
+`DAG`/`BaseOperator`/`BaseHook` resolve dynamically ON PURPOSE: they moved from
+`airflow.models`/`airflow.hooks.base` (2.x) to `airflow.sdk` (3.x). The provider
+operator import path is unchanged across families and stays static. Only the
+DB-free hook tests need the Task SDK's `run_task` runner, so they alone carry
+`requires_airflow3`.
+"""
 
 from __future__ import annotations
 
 import sqlite3
+from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
 import pytest
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
-from airflow.sdk import DAG, BaseHook, BaseOperator
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box.types import AirflowConnections, DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
+
+
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+
+
+_authoring = _resolve("airflow.sdk", "airflow.models")
+DAG = _authoring.DAG
+BaseOperator = _authoring.BaseOperator
+BaseHook = _resolve("airflow.sdk", "airflow.hooks.base").BaseHook
 
 
 class ClientHook(BaseHook):
@@ -85,6 +102,7 @@ def test_custom_hook_reads_a_persisted_connection(
     assert ti.xcom_pull(task_ids="connect", session=dag_maker.session) == _expected_connection()
 
 
+@pytest.mark.requires_airflow3
 def test_custom_hook_reads_a_seeded_connection(run_task: RunTask) -> None:
     """Resolve the same connection shape through fake supervision."""
 
@@ -107,6 +125,7 @@ def test_custom_hook_reads_a_seeded_connection(run_task: RunTask) -> None:
     assert result.xcoms["return_value"] == _expected_connection()
 
 
+@pytest.mark.requires_airflow3
 def test_custom_hook_mocked_with_unittest_mock(run_task: RunTask) -> None:
     """Patch a custom hook's connection resolution instead of seeding one."""
 

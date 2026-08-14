@@ -20,10 +20,10 @@ All notable changes to this project will be documented in this file. The format 
   fixtures fail on 2.x with actionable errors naming the 2.x alternative.
 - `requires_airflow2` / `requires_airflow3` markers, auto-skipped on the other family,
   plus three 2.x CI legs (two-pass constraints install) running the end-user consumer
-  contract; widening the 2.x-collectable surface is tracked in
-  [#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83).
+  contract; the 2.x-collectable surface is widened below
+  ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 - The bundled Dag corpus authors through a small dynamic resolver so the same files
-  parse on both Airflow families.
+  parse on both Airflow families ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
 - Certified Airflow 3.3.1, which the `airflow3` extra now resolves fresh (the new
   extra-resolving CI smoke leg caught the drift on its first run). 3.3.1 regenerated
   the Task SDK comms models with every None-able field required-without-default, so the
@@ -74,6 +74,13 @@ All notable changes to this project will be documented in this file. The format 
   already reaches `provider_package` (`sys.path` insertion plus `import_module`) since
   DagBag imports every corpus file as a standalone module
   ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
+- Seven of the ten 3.x-only `tests/enduser/` contract modules now author dynamically
+  through the same `_resolve()` shape as the Dag corpus and collect on the 2.x family too,
+  gating only the tests that touch a genuinely 3.x-only surface (the Task SDK's `run_task`
+  runner) with `requires_airflow3` instead of the whole module; `test_assets.py`,
+  `test_rest_api_compat.py`, and `test_structlog_events.py` stay `collect_ignore`'d, since
+  Asset ORM persistence, the REST API server, and structlog capture have no 2.x equivalent
+  ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 
 ## [0.4.0] - 2026-08-12
 

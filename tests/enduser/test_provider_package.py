@@ -1,4 +1,10 @@
-"""Exercise composition with a provider-shaped user package."""
+"""Exercise composition with a provider-shaped user package.
+
+`DAG` resolves dynamically ON PURPOSE: it lives at `airflow.sdk` on 3.x and
+`airflow.models` on 2.x, and the corpus round-trip test collects and runs on both
+families. Only the in-process execution test needs the Task SDK's DB-free
+`run_task` runner, so it alone carries `requires_airflow3`.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from airflow.sdk import DAG
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box.types import RunTask
@@ -15,6 +20,13 @@ from pytest_airflow_in_a_box.types import RunTask
 pytestmark = pytest.mark.compat
 
 CORPUS = Path(__file__).parents[1] / "dags"
+
+
+# Shared with the six sibling contract modules; see `tests/enduser/_authoring.py`.
+_resolve = import_module("_authoring")._resolve
+
+
+DAG = _resolve("airflow.sdk", "airflow.models").DAG
 
 
 def test_provider_package_composes_in_a_corpus_dag(pytester: pytest.Pytester) -> None:
@@ -34,6 +46,7 @@ def test_provider_package_composes_in_a_corpus_dag(pytester: pytest.Pytester) ->
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.requires_airflow3
 def test_provider_package_operator_and_sensor_execute(
     run_task: RunTask, monkeypatch: pytest.MonkeyPatch
 ) -> None:
