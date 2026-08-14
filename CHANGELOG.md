@@ -98,6 +98,14 @@ All notable changes to this project will be documented in this file. The format 
   capture have no 2.x equivalent
   ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 
+### Fixed
+
+- `_free_port` no longer hands two `pytest-xdist` workers the same loopback port for their
+  isolated Airflow API servers: a subprocess that loses the bind race now retries with a
+  freshly probed port (bounded to `API_SERVER_BIND_RETRIES` attempts) instead of leaving both
+  workers pointed at one server
+  ([#103](https://github.com/nredd/pytest-airflow-in-a-box/issues/103)).
+
 ## [0.4.0] - 2026-08-12
 
 ### Added
