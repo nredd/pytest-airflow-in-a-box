@@ -166,7 +166,7 @@ plugin rather than baking one blessed command into the action.
 
 ```yaml
 - uses: actions/checkout@v5
-- uses: nredd/pytest-airflow-in-a-box/action@v0.6.0
+- uses: nredd/pytest-airflow-in-a-box/action@main
   id: airflow-env
   with:
     airflow-version: "3.3.0"
@@ -198,7 +198,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: nredd/pytest-airflow-in-a-box/action@v0.6.0
+      - uses: nredd/pytest-airflow-in-a-box/action@main
         id: airflow-env
         with:
           airflow-version: ${{ matrix.airflow-version }}
@@ -217,8 +217,9 @@ jobs:
 | `requirements-file`  | no       | (none)     | Extra requirements file to install into the same environment.                |
 
 Outputs: `python-path` (the provisioned venv's `python`) and `venv-path` (the venv directory,
-for console scripts). The action is pinned to a full release tag for now -- a moving `v1` tag
-is tracked as a follow-up.
+for console scripts). The examples above pin `@main` because no tagged release carries the
+action yet -- once one ships, pin to that full release tag (e.g. `@v0.6.0`) instead. A moving
+`v1` tag is tracked as a follow-up.
 
 ## Migration diff orchestrator
 

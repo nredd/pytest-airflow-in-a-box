@@ -54,12 +54,14 @@ runs:
   steps:
     - name: Validate inputs
       shell: bash
+      env:
+        EXTRA: ${{ inputs.extra }}
       run: |
         set -euo pipefail
-        case "${{ inputs.extra }}" in
+        case "$EXTRA" in
           airflow3|airflow2) ;;
           *)
-            echo "::error::extra '${{ inputs.extra }}' is not supported; use 'airflow3' or 'airflow2'." >&2
+            echo "::error::extra '${EXTRA}' is not supported; use 'airflow3' or 'airflow2'." >&2
             exit 1
             ;;
         esac
@@ -70,7 +72,14 @@ runs:
 
     - name: Install uv
       shell: bash
-      run: curl -LsSf "https://astral.sh/uv/${{ inputs.uv-version }}/install.sh" | sh
+      env:
+        UV_VERSION: ${{ inputs.uv-version }}
+        UV_INSTALL_DIR: ${{ runner.temp }}/uv
+        INSTALLER_NO_MODIFY_PATH: "1"
+      run: |
+        set -euo pipefail
+        curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+        echo "${UV_INSTALL_DIR}" >> "$GITHUB_PATH"
 
     - name: Set up the constrained environment
       id: setup-env
