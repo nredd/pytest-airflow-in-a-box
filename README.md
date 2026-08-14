@@ -21,6 +21,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 - [Why not...](#why-not)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [GitHub Action](#github-action)
 - [Migration diff orchestrator](#migration-diff-orchestrator)
 - [Documentation](#documentation)
 - [Development](#development)
@@ -155,6 +156,69 @@ To disable the plugin entirely for a run:
 ```console
 pytest -p no:pytest_airflow_in_a_box
 ```
+
+## GitHub Action
+
+A composite GitHub Action wraps the constraints-pinned `uv` + Airflow setup this repo's own
+compat matrix uses, for a Dag repo's own CI. It provisions the environment and stops -- you
+always write the invocation, so the example below shows several distinct features of the
+plugin rather than baking one blessed command into the action.
+
+```yaml
+- uses: actions/checkout@v5
+- uses: nredd/pytest-airflow-in-a-box/action@v0.6.0
+  id: airflow-env
+  with:
+    airflow-version: "3.3.0"
+    python-version: "3.12"
+
+# Plain unit tests
+- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
+
+# Bundled smoke checks (Dag import + parse-time diagnostics)
+- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest --airflow-smoke
+
+# Migration outcome diff: record a baseline, then compare on a later run
+- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest --airflow-record=baseline.json
+- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest --airflow-baseline=baseline.json
+
+# The `airflow-migration-diff` console script, via the venv-path output
+- run: ${{ steps.airflow-env.outputs.venv-path }}/bin/airflow-migration-diff --project-dir .
+```
+
+Drop it straight into a `strategy.matrix` loop -- it's a single step with scalar inputs:
+
+```yaml
+jobs:
+  test:
+    strategy:
+      matrix:
+        airflow-version: ["3.2.2", "3.3.0", "3.3.1"]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: nredd/pytest-airflow-in-a-box/action@v0.6.0
+        id: airflow-env
+        with:
+          airflow-version: ${{ matrix.airflow-version }}
+          python-version: ${{ matrix.python-version }}
+      - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
+```
+
+| Input               | Required | Default    | Description                                                              |
+| -------------------- | -------- | ---------- | ---------------------------------------------------------------------------- |
+| `airflow-version`    | yes      | --          | Exact Apache Airflow version to install.                                     |
+| `python-version`     | yes      | --          | Python version to provision.                                                 |
+| `extra`              | no       | `airflow3` | Plugin extra to install: `airflow3` or `airflow2`.                          |
+| `plugin-version`     | no       | latest     | Exact `pytest-airflow-in-a-box` version to install.                          |
+| `uv-version`         | no       | `0.12.2`   | `uv` version to install.                                                      |
+| `working-directory`  | no       | `.`        | Directory to run in.                                                         |
+| `requirements-file`  | no       | (none)     | Extra requirements file to install into the same environment.                |
+
+Outputs: `python-path` (the provisioned venv's `python`) and `venv-path` (the venv directory,
+for console scripts). The action is pinned to a full release tag for now -- a moving `v1` tag
+is tracked as a follow-up.
 
 ## Migration diff orchestrator
 

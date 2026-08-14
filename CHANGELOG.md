@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- A composite GitHub Action (`action/action.yml`) wrapping constraints-pinned `uv` +
+  Airflow + plugin setup for Dag repos' own CI, matrix-ready and installing the
+  published PyPI package rather than an editable checkout; both the `airflow3` and
+  `airflow2` extras are supported
+  ([#38](https://github.com/nredd/pytest-airflow-in-a-box/issues/38)). A maintained
+  moving `v1` tag is tracked as a follow-up -- pin to a full release tag for now.
+
 ### Fixed
 
 - `make release` and `release.yml`'s tag-version check no longer false-positive when `uv`

@@ -74,6 +74,40 @@ jobs:
     name: Compat
     uses: ./.github/workflows/compat.yml
 
+  action-smoke:
+    name: >-
+      Action smoke / Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
+      (${{ matrix.extra }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - airflow-version: "3.3.0"
+            python-version: "3.12"
+            extra: airflow3
+          - airflow-version: "2.11.2"
+            python-version: "3.12"
+            extra: airflow2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Provision the environment via the local action
+        # Installs the PUBLISHED PyPI package (latest, `plugin-version` left
+        # unset), not this branch's own code -- this job proves the action's
+        # wrapper mechanics work, not the current branch's plugin internals;
+        # `compat` above already covers that via editable installs.
+        id: env
+        uses: ./action
+        with:
+          airflow-version: ${{ matrix.airflow-version }}
+          python-version: ${{ matrix.python-version }}
+          extra: ${{ matrix.extra }}
+          working-directory: action/smoke-test
+      - name: Run the smoke fixture through the provisioned interpreter
+        working-directory: action/smoke-test
+        run: ${{ steps.env.outputs.python-path }} -m pytest -v
+
   postgres:
     name: postgres / Airflow 3.3.0 / Python 3.12
     runs-on: ubuntu-latest
