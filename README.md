@@ -5,6 +5,8 @@
 [![PyPI](https://img.shields.io/pypi/v/pytest-airflow-in-a-box?logo=pypi&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pytest-airflow-in-a-box?logo=python&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
 [![License](https://img.shields.io/pypi/l/pytest-airflow-in-a-box?cacheSeconds=3600)](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/LICENSE)
+[![Docs](https://img.shields.io/badge/docs-mkdocs-blue?logo=materialformkdocs&logoColor=white)](https://nredd.github.io/pytest-airflow-in-a-box/)
+[![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.9--2.11-017CEE?logo=apacheairflow&logoColor=white)](#requirements)
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
 Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
@@ -19,6 +21,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 - [Why not...](#why-not)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Migration diff orchestrator](#migration-diff-orchestrator)
 - [Documentation](#documentation)
 - [Development](#development)
 - [License](#license)
@@ -83,23 +86,26 @@ operators, the REST API fixture, and bundled smoke checks.
 
 ## Requirements
 
-- CPython 3.10 through 3.14
 - pytest 8 or newer
-- Apache Airflow 3.1 or newer, below 4
 - Linux or macOS for Airflow-backed tests
 
 Apache Airflow does not support native Windows installations. Windows development should use WSL2
 or the included devcontainer; platform-independent package checks alone do not imply full Windows
 Airflow support.
 
-The released compatibility matrix is exercised against Airflow 3.1.0, 3.1.1, 3.1.2, 3.1.3,
-3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, and 3.3.1 across CPython 3.10 through 3.14
-using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.9.3,
-2.10.5, and 2.11.2 on CPython 3.10-3.12, exercised through the end-user consumer contract
-(Airflow 2.x never supported 3.13). On the 2.x
-family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable errors
-naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip on
-the other family so one suite runs green on both sides of a migration.
+The released compatibility matrix is exercised in CI against every combination below, using
+Airflow's published constraints files:
+
+| Tier                   | Airflow versions                                                                | Python           | OS                                       | Metadata DB                    |
+| ----------------------- | -------------------------------------------------------------------------------- | ----------------- | ------------------------------------------ | -------------------------------- |
+| 3.x (primary)           | 3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, 3.3.1 | 3.10 - 3.14        | Linux (glibc, musl, arm64), macOS          | SQLite (WAL), Postgres (testcontainers) |
+| 2.x (certified, [#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)) | 2.9.3, 2.10.5, 2.11.2                                                             | 3.10 - 3.12 (Airflow 2.x never supported 3.13+) | Linux                                     | SQLite (WAL)                     |
+
+On the 2.x family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable
+errors naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip
+on the other family so one suite runs green on both sides of a migration. The 2.x tier is
+exercised through the end-user consumer contract (`tests/enduser`, marked `compat`) rather than
+the full internal suite.
 
 ## Installation
 
@@ -150,11 +156,26 @@ To disable the plugin entirely for a run:
 pytest -p no:pytest_airflow_in_a_box
 ```
 
+## Migration diff orchestrator
+
+`airflow-migration-diff` is a console script that `uv`-provisions a disposable Airflow 2.x
+environment and a disposable Airflow 3.x environment, records outcomes on each, and prints the
+categorized migration diff -- one command that tells a migrating team exactly what breaks:
+
+```console
+airflow-migration-diff --project-dir . -- -k "not slow"
+```
+
+Exit code `0` means no regressions, `1` means at least one was found, and `2` means the
+orchestrator itself failed (missing `uv`, a provisioning failure, and the like). See the
+[documentation site](https://nredd.github.io/pytest-airflow-in-a-box/guide/migration-orchestrator/)
+for the full option reference.
+
 ## Documentation
 
 Task execution, deferrable operators, DB-free execution, Variable/Connection seeding, structlog
 capture, Dag collection, configuration overrides, smoke tests, database backends and cleanup, the
-live REST API, markers, and diagnostics are all covered on the
+live REST API, the migration outcome diff, markers, and diagnostics are all covered on the
 [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/).
 
 ## Development
