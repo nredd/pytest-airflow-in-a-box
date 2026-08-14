@@ -55,6 +55,7 @@ nav:
       - Migration-strict mode: guide/migration-strict.md
       - Database: guide/database.md
       - Live REST API: guide/rest-api.md
+      - Migration outcome diff: guide/migration-diff.md
       - Cookbook: guide/cookbook.md
   - Reference:
       - Markers: reference/markers.md

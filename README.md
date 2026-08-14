@@ -154,7 +154,7 @@ pytest -p no:pytest_airflow_in_a_box
 
 Task execution, deferrable operators, DB-free execution, Variable/Connection seeding, structlog
 capture, Dag collection, configuration overrides, smoke tests, database backends and cleanup, the
-live REST API, markers, and diagnostics are all covered on the
+live REST API, the migration outcome diff, markers, and diagnostics are all covered on the
 [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/).
 
 ## Development
