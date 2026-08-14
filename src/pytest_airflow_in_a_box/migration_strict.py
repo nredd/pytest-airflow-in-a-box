@@ -69,7 +69,19 @@ def migration_strict_enabled(config: pytest.Config) -> bool:
     if option_value is not None:
         enabled = bool(option_value)
     else:
-        ini_value: object = config.getini("airflow_migration_strict")
+        # `parser.addini(..., type="bool")` makes pytest's own `config.getini()` coerce
+        # the raw ini string itself, raising a bare `ValueError` for an unparseable
+        # value (e.g. `airflow_migration_strict = maybe`) before this function ever
+        # sees it; left unhandled that surfaces as an `INTERNALERROR` traceback wall
+        # instead of an actionable usage error. The `isinstance` check below is a
+        # second guard for callers passing a duck-typed config with a raw ini value,
+        # matching this project's validate-coerce-revalidate guard-clause style.
+        try:
+            ini_value: object = config.getini("airflow_migration_strict")
+        except ValueError as error:
+            raise pytest.UsageError(
+                f"Ini option `airflow_migration_strict` must be a boolean: {error}"
+            ) from error
         if not isinstance(ini_value, bool):
             raise pytest.UsageError("Ini option `airflow_migration_strict` must be a boolean")
         enabled = ini_value

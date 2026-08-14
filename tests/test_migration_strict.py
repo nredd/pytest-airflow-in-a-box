@@ -89,6 +89,38 @@ def test_migration_strict_enabled_rejects_non_boolean_ini() -> None:
         migration_strict.migration_strict_enabled(config)
 
 
+def test_migration_strict_enabled_rejects_unparseable_real_ini_value(
+    pytester: pytest.Pytester,
+) -> None:
+    """Render pytest's own ini-coercion `ValueError` as a usage error, not a crash.
+
+    Regression test: `parser.addini(..., type="bool")` makes pytest's real
+    `config.getini()` coerce the raw ini string itself via `_strtobool`, raising a
+    bare `ValueError` for a value like `maybe` before `migration_strict_enabled` ever
+    sees it. The unit test above only exercises a duck-typed config double whose
+    `getini` returns the raw string untouched, which never touches this path -- only
+    a real pytest ini file reproduces it.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makeini("[pytest]\nairflow_migration_strict = maybe\n")
+    pytester.makepyfile(
+        test_ok="""
+        def test_ok():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess()
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    output = result.stdout.str() + result.stderr.str()
+    assert "`airflow_migration_strict` must be a boolean" in output
+    assert "INTERNALERROR" not in output
+
+
 def test_apply_migration_strict_filterwarnings_noop_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
