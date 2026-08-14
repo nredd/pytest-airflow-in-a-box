@@ -6,8 +6,17 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-14
+
 ### Added
 
+- Migration outcome diff: `--airflow-record=PATH` writes a versioned JSON artifact of
+  per-test outcomes at session finish, `--airflow-baseline=PATH` compares live outcomes
+  against a prior recording (seven categories: still-passing, broken-on-both,
+  regression, fixed, gated, new, missing), `--airflow-baseline-select` filters
+  collection by baseline outcome, and `--airflow-baseline-xfail=PATH` non-strict
+  xfail-marks known regressions during the migration
+  ([#42](https://github.com/nredd/pytest-airflow-in-a-box/issues/42)).
 - The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
   certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
   ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
@@ -44,6 +53,12 @@ All notable changes to this project will be documented in this file. The format 
   from inside the runtest phase's own warning context, where any consumer `error::` filter
   covering a warning Airflow's own bootstrap happens to raise could already turn database
   initialization into a misleading `AirflowCompatibilityError` on that worker's first test.
+- `airflow-migration-diff`, a console script that `uv`-provisions a disposable Airflow 2.x
+  environment and a disposable Airflow 3.x environment, records outcomes on each with
+  `--airflow-record`/`--airflow-baseline`, and prints the categorized migration diff; exit
+  code 0 means no regressions, 1 means at least one was found, and 2 means the orchestrator
+  itself failed. Categorization is `--airflow-record`'s own `compute_categories`, not a
+  reimplementation ([#44](https://github.com/nredd/pytest-airflow-in-a-box/issues/44)).
 
 ### Changed
 
@@ -333,7 +348,8 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.5.0
 [0.4.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.4.0
 [0.3.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.3.0
 [0.2.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.2.0

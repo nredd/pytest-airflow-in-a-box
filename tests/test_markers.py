@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from pytest_airflow_in_a_box import markers
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.markers import read_bool_marker
 
 
@@ -263,3 +264,51 @@ def test_environment_gate_end_to_end(pytester: pytest.Pytester) -> None:
     sentinel.touch()
     ran = pytester.runpytest_subprocess("-q")
     ran.assert_outcomes(passed=1)
+
+
+def _family_marked_item(marks: dict[str, pytest.Mark]) -> Any:
+    """Create a minimal item double carrying zero or more family markers.
+
+    Parameters:
+        marks: dict[str, pytest.Mark] mapping marker name to the mark returned for it.
+
+    Returns:
+        Any shaped like the item surface `would_family_gate` inspects.
+    """
+
+    return SimpleNamespace(get_closest_marker=lambda name: marks.get(name))
+
+
+def test_would_family_gate_false_when_unmarked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report no gate for an item without a family marker."""
+
+    monkeypatch.setattr(markers, "installed_family", lambda: AirflowFamily.V3)
+
+    assert markers.would_family_gate(_family_marked_item({})) is False
+
+
+def test_would_family_gate_false_when_family_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report no gate when the marked family is the installed one."""
+
+    monkeypatch.setattr(markers, "installed_family", lambda: AirflowFamily.V3)
+    item = _family_marked_item({"requires_airflow3": pytest.mark.requires_airflow3().mark})
+
+    assert markers.would_family_gate(item) is False
+
+
+def test_would_family_gate_true_when_family_mismatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a gate when the marked family differs from the installed one."""
+
+    monkeypatch.setattr(markers, "installed_family", lambda: AirflowFamily.V3)
+    item = _family_marked_item({"requires_airflow2": pytest.mark.requires_airflow2().mark})
+
+    assert markers.would_family_gate(item) is True
+
+
+def test_would_family_gate_true_when_no_airflow_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a gate for either family marker when no Airflow family is installed."""
+
+    monkeypatch.setattr(markers, "installed_family", lambda: None)
+    item = _family_marked_item({"requires_airflow2": pytest.mark.requires_airflow2().mark})
+
+    assert markers.would_family_gate(item) is True
