@@ -88,3 +88,22 @@ jobs:
         with:
           subject-path: "dist/*"
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+
+  tag-major:
+    name: Move major-version tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [pypi]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Move the major-version tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          major="${TAG#v}"
+          major="${major%%.*}"
+          git tag -f "v${major}" "$TAG"
+          git push origin "refs/tags/v${major}" --force
