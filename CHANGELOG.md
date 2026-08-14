@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Certified Airflow 3.3.1, which the `airflow3` extra now resolves fresh (the new
+  extra-resolving CI smoke leg caught the drift on its first run). 3.3.1 regenerated
+  the Task SDK comms models with every None-able field required-without-default, so the
+  DB-free runner now sends explicit `None` for the declared `DagRun` fields
+  (`end_date`, the new `partition_key`) and `FakeSupervisorComms` completes seeded
+  `ConnectionResult` payloads the same way, keyed by validation alias.
+
 ### Changed
 
 - Controller-to-worker `pytest-xdist` bootstrap handoff now has focused happy-path unit coverage
