@@ -173,18 +173,30 @@ def _install_fake_environment(
     monkeypatch: pytest.MonkeyPatch,
     version: str,
     modules: dict[str, SimpleNamespace],
+    meta_version: str | None = None,
+    meta_error: Exception | None = None,
 ) -> None:
     """Patch metadata and imports to expose one isolated fake Airflow installation.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch applying replacements.
-        version: str returned as installed package metadata.
+        version: str returned as installed `apache-airflow-core` package metadata.
         modules: dict[str, types.SimpleNamespace] containing fake Airflow modules.
+        meta_version: str | None returned as installed `apache-airflow` meta-distribution
+            metadata; None reports the meta-distribution as absent.
+        meta_error: Exception | None raised by the meta-distribution lookup instead of
+            returning or reporting absence; takes precedence over `meta_version`.
     """
 
     def fake_version(distribution_name: str) -> str:
-        """Return fake metadata for the expected distribution."""
+        """Return fake metadata for exactly the two known Airflow distributions."""
 
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            if meta_error is not None:
+                raise meta_error
+            if meta_version is None:
+                raise capability_module.metadata.PackageNotFoundError(distribution_name)
+            return meta_version
         assert distribution_name == AIRFLOW_DISTRIBUTION
         return version
 
@@ -395,7 +407,7 @@ def test_resolves_certified_release_capabilities(
     assert capability_module.resolve_capabilities() == expected
 
 
-@pytest.mark.parametrize("version", ["3.2.3", "3.3.1", "4.0.0"])
+@pytest.mark.parametrize("version", ["3.2.3", "3.3.2", "4.0.0"])
 def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
     """Name the installed and complete supported versions for valid but uncertified releases."""
 
@@ -428,23 +440,215 @@ def test_rejects_malformed_or_disallowed_version(
     assert isinstance(caught.value.__cause__, ValueError)
 
 
-def test_wraps_missing_package_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Retain metadata failure context while giving installation guidance."""
+def test_airflow_free_environment_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point an Airflow-free environment at the `airflow3` extra with failure context."""
 
     missing = capability_module.metadata.PackageNotFoundError(AIRFLOW_DISTRIBUTION)
 
     def missing_version(distribution_name: str) -> str:
-        """Raise the representative importlib metadata failure."""
+        """Raise the representative importlib metadata failure for every distribution."""
 
-        assert distribution_name == AIRFLOW_DISTRIBUTION
+        del distribution_name
         raise missing
 
     monkeypatch.setattr(capability_module.metadata, "version", missing_version)
 
+    with pytest.raises(AirflowCompatibilityError, match="No Airflow distribution") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert "pytest-airflow-in-a-box[airflow3]" in message
+    assert caught.value.__cause__ is missing
+
+
+def test_wraps_unexpected_metadata_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retain metadata failure context for non-PackageNotFoundError failures."""
+
+    unexpected = RuntimeError("metadata backend exploded")
+
+    def broken_version(distribution_name: str) -> str:
+        """Raise a non-PackageNotFoundError metadata failure."""
+
+        del distribution_name
+        raise unexpected
+
+    monkeypatch.setattr(capability_module.metadata, "version", broken_version)
+
     with pytest.raises(AirflowCompatibilityError, match="<not installed>") as caught:
         capability_module.resolve_capabilities()
 
+    assert caught.value.__cause__ is unexpected
+
+
+def test_airflow2_environment_points_at_the_tier_issue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tell an Airflow 2.x environment the tier is planned and name the 3.x fix."""
+
+    def fake_version(distribution_name: str) -> str:
+        """Expose only the 2.x monolith distribution."""
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            return "2.11.2"
+        raise capability_module.metadata.PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match=r"Airflow 2\.x is installed") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert "'2.11.2'" in message
+    assert "issues/25" in message
+    assert "pytest-airflow-in-a-box[airflow3]" in message
+    assert isinstance(caught.value.__cause__, capability_module.metadata.PackageNotFoundError)
+
+
+def test_meta_without_core_is_reported_broken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report a 3.x meta-distribution without the core as a broken installation."""
+
+    def fake_version(distribution_name: str) -> str:
+        """Expose only the 3.x meta-distribution."""
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            return "3.3.0"
+        raise capability_module.metadata.PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match="Broken Airflow installation") as caught:
+        capability_module.resolve_capabilities()
+
+    assert "'3.3.0'" in str(caught.value)
+    assert isinstance(caught.value.__cause__, capability_module.metadata.PackageNotFoundError)
+
+
+@pytest.mark.parametrize(
+    "meta_version",
+    ["2.11.2", "1!2.11.2", "0.1.dev0+g1234567", "unversioned"],
+)
+def test_corrupt_dual_family_environment_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, meta_version: str
+) -> None:
+    """Fail closed on any non-3.x or unparseable meta-distribution next to the core."""
+
+    _install_fake_environment(monkeypatch, "3.3.0", {}, meta_version=meta_version)
+
+    with pytest.raises(AirflowCompatibilityError, match="Corrupt Airflow installation") as caught:
+        capability_module.resolve_capabilities()
+
+    assert f"'{meta_version}'" in str(caught.value)
+
+
+def test_corruption_check_escape_hatch_bypasses_the_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a self-verified dual-metadata environment when the escape hatch is set.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating metadata and environment state.
+    """
+
+    modules = _fake_modules((3, 3, 0))
+    _install_fake_environment(monkeypatch, "3.3.0", modules, meta_version="0.1.dev0+g1234567")
+    monkeypatch.setenv(capability_module.SKIP_CORRUPTION_CHECK_ENVIRONMENT_VARIABLE, "1")
+
+    resolved = capability_module.resolve_capabilities()
+
+    assert resolved.release == (3, 3, 0)
+
+
+def test_airflow1_environment_is_named_without_the_tier_pointer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Name the actual pre-2.x major instead of claiming Airflow 2.x is installed.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating metadata state.
+    """
+
+    def fake_version(distribution_name: str) -> str:
+        """Expose only a legacy 1.x monolith distribution.
+
+        Parameters:
+            distribution_name: str naming the queried distribution.
+
+        Returns:
+            str containing the fake metadata version.
+
+        Raises:
+            importlib.metadata.PackageNotFoundError: The distribution is not the
+                legacy monolith.
+        """
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            return "1.10.15"
+        raise capability_module.metadata.PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match=r"Airflow 1\.x is installed") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert "'1.10.15'" in message
+    assert "issues/25" not in message
+
+
+def test_unreadable_meta_metadata_next_to_core_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat an unreadable meta-distribution next to the core as corruption."""
+
+    _install_fake_environment(
+        monkeypatch,
+        "3.3.0",
+        {},
+        meta_error=RuntimeError("metadata backend exploded"),
+    )
+
+    with pytest.raises(AirflowCompatibilityError, match="Corrupt Airflow installation") as caught:
+        capability_module.resolve_capabilities()
+
+    assert "RuntimeError: metadata backend exploded" in str(caught.value)
+
+
+def test_unreadable_meta_metadata_without_core_names_the_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Name the metadata read failure instead of claiming Airflow is absent."""
+
+    missing = capability_module.metadata.PackageNotFoundError(AIRFLOW_DISTRIBUTION)
+
+    def fake_version(distribution_name: str) -> str:
+        """Fail both distribution lookups in distinct, realistic ways."""
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            raise RuntimeError("metadata backend exploded")
+        raise missing
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+
+    with pytest.raises(AirflowCompatibilityError, match="Broken Airflow installation") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert "RuntimeError: metadata backend exploded" in message
+    assert "pytest-airflow-in-a-box[airflow3]" in message
     assert caught.value.__cause__ is missing
+
+
+def test_meta_alongside_core_is_the_normal_3x_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve normally when the 3.x meta-package accompanies the core."""
+
+    modules = _fake_modules((3, 3, 0))
+    _install_fake_environment(monkeypatch, "3.3.0", modules, meta_version="3.3.0")
+
+    resolved = capability_module.resolve_capabilities()
+
+    assert resolved.release == (3, 3, 0)
 
 
 def test_missing_symbol_is_named_and_failure_is_not_cached(
@@ -622,6 +826,8 @@ def test_unexpected_canonical_import_failure_is_wrapped(
     def fake_version(distribution_name: str) -> str:
         """Return certified metadata for the import failure test."""
 
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            raise capability_module.metadata.PackageNotFoundError(distribution_name)
         assert distribution_name == AIRFLOW_DISTRIBUTION
         return "3.1.8"
 
@@ -655,6 +861,8 @@ def test_unexpected_serialized_dag_import_failure_is_wrapped(
     def fake_version(distribution_name: str) -> str:
         """Return certified metadata for the serialization failure test."""
 
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            raise capability_module.metadata.PackageNotFoundError(distribution_name)
         assert distribution_name == AIRFLOW_DISTRIBUTION
         return "3.2.2"
 
@@ -705,6 +913,7 @@ def test_real_current_airflow_resolves(pytester: pytest.Pytester) -> None:
                 (3, 2, 1),
                 (3, 2, 2),
                 (3, 3, 0),
+                (3, 3, 1),
             }
             assert resolve_capabilities() is capabilities
         """

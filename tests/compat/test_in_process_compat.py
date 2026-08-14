@@ -27,6 +27,8 @@ from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box._compat.in_process import (
     FakeSupervisorComms,
+    _dag_run_payload_extras,
+    _fill_declared_nones,
     _task_runner_module,
     run_task_in_process,
 )
@@ -339,3 +341,59 @@ def test_fake_comms_accepts_active_asset_inlets_and_outlets() -> None:
     result = FakeSupervisorComms().send(ValidateInletsAndOutlets(ti_id=uuid7()))
 
     assert result.inactive_assets == []
+
+
+def test_dag_run_payload_extras_track_the_declared_model_fields() -> None:
+    """Send explicit None for exactly the newer generated fields the model declares.
+
+    3.3.1 promoted `end_date` and `partition_key` to required-without-default, while
+    releases before 3.3.0 lack `partition_key` entirely and the generated models forbid
+    extra fields -- both shapes are pinned here with fakes so every branch is reachable
+    on any single installed release.
+    """
+
+    newer: Any = type(
+        "NewerDagRun",
+        (),
+        {"model_fields": {"end_date": object(), "partition_key": object(), "run_id": object()}},
+    )
+    older: Any = type("OlderDagRun", (), {"model_fields": {"run_id": object()}})
+
+    assert _dag_run_payload_extras(newer) == {"end_date": None, "partition_key": None}
+    assert _dag_run_payload_extras(older) == {}
+
+
+def test_fill_declared_nones_completes_only_required_fields_by_alias() -> None:
+    """Complete required fields with None, keyed by alias, without touching the payload.
+
+    3.3.1 regenerated the comms models with None-able fields required-without-default
+    (and `schema_` aliased to `schema`); earlier releases keep defaults, so the
+    completion must no-op there. Both shapes are pinned with fakes so every branch is
+    reachable on any single installed release.
+    """
+
+    class _Field:
+        def __init__(self, required: bool, alias: str | None = None) -> None:
+            self.alias = alias
+            self._required = required
+
+        def is_required(self) -> bool:
+            return self._required
+
+    newer: Any = type(
+        "NewerResult",
+        (),
+        {
+            "model_fields": {
+                "conn_id": _Field(True),
+                "schema_": _Field(True, alias="schema"),
+                "port": _Field(True),
+                "note": _Field(False),
+            }
+        },
+    )
+    older: Any = type("OlderResult", (), {"model_fields": {"conn_id": _Field(False)}})
+
+    completed = _fill_declared_nones(newer, {"conn_id": "db", "port": 5432})
+    assert completed == {"conn_id": "db", "schema": None, "port": 5432}
+    assert _fill_declared_nones(older, {"conn_id": "db"}) == {"conn_id": "db"}

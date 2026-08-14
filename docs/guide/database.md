@@ -9,7 +9,7 @@ cannot reproduce the concurrency semantics a real deployment runs on (row-level 
 you need that fidelity:
 
 ```console
-uv add --dev "pytest-airflow-in-a-box[postgres]"
+uv add --dev "pytest-airflow-in-a-box[airflow3,postgres]"
 pytest --airflow-db-backend=postgres
 ```
 

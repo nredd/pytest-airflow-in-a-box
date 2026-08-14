@@ -6,12 +6,44 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Certified Airflow 3.3.1, which the `airflow3` extra now resolves fresh (the new
+  extra-resolving CI smoke leg caught the drift on its first run). 3.3.1 regenerated
+  the Task SDK comms models with every None-able field required-without-default, so the
+  DB-free runner now sends explicit `None` for the declared `DagRun` fields
+  (`end_date`, the new `partition_key`) and `FakeSupervisorComms` completes seeded
+  `ConnectionResult` payloads the same way, keyed by validation alias.
+
 ### Changed
 
 - Controller-to-worker `pytest-xdist` bootstrap handoff now has focused happy-path unit coverage
   in every leg of the full Airflow/Python compatibility matrix, complementing the live
   nested-worker scenarios added by [#45](https://github.com/nredd/pytest-airflow-in-a-box/issues/45)
   ([#102](https://github.com/nredd/pytest-airflow-in-a-box/issues/102)).
+- BREAKING: Airflow is no longer a base dependency. The Airflow 2.x monolith and the 3.x
+  core both install the `airflow` package, so the previous hard `apache-airflow-core>=3.1,<4`
+  pin would silently corrupt any Airflow 2.x environment the plugin was installed into --
+  the packaging prerequisite for the planned 2.x compatibility tier, superseding the 0.2.0
+  note that 2.x support would require a parallel implementation
+  ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)). Install the new
+  `airflow3` extra (`apache-airflow>=3.1,<4` plus the sqlite provider) for the previous
+  behavior, or keep pinning Airflow yourself. `sqlalchemy>=1.4.36,<3` and `packaging>=22`
+  are newly direct base dependencies (previously transitive via Airflow): the storage
+  layer imports `sqlalchemy` at plugin load and the capability probe parses versions
+  with `packaging`. An `airflow2` extra (`apache-airflow>=2.9,<3`, resolving only on
+  Python <= 3.12) ships ahead of the tier. Requesting both Airflow extras fails at
+  resolution for pip and uv alike because the version ranges are disjoint; this repo's
+  own `[tool.uv] conflicts` table additionally keeps the two extras lockable here (it is
+  not wheel metadata and does not travel to consumers).
+- The first test that needs the metadata database now distinguishes the possible Airflow
+  installation states with actionable single-line errors (`pytest.UsageError`, not an
+  `INTERNALERROR` traceback; under `pytest-xdist` the same message renders as per-test
+  setup errors instead of crashed workers): no Airflow at all, Airflow 2.x without the tier that
+  supports it, an `apache-airflow` meta-package without `apache-airflow-core`, and the
+  corrupt case of `apache-airflow<3` coexisting with `apache-airflow-core`. Runs without
+  Airflow-facing tests remain untouched, and `--airflow-doctor` renders the same
+  diagnosis ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)).
 
 ## [0.4.0] - 2026-08-12
 
