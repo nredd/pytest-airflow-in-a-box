@@ -24,6 +24,10 @@ All notable changes to this project will be documented in this file. The format 
   ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 - The bundled Dag corpus authors through a small dynamic resolver so the same files
   parse on both Airflow families ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
+- `--airflow-doctor` now reports the resolved `core.executor` and flags a 2.x SQLite run
+  whose configuration overrides the plugin's `SequentialExecutor` default with a
+  multi-threaded executor, which Airflow's `ready_to_reschedule` dependency rejects
+  ([#105](https://github.com/nredd/pytest-airflow-in-a-box/issues/105)).
 - Certified Airflow 3.3.1, which the `airflow3` extra now resolves fresh (the new
   extra-resolving CI smoke leg caught the drift on its first run). 3.3.1 regenerated
   the Task SDK comms models with every None-able field required-without-default, so the
@@ -74,12 +78,14 @@ All notable changes to this project will be documented in this file. The format 
   already reaches `provider_package` (`sys.path` insertion plus `import_module`) since
   DagBag imports every corpus file as a standalone module
   ([#86](https://github.com/nredd/pytest-airflow-in-a-box/issues/86)).
-- Seven of the ten 3.x-only `tests/enduser/` contract modules now author dynamically
-  through the same `_resolve()` shape as the Dag corpus and collect on the 2.x family too,
-  gating only the tests that touch a genuinely 3.x-only surface (the Task SDK's `run_task`
-  runner) with `requires_airflow3` instead of the whole module; `test_assets.py`,
-  `test_rest_api_compat.py`, and `test_structlog_events.py` stay `collect_ignore`'d, since
-  Asset ORM persistence, the REST API server, and structlog capture have no 2.x equivalent
+- Eight of the eleven 3.x-only `tests/enduser/` contract modules -- including the
+  whole-DagRun `dag_maker.run()` contract in `test_dag_run_result.py` -- now author
+  dynamically through a shared `tests/enduser/_authoring.py` resolver and collect on the
+  2.x family too, gating only the tests that touch a genuinely 3.x-only surface (the
+  Task SDK's `run_task` runner) with `requires_airflow3` instead of the whole module;
+  `test_assets.py`, `test_rest_api_compat.py`, and `test_structlog_events.py` stay
+  `collect_ignore`'d, since Asset ORM persistence, the REST API server, and structlog
+  capture have no 2.x equivalent
   ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
 
 ## [0.4.0] - 2026-08-12

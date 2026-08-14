@@ -2,10 +2,14 @@
 
 References:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_cmdline_main
+    https://github.com/apache/airflow/blob/2.11.2/airflow/executors/executor_loader.py
+    https://github.com/apache/airflow/blob/2.11.2/airflow/config_templates/unit_tests.cfg
+    https://airflow.apache.org/docs/apache-airflow/2.10.0/core-concepts/executor/index.html#using-multiple-executors-concurrently
 """
 
 from __future__ import annotations
 
+import os
 import platform
 import urllib.parse
 from dataclasses import fields
@@ -19,9 +23,18 @@ from pytest_airflow_in_a_box._compat import (
     AirflowCompatibilityError,
     resolve_capabilities,
 )
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
+from pytest_airflow_in_a_box.storage.provision import DbBackend
 
 REPORT_TITLE = "# pytest-airflow-in-a-box diagnostics"
+# Airflow 2.x gates SQLite compatibility on `Executor.is_single_threaded`, not a name
+# list; `SequentialExecutor` and `DebugExecutor` are the two core executors setting it
+# True (`ExecutorLoader.validate_database_executor_compatibility`).
+_SINGLE_THREADED_EXECUTORS = frozenset({"SequentialExecutor", "DebugExecutor"})
+# Airflow's own escape hatch for this exact check; set by a consumer who has already
+# decided SQLite + their executor is fine for their test.
+_SKIP_CHECK_ENVIRONMENT_VARIABLE = "_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK"
 
 
 def _storage_section(state: BootstrapState) -> list[str]:
@@ -59,6 +72,78 @@ def _database_section(state: BootstrapState) -> list[str]:
         f"- Backend tier: `{state.db_backend}`",
         f"- Database URL scheme: `{scheme}`",
     ]
+
+
+def _resolve_executor() -> str:
+    """Resolve Airflow's configured `core.executor` value after bootstrap.
+
+    Returns:
+        str containing the resolved executor name, import path, or multi-executor list.
+
+    Raises:
+        Exception: Airflow is not importable, or its configuration cannot be read. Left
+            unnarrowed because the caller degrades on any failure here rather than
+            distinguishing them.
+    """
+
+    # Deferred to keep this module importable before Airflow bootstrap completes.
+    from airflow.configuration import conf
+
+    return conf.get("core", "executor")
+
+
+def _executor_section(state: BootstrapState) -> list[str]:
+    """Render the resolved `core.executor` and flag the 2.x SQLite executor conflict.
+
+    Bootstrap env-pins `SequentialExecutor` on the 2.x family (see
+    `bootstrap._environment()`), so a multi-threaded executor resolving here means
+    consumer configuration overrode the pin -- and Airflow 2.x's `ready_to_reschedule`
+    sensor dependency rejects that combination with SQLite for poke- and
+    reschedule-mode sensors alike, with no indication of the actual cause. Degrades to
+    a resolution-failure bullet, never raises, matching every other section in this
+    module.
+
+    Parameters:
+        state: BootstrapState containing the resolved database backend and Airflow family.
+
+    Returns:
+        list[str] containing Markdown bullet lines.
+    """
+
+    try:
+        # Broad on purpose: an unresolvable executor (bad import, a malformed override) is
+        # exactly as reportable as a resolved one, and this section must never abort the
+        # rest of the report over it.
+        executor = _resolve_executor()
+    except Exception as error:
+        return [f"- `core.executor`: could not resolve: {error}"]
+
+    lines = [f"- `core.executor`: `{executor}`"]
+    # `core.executor` accepts a comma-separated multi-executor list since Airflow 2.10
+    # (AIP-61); the first entry is the default `ready_to_reschedule` actually loads, and
+    # may be a bare name, an `alias:module.Class` or `alias:CoreName` pair, or a bare
+    # import path -- strip any alias before reducing to the class name.
+    primary = executor.split(",")[0].strip()
+    unaliased = primary.rpartition(":")[2]
+    executor_name = unaliased.rpartition(".")[2] or unaliased
+    if not executor_name:
+        return lines
+
+    is_sqlite = state.db_backend == DbBackend.SQLITE
+    is_v2 = state.family == AirflowFamily.V2.value
+    skip_check = os.environ.get(_SKIP_CHECK_ENVIRONMENT_VARIABLE) == "1"
+    if is_v2 and is_sqlite and not skip_check and executor_name not in _SINGLE_THREADED_EXECUTORS:
+        lines.append(
+            f"- INCOMPATIBLE: `{executor_name}` overrides this plugin's 2.x default of "
+            f"`SequentialExecutor`, and Airflow 2.x's `ready_to_reschedule` sensor "
+            f"dependency rejects it with SQLite for poke- and reschedule-mode sensors "
+            f"alike. Pin `core.executor` back to `SequentialExecutor` or `DebugExecutor` "
+            f"with `airflow_config`, switch to `--airflow-db-backend=postgres`, or set "
+            f"`{_SKIP_CHECK_ENVIRONMENT_VARIABLE}=1` (Airflow's own escape hatch, exact "
+            f"string '1') if the executor is single-threaded and merely named "
+            f"unconventionally."
+        )
+    return lines
 
 
 def _format_capability_value(value: object) -> str:
@@ -152,6 +237,7 @@ def render_doctor_report(config: pytest.Config) -> str:
         ("Storage", _storage_section(state)),
         ("AIRFLOW_HOME and database", _database_section(state)),
         ("Versions and capabilities", _version_section()),
+        ("Executor", _executor_section(state)),
         ("API server", _api_server_section()),
     )
     lines = [REPORT_TITLE, ""]
