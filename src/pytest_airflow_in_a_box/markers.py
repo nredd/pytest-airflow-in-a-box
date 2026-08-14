@@ -197,6 +197,31 @@ def apply_family_gate(item: pytest.Item) -> None:
             )
 
 
+def would_family_gate(item: pytest.Item) -> bool:
+    """Report whether a family marker would skip one item in this environment.
+
+    A semantic recomputation of `apply_family_gate`'s condition, not a parse of its
+    skip reason: reused by the migration outcome diff (`--airflow-record`) to tag a
+    recorded outcome `gated` so an environment-caused skip on a family-marked test is
+    never mistaken for a family gate.
+
+    Parameters:
+        item: pytest.Item possibly carrying a `requires_airflow2`/`requires_airflow3`
+            marker.
+
+    Returns:
+        bool indicating whether some carried family marker's required family differs
+        from the installed family.
+    """
+
+    for name, required in FAMILY_MARKERS.items():
+        if item.get_closest_marker(name) is None:
+            continue
+        if installed_family() is not required:
+            return True
+    return False
+
+
 __all__ = (
     "MarkedNode",
     "apply_environment_gate",
@@ -204,4 +229,5 @@ __all__ = (
     "environment_sentinels",
     "read_bool_marker",
     "register_markers",
+    "would_family_gate",
 )

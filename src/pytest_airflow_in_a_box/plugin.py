@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+from pytest_airflow_in_a_box import baseline, record
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
@@ -62,6 +64,9 @@ from pytest_airflow_in_a_box.markers import (
 from pytest_airflow_in_a_box.reporting import configure_reporting
 from pytest_airflow_in_a_box.results import assertrepr_compare
 from pytest_airflow_in_a_box.smoke import collect_smoke_items
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 __all__ = (
     "airflow_connections",
@@ -233,6 +238,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         dest="airflow_doctor",
         help="Print a one-shot diagnostics report and exit without running tests.",
     )
+    record.register_options(parser)
+    baseline.register_options(parser)
     register_ini_defaults(parser)
 
 
@@ -290,6 +297,7 @@ def pytest_configure(config: pytest.Config) -> None:
     configure_reporting(config)
     apply_option_defaults(config)
     apply_filterwarnings(config)
+    record.configure(config)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -299,7 +307,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         config: pytest.Config for the completed test session.
     """
 
-    del config
+    record.unconfigure(config)
     _uninstall_dict_config_interceptor()
 
 
@@ -340,7 +348,11 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Drop duplicate Dag-file items and append the bundled smoke catalog.
+    """Drop duplicate Dag-file items, append the smoke catalog, then apply the baseline.
+
+    `baseline.apply_selection_and_xfail` runs last, at effectively normal priority
+    relative to the deduplication and smoke-item injection above it: it must see the
+    final collected item list, not an intermediate one.
 
     Parameters:
         session: pytest.Session that owns the synthetic smoke collector.
@@ -350,6 +362,7 @@ def pytest_collection_modifyitems(
 
     prune_duplicate_items(config, items)
     collect_smoke_items(session, config, items)
+    baseline.apply_selection_and_xfail(session, config, items)
 
 
 def _requires_database(item: pytest.Item) -> bool:
@@ -479,6 +492,64 @@ def pytest_assertrepr_compare(
 
     del config
     return assertrepr_compare(op, left, right)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Stash the migration-diff family-gate flag onto every phase report.
+
+    Parameters:
+        item: pytest.Item under test.
+        call: pytest.CallInfo describing the executed phase.
+
+    Yields:
+        None, delegating report construction to inner hookimpls.
+
+    Returns:
+        pytest.TestReport carrying the stashed `gated` user property.
+    """
+
+    del call
+    report = yield
+    record.stash_gated_property(item, report)
+    return report
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Accumulate one migration-diff outcome report, local or forwarded from xdist.
+
+    Parameters:
+        report: pytest.TestReport for one setup/call/teardown phase.
+    """
+
+    record.handle_logreport(report)
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter, exitstatus: int, config: pytest.Config
+) -> None:
+    """Render the `--airflow-baseline` migration diff summary.
+
+    Parameters:
+        terminalreporter: pytest.TerminalReporter receiving the rendered summary.
+        exitstatus: int containing pytest's raw session exit status.
+        config: pytest.Config containing plugin options and accumulated outcomes.
+    """
+
+    baseline.render_terminal_summary(terminalreporter, exitstatus, config)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Write the `--airflow-record` migration outcome artifact.
+
+    Parameters:
+        session: pytest.Session that finished collecting and running tests.
+        exitstatus: int containing pytest's raw session exit status.
+    """
+
+    record.write_recorded_artifact(session, exitstatus)
 
 
 @pytest.hookimpl(optionalhook=True)

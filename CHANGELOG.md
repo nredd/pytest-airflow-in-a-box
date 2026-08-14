@@ -8,6 +8,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- Migration outcome diff: `--airflow-record=PATH` writes a versioned JSON artifact of
+  per-test outcomes at session finish, `--airflow-baseline=PATH` compares live outcomes
+  against a prior recording (seven categories: still-passing, broken-on-both,
+  regression, fixed, gated, new, missing), `--airflow-baseline-select` filters
+  collection by baseline outcome, and `--airflow-baseline-xfail=PATH` non-strict
+  xfail-marks known regressions during the migration
+  ([#42](https://github.com/nredd/pytest-airflow-in-a-box/issues/42)).
 - The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
   certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
   ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
