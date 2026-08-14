@@ -118,9 +118,8 @@ class FakeSupervisorComms:
                     },
                 )
             fields = self.connections[msg.conn_id]
-            return ConnectionResult.model_validate(
-                {"conn_type": "generic", **fields, "conn_id": msg.conn_id}
-            )
+            payload = {"conn_type": "generic", **fields, "conn_id": msg.conn_id}
+            return ConnectionResult.model_validate(_fill_declared_nones(ConnectionResult, payload))
         if name == "ValidateInletsAndOutlets":
             return InactiveAssetsResult(inactive_assets=[])
         return None
@@ -159,6 +158,50 @@ def _task_runner_module() -> Any:
     from airflow.sdk.execution_time import task_runner
 
     return task_runner
+
+
+# Generated-model fields the runner must send as explicit None where declared: 3.3.1
+# promoted `end_date` and `partition_key` to required-without-default, while releases
+# before 3.3.0 lack `partition_key` entirely and the models forbid extra fields.
+_OPTIONAL_DAG_RUN_FIELDS = ("end_date", "partition_key")
+
+
+def _dag_run_payload_extras(dag_run_model: Any) -> dict[str, None]:
+    """Build the None-valued keyword arguments the generated `DagRun` model declares.
+
+    Parameters:
+        dag_run_model: Any containing the release's generated `DagRun` Pydantic model.
+
+    Returns:
+        dict[str, None] keyed by each declared `_OPTIONAL_DAG_RUN_FIELDS` name.
+    """
+
+    return {name: None for name in _OPTIONAL_DAG_RUN_FIELDS if name in dag_run_model.model_fields}
+
+
+def _fill_declared_nones(model: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Complete a payload with explicit None for required fields the caller omitted.
+
+    3.3.1 regenerated the comms models with every field required-without-default
+    (None-able fields included), so a seeded subset like `{'conn_type': ..., 'host':
+    ...}` no longer validates on its own. A genuinely non-null required field that is
+    missing still fails validation loudly -- None is not a valid value for it.
+
+    Parameters:
+        model: Any containing the release's generated Pydantic model.
+        payload: dict[str, Any] containing the caller-provided field values.
+
+    Returns:
+        dict[str, Any] containing `payload` plus None for each absent required field,
+        keyed by validation alias where one is declared (the generated models alias
+        e.g. `schema_` to `schema`).
+    """
+
+    return {
+        field.alias or name: None
+        for name, field in model.model_fields.items()
+        if field.is_required()
+    } | payload
 
 
 def run_task_in_process(
@@ -228,6 +271,7 @@ def run_task_in_process(
     task_runner = _task_runner_module()
     now = datetime.now(timezone.utc)
     run_date = logical_date if logical_date is not None else now
+    dag_run_extras = _dag_run_payload_extras(DagRunDataModel)
     task_instance = TaskInstanceDataModel(
         id=uuid7(),
         task_id=task_id,
@@ -250,6 +294,7 @@ def run_task_in_process(
             state="running",
             conf=dict(params) if params else None,
             consumed_asset_events=[],
+            **dag_run_extras,
         ),
         max_tries=int(task.retries or 0),
         should_retry=try_number <= int(task.retries or 0),
