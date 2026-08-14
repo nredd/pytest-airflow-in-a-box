@@ -15,8 +15,13 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AIRFLOW_DISTRIBUTION,
     AirflowCapabilities,
     AirflowCompatibilityError,
+    AirflowFamily,
+    ApiSurface,
     DagBagLocation,
+    DagRunInterface,
+    ParamsLocation,
     TaskInstanceRunner,
+    TimezoneLocation,
 )
 
 
@@ -106,6 +111,8 @@ def _base_modules() -> dict[str, SimpleNamespace]:
     generic_class = type("GenericAirflowSymbol", (), {})
     return {
         "airflow.sdk": SimpleNamespace(DAG=generic_class),
+        "airflow.sdk.definitions.param": SimpleNamespace(ParamsDict=generic_class),
+        "airflow.sdk.timezone": SimpleNamespace(utcnow=_callable_symbol),
         "airflow.utils.db": SimpleNamespace(initdb=_callable_symbol),
         "airflow.utils.session": SimpleNamespace(create_session=_callable_symbol),
         "airflow.models.dagrun": SimpleNamespace(DagRun=generic_class),
@@ -128,6 +135,39 @@ def _base_modules() -> dict[str, SimpleNamespace]:
             ToSupervisor=object(),
         ),
         "airflow.sdk.execution_time.xcom": SimpleNamespace(XCom=generic_class),
+    }
+
+
+def _fake_v2_modules() -> dict[str, SimpleNamespace]:
+    """Build the exact fake private interface for a certified Airflow 2.x release.
+
+    Returns:
+        dict[str, types.SimpleNamespace] keyed by private module path. The 2.x surface
+        is uniform across all certified releases, so no release parameter exists.
+    """
+
+    generic_class = type("GenericAirflowSymbol", (), {})
+    return {
+        "airflow.utils.db": SimpleNamespace(initdb=_callable_symbol),
+        "airflow.utils.session": SimpleNamespace(create_session=_callable_symbol),
+        "airflow.models.dagrun": SimpleNamespace(DagRun=generic_class),
+        "airflow.models.serialized_dag": SimpleNamespace(SerializedDagModel=generic_class),
+        "airflow.models.dag": SimpleNamespace(DagModel=generic_class, DAG=generic_class),
+        "airflow.models.dagbag": SimpleNamespace(DagBag=_OldDagBag),
+        "airflow.models.taskinstance": SimpleNamespace(TaskInstance=_LegacyTaskInstance),
+        "airflow.serialization.serialized_objects": SimpleNamespace(SerializedDAG=generic_class),
+        "airflow.models.param": SimpleNamespace(ParamsDict=generic_class),
+        "airflow.exceptions": SimpleNamespace(
+            ParamValidationError=generic_class,
+            RemovedInAirflow3Warning=generic_class,
+            AirflowProviderDeprecationWarning=generic_class,
+        ),
+        "airflow.utils.timezone": SimpleNamespace(
+            utcnow=_callable_symbol,
+            coerce_datetime=_callable_symbol,
+            convert_to_utc=_callable_symbol,
+        ),
+        "airflow.models.dataset": SimpleNamespace(DatasetModel=generic_class),
     }
 
 
@@ -171,22 +211,30 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
 
 def _install_fake_environment(
     monkeypatch: pytest.MonkeyPatch,
-    version: str,
+    version: str | None,
     modules: dict[str, SimpleNamespace],
     meta_version: str | None = None,
     meta_error: Exception | None = None,
+    python_version: tuple[int, int] = (3, 12),
 ) -> None:
     """Patch metadata and imports to expose one isolated fake Airflow installation.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch applying replacements.
-        version: str returned as installed `apache-airflow-core` package metadata.
+        version: str | None returned as installed `apache-airflow-core` package
+            metadata; None reports the core distribution as absent (a 2.x or
+            Airflow-free environment).
         modules: dict[str, types.SimpleNamespace] containing fake Airflow modules.
         meta_version: str | None returned as installed `apache-airflow` meta-distribution
             metadata; None reports the meta-distribution as absent.
         meta_error: Exception | None raised by the meta-distribution lookup instead of
             returning or reporting absence; takes precedence over `meta_version`.
+        python_version: tuple[int, int] reported as the running interpreter -- part of
+            the faked environment because the real host may be 3.13/3.14, where the
+            ragged-matrix guard would otherwise fire inside every fake 2.x scenario.
     """
+
+    monkeypatch.setattr(capability_module, "_running_python", lambda: python_version)
 
     def fake_version(distribution_name: str) -> str:
         """Return fake metadata for exactly the two known Airflow distributions."""
@@ -198,6 +246,8 @@ def _install_fake_environment(
                 raise capability_module.metadata.PackageNotFoundError(distribution_name)
             return meta_version
         assert distribution_name == AIRFLOW_DISTRIBUTION
+        if version is None:
+            raise capability_module.metadata.PackageNotFoundError(distribution_name)
         return version
 
     def fake_import_module(name: str, package: str | None = None) -> object:
@@ -247,6 +297,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -260,6 +318,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -273,6 +339,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -286,6 +360,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -299,6 +381,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -312,6 +402,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -325,6 +423,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -338,6 +444,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=False,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -351,6 +465,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=True,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -364,6 +486,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=True,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -377,6 +507,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=False,
                 startup_details_supports_sentry=True,
                 runtime_task_instance_supports_queue=False,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
         (
@@ -390,6 +528,14 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 refresh_from_task_supports_dag_run=True,
                 startup_details_supports_sentry=True,
                 runtime_task_instance_supports_queue=True,
+                family=AirflowFamily.V3,
+                has_task_sdk=True,
+                uses_structlog=True,
+                has_dag_versioning=True,
+                dagrun_interface=DagRunInterface.LOGICAL_DATE,
+                api_surface=ApiSurface.API_SERVER,
+                params_location=ParamsLocation.SDK,
+                timezone_location=TimezoneLocation.SDK,
             ),
         ),
     ],
@@ -480,28 +626,158 @@ def test_wraps_unexpected_metadata_failure(monkeypatch: pytest.MonkeyPatch) -> N
     assert caught.value.__cause__ is unexpected
 
 
-def test_airflow2_environment_points_at_the_tier_issue(
+@pytest.mark.parametrize(
+    ("meta_version", "release"),
+    [("2.9.3", (2, 9, 3)), ("2.10.5", (2, 10, 5)), ("2.11.2", (2, 11, 2))],
+)
+def test_resolves_certified_v2_release_capabilities(
+    monkeypatch: pytest.MonkeyPatch, meta_version: str, release: tuple[int, int, int]
+) -> None:
+    """Resolve the full certified 2.x contract from a monolith-only environment."""
+
+    _install_fake_environment(monkeypatch, None, _fake_v2_modules(), meta_version=meta_version)
+
+    resolved = capability_module.resolve_capabilities()
+
+    assert resolved == AirflowCapabilities(
+        release=release,
+        family=AirflowFamily.V2,
+        dag_bag_location=DagBagLocation.MODELS,
+        dag_bag_supports_include_examples=True,
+        task_instance_runner=TaskInstanceRunner.LEGACY_RUN,
+        refresh_from_task_supports_dag_run=False,
+        startup_details_supports_sentry=None,
+        runtime_task_instance_supports_queue=None,
+        has_task_sdk=False,
+        uses_structlog=False,
+        has_dag_versioning=False,
+        dagrun_interface=DagRunInterface.EXECUTION_DATE,
+        api_surface=ApiSurface.WEBSERVER,
+        params_location=ParamsLocation.MODELS,
+        timezone_location=TimezoneLocation.UTILS,
+    )
+
+
+@pytest.mark.parametrize("meta_version", ["2.8.1", "2.10.4", "2.11.3"])
+def test_rejects_uncertified_v2_release(
+    monkeypatch: pytest.MonkeyPatch, meta_version: str
+) -> None:
+    """Name both families' supported versions for valid but uncertified 2.x releases."""
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version=meta_version)
+
+    with pytest.raises(AirflowCompatibilityError) as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert f"installed version '{meta_version}'" in message
+    assert "2.9.3, 2.10.5, 2.11.2" in message
+
+
+@pytest.mark.parametrize(
+    ("meta_version", "match"),
+    [
+        ("2.11", "parsing installed version"),
+        ("2.x.1", "Broken Airflow installation"),
+    ],
+)
+def test_v2_unparseable_certified_version_is_named(
+    monkeypatch: pytest.MonkeyPatch, meta_version: str, match: str
+) -> None:
+    """Reject 2.x versions outside the strict release pattern with named reasons.
+
+    A PEP 440 version missing the strict `x.y.z` shape fails the release parse; a
+    version PEP 440 cannot read at all classifies as a broken installation.
+    """
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version=meta_version)
+
+    with pytest.raises(AirflowCompatibilityError, match=match):
+        capability_module.resolve_capabilities()
+
+
+def test_installed_family_classifies_v3(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Classify a core install as the 3.x family."""
+
+    _install_fake_environment(monkeypatch, "3.3.0", {})
+
+    assert capability_module.installed_family() is AirflowFamily.V3
+
+
+def test_installed_family_classifies_v2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Classify a monolith-only install as the 2.x family."""
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version="2.11.2")
+
+    assert capability_module.installed_family() is AirflowFamily.V2
+
+
+def test_installed_family_reports_none_without_airflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tell an Airflow 2.x environment the tier is planned and name the 3.x fix."""
+    """Report no family for an Airflow-free environment."""
 
-    def fake_version(distribution_name: str) -> str:
-        """Expose only the 2.x monolith distribution."""
+    _install_fake_environment(monkeypatch, None, {})
 
-        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
-            return "2.11.2"
-        raise capability_module.metadata.PackageNotFoundError(distribution_name)
+    assert capability_module.installed_family() is None
 
-    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
 
-    with pytest.raises(AirflowCompatibilityError, match=r"Airflow 2\.x is installed") as caught:
+def test_installed_family_survives_metadata_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Report no family instead of raising when the core metadata read explodes."""
+
+    def broken_version(distribution_name: str) -> str:
+        """Fail every metadata lookup with a non-PackageNotFoundError error."""
+
+        del distribution_name
+        raise RuntimeError("metadata backend exploded")
+
+    monkeypatch.setattr(capability_module.metadata, "version", broken_version)
+
+    with caplog.at_level("WARNING", logger=capability_module.LOGGER.name):
+        assert capability_module.installed_family() is None
+
+    assert "metadata backend exploded" in caplog.text
+
+
+def test_installed_family_warns_on_unreadable_meta_metadata(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Warn, not raise, when only the meta-distribution is present but unreadable."""
+
+    _install_fake_environment(
+        monkeypatch, None, {}, meta_error=RuntimeError("half-clobbered dist-info")
+    )
+
+    with caplog.at_level("WARNING", logger=capability_module.LOGGER.name):
+        assert capability_module.installed_family() is None
+
+    assert "half-clobbered dist-info" in caplog.text
+
+
+def test_running_python_reports_the_interpreter() -> None:
+    """Report the live interpreter's major and minor version."""
+
+    assert capability_module._running_python() == sys.version_info[:2]
+
+
+@pytest.mark.parametrize("python_version", [(3, 13), (3, 14), (4, 0)])
+def test_v2_python_cap_is_enforced(
+    monkeypatch: pytest.MonkeyPatch, python_version: tuple[int, int]
+) -> None:
+    """Reject a certified 2.x release on a Python the family never supported."""
+
+    _install_fake_environment(
+        monkeypatch, None, {}, meta_version="2.11.2", python_version=python_version
+    )
+
+    with pytest.raises(AirflowCompatibilityError, match="does not support Python") as caught:
         capability_module.resolve_capabilities()
 
     message = str(caught.value)
     assert "'2.11.2'" in message
-    assert "issues/25" in message
-    assert "pytest-airflow-in-a-box[airflow3]" in message
-    assert isinstance(caught.value.__cause__, capability_module.metadata.PackageNotFoundError)
+    assert "3.10-3.12" in message
 
 
 def test_meta_without_core_is_reported_broken(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -558,10 +834,10 @@ def test_corruption_check_escape_hatch_bypasses_the_rejection(
     assert resolved.release == (3, 3, 0)
 
 
-def test_airflow1_environment_is_named_without_the_tier_pointer(
+def test_airflow1_environment_fails_certification_naming_supported_versions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Name the actual pre-2.x major instead of claiming Airflow 2.x is installed.
+    """Reject a legacy 1.x monolith through certification, never as `Airflow 2.x`.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch isolating metadata state.
@@ -587,12 +863,13 @@ def test_airflow1_environment_is_named_without_the_tier_pointer(
 
     monkeypatch.setattr(capability_module.metadata, "version", fake_version)
 
-    with pytest.raises(AirflowCompatibilityError, match=r"Airflow 1\.x is installed") as caught:
+    with pytest.raises(AirflowCompatibilityError, match="base release is not certified") as caught:
         capability_module.resolve_capabilities()
 
     message = str(caught.value)
     assert "'1.10.15'" in message
-    assert "issues/25" not in message
+    assert "Airflow 2.x" not in message
+    assert "2.9.3" in message
 
 
 def test_unreadable_meta_metadata_next_to_core_fails_closed(

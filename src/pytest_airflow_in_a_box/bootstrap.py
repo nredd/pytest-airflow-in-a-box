@@ -20,6 +20,7 @@ from typing import Protocol, runtime_checkable
 
 import pytest
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 from pytest_airflow_in_a_box.airflow_cfg import (
     SIMPLE_AUTH_MANAGER,
     sqlite_url,
@@ -28,7 +29,7 @@ from pytest_airflow_in_a_box.airflow_cfg import (
 from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
-STATE_VERSION = 3
+STATE_VERSION = 4
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
 WORKER_INPUT_KEY = "pytest_airflow_in_a_box_bootstrap_state"
 XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
@@ -59,6 +60,8 @@ class BootstrapState:
         network_storage: bool indicating network filesystem semantics.
         sql_alchemy_conn: str containing the metadata database SQLAlchemy URL.
         db_backend: str naming the selected metadata database backend.
+        family: str naming the Airflow distribution family (`AirflowFamily` value); on
+            2.x the `jwt_secret` doubles as the webserver secret key.
     """
 
     version: int
@@ -75,6 +78,7 @@ class BootstrapState:
     network_storage: bool
     sql_alchemy_conn: str
     db_backend: str
+    family: str
 
     def to_payload(self) -> StatePayload:
         """Serialize state to JSON-compatible primitives.
@@ -98,6 +102,7 @@ class BootstrapState:
             "network_storage": self.network_storage,
             "sql_alchemy_conn": self.sql_alchemy_conn,
             "db_backend": self.db_backend,
+            "family": self.family,
         }
 
 
@@ -223,6 +228,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "network_storage",
         "sql_alchemy_conn",
         "db_backend",
+        "family",
     }
     if set(payload) != expected_keys:
         raise ValueError("Bootstrap state has missing or unexpected fields")
@@ -256,6 +262,14 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
     ):
         raise ValueError("SQLite bootstrap state URL disagrees with the database path")
 
+    family_value = _require_string(payload, "family")
+    try:
+        AirflowFamily(family_value)
+    except ValueError as error:
+        raise ValueError(
+            f"Bootstrap state field `family` must be a supported family: '{family_value}'"
+        ) from error
+
     state = BootstrapState(
         version=version,
         owner_pid=_require_int(payload, "owner_pid"),
@@ -271,6 +285,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         network_storage=_require_bool(payload, "network_storage"),
         sql_alchemy_conn=sql_alchemy_conn,
         db_backend=str(backend),
+        family=family_value,
     )
     if validate_files:
         local_settings_path = state.root / "config" / "airflow_local_settings.py"
@@ -330,6 +345,11 @@ def generate_fernet_key() -> str:
 def _environment(state: BootstrapState) -> dict[str, str]:
     """Build the minimum pre-import Airflow environment.
 
+    Every setting the plugin owns on 2.x MUST live here, not only in the written
+    `airflow.cfg`: 2.x's `unit_test_mode` short-circuits `initialize_config()` to its
+    internal `unit_tests.cfg` template and never reads `AIRFLOW_CONFIG`, so environment
+    variables are the only channel that outranks the overlay.
+
     Parameters:
         state: BootstrapState containing run paths and secrets.
 
@@ -343,14 +363,26 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         "AIRFLOW__CORE__DAGS_FOLDER": str(state.dags_folder),
         "AIRFLOW__CORE__UNIT_TEST_MODE": "True",
         "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
-        "AIRFLOW__CORE__AUTH_MANAGER": SIMPLE_AUTH_MANAGER,
-        "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS": "admin:admin",
-        "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": str(state.password_file),
         SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE: state.sql_alchemy_conn,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER": str(state.logs_folder),
-        "AIRFLOW__API_AUTH__JWT_SECRET": state.jwt_secret,
         "AIRFLOW__CORE__FERNET_KEY": state.fernet_key,
     }
+    if state.family == AirflowFamily.V2.value:
+        variables["AIRFLOW__WEBSERVER__SECRET_KEY"] = state.jwt_secret
+        # 2.x's `unit_tests.cfg` overlay hard-codes `executor = LocalExecutor`, which the
+        # `ready_to_reschedule` dependency rejects against SQLite for poke- and
+        # reschedule-mode sensors alike. `SequentialExecutor` is single-threaded, valid
+        # for every backend, and matches the storage ladder's SQLite-by-default posture.
+        # An ambient `AIRFLOW__CORE__EXECUTOR` is deliberate consumer configuration and
+        # wins over the pin (`--airflow-doctor` flags an incompatible choice);
+        # `airflow_config` overrides win over both for a single test.
+        if "AIRFLOW__CORE__EXECUTOR" not in os.environ:
+            variables["AIRFLOW__CORE__EXECUTOR"] = "SequentialExecutor"
+    else:
+        variables["AIRFLOW__CORE__AUTH_MANAGER"] = SIMPLE_AUTH_MANAGER
+        variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] = "admin:admin"
+        variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE"] = str(state.password_file)
+        variables["AIRFLOW__API_AUTH__JWT_SECRET"] = state.jwt_secret
     if state.db_backend == DbBackend.POSTGRES:
         variables[SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] = "False"
     return variables
@@ -365,8 +397,12 @@ def _install_environment(state: BootstrapState) -> None:
 
     variables = _environment(state)
     os.environ.update(variables)
-    if state.db_backend == DbBackend.SQLITE:
-        os.environ.pop(SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE, None)
+    # Own the complete family-independent surface: any owned name this state does not
+    # set (the other family's auth variables, the SQLite-only pool flag) must not leak
+    # in from the ambient shell environment.
+    for name in _environment_names():
+        if name not in variables and name != STATE_ENVIRONMENT_VARIABLE:
+            os.environ.pop(name, None)
     os.environ[STATE_ENVIRONMENT_VARIABLE] = json.dumps(
         state.to_payload(), sort_keys=True, separators=(",", ":")
     )
@@ -543,6 +579,10 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         sql_alchemy_conn = provisioner.start(
             database_path=database_path, database_name=database_name
         )
+        # Best-effort classification on purpose: bootstrap must never import Airflow,
+        # and `resolve_capabilities()` remains the authority that rejects corrupt or
+        # Airflow-free environments once a test actually needs Airflow.
+        family = installed_family() or AirflowFamily.V3
         state = BootstrapState(
             version=STATE_VERSION,
             owner_pid=os.getpid(),
@@ -558,6 +598,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             network_storage=location.network,
             sql_alchemy_conn=sql_alchemy_conn,
             db_backend=str(backend),
+            family=family.value,
         )
         write_airflow_config(
             config_path,
@@ -567,6 +608,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             password_file=password_file,
             jwt_secret=state.jwt_secret,
             fernet_key=state.fernet_key,
+            family=family,
         )
     except (OSError, ValueError) as error:
         cleanup()
@@ -579,6 +621,10 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
 
 def _environment_names() -> tuple[str, ...]:
     """List every environment variable owned during bootstrap.
+
+    `AIRFLOW__CORE__EXECUTOR` is deliberately NOT owned: the V2 branch sets it (so the
+    assignment overwrites any ambient value there), but on 3.x an ambient executor
+    choice is legitimate consumer configuration and must survive bootstrap unscrubbed.
 
     Returns:
         tuple[str, ...] containing Airflow and handoff variable names.
@@ -597,6 +643,7 @@ def _environment_names() -> tuple[str, ...]:
         SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER",
         "AIRFLOW__API_AUTH__JWT_SECRET",
+        "AIRFLOW__WEBSERVER__SECRET_KEY",
         "AIRFLOW__CORE__FERNET_KEY",
         STATE_ENVIRONMENT_VARIABLE,
     )
