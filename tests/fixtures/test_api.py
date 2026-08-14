@@ -312,6 +312,124 @@ def test_launch_fails_when_startup_times_out(
         next(api._launch_api_server(_fake_state(tmp_path)))
 
 
+@pytest.mark.parametrize(
+    ("log_tail", "expected"),
+    [
+        ("OSError: [Errno 98] Address already in use", True),
+        ("address ALREADY in use", True),
+        ("[errno 48] address already in use", True),
+        ("Traceback (most recent call last):\nValueError: boom", False),
+        ("", False),
+    ],
+)
+def test_lost_port_bind_race_detects_known_markers(log_tail: str, expected: bool) -> None:
+    """Recognize address-in-use failures across platforms, case-insensitively."""
+
+    assert api._lost_port_bind_race(log_tail) is expected
+
+
+def test_launch_retries_after_losing_a_bind_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry with a freshly probed, distinct port after losing the bind race."""
+
+    losers = _FakeProcess(returncode=1)
+    winner = _FakeProcess(returncode=None)
+    processes = iter([losers, winner])
+    launched_ports: list[str] = []
+
+    def fake_popen(command: list[str], *, stdout: Any, stderr: Any) -> _FakeProcess:
+        del stderr
+        launched_ports.append(command[command.index("--port") + 1])
+        process = next(processes)
+        if process is losers:
+            stdout.write(b"OSError: [Errno 98] Address already in use\n")
+            stdout.flush()
+        return process
+
+    monkeypatch.setattr(api.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(api, "_server_responds", lambda _url: True)
+
+    launcher = api._launch_api_server(_fake_state(tmp_path))
+    base_url = next(launcher)
+
+    assert base_url.startswith("http://127.0.0.1:")
+    assert len(launched_ports) == 2
+    assert len(set(launched_ports)) == 2
+    assert base_url.endswith(launched_ports[1])
+    assert losers.calls[:1] == ["poll"]
+    assert "terminate" in losers.calls
+
+
+def test_launch_does_not_trust_a_response_while_its_own_process_is_dead(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never yield a URL for a dead subprocess, even if that port already answers.
+
+    Regression test for the scenario `#103` actually reports: two workers share
+    one advisory port, the loser's subprocess dies on bind, but the port still
+    answers because the *winner's* server is listening there. The loser must
+    notice its own process died rather than mistake the winner's response for
+    its own and yield the shared URL.
+    """
+
+    losers = _FakeProcess(returncode=1)
+    winner = _FakeProcess(returncode=None)
+    processes = iter([losers, winner])
+
+    def fake_popen(command: Any, *, stdout: Any, stderr: Any) -> _FakeProcess:
+        del command, stderr
+        process = next(processes)
+        if process is losers:
+            stdout.write(b"OSError: [Errno 98] Address already in use\n")
+            stdout.flush()
+        return process
+
+    monkeypatch.setattr(api.subprocess, "Popen", fake_popen)
+    # Always responds, as if another worker's server already owns the port --
+    # this must never be read as the loser's own subprocess succeeding.
+    monkeypatch.setattr(api, "_server_responds", lambda _url: True)
+
+    launcher = api._launch_api_server(_fake_state(tmp_path))
+    base_url = next(launcher)
+
+    assert base_url.startswith("http://127.0.0.1:")
+    assert "terminate" in losers.calls
+    assert winner.calls[0] == "poll"
+
+
+def test_launch_gives_up_after_exhausting_bind_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Surface the final attempt's failure once retries are exhausted."""
+
+    monkeypatch.setattr(api, "API_SERVER_BIND_RETRIES", 2)
+
+    def fake_popen(command: Any, *, stdout: Any, stderr: Any) -> _FakeProcess:
+        del command, stderr
+        stdout.write(b"OSError: [Errno 98] Address already in use\n")
+        stdout.flush()
+        return _FakeProcess(returncode=1)
+
+    attempts: list[_FakeProcess] = []
+
+    def counting_popen(*args: Any, **kwargs: Any) -> _FakeProcess:
+        process = fake_popen(*args, **kwargs)
+        attempts.append(process)
+        return process
+
+    monkeypatch.setattr(api.subprocess, "Popen", counting_popen)
+    monkeypatch.setattr(api, "_server_responds", lambda _url: False)
+
+    with pytest.raises(ApiServerError, match="exited with code 1"):
+        next(api._launch_api_server(_fake_state(tmp_path)))
+
+    assert len(attempts) == 2
+
+
 def test_launch_kills_a_server_that_ignores_terminate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

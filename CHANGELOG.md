@@ -41,6 +41,16 @@ All notable changes to this project will be documented in this file. The format 
   DB-free runner now sends explicit `None` for the declared `DagRun` fields
   (`end_date`, the new `partition_key`) and `FakeSupervisorComms` completes seeded
   `ConnectionResult` payloads the same way, keyed by validation alias.
+- `--airflow-migration-strict` / `airflow_migration_strict` ini option: on the Airflow 2.x
+  family, promotes `RemovedInAirflow3Warning` and `AirflowProviderDeprecationWarning` to
+  test-phase errors, turning a 2.11 run into a forecast of 3.x breakage with no 3.x
+  environment needed; a no-op (warned once) off 2.x
+  ([#43](https://github.com/nredd/pytest-airflow-in-a-box/issues/43)). Fixing this also
+  closed a latent bug independent of the new flag: `ensure_database` now runs under its own
+  default-filter warnings context unconditionally, because on an `xdist` worker it executes
+  from inside the runtest phase's own warning context, where any consumer `error::` filter
+  covering a warning Airflow's own bootstrap happens to raise could already turn database
+  initialization into a misleading `AirflowCompatibilityError` on that worker's first test.
 
 ### Changed
 
@@ -94,6 +104,14 @@ All notable changes to this project will be documented in this file. The format 
   `collect_ignore`'d, since Asset ORM persistence, the REST API server, and structlog
   capture have no 2.x equivalent
   ([#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83)).
+
+### Fixed
+
+- `_free_port` no longer hands two `pytest-xdist` workers the same loopback port for their
+  isolated Airflow API servers: a subprocess that loses the bind race now retries with a
+  freshly probed port (bounded to `API_SERVER_BIND_RETRIES` attempts) instead of leaving both
+  workers pointed at one server
+  ([#103](https://github.com/nredd/pytest-airflow-in-a-box/issues/103)).
 
 ## [0.4.0] - 2026-08-12
 

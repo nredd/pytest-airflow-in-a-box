@@ -7,9 +7,11 @@ first ``api_test``-marked test runs or a test requests ``api_client`` or
 test the selected URL is published as ``AIRFLOW__API__BASE_URL`` so
 application code can discover the endpoint through active Airflow
 configuration. Under xdist each worker owns its own server process; they share
-the database, so no cross-worker coordination or port election is needed. This
-deliberately replaces the plan's controller-owned single server: it is
-strictly simpler and costs nothing on sessions without API tests.
+the database. Port selection stays uncoordinated across workers, but a worker
+that loses the resulting bind race retries with a freshly probed port (see
+``API_SERVER_BIND_RETRIES``) rather than silently sharing another worker's
+server. This deliberately replaces the plan's controller-owned single server:
+it is strictly simpler and costs nothing on sessions without API tests.
 
 References:
     https://airflow.apache.org/docs/apache-airflow/stable/stable-rest-api-ref.html
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import subprocess
 import sys
@@ -43,9 +46,11 @@ LOGGER = logging.getLogger(__name__)
 API_SERVER_STARTUP_TIMEOUT_SECONDS = 120.0
 API_SERVER_SHUTDOWN_TIMEOUT_SECONDS = 15.0
 API_SERVER_POLL_INTERVAL_SECONDS = 0.5
+API_SERVER_BIND_RETRIES = 5
 DEFAULT_USERNAME = "admin"
 DEFAULT_PASSWORD = "admin"
 LOG_TAIL_CHARACTERS = 4000
+_BIND_CONFLICT_MARKERS = ("address already in use", "errno 98", "errno 48")
 
 
 class ApiServerError(RuntimeError):
@@ -285,8 +290,28 @@ def _log_tail(log_path: Any) -> str:
         return f"<no server log available: {error}>"
 
 
+def _lost_port_bind_race(log_tail: str) -> bool:
+    """Recognize a server exit caused by another process already owning the port.
+
+    Parameters:
+        log_tail: str containing the tail of the server's redirected log.
+
+    Returns:
+        bool indicating the log names an address-in-use bind failure.
+    """
+
+    lowered = log_tail.lower()
+    return any(marker in lowered for marker in _BIND_CONFLICT_MARKERS)
+
+
 def _launch_api_server(state: BootstrapState) -> Iterator[str]:
     """Start, hand over, and finally stop one isolated Airflow API server.
+
+    ``_free_port`` only advises a port; nothing holds it reserved between the
+    probe and the subprocess actually binding it, so two xdist workers can be
+    handed the same port. When that happens the subprocess exits immediately
+    with an address-in-use error, which this function retries against a
+    freshly probed port, up to ``API_SERVER_BIND_RETRIES`` attempts.
 
     Parameters:
         state: BootstrapState providing the run's log directory.
@@ -298,49 +323,74 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
         ApiServerError: The server exited early or never became responsive.
     """
 
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-    log_path = state.logs_folder / f"api-server-{port}.log"
-    command = [
-        sys.executable,
-        "-m",
-        "airflow",
-        "api-server",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--apps",
-        "core",
-        "--workers",
-        "1",
-    ]
-    LOGGER.info(f"Starting isolated Airflow API server on '{base_url}'")
-    with log_path.open("wb") as log_stream:
-        process = subprocess.Popen(command, stdout=log_stream, stderr=subprocess.STDOUT)
-        try:
-            deadline = time.monotonic() + API_SERVER_STARTUP_TIMEOUT_SECONDS
-            while not _server_responds(base_url):
-                if process.poll() is not None:
-                    raise ApiServerError(
-                        f"Airflow API server exited with code {process.returncode} before "
-                        f"responding; log tail:\n{_log_tail(log_path)}"
-                    )
-                if time.monotonic() > deadline:
-                    raise ApiServerError(
-                        f"Airflow API server did not respond within "
-                        f"{API_SERVER_STARTUP_TIMEOUT_SECONDS:.0f}s; log tail:\n"
-                        f"{_log_tail(log_path)}"
-                    )
-                time.sleep(API_SERVER_POLL_INTERVAL_SECONDS)
-            yield base_url
-        finally:
-            process.terminate()
+    attempt = 1
+    while True:
+        port = _free_port()
+        base_url = f"http://127.0.0.1:{port}"
+        # `state.logs_folder` is shared across every xdist worker (bootstrap.py
+        # propagates one path via workerinput), so racing workers that are handed
+        # the same advisory port must not also collide on the log filename.
+        log_path = state.logs_folder / f"api-server-{port}-{os.getpid()}.log"
+        command = [
+            sys.executable,
+            "-m",
+            "airflow",
+            "api-server",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--apps",
+            "core",
+            "--workers",
+            "1",
+        ]
+        LOGGER.info(f"Starting isolated Airflow API server on '{base_url}' (attempt {attempt})")
+        with log_path.open("wb") as log_stream:
+            process = subprocess.Popen(command, stdout=log_stream, stderr=subprocess.STDOUT)
             try:
-                process.wait(timeout=API_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                deadline = time.monotonic() + API_SERVER_STARTUP_TIMEOUT_SECONDS
+                lost_bind_race = False
+                while True:
+                    # Check our own process before trusting a response on this
+                    # port: two workers can share one advisory port, and a dead
+                    # process must never be mistaken for the worker that's
+                    # actually listening, however briefly, before it exits.
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        tail = _log_tail(log_path)
+                        if _lost_port_bind_race(tail) and attempt < API_SERVER_BIND_RETRIES:
+                            LOGGER.warning(
+                                f"Port {port} lost a bind race to another worker on attempt "
+                                f"{attempt}; retrying with a freshly probed port"
+                            )
+                            lost_bind_race = True
+                            attempt += 1
+                            break
+                        raise ApiServerError(
+                            f"Airflow API server exited with code {exit_code} before "
+                            f"responding; log tail:\n{tail}"
+                        )
+                    if _server_responds(base_url):
+                        break
+                    if time.monotonic() > deadline:
+                        raise ApiServerError(
+                            f"Airflow API server did not respond within "
+                            f"{API_SERVER_STARTUP_TIMEOUT_SECONDS:.0f}s; log tail:\n"
+                            f"{_log_tail(log_path)}"
+                        )
+                    time.sleep(API_SERVER_POLL_INTERVAL_SECONDS)
+                if lost_bind_race:
+                    continue
+                yield base_url
+                return
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=API_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
 
 @pytest.fixture(scope="session")
