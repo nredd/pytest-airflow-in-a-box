@@ -50,6 +50,7 @@ def test_run_record_writes_artifact_and_omits_baseline_flag_when_none(tmp_path: 
     def fake_runner(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(args)
         assert kwargs["cwd"] == str(tmp_path)
+        assert kwargs["check"] is False
         record_path.write_text("{}", encoding="utf-8")
         return subprocess.CompletedProcess(args, 0, "", "")
 
@@ -128,12 +129,19 @@ def test_run_record_raises_when_artifact_absent_after_crash(tmp_path: Path) -> N
 
 
 def test_run_record_tolerates_ordinary_test_failure_exit_code(tmp_path: Path) -> None:
-    """Do not raise when the invocation fails tests but still writes its artifact."""
+    """Do not raise when the invocation fails tests but still writes its artifact.
+
+    Asserts `check=False` too: the whole point of this test is that a nonzero pytest
+    exit code is not fatal, a property real `subprocess.run(..., check=True)` would
+    outright break by raising `CalledProcessError` before this function ever inspects
+    the return code. A fake that ignored `check` could not catch that regression.
+    """
     record_path = tmp_path / "baseline.json"
 
     def failing_but_recording_runner(
-        args: list[str], **_kwargs: object
+        args: list[str], **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
+        assert kwargs["check"] is False
         record_path.write_text("{}", encoding="utf-8")
         return subprocess.CompletedProcess(args, 1, "", "")
 

@@ -189,6 +189,42 @@ def test_resolve_config_creates_fresh_run_subdirectory_under_explicit_work_dir(
     assert second.work_dir.parent == tmp_path
 
 
+def test_resolve_config_wraps_explicit_work_dir_creation_failure(tmp_path: Path) -> None:
+    """Raise ProvisioningError, not a raw OSError, when `--work-dir` cannot be created.
+
+    A raw, unwrapped OSError here would propagate out of `main()`'s `resolve_config`
+    call and hit Python's default unhandled-exception exit status of 1 -- identical to
+    EXIT_REGRESSIONS. This is the unit-level half of that guard; `test_main_wraps_an_
+    unexpected_exception_from_resolve_config` below is the `main()`-level half.
+    """
+    # A file, not a directory, in the exact spot `--work-dir` names: `mkdir` on it fails.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory", encoding="utf-8")
+    args = _parse("--work-dir", str(blocked), "--uv-path", "/opt/uv")
+
+    with pytest.raises(ProvisioningError, match="Could not create --work-dir"):
+        cli.resolve_config(args, [])
+
+
+def test_make_run_dir_wraps_mkdir_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raise ProvisioningError, not a raw OSError, when the per-run subdirectory fails.
+
+    Exercised directly against `_make_run_dir` (rather than through a real filesystem
+    permission failure, which behaves inconsistently when tests run as root) with a
+    monkeypatched `Path.mkdir`, isolating this from the base-directory creation branch
+    `test_resolve_config_wraps_explicit_work_dir_creation_failure` already covers.
+    """
+
+    def failing_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        del self, args, kwargs
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+
+    with pytest.raises(ProvisioningError, match="Could not create the run's work directory"):
+        cli._make_run_dir(tmp_path)
+
+
 def test_resolve_config_defaults_work_dir_through_make_temp_dir_seam(tmp_path: Path) -> None:
     """Create the base work directory through the injected `make_temp_dir` seam."""
     args = _parse("--uv-path", "/opt/uv")
@@ -457,6 +493,51 @@ def test_main_returns_tooling_error_exit_code_when_resolve_config_fails(
     exit_code = cli.main([])
 
     assert exit_code == cli.EXIT_TOOLING_ERROR
+
+
+def test_main_wraps_an_unexpected_exception_from_resolve_config(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Map any non-MigrationToolingError exception from resolve_config to exit code 2.
+
+    Python's default unhandled-exception exit status is 1, identical to
+    EXIT_REGRESSIONS -- an uncaught bug here must never be misread as "a migration
+    regression was found." This is deliberately a plain RuntimeError, not one of this
+    package's own typed errors, to prove the broad safety-net catch, not the specific
+    MigrationToolingError path already covered above.
+    """
+
+    def buggy_resolve(_args: object, _pytest_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("a genuine bug, not a tooling error")
+
+    monkeypatch.setattr(cli, "resolve_config", buggy_resolve)
+
+    exit_code = cli.main([])
+
+    assert exit_code == cli.EXIT_TOOLING_ERROR
+    assert "a genuine bug, not a tooling error" in capsys.readouterr().err
+
+
+def test_main_wraps_an_unexpected_exception_from_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Map any non-MigrationToolingError exception from execute() to exit code 2.
+
+    Also proves cleanup still runs on this path: the `finally` block must remove
+    `cfg.work_dir` even when `execute()` raises something this package did not define.
+    """
+
+    def buggy_execute(cfg: cli.ResolvedConfig, **_kwargs: object) -> tuple[int, str]:
+        del cfg
+        raise RuntimeError("a genuine bug, not a tooling error")
+
+    monkeypatch.setattr(cli, "execute", buggy_execute)
+
+    exit_code = cli.main(["--work-dir", str(tmp_path), "--uv-path", "/opt/uv"])
+
+    assert exit_code == cli.EXIT_TOOLING_ERROR
+    assert "a genuine bug, not a tooling error" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_main_writes_resolve_config_failure_message_to_stderr(

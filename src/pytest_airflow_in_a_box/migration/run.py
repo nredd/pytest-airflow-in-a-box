@@ -18,7 +18,11 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from pytest_airflow_in_a_box.migration.provision import ProvisionedEnvironment, SubprocessRunner
+from pytest_airflow_in_a_box.migration.provision import (
+    ProvisionedEnvironment,
+    SubprocessRunner,
+    redact_command_line,
+)
 from pytest_airflow_in_a_box.migration.types import (
     ArtifactError,
     ComputeCategoryDiff,
@@ -92,7 +96,7 @@ def run_record(
         *([f"--airflow-baseline={baseline_path}"] if baseline_path is not None else []),
         *pytest_args,
     ]
-    LOGGER.info(f"Recording {env.family.name} outcomes: {' '.join(args)}")
+    LOGGER.info(f"Recording {env.family.name} outcomes: {redact_command_line(args)}")
     try:
         result = runner(args, cwd=str(project_dir), check=False)
     except OSError as error:

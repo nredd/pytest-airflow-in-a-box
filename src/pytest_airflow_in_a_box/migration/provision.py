@@ -1,8 +1,13 @@
 """Provision disposable `uv` virtual environments for the migration diff orchestrator.
 
-Mirrors `compat.yml`'s two-pass Airflow 2.x install and single-pass 3.x install so the
-environments this package tests against match the ones CI already certifies. Every
-`uv`/network touch is deferred behind an injected seam (the `storage/postgres.py`
+Both families install in two passes: the Airflow distribution itself under Apache
+Airflow's published constraints, then the plugin's own family extra unconstrained (the
+2.x two-pass pattern `compat.yml` already certifies; 3.x follows the same shape here
+even though `compat.yml`'s own 3.x leg is single-pass, because that leg installs a local
+editable checkout with `--editable .` while this orchestrator installs a published
+`--plugin-spec` distribution -- splitting the passes here keeps a plugin-install
+failure attributable to `--plugin-spec` specifically, never to the Airflow core pin).
+Every `uv`/network touch is deferred behind an injected seam (the `storage/postgres.py`
 `DockerRunner` precedent) so this module reaches full branch coverage without a real
 `uv` binary or network access.
 
@@ -10,11 +15,13 @@ References:
     https://github.com/apache/airflow/blob/main/.github/workflows/README.md
     https://docs.astral.sh/uv/pip/environments/
     https://docs.astral.sh/uv/reference/cli/#uv-pip-install
+    https://peps.python.org/pep-0508/
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -36,6 +43,12 @@ CONSTRAINTS_URL_TEMPLATE = (
 V2_UNCONSTRAINED_PYTEST_SPEC = "pytest>=8,<9"
 V3_SQLITE_PROVIDER_SPEC = "apache-airflow-providers-sqlite>=4.1,<5"
 _CONSTRAINTS_FETCH_TIMEOUT_SECONDS = 30
+# PEP 508 version specifier operators; `===` and `==` must precede the single-character
+# operators so the regex does not match the shorter operator first.
+_VERSION_SPECIFIER_PATTERN = re.compile(r"(===|==|!=|<=|>=|~=|<|>)")
+# A `scheme://user:pass@host` credential a `--plugin-spec` VCS ref may embed; redacted
+# before any subprocess command line reaches the log.
+_CREDENTIAL_PATTERN = re.compile(r"://[^/@\s]+:[^/@\s]+@")
 
 ConstraintsFetcher = Callable[[str, str], str]
 SubprocessRunner = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -84,6 +97,51 @@ def fetch_constraints(airflow_version: str, python_version: str) -> str:
         ) from error
 
 
+def _extras_qualified_spec(plugin_spec: str, extra: str) -> str:
+    """Insert `[extra]` at the correct position in a `uv pip install` plugin spec.
+
+    PEP 508 requires extras to immediately follow the package name, before any version
+    specifier or `@ url` direct reference: `name[extra]==1.0`, never `name==1.0[extra]`
+    (the latter is a parse error, not merely unconventional). This handles the spec
+    shapes `--plugin-spec` documents: a bare name, a name with a version specifier, and
+    a PEP 508 direct reference (`name @ url`, covering VCS refs). A bare local path or
+    wheel filename has no name prefix to split on; appending `[extra]` at the end is
+    already the correct syntax there (`./local/path[extra]`), so it falls through both
+    pattern checks below unchanged except for the append.
+
+    Parameters:
+        plugin_spec: str containing the `uv pip install` spec for the plugin itself.
+        extra: str naming the extra to request (`airflow2` or `airflow3`).
+
+    Returns:
+        str containing the extras-qualified spec.
+    """
+
+    name_part, separator, url_part = plugin_spec.partition("@")
+    if separator:
+        return f"{name_part.rstrip()}[{extra}] {separator} {url_part.strip()}"
+
+    match = _VERSION_SPECIFIER_PATTERN.search(plugin_spec)
+    if match:
+        return f"{plugin_spec[: match.start()]}[{extra}]{plugin_spec[match.start() :]}"
+
+    return f"{plugin_spec}[{extra}]"
+
+
+def redact_command_line(args: list[str]) -> str:
+    """Render a command line for logging with any embedded credential redacted.
+
+    Parameters:
+        args: list[str] containing the complete command.
+
+    Returns:
+        str containing the space-joined command, with any `scheme://user:pass@` token
+        (a `--plugin-spec` VCS ref may carry one) replaced by a redacted placeholder.
+    """
+
+    return _CREDENTIAL_PATTERN.sub("://<redacted>@", " ".join(args))
+
+
 def _run_step(
     args: list[str],
     *,
@@ -106,7 +164,7 @@ def _run_step(
         ProvisioningError: Any other step failed.
     """
 
-    LOGGER.info(f"Running provisioning step '{step_name}': {' '.join(args)}")
+    LOGGER.info(f"Running provisioning step '{step_name}': {redact_command_line(args)}")
     try:
         result = runner(args, capture_output=True, text=True, check=False)
     except OSError as error:
@@ -156,6 +214,26 @@ def _project_install_args(python_path: Path, project_dir: Path) -> list[str] | N
     return None
 
 
+def _write_constraints(constraints_path: Path, constraints_text: str) -> None:
+    """Write the fetched constraints file to disk, wrapping any I/O failure.
+
+    Parameters:
+        constraints_path: pathlib.Path the constraints file is written to.
+        constraints_text: str containing the fetched constraints file body.
+
+    Raises:
+        ProvisioningError: The constraints file could not be written (for example, a
+            full disk or a permissions failure on the run's work directory).
+    """
+
+    try:
+        constraints_path.write_text(constraints_text, encoding="utf-8")
+    except OSError as error:
+        raise ProvisioningError(
+            f"Could not write the fetched constraints file to '{constraints_path}': {error}"
+        ) from error
+
+
 def provision_environment(
     *,
     family: AirflowFamily,
@@ -171,15 +249,16 @@ def provision_environment(
 ) -> ProvisionedEnvironment:
     """Create one `uv` virtual environment with Airflow and the plugin installed.
 
-    Airflow 2.x installs in two passes (Airflow under constraints, then the plugin's
-    `airflow2` extra unconstrained with a pinned pytest ceiling); Airflow 3.x installs
-    in a single pass, plugin and Airflow core together under constraints. Both then
+    Both families install in two passes: the Airflow distribution under constraints
+    first (`apache-airflow` for 2.x, `apache-airflow-core` plus the SQLite provider for
+    3.x), then the plugin's own family extra unconstrained (2.x additionally pins a
+    pytest ceiling in that pass; see `V2_UNCONSTRAINED_PYTEST_SPEC`). Both then
     optionally install `--project-dir`'s own project: editable with `--no-deps` when a
     `pyproject.toml`/`setup.py` is present, a plain `requirements.txt` install when only
     that is present, or nothing at all.
 
     Parameters:
-        family: AirflowFamily selecting the two-pass (V2) or single-pass (V3) install.
+        family: AirflowFamily selecting the 2.x or 3.x two-pass install.
         airflow_version: str containing the Airflow release to install.
         python_version: str containing the `X.Y` Python version for the venv.
         plugin_spec: str containing the `uv pip install` spec for the plugin itself.
@@ -211,7 +290,7 @@ def provision_environment(
 
     constraints_text = constraints_fetcher(airflow_version, python_version)
     constraints_path = work_dir / f"constraints-{family.name.lower()}.txt"
-    constraints_path.write_text(constraints_text, encoding="utf-8")
+    _write_constraints(constraints_path, constraints_text)
 
     if family is AirflowFamily.V2:
         _run_step(
@@ -237,7 +316,7 @@ def provision_environment(
                 "install",
                 "--python",
                 str(python_path),
-                f"{plugin_spec}[airflow2]",
+                _extras_qualified_spec(plugin_spec, "airflow2"),
                 V2_UNCONSTRAINED_PYTEST_SPEC,
             ],
             runner=runner,
@@ -255,12 +334,25 @@ def provision_environment(
                 str(python_path),
                 "--constraint",
                 str(constraints_path),
-                f"{plugin_spec}[airflow3]",
                 f"apache-airflow-core=={airflow_version}",
                 V3_SQLITE_PROVIDER_SPEC,
             ],
             runner=runner,
-            step_name="install plugin and Airflow 3.x core under constraints",
+            step_name="install Airflow 3.x core under constraints",
+            plugin_spec_step=False,
+            plugin_spec_is_default=plugin_spec_is_default,
+        )
+        _run_step(
+            [
+                str(uv_path),
+                "pip",
+                "install",
+                "--python",
+                str(python_path),
+                _extras_qualified_spec(plugin_spec, "airflow3"),
+            ],
+            runner=runner,
+            step_name="install plugin (airflow3 extra, unconstrained)",
             plugin_spec_step=True,
             plugin_spec_is_default=plugin_spec_is_default,
         )
@@ -293,4 +385,5 @@ __all__ = (
     "SubprocessRunner",
     "fetch_constraints",
     "provision_environment",
+    "redact_command_line",
 )

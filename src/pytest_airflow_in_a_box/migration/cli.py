@@ -37,6 +37,7 @@ from pytest_airflow_in_a_box.migration.provision import ProvisionedEnvironment
 from pytest_airflow_in_a_box.migration.types import (
     ComputeCategoryDiff,
     MigrationToolingError,
+    ProvisioningError,
     UvNotFoundError,
 )
 
@@ -268,6 +269,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _make_run_dir(base_work_dir: Path) -> Path:
+    """Create this run's fresh, uniquely-suffixed scratch subdirectory.
+
+    Parameters:
+        base_work_dir: pathlib.Path containing the base work directory (already
+            created, either user-supplied via `--work-dir` or freshly made by
+            `make_temp_dir`).
+
+    Returns:
+        pathlib.Path containing the created per-run subdirectory.
+
+    Raises:
+        ProvisioningError: The directory could not be created (for example, a full
+            disk or a permissions failure), so this never collides with
+            `EXIT_REGRESSIONS` by escaping as a raw, exit-code-1 `OSError`.
+    """
+
+    run_dir = base_work_dir / f"run-{uuid.uuid4().hex[:8]}"
+    try:
+        run_dir.mkdir(parents=True)
+    except OSError as error:
+        raise ProvisioningError(
+            f"Could not create the run's work directory '{run_dir}': {error}"
+        ) from error
+    return run_dir
+
+
 def resolve_config(
     args: argparse.Namespace,
     pytest_args: Sequence[str],
@@ -309,11 +337,15 @@ def resolve_config(
 
     if args.work_dir is not None:
         base_work_dir = args.work_dir.resolve()
-        base_work_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            base_work_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ProvisioningError(
+                f"Could not create --work-dir '{base_work_dir}': {error}"
+            ) from error
     else:
         base_work_dir = Path(make_temp_dir()).resolve()
-    work_dir = base_work_dir / f"run-{uuid.uuid4().hex[:8]}"
-    work_dir.mkdir(parents=True)
+    work_dir = _make_run_dir(base_work_dir)
 
     plugin_spec_is_default = args.plugin_spec is None
     baseline_artifact = args.baseline_artifact or (work_dir / "baseline.json")
@@ -431,11 +463,28 @@ def main(argv: list[str] | None = None) -> int:
     except MigrationToolingError as error:
         sys.stderr.write(f"airflow-migration-diff: {error}\n")
         return EXIT_TOOLING_ERROR
+    except Exception as error:
+        # Broad on purpose: resolving configuration must never escape as a raw,
+        # unhandled exception. Python's default unhandled-exception exit status is 1 --
+        # identical to EXIT_REGRESSIONS -- so any exception here, however unexpected,
+        # is reported as a tooling failure rather than silently misread as "a migration
+        # regression was found." No `--work-dir` was necessarily created yet at every
+        # point in `resolve_config`, so there is nothing to clean up here.
+        sys.stderr.write(
+            f"airflow-migration-diff: unexpected failure resolving configuration: {error}\n"
+        )
+        return EXIT_TOOLING_ERROR
 
     try:
         exit_code, report = execute(cfg)
     except MigrationToolingError as error:
         sys.stderr.write(f"airflow-migration-diff: {error}\n")
+        return EXIT_TOOLING_ERROR
+    except Exception as error:
+        # Broad on purpose, same rationale as above: an unexpected exception here must
+        # never collide with EXIT_REGRESSIONS by falling through to Python's default
+        # unhandled-exception exit status of 1.
+        sys.stderr.write(f"airflow-migration-diff: unexpected failure: {error}\n")
         return EXIT_TOOLING_ERROR
     else:
         sys.stdout.write(report)

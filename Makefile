@@ -28,7 +28,7 @@ test:  ## Run tests with branch coverage, subprocess runs included
 	uv run coverage report
 
 test-migration-e2e:  ## Run the real-uv/network migration-orchestrator e2e test (slow, not in `make all`)
-	uv run pytest -v -m migration_e2e tests/migration/test_e2e.py
+	PYTEST_AIRFLOW_IN_A_BOX_MIGRATION_E2E=1 uv run pytest -v -m migration_e2e tests/migration/test_e2e.py
 
 lock:  ## Verify the dependency lock is current
 	uv lock --check
