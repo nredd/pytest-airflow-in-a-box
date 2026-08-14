@@ -553,7 +553,7 @@ def test_resolves_certified_release_capabilities(
     assert capability_module.resolve_capabilities() == expected
 
 
-@pytest.mark.parametrize("version", ["3.2.3", "3.3.1", "4.0.0"])
+@pytest.mark.parametrize("version", ["3.2.3", "3.3.2", "4.0.0"])
 def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
     """Name the installed and complete supported versions for valid but uncertified releases."""
 
@@ -1190,6 +1190,7 @@ def test_real_current_airflow_resolves(pytester: pytest.Pytester) -> None:
                 (3, 2, 1),
                 (3, 2, 2),
                 (3, 3, 0),
+                (3, 3, 1),
             }
             assert resolve_capabilities() is capabilities
         """

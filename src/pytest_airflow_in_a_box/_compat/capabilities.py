@@ -49,6 +49,7 @@ SUPPORTED_RELEASES_BY_FAMILY: dict[AirflowFamily, tuple[Release, ...]] = {
         (3, 2, 1),
         (3, 2, 2),
         (3, 3, 0),
+        (3, 3, 1),
     ),
     # Certified per issue #41: the final 2.x release, Composer 3's exact 2.10 patch, and
     # the oldest line still shipped by a managed vendor. Spike-verified 2026-08-11.
@@ -306,6 +307,15 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
         ),
+        (3, 3, 1): _certify_v3(
+            (3, 3, 1),
+            dag_bag_location=DagBagLocation.DAG_PROCESSING,
+            dag_bag_supports_include_examples=False,
+            task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+            refresh_from_task_supports_dag_run=True,
+            startup_details_supports_sentry=True,
+            runtime_task_instance_supports_queue=True,
+        ),
     }
 )
 _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
@@ -324,6 +334,7 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 2, 1): _SerializedDagLocation.DEFINITIONS,
     (3, 2, 2): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
+    (3, 3, 1): _SerializedDagLocation.DEFINITIONS,
 }
 _COMMON_REQUIRED_SYMBOLS = (
     ("airflow.utils.db", "initdb"),
