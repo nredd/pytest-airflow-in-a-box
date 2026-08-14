@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-pytestmark = [pytest.mark.compat, pytest.mark.db_test]
+pytestmark = [pytest.mark.compat, pytest.mark.db_test, pytest.mark.requires_airflow3]
 
 # Every nested run re-bootstraps Airflow and starts two API servers; macOS and
 # musl CI hosts need roughly double the glibc-Linux budget.

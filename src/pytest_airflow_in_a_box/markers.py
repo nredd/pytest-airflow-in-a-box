@@ -12,6 +12,8 @@ from typing import Protocol
 
 import pytest
 
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
+
 MARKER_DESCRIPTIONS = (
     "api_test: start the isolated Airflow REST API server lazily and publish `api.base_url`",
     "compat: exercise the public plugin surface across certified runtimes",
@@ -19,11 +21,23 @@ MARKER_DESCRIPTIONS = (
     "environment(name): run only when the named environment's sentinel path exists",
     "need_serialized_dag([enabled]): request serialized Dag behavior",
     "postgres: require a provisioned Postgres metadata database",
+    "requires_airflow2: run only on the Airflow 2.x family; auto-skipped elsewhere",
+    "requires_airflow3: run only on the Airflow 3.x family; auto-skipped elsewhere",
     "smoke: run a bundled zero-boilerplate check (opt in with airflow_smoke)",
 )
 
 DATABASE_MARKER_NAMES = ("api_test", "db_test")
 ENVIRONMENT_MARKER_NAME = "environment"
+FAMILY_MARKERS: dict[str, AirflowFamily] = {
+    "requires_airflow2": AirflowFamily.V2,
+    "requires_airflow3": AirflowFamily.V3,
+}
+# `AirflowFamily` values are distribution names, which read ambiguously in a skip
+# reason (`apache-airflow` is installed on both families via the 3.x meta-package).
+_FAMILY_LABELS: dict[AirflowFamily, str] = {
+    AirflowFamily.V2: "Airflow 2.x",
+    AirflowFamily.V3: "Airflow 3.x",
+}
 _ENVIRONMENTS_KEY = pytest.StashKey[dict[str, Path]]()
 
 
@@ -157,9 +171,36 @@ def apply_environment_gate(item: pytest.Item) -> None:
         pytest.skip(f"environment `{name}` unavailable; sentinel missing: '{sentinel}'")
 
 
+def apply_family_gate(item: pytest.Item) -> None:
+    """Skip one test whose required Airflow family is not installed.
+
+    Classification uses the import-free metadata probe, so gating costs no Airflow
+    import; an Airflow-free session skips both directions because neither family
+    requirement can be satisfied.
+
+    Parameters:
+        item: pytest.Item possibly carrying a `requires_airflow2`/`requires_airflow3`
+            marker.
+
+    Raises:
+        pytest.skip.Exception: The required family is not the installed one.
+    """
+
+    for name, required in FAMILY_MARKERS.items():
+        if item.get_closest_marker(name) is None:
+            continue
+        family = installed_family()
+        if family is not required:
+            installed = _FAMILY_LABELS[family] if family is not None else "no Airflow"
+            pytest.skip(
+                f"`{name}` requires the {_FAMILY_LABELS[required]} family; installed: {installed}"
+            )
+
+
 __all__ = (
     "MarkedNode",
     "apply_environment_gate",
+    "apply_family_gate",
     "environment_sentinels",
     "read_bool_marker",
     "register_markers",

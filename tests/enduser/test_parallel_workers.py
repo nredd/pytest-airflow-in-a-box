@@ -43,7 +43,10 @@ _DAG_MAKER_SUITE = """
     import uuid
     from pathlib import Path
 
-    from airflow.providers.standard.operators.empty import EmptyOperator
+    try:
+        from airflow.providers.standard.operators.empty import EmptyOperator
+    except ImportError:  # Airflow 2.x bundles the operator.
+        from airflow.operators.empty import EmptyOperator
     from airflow.utils.state import TaskInstanceState
 
     RECORD_DIR = Path({record_dir!r})
@@ -157,6 +160,7 @@ def _read_records(record_dir: Path) -> list[dict[str, object]]:
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+@pytest.mark.requires_airflow3
 def test_run_task_is_xdist_safe(pytester: pytest.Pytester) -> None:
     """Run independent consumer tests concurrently on two workers."""
 
@@ -203,6 +207,7 @@ def test_dag_maker_default_ids_never_collide_across_workers(pytester: pytest.Pyt
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+@pytest.mark.requires_airflow3
 def test_mixed_workload_shares_one_database(pytester: pytest.Pytester) -> None:
     """Combine `dag_maker`, `session`, `run_task`, and `cap_structlog` under two workers."""
 
@@ -231,6 +236,7 @@ def test_mixed_workload_shares_one_postgres_database(pytester: pytest.Pytester) 
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+@pytest.mark.requires_airflow3
 def test_n_auto_bootstrap_fans_out_at_real_core_count(pytester: pytest.Pytester) -> None:
     """Bootstrap and pass a cheap suite under `-n auto` at the host's real core count.
 

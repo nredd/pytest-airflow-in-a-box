@@ -147,8 +147,11 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
       - name: Combine and report
-        # Every leg runs the full suite with fake-libc/windll probes, so the
-        # union carries the same 100 bar as the local gate.
+        # Every 3.x leg runs the full suite with fake-libc/windll probes; the three
+        # `airflow2` legs run only `tests/enduser` (the consumer contract -- labeled
+        # `consumer contract only` in the checks list and `-enduser` in artifact
+        # names), so the 100% bar holds as the UNION across legs, with the 2.x-only
+        # src/ branches reached live by the 2.x legs and by fake probes elsewhere.
         run: |
           set -euo pipefail
           uv run coverage combine

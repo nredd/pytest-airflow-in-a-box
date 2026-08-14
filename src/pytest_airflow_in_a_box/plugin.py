@@ -56,6 +56,7 @@ from pytest_airflow_in_a_box.logging import (
 from pytest_airflow_in_a_box.markers import (
     DATABASE_MARKER_NAMES,
     apply_environment_gate,
+    apply_family_gate,
     register_markers,
 )
 from pytest_airflow_in_a_box.reporting import configure_reporting
@@ -380,6 +381,7 @@ def _requires_database_at_collection(item: pytest.Item) -> bool:
     if not _requires_database(item):
         return False
     try:
+        apply_family_gate(item)
         apply_environment_gate(item)
     except pytest.skip.Exception:
         return False
@@ -395,8 +397,8 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
     Runs after deselection so `pytest -k unrelated` stays free, and before the
     run phase so test execution never absorbs the one-time migration cost.
-    Environment-gated items that
-    will skip do not trigger initialization.
+    Family- and environment-gated items that will skip do not trigger
+    initialization.
 
     On an xdist worker the eager initialization is skipped: a `pytest.UsageError`
     raised from this hook escapes through execnet as a crashed-node traceback wall,
@@ -439,17 +441,18 @@ def _ensure_database_or_usage_error(root: Path) -> None:
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Gate environment-marked tests, then lazily initialize the database.
+    """Gate family- and environment-marked tests, then lazily initialize the database.
 
-    The environment gate runs first so a skipped test never pays the Airflow
-    import and migration cost. The database check is a safety net for items
-    injected after collection; ordinary runs initialize during
-    ``pytest_collection_finish``.
+    The family and environment gates run first so a skipped test never pays the
+    Airflow import and migration cost. The database check is a safety net for items
+    injected after collection and the primary path on xdist workers; single-process
+    runs initialize during ``pytest_collection_finish``.
 
     Parameters:
         item: pytest.Item about to enter its setup phase.
     """
 
+    apply_family_gate(item)
     apply_environment_gate(item)
     if _requires_database(item):
         _ensure_database_or_usage_error(get_bootstrap_state(item.config).root)

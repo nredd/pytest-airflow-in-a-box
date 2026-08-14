@@ -9,15 +9,21 @@ References:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
+from pytest_airflow_in_a_box._compat.capabilities import (
+    AirflowFamily,
+    resolve_capabilities,
+)
 from pytest_airflow_in_a_box._compat.registry import (
     register_authoring_dag,
     unregister_authoring_dag,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -67,26 +73,65 @@ class DagPersistenceRecord:
     task_instance_keys: set[tuple[str, str, str, int]] = field(default_factory=set)
 
 
+def _is_v2() -> bool:
+    """Report whether the installed Airflow is the certified 2.x family.
+
+    Returns:
+        bool selecting the 2.x metadata interface.
+    """
+
+    return resolve_capabilities().family is AirflowFamily.V2
+
+
 def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
-    """Construct one public SDK Dag while keeping the Airflow import deferred.
+    """Construct one public authoring Dag while keeping the Airflow import deferred.
 
     Parameters:
         dag_id: str containing a validated Dag identifier.
         fileloc: str naming the consumer test module.
-        dag_kwargs: dict[str, Any] forwarded to the SDK constructor.
+        dag_kwargs: dict[str, Any] forwarded to the authoring constructor.
 
     Returns:
-        airflow.sdk.DAG configured with stable file locations.
+        airflow.sdk.DAG (or the 2.x `airflow.models.dag.DAG`) configured with stable
+        file locations.
     """
 
     # Deferred to preserve pre-bootstrap plugin import safety.
-    from airflow.sdk import DAG
+    if _is_v2():
+        from airflow.models.dag import DAG
+    else:
+        from airflow.sdk import DAG
 
     schedule = dag_kwargs.pop("schedule", None)
     dag = DAG(dag_id=dag_id, schedule=schedule, **dag_kwargs)
     dag.fileloc = fileloc
-    dag.relative_fileloc = fileloc.rsplit("/", maxsplit=1)[-1]
+    if not _is_v2():
+        # 2.x computes `relative_fileloc` from `fileloc`; the property is read-only.
+        dag.relative_fileloc = fileloc.rsplit("/", maxsplit=1)[-1]
     return dag
+
+
+def _register_v2_orm_models() -> None:
+    """Register the FAB tables 2.x ORM mapper configuration depends on.
+
+    Flushing a 2.x `TaskInstance` or `DagRun` configures the note mappers, whose
+    foreign keys target FAB's `ab_user` table; importing the FAB models registers that
+    table so mapper configuration can resolve it regardless of what else the process
+    imported first.
+    """
+
+    try:
+        # Every certified 2.x release depends on `apache-airflow-providers-fab`
+        # unconditionally, so this import only fails on a hand-stripped install.
+        import_module("airflow.providers.fab.auth_manager.models")
+    except ImportError:
+        # INFO because Airflow's dictConfig caps handlers at INFO; a DEBUG line
+        # would vanish exactly when this diagnostic matters.
+        LOGGER.info(
+            "`airflow.providers.fab.auth_manager.models` is not importable; 2.x "
+            "note-mapper configuration may fail to resolve the `ab_user` table on "
+            "ORM flushes"
+        )
 
 
 def open_dag_session(dag_id: str) -> Session:
@@ -104,6 +149,8 @@ def open_dag_session(dag_id: str) -> Session:
 
     try:
         resolve_capabilities()
+        if _is_v2():
+            _register_v2_orm_models()
         # Deferred because Airflow settings are bootstrap-sensitive.
         from airflow import settings
 
@@ -177,9 +224,15 @@ def _get_dag_serializer() -> Any:
 def _ensure_bundle(record: DagPersistenceRecord) -> None:
     """Create the fixture's isolated Dag bundle when absent.
 
+    Bundles arrived in Airflow 3; the 2.x branch is a no-op so persistence keeps one
+    call sequence across families.
+
     Parameters:
         record: DagPersistenceRecord receiving bundle ownership state.
     """
+
+    if _is_v2():
+        return
 
     from airflow.models.dagbundle import DagBundleModel
 
@@ -198,6 +251,12 @@ def _sync_dag_model(dag: DAG, record: DagPersistenceRecord) -> None:
         record: DagPersistenceRecord identifying the isolated bundle.
     """
 
+    if _is_v2():
+        # 2.x has no bundle arguments; the authoring class carries the writer. The
+        # dynamic access keeps static checking valid against an installed 3.x tree.
+        authoring_class: Any = type(dag)
+        authoring_class.bulk_write_to_db([dag], session=record.session)
+        return
     serialized_dag_class = _get_serialized_dag_class()
     serialized_dag_class.bulk_write_to_db(
         record.bundle_name,
@@ -216,6 +275,14 @@ def _write_serialized_dag(dag: DAG, record: DagPersistenceRecord) -> None:
     """
 
     from airflow.models.serialized_dag import SerializedDagModel
+
+    if _is_v2():
+        # 2.x serializes the authoring Dag directly and has no DagVersion/bundle rows.
+        # The dynamic access keeps static checking valid against an installed 3.x tree.
+        serialized_model: Any = SerializedDagModel
+        serialized_model.write_dag(dag, min_update_interval=0, session=record.session)
+        return
+
     from airflow.serialization.serialized_objects import LazyDeserializedDAG
 
     lazy_dag = LazyDeserializedDAG.from_dag(dag)
@@ -315,7 +382,8 @@ def create_dag_run(
         record: DagPersistenceRecord receiving exact metadata ownership.
         run_id: str containing the validated collision-safe run identifier.
         logical_date: datetime.datetime | None overriding the current UTC logical date.
-        run_after: datetime.datetime | None overriding the current UTC run-after date.
+        run_after: datetime.datetime | None overriding the current UTC run-after date;
+            rejected on the 2.x family, which has no run-after concept.
         start_date: datetime.datetime | None overriding the current UTC start date.
         dag_run_kwargs: dict[str, Any] forwarded to Airflow's scheduler Dag.
 
@@ -323,26 +391,42 @@ def create_dag_run(
         airflow.models.dagrun.DagRun committed with verified task instances.
 
     Raises:
+        ValueError: `run_after` was passed on the Airflow 2.x family.
         DagRunCreationError: Airflow cannot create or verify the DagRun metadata.
     """
 
-    from airflow.models.dag_version import DagVersion
-    from airflow.sdk.timezone import coerce_datetime, convert_to_utc, utcnow
-    from airflow.utils.state import DagRunState
-    from airflow.utils.types import DagRunTriggeredByType, DagRunType
+    if run_after is not None and _is_v2():
+        raise ValueError(
+            "`run_after` is an Airflow 3.x scheduling concept with no 2.x equivalent; "
+            "silently ignoring it would change run semantics between families. Pass "
+            "`logical_date` on the 2.x family instead."
+        )
 
+    # The 2.x module is dynamically resolved so static checking stays valid against an
+    # installed 3.x tree, which has no `airflow.utils.timezone`.
+    timezone: Any = import_module(resolve_capabilities().timezone_location.value)
+    coerce_datetime = timezone.coerce_datetime
+    convert_to_utc = timezone.convert_to_utc
+    utcnow = timezone.utcnow
+    from airflow.utils.state import DagRunState
+    from airflow.utils.types import DagRunType
+
+    is_v2 = _is_v2()
     operation = "resolving UTC dates"
     try:
         now = utcnow()
         resolved_logical_date = convert_to_utc(coerce_datetime(logical_date or now))
-        resolved_run_after = convert_to_utc(coerce_datetime(run_after or now))
         resolved_start_date = convert_to_utc(coerce_datetime(start_date or now))
-        operation = "loading the current DagVersion"
-        dag_version: Any = DagVersion.get_latest_version(record.dag_id, session=record.session)
-        if dag_version is None:
-            raise RuntimeError(
-                f"Airflow did not return a current DagVersion for '{record.dag_id}'"
-            )
+        dag_version: Any = None
+        if not is_v2:
+            from airflow.models.dag_version import DagVersion
+
+            operation = "loading the current DagVersion"
+            dag_version = DagVersion.get_latest_version(record.dag_id, session=record.session)
+            if dag_version is None:
+                raise RuntimeError(
+                    f"Airflow did not return a current DagVersion for '{record.dag_id}'"
+                )
 
         kwargs = dict(dag_run_kwargs)
         if "data_interval" not in kwargs:
@@ -350,24 +434,42 @@ def create_dag_run(
                 run_after=resolved_logical_date
             )
         kwargs.setdefault("run_type", DagRunType.MANUAL)
-        kwargs.setdefault("triggered_by", DagRunTriggeredByType.TEST)
         kwargs.setdefault("state", DagRunState.RUNNING)
         operation = "calling the persisted scheduler Dag's create_dagrun"
-        dag_run: Any = scheduler_dag.create_dagrun(
-            run_id=run_id,
-            logical_date=resolved_logical_date,
-            run_after=resolved_run_after,
-            start_date=resolved_start_date,
-            session=record.session,
-            **kwargs,
-        )
-        if dag_run.created_dag_version_id != dag_version.id:
-            raise RuntimeError(
-                f"DagRun '{run_id}' linked DagVersion '{dag_run.created_dag_version_id}', "
-                f"expected current version '{dag_version.id}'"
+        if is_v2:
+            # 2.x: `execution_date` interface, no `triggered_by`/`run_after`. No
+            # explicit `verify_integrity` call: 2.x's `DAG.create_dagrun` already ends
+            # with `run.verify_integrity(session=...)`, so task instances have
+            # materialized by the time it returns and a second pass would only repeat
+            # `_check_for_removed_or_restored_tasks` and mapped-task counting.
+            dag_run: Any = scheduler_dag.create_dagrun(
+                run_id=run_id,
+                execution_date=resolved_logical_date,
+                start_date=resolved_start_date,
+                session=record.session,
+                **kwargs,
             )
-        operation = "verifying task-instance integrity"
-        dag_run.verify_integrity(session=record.session, dag_version_id=dag_version.id)
+        else:
+            from airflow.utils.types import DagRunTriggeredByType
+
+            resolved_run_after = convert_to_utc(coerce_datetime(run_after or now))
+            kwargs.setdefault("triggered_by", DagRunTriggeredByType.TEST)
+            dag_run = scheduler_dag.create_dagrun(
+                run_id=run_id,
+                logical_date=resolved_logical_date,
+                run_after=resolved_run_after,
+                start_date=resolved_start_date,
+                session=record.session,
+                **kwargs,
+            )
+            if dag_run.created_dag_version_id != dag_version.id:
+                raise RuntimeError(
+                    f"DagRun '{run_id}' linked DagVersion "
+                    f"'{dag_run.created_dag_version_id}', expected current version "
+                    f"'{dag_version.id}'"
+                )
+            operation = "verifying task-instance integrity"
+            dag_run.verify_integrity(session=record.session, dag_version_id=dag_version.id)
         capabilities = resolve_capabilities()
         task_instances: list[Any] = dag_run.get_task_instances(session=record.session)
         operation = "refreshing task instances from authoring tasks"
@@ -473,10 +575,34 @@ def select_task_instance(
         ) from error
 
 
+def task_is_mapped(task: Any) -> bool:
+    """Report whether one task participates in dynamic task mapping.
+
+    Parameters:
+        task: Any containing an authoring or serialized operator.
+
+    Returns:
+        bool marking the task as a mapped operator on the installed family.
+    """
+
+    if _is_v2():
+        # 2.x `MappedOperator` predates the `is_mapped` attribute, so an attribute
+        # probe is always False there; detect by class instead.
+        mapped_module = import_module("airflow.models.mappedoperator")
+        return isinstance(task, mapped_module.MappedOperator)
+    return bool(getattr(task, "is_mapped", False))
+
+
 def expand_mapped_task_instances(task: Any, run_id: str, session: Session) -> None:
     """Expand a persisted mapped task for one DagRun when mapping applies."""
 
-    if not getattr(task, "is_mapped", False):
+    if not task_is_mapped(task):
+        return
+
+    if _is_v2():
+        # 2.x expansion lives on the mapped operator itself.
+        task.expand_mapped_task(run_id, session=session)
+        session.commit()
         return
 
     from airflow.models.taskmap import TaskMap
@@ -508,9 +634,6 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
     """
 
     from airflow.models.dag import DagModel
-    from airflow.models.dag_version import DagVersion
-    from airflow.models.dagbundle import DagBundleModel
-    from airflow.models.dagcode import DagCode
     from airflow.models.dagrun import DagRun
     from airflow.models.serialized_dag import SerializedDagModel
     from sqlalchemy import delete, func, select
@@ -522,6 +645,32 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
         if dag_run is not None:
             session.delete(dag_run)
     session.flush()
+
+    if _is_v2():
+        from airflow.models.dagcode import DagCode
+
+        # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id` and
+        # `dag_code` rows key on `fileloc`, shared by every Dag in one source file.
+        session.execute(
+            delete(SerializedDagModel).where(SerializedDagModel.dag_id == record.dag_id)
+        )
+        dag_model = session.get(DagModel, record.dag_id)
+        if dag_model is not None:
+            fileloc = dag_model.fileloc
+            session.delete(dag_model)
+            session.flush()
+            still_used = session.scalars(
+                select(DagModel.dag_id).where(DagModel.fileloc == fileloc)
+            ).first()
+            if fileloc is not None and still_used is None:
+                session.execute(delete(DagCode).where(DagCode.fileloc == fileloc))
+        session.commit()
+        return
+
+    from airflow.models.dag_version import DagVersion
+    from airflow.models.dagbundle import DagBundleModel
+    from airflow.models.dagcode import DagCode
+
     version_ids = list(
         session.scalars(
             select(DagVersion.id).where(
@@ -591,4 +740,5 @@ __all__ = (
     "open_dag_session",
     "persist_dag",
     "select_task_instance",
+    "task_is_mapped",
 )

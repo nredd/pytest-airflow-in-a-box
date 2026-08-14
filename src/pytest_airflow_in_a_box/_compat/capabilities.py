@@ -536,6 +536,29 @@ def installed_family() -> AirflowFamily | None:
     return AirflowFamily.V3
 
 
+def v2_gate_message(surface: str, detail: str) -> str | None:
+    """Build the unavailable-on-2.x message for a 3.x-only fixture surface.
+
+    Classification uses the import-free family probe so a 3.x session requesting the
+    surface stays as cheap as before the 2.x tier existed.
+
+    Parameters:
+        surface: str naming the requested fixture surface.
+        detail: str explaining why 2.x lacks it and what to use instead.
+
+    Returns:
+        str | None containing the actionable message, or None off the 2.x family.
+    """
+
+    if installed_family() is not AirflowFamily.V2:
+        return None
+    return (
+        f"`{surface}` is unavailable on Apache Airflow 2.x: {detail} The 2.x tier "
+        f"scope is tracked in "
+        f"https://github.com/nredd/pytest-airflow-in-a-box/issues/25."
+    )
+
+
 def _running_python() -> tuple[int, int]:
     """Report the running Python major and minor version.
 

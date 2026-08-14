@@ -58,7 +58,11 @@ _SHARED_SMOKE_DAG = """
     import os
     from pathlib import Path
 
-    from airflow.sdk import DAG, task
+    try:
+        from airflow.sdk import DAG, task
+    except ImportError:  # Airflow 2.x: the pre-Task-SDK authoring surface.
+        from airflow.decorators import task
+        from airflow.models.dag import DAG
 
     RECORD_DIR = Path({record_dir!r})
     record = {{"worker": os.environ["PYTEST_XDIST_WORKER"], "pid": os.getpid()}}

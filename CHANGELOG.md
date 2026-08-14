@@ -8,6 +8,22 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
+  certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
+  ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
+  `execution_date` interface, no bundles/DAG versioning), `dag_maker.run()` whole-DagRun
+  execution with family-aware mapped-task expansion (2.x `MappedOperator` predates the
+  `is_mapped` attribute, so detection is class-based there),
+  `run_ti`/`run_task_instance`, `full_dag_bag`, `clear_db` (renamed `dataset*` tables,
+  `BaseXCom`), seeding, params validation via `airflow.models.param`, and the bundled
+  smoke checks all run on both families; `run_task`, `cap_structlog`, and the REST API
+  fixtures fail on 2.x with actionable errors naming the 2.x alternative.
+- `requires_airflow2` / `requires_airflow3` markers, auto-skipped on the other family,
+  plus three 2.x CI legs (two-pass constraints install) running the end-user consumer
+  contract; widening the 2.x-collectable surface is tracked in
+  [#83](https://github.com/nredd/pytest-airflow-in-a-box/issues/83).
+- The bundled Dag corpus authors through a small dynamic resolver so the same files
+  parse on both Airflow families.
 - Certified Airflow 3.3.1, which the `airflow3` extra now resolves fresh (the new
   extra-resolving CI smoke leg caught the drift on its first run). 3.3.1 regenerated
   the Task SDK comms models with every None-able field required-without-default, so the
