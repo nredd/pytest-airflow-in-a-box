@@ -5,6 +5,8 @@
 [![PyPI](https://img.shields.io/pypi/v/pytest-airflow-in-a-box?logo=pypi&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pytest-airflow-in-a-box?logo=python&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
 [![License](https://img.shields.io/pypi/l/pytest-airflow-in-a-box?cacheSeconds=3600)](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/LICENSE)
+[![Docs](https://img.shields.io/badge/docs-mkdocs-blue?logo=materialformkdocs&logoColor=white)](https://nredd.github.io/pytest-airflow-in-a-box/)
+[![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.9--2.11-017CEE?logo=apacheairflow&logoColor=white)](#requirements)
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
 Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
@@ -84,23 +86,26 @@ operators, the REST API fixture, and bundled smoke checks.
 
 ## Requirements
 
-- CPython 3.10 through 3.14
 - pytest 8 or newer
-- Apache Airflow 3.1 or newer, below 4
 - Linux or macOS for Airflow-backed tests
 
 Apache Airflow does not support native Windows installations. Windows development should use WSL2
 or the included devcontainer; platform-independent package checks alone do not imply full Windows
 Airflow support.
 
-The released compatibility matrix is exercised against Airflow 3.1.0, 3.1.1, 3.1.2, 3.1.3,
-3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, and 3.3.1 across CPython 3.10 through 3.14
-using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.9.3,
-2.10.5, and 2.11.2 on CPython 3.10-3.12, exercised through the end-user consumer contract
-(Airflow 2.x never supported 3.13). On the 2.x
-family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable errors
-naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip on
-the other family so one suite runs green on both sides of a migration.
+The released compatibility matrix is exercised in CI against every combination below, using
+Airflow's published constraints files:
+
+| Tier                   | Airflow versions                                                                | Python           | OS                                       | Metadata DB                    |
+| ----------------------- | -------------------------------------------------------------------------------- | ----------------- | ------------------------------------------ | -------------------------------- |
+| 3.x (primary)           | 3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, 3.3.1 | 3.10 - 3.14        | Linux (glibc, musl, arm64), macOS          | SQLite (WAL), Postgres (testcontainers) |
+| 2.x (certified, [#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)) | 2.9.3, 2.10.5, 2.11.2                                                             | 3.10 - 3.12 (Airflow 2.x never supported 3.13+) | Linux                                     | SQLite (WAL)                     |
+
+On the 2.x family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable
+errors naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip
+on the other family so one suite runs green on both sides of a migration. The 2.x tier is
+exercised through the end-user consumer contract (`tests/enduser`, marked `compat`) rather than
+the full internal suite.
 
 ## Installation
 
