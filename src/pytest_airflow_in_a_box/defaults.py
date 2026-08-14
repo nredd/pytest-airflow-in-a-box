@@ -85,25 +85,29 @@ def apply_option_defaults(config: pytest.Config) -> None:
             setattr(config.option, default.attribute, default.plugin_default)
 
 
-def apply_filterwarnings(config: pytest.Config) -> None:
-    """Prepend the plugin's warning filters below every user-supplied line.
+def apply_filterwarnings(config: pytest.Config, lines: tuple[str, ...] = FILTERWARNINGS) -> None:
+    """Prepend the given warning filters below every user-supplied line.
 
     pytest applies ``filterwarnings`` ini lines in order and later lines win,
-    so prepending keeps user configuration authoritative.
+    so prepending keeps user configuration authoritative. Defaults to the
+    plugin's own ``FILTERWARNINGS``; a caller such as ``migration_strict`` passes
+    a different filter set through the same insertion mechanism.
 
     Parameters:
         config: pytest.Config containing the ``filterwarnings`` ini value.
+        lines: tuple[str, ...] containing the filter lines to prepend, in priority
+            order (the first line ends up closest to the user's own lines).
 
     Raises:
         pytest.UsageError: The ``filterwarnings`` ini value is not a line list.
     """
 
-    lines = config.getini("filterwarnings")
-    if not isinstance(lines, list):
+    ini_lines = config.getini("filterwarnings")
+    if not isinstance(ini_lines, list):
         raise pytest.UsageError("Ini option `filterwarnings` must be a list of filter lines")
-    for line in reversed(FILTERWARNINGS):
-        if line not in lines:
-            lines.insert(0, line)
+    for line in reversed(lines):
+        if line not in ini_lines:
+            ini_lines.insert(0, line)
 
 
 __all__ = (

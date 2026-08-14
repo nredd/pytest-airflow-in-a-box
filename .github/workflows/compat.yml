@@ -75,6 +75,14 @@ jobs:
             python-version: "3.12"
             airflow-family: "airflow2"
             pytest-paths: "tests/enduser"
+          # Same 2.11.2 leg under xdist (#43): gives the `ensure_database` warnings-context
+          # fix (unrelated to migration-strict mode, but found while spiking on it) live
+          # real-Airflow coverage on top of the mocked regression test in `test_plugin.py`.
+          - airflow-version: "2.11.2"
+            python-version: "3.12"
+            airflow-family: "airflow2"
+            pytest-paths: "tests/enduser"
+            pytest-args: "-n 2"
           - airflow-version: "2.10.5"
             python-version: "3.11"
             airflow-family: "airflow2"
