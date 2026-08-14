@@ -74,12 +74,12 @@ dev = [
     "apache-airflow>=3.1,<4",
     "apache-airflow-providers-sqlite>=4.1,<5",
     "build==1.5.0",
-    "prek==0.4.12",
+    "prek==0.4.13",
     "pytest-cov==7.1.0",
-    "ruff==0.16.1",
-    "ty==0.0.69",
-    "uv==0.12.2",
-    "uv-build==0.12.2",
+    "ruff==0.16.2",
+    "ty==0.0.70",
+    "uv==0.12.3",
+    "uv-build==0.12.3",
 ]
 docs = [
     "mkdocs==1.6.1",
@@ -100,7 +100,7 @@ conflicts = [
 ]
 
 [tool.ruff]
-required-version = "==0.16.1"
+required-version = "==0.16.2"
 target-version = "py310"
 line-length = 99
 unsafe-fixes = true
