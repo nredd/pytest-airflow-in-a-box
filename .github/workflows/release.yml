@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           tag_version="${TAG#v}"
-          pyproject_version="$(uv version --short)"
+          pyproject_version="$(uv version --short --color never)"
           init_version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pytest_airflow_in_a_box/__init__.py)"
           if [ "$tag_version" != "$pyproject_version" ] || [ "$tag_version" != "$init_version" ]; then
             echo "version mismatch: tag=$tag_version pyproject.toml=$pyproject_version __init__.py=$init_version" >&2

@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- `make release` and `release.yml`'s tag-version check no longer false-positive when `uv`
+  colorizes `uv version --short` output (e.g. forced-color env vars); both now pass
+  `--color never` ([#126](https://github.com/nredd/pytest-airflow-in-a-box/issues/126)).
+
 ## [0.5.0] - 2026-08-14
 
 ### Added
