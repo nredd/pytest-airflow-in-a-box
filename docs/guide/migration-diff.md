@@ -5,6 +5,12 @@ Airflow, and the 2.x/3.x extras are mutually exclusive (see [Requirements](../in
 a two-run workflow the plugin owns: record outcomes in one environment, compare them against a
 second.
 
+This is the last and most expensive layer of the migration funnel -- it answers with real
+pass/fail rather than a predicted break, so run ruff's `AIR3xx` rules and
+`--airflow-migration-strict` first and let this catch the *executed* breakage they structurally
+cannot see (see [Pairing with ruff's AIR rules](migration-strict.md#pairing-with-ruffs-air-rules)).
+It does not subsume them: this layer only ever sees what your tests exercise.
+
 ## Quickstart
 
 Record a baseline in the 2.x environment:

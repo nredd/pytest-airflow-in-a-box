@@ -13,6 +13,11 @@ airflow-migration-diff --project-dir . -- -k "not slow"
 
 Everything after a literal `--` forwards verbatim to both `pytest` invocations.
 
+Reach for this after the cheaper layers have stopped finding things -- ruff's `AIR3xx` rules
+statically, then `--airflow-migration-strict` on the 2.x environment already in CI (see
+[Pairing with ruff's AIR rules](migration-strict.md#pairing-with-ruffs-air-rules)). A regression
+only this command finds is one neither promoted warning category announced.
+
 ## Exit codes
 
 | Code | Meaning |
