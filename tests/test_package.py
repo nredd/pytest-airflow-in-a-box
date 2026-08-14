@@ -12,6 +12,8 @@ import pytest_airflow_in_a_box
 from pytest_airflow_in_a_box import (
     __version__,
     _compat,
+    artifact,
+    baseline,
     collection,
     config,
     db,
@@ -21,6 +23,7 @@ from pytest_airflow_in_a_box import (
     markers,
     matchers,
     plugin,
+    record,
     reporting,
     results,
     taskinstance,
@@ -84,6 +87,36 @@ def test_public_surface_is_explicit() -> None:
         "environment_sentinels",
         "read_bool_marker",
         "register_markers",
+        "would_family_gate",
+    )
+    assert artifact.__all__ == (
+        "ARTIFACT_SCHEMA_VERSION",
+        "UNKNOWN",
+        "Artifact",
+        "Outcome",
+        "OutcomeEntry",
+        "load_artifact",
+        "write_artifact",
+    )
+    assert record.__all__ == (
+        "GATED_PROPERTY_NAME",
+        "build_artifact",
+        "build_live_artifact",
+        "configure",
+        "handle_logreport",
+        "live_outcomes",
+        "register_options",
+        "stash_gated_property",
+        "unconfigure",
+        "write_recorded_artifact",
+    )
+    assert baseline.__all__ == (
+        "SELECTORS",
+        "CategoryBuckets",
+        "apply_selection_and_xfail",
+        "compute_categories",
+        "register_options",
+        "render_terminal_summary",
     )
     assert plugin.__all__ == (
         "airflow_connections",
