@@ -166,7 +166,7 @@ plugin rather than baking one blessed command into the action.
 
 ```yaml
 - uses: actions/checkout@v5
-- uses: nredd/pytest-airflow-in-a-box/action@v0
+- uses: nredd/pytest-airflow-in-a-box/action@main
   id: airflow-env
   with:
     airflow-version: "3.3.0"
@@ -198,7 +198,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: nredd/pytest-airflow-in-a-box/action@v0
+      - uses: nredd/pytest-airflow-in-a-box/action@main
         id: airflow-env
         with:
           airflow-version: ${{ matrix.airflow-version }}
@@ -217,10 +217,11 @@ jobs:
 | `requirements-file`  | no       | (none)     | Extra requirements file to install into the same environment.                |
 
 Outputs: `python-path` (the provisioned venv's `python`) and `venv-path` (the venv directory,
-for console scripts). `release.yml` moves a `v<major>` tag (currently `v0`, since the package
-is pre-1.0) to point at the latest published release on that major line, so `@v0` always
-tracks latest without a re-pin on every release. Pin to a full release tag (e.g. `@v0.6.0`)
-instead for an exact, non-moving reference.
+for console scripts). The examples above pin `@main` because no tagged release carries the
+action yet. Once one ships, `release.yml` moves a `v<major>` tag (`v0` while pre-1.0, `v1`
+once `1.0.0` ships) to point at the latest published release on that major line -- pin to
+`@v0` at that point for an always-latest reference, or to a full release tag (e.g.
+`@v0.6.0`) for an exact, non-moving one.
 
 ## Migration diff orchestrator
 
