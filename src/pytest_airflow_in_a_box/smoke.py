@@ -4,7 +4,8 @@ Every item is synthesized directly on the pytest ``Session`` rather than anchore
 on disk, so the catalog carries no collection dependency on the user's project layout. Off unless
 ``airflow_smoke``/``--airflow-smoke`` is enabled; collection cost is zero when disabled. Explicit
 file or node-ID positionals scope the run to those tests and drop the catalog; directory
-positionals and arg-less runs keep it.
+positionals and arg-less runs keep it. An explicit ``-m`` expression that would select a smoke
+item overrides that positional scoping.
 
 References:
     https://docs.pytest.org/en/stable/example/nonpython.html
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from _pytest.mark.expression import Expression
 
 from pytest_airflow_in_a_box._compat import build_dag_bag
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
@@ -206,6 +208,44 @@ def _smoke_enabled(config: pytest.Config) -> bool:
     return enabled
 
 
+def _matches_smoke_identifier(name: str, /, **kwargs: str | int | bool | None) -> bool:
+    """Match only the bare ``smoke`` identifier, per the ``ExpressionMatcher`` protocol.
+
+    Parameters:
+        name: str identifier from the compiled `-m` expression.
+        kwargs: str | int | bool | None keyword-call arguments; smoke items take none.
+
+    Returns:
+        bool indicating whether `name` is exactly ``smoke`` with no keyword arguments.
+    """
+
+    return name == "smoke" and not kwargs
+
+
+def _markexpr_wants_smoke(config: pytest.Config) -> bool:
+    """Report whether ``-m``/ini ``markexpr`` would select an item bearing only ``smoke``.
+
+    An explicit ``-m`` expression is unambiguous opt-in to the smoke catalog and must win
+    over the file/node-ID scoping in `_smoke_in_scope`, or ``-m smoke`` combined with an
+    explicit positional silently selects nothing.
+
+    Parameters:
+        config: pytest.Config carrying the resolved ``-m`` mark expression.
+
+    Returns:
+        bool indicating whether the expression matches a smoke-only marker set.
+    """
+
+    markexpr: str = config.option.markexpr
+    if not markexpr:
+        return False
+    try:
+        expression = Expression.compile(markexpr)
+    except SyntaxError:
+        return False
+    return expression.evaluate(_matches_smoke_identifier)
+
+
 def _smoke_in_scope(config: pytest.Config) -> bool:
     """Report whether the run's positional selection leaves the smoke catalog in scope.
 
@@ -213,8 +253,10 @@ def _smoke_in_scope(config: pytest.Config) -> bool:
     honored positional args, so node-ID and file selection must be re-applied here: explicit
     file or node-ID positionals scope the run to those tests only, while directory positionals
     (and arg-less runs, including ``testpaths``-driven ones) keep the session-level catalog.
-    Keyword and marker deselection (``-k``/``-m``/``--deselect``) need no handling -- pytest
-    applies them after this plugin's ``tryfirst`` collection hook.
+    An explicit ``-m`` expression that would select a smoke item (see
+    `_markexpr_wants_smoke`) overrides that positional scoping, since it is unambiguous
+    opt-in. Keyword deselection (``-k``/``--deselect``) needs no handling -- pytest applies
+    it after this plugin's ``tryfirst`` collection hook.
 
     Parameters:
         config: pytest.Config containing resolved positional args and invocation metadata.
@@ -222,6 +264,9 @@ def _smoke_in_scope(config: pytest.Config) -> bool:
     Returns:
         bool indicating whether the bundled catalog should be appended to the collection.
     """
+
+    if _markexpr_wants_smoke(config):
+        return True
 
     if config.args_source is not pytest.Config.ArgsSource.ARGS:
         return True

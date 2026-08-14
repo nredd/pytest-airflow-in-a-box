@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file. The format 
 - `make release` and `release.yml`'s tag-version check no longer false-positive when `uv`
   colorizes `uv version --short` output (e.g. forced-color env vars); both now pass
   `--color never` ([#126](https://github.com/nredd/pytest-airflow-in-a-box/issues/126)).
+- `-m smoke` combined with an explicit file or node-ID positional (e.g.
+  `pytest test_foo.py -m smoke --airflow-smoke`) no longer silently selects nothing: an
+  explicit `-m` expression that would select a smoke item now overrides the positional
+  scoping that otherwise drops the bundled catalog
+  ([#133](https://github.com/nredd/pytest-airflow-in-a-box/issues/133)).
 
 ## [0.5.0] - 2026-08-14
 

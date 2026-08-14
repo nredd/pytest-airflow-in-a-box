@@ -126,7 +126,11 @@ def test_smoke_enabled_rejects_non_boolean_ini() -> None:
 
 
 def _scope_config(
-    *, args_source: pytest.Config.ArgsSource, args: list[str], invocation_dir: Path
+    *,
+    args_source: pytest.Config.ArgsSource,
+    args: list[str],
+    invocation_dir: Path,
+    markexpr: str = "",
 ) -> Any:
     """Create a minimal configuration double for `_smoke_in_scope` tests.
 
@@ -134,13 +138,17 @@ def _scope_config(
         args_source: pytest.Config.ArgsSource describing where the positional args came from.
         args: list[str] of resolved positional args.
         invocation_dir: pathlib.Path of the invocation directory.
+        markexpr: str resolved `-m` mark expression.
 
     Returns:
         types.SimpleNamespace shaped like the configuration surface under test.
     """
 
     return SimpleNamespace(
-        args_source=args_source, args=args, invocation_params=SimpleNamespace(dir=invocation_dir)
+        args_source=args_source,
+        args=args,
+        invocation_params=SimpleNamespace(dir=invocation_dir),
+        option=SimpleNamespace(markexpr=markexpr),
     )
 
 
@@ -176,6 +184,50 @@ def test_smoke_in_scope_keeps_catalog_for_directory_arg(tmp_path: Path) -> None:
         args_source=pytest.Config.ArgsSource.ARGS,
         args=["missing.py::test_one", "sub"],
         invocation_dir=tmp_path,
+    )
+
+    assert smoke._smoke_in_scope(config) is True
+
+
+@pytest.mark.parametrize(
+    ("markexpr", "expected"),
+    [
+        ("", False),
+        ("smoke", True),
+        ("not smoke", False),
+        ("smoke or db_test", True),
+        ("db_test", False),
+        ("smoke(", False),
+    ],
+    ids=["empty", "bare", "negated", "or-clause", "unrelated", "malformed"],
+)
+def test_markexpr_wants_smoke(markexpr: str, expected: bool, tmp_path: Path) -> None:
+    """Resolve whether a `-m` expression would select a smoke-only marker set."""
+
+    config = _scope_config(
+        args_source=pytest.Config.ArgsSource.ARGS,
+        args=[],
+        invocation_dir=tmp_path,
+        markexpr=markexpr,
+    )
+
+    assert smoke._markexpr_wants_smoke(config) is expected
+
+
+def test_smoke_in_scope_mark_expression_overrides_node_id_and_file_args(
+    tmp_path: Path,
+) -> None:
+    """Keep the catalog when `-m` explicitly selects `smoke`, even with file/node-ID args.
+
+    Regression test for https://github.com/nredd/pytest-airflow-in-a-box/issues/133.
+    """
+
+    (tmp_path / "test_x.py").write_text("", encoding="utf-8")
+    config = _scope_config(
+        args_source=pytest.Config.ArgsSource.ARGS,
+        args=["test_x.py::test_one", "test_x.py"],
+        invocation_dir=tmp_path,
+        markexpr="smoke",
     )
 
     assert smoke._smoke_in_scope(config) is True
@@ -2111,6 +2163,46 @@ def test_explicit_node_id_and_file_args_exclude_smoke_catalog(
     file = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "test_regular.py")
     file.assert_outcomes(passed=1)
     file.stdout.no_fnmatch_line("*::smoke*")
+
+
+def test_explicit_mark_expression_overrides_positional_exclusion(
+    pytester: pytest.Pytester,
+) -> None:
+    """Let an explicit `-m` expression selecting `smoke` win over positional scoping.
+
+    Regression test for https://github.com/nredd/pytest-airflow-in-a-box/issues/133: an
+    explicit file or node-ID positional used to drop the smoke catalog unconditionally, so
+    `-m smoke` combined with either had nothing to select.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    file_selected = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke", "test_regular.py"
+    )
+    file_selected.assert_outcomes(passed=5, deselected=1)
+
+    node_selected = pytester.runpytest_subprocess(
+        "-q",
+        "--airflow-smoke",
+        "--dag-folder=dags",
+        "-m",
+        "smoke",
+        "test_regular.py::test_regular",
+    )
+    node_selected.assert_outcomes(passed=5, deselected=1)
+
+    file_excluded = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke", "test_regular.py"
+    )
+    file_excluded.assert_outcomes(passed=1)
+    file_excluded.stdout.no_fnmatch_line("*::smoke*")
 
 
 def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
