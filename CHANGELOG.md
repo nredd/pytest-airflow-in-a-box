@@ -34,6 +34,13 @@ All notable changes to this project will be documented in this file. The format 
   DB-free runner now sends explicit `None` for the declared `DagRun` fields
   (`end_date`, the new `partition_key`) and `FakeSupervisorComms` completes seeded
   `ConnectionResult` payloads the same way, keyed by validation alias.
+- `airflow-migration-diff`, a console script that `uv`-provisions a disposable Airflow 2.x
+  environment and a disposable Airflow 3.x environment, records outcomes on each, and prints
+  the categorized migration diff; exit code 0 means no regressions, 1 means at least one was
+  found, and 2 means the orchestrator itself failed. Ships as a draft pending
+  [#42](https://github.com/nredd/pytest-airflow-in-a-box/issues/42)'s artifact contract, which
+  it is built against behind an internal seam rather than duplicating
+  ([#44](https://github.com/nredd/pytest-airflow-in-a-box/issues/44)).
 
 ### Changed
 

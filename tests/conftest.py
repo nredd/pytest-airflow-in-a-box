@@ -8,6 +8,26 @@ from pytest_airflow_in_a_box.bootstrap import STATE_ENVIRONMENT_VARIABLE
 
 pytest_plugins = ["pytester"]
 
+# Dev-only marker for the migration orchestrator's real-uv/network e2e test
+# (tests/migration/test_e2e.py). Deliberately not part of the consumer-facing marker
+# surface in markers.py/defaults.py -- it gates this repo's own opt-in `make
+# test-migration-e2e` target, never something a plugin consumer would mark their tests
+# with.
+MIGRATION_E2E_MARKER = (
+    "migration_e2e: real uv/network migration-orchestrator end-to-end test "
+    "(opt in with `make test-migration-e2e`, excluded from `make test`/`make all`)"
+)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the dev-only `migration_e2e` marker.
+
+    Parameters:
+        config: pytest.Config for the active test session.
+    """
+
+    config.addinivalue_line("markers", MIGRATION_E2E_MARKER)
+
 
 @pytest.fixture(autouse=True)
 def _isolate_nested_pytest_environment(monkeypatch: pytest.MonkeyPatch) -> None:

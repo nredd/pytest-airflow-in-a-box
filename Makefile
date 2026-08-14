@@ -1,4 +1,4 @@
-.PHONY: help install install-postgres format lint type test lock build dist release docs-build docs-serve clean all
+.PHONY: help install install-postgres format lint type test test-migration-e2e lock build dist release docs-build docs-serve clean all
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -23,9 +23,12 @@ type:  ## Type check source, tests, and scripts with ty
 test:  ## Run tests with branch coverage, subprocess runs included
 	uv run python scripts/install_coverage_pth.py
 	COVERAGE_PROCESS_START=$(CURDIR)/pyproject.toml COVERAGE_FILE=$(CURDIR)/.coverage \
-		uv run coverage run -m pytest -v
+		uv run coverage run -m pytest -v -m "not migration_e2e"
 	uv run coverage combine
 	uv run coverage report
+
+test-migration-e2e:  ## Run the real-uv/network migration-orchestrator e2e test (slow, not in `make all`)
+	uv run pytest -v -m migration_e2e tests/migration/test_e2e.py
 
 lock:  ## Verify the dependency lock is current
 	uv lock --check

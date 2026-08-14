@@ -19,6 +19,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 - [Why not...](#why-not)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Migration diff orchestrator](#migration-diff-orchestrator)
 - [Documentation](#documentation)
 - [Development](#development)
 - [License](#license)
@@ -149,6 +150,21 @@ To disable the plugin entirely for a run:
 ```console
 pytest -p no:pytest_airflow_in_a_box
 ```
+
+## Migration diff orchestrator
+
+`airflow-migration-diff` is a console script that `uv`-provisions a disposable Airflow 2.x
+environment and a disposable Airflow 3.x environment, records outcomes on each, and prints the
+categorized migration diff -- one command that tells a migrating team exactly what breaks:
+
+```console
+airflow-migration-diff --project-dir . -- -k "not slow"
+```
+
+Exit code `0` means no regressions, `1` means at least one was found, and `2` means the
+orchestrator itself failed (missing `uv`, a provisioning failure, and the like). See the
+[documentation site](https://nredd.github.io/pytest-airflow-in-a-box/guide/migration-orchestrator/)
+for the full option reference.
 
 ## Documentation
 
