@@ -197,17 +197,24 @@ def test_smoke_in_scope_keeps_catalog_for_directory_arg(tmp_path: Path) -> None:
         ("not smoke", False),
         ("smoke or unrelated_marker", True),
         ("unrelated_marker", False),
-        # `timeout` and `db_test` are real markers every/some smoke items carry too --
-        # standalone or conjoined with `smoke`, they must still resolve to the catalog.
-        ("timeout", True),
-        ("db_test", True),
+        # No literal `smoke` token: must NOT force the catalog into scope even though the
+        # expression happens to match real smoke-item marks once vacuously true (absence of
+        # an unrelated marker) or by name alone. Forcing scope here would silently balloon
+        # any explicitly-scoped run that merely deselects by an unrelated marker.
+        ("not slow", False),
+        ("timeout", False),
+        ("db_test", False),
+        # `timeout` and `db_test` are real markers every/some smoke items carry too -- once
+        # `smoke` is explicitly mentioned, conjoining with either must still resolve.
         ("smoke and timeout", True),
         ("smoke and db_test", True),
         # Only the 7 non-`db_test` items match; a flat union-of-names matcher would
         # wrongly return False here since `db_test` is present on *some* smoke item.
         ("smoke and not db_test", True),
         # No real smoke item carries `db_test` without `timeout`.
-        ("db_test and not timeout", False),
+        ("smoke and db_test and not timeout", False),
+        # No real smoke item's `smoke` mark takes keyword arguments.
+        ("smoke(iteration=1)", False),
         ("smoke(", False),
     ],
     ids=[
@@ -216,17 +223,19 @@ def test_smoke_in_scope_keeps_catalog_for_directory_arg(tmp_path: Path) -> None:
         "negated",
         "or-clause",
         "unrelated",
+        "negated-unrelated",
         "timeout-alone",
         "db-test-alone",
         "smoke-and-timeout",
         "smoke-and-db-test",
         "smoke-and-not-db-test",
         "impossible-combo",
+        "kwargs-blind",
         "malformed",
     ],
 )
 def test_markexpr_wants_smoke(markexpr: str, expected: bool, tmp_path: Path) -> None:
-    """Resolve whether a `-m` expression would select at least one real smoke item's marks."""
+    """Resolve whether a `-m` expression explicitly opts into the smoke catalog."""
 
     config = _scope_config(
         args_source=pytest.Config.ArgsSource.ARGS,
@@ -1729,6 +1738,17 @@ with DAG(dag_id="valid_dag", schedule=None, tags=["team-a"]) as dag:
     t()
 """
 
+VALID_DAG_WITH_OWNER = """
+from airflow.sdk import DAG, task
+
+with DAG(dag_id="valid_dag", schedule=None, tags=["team-a"]) as dag:
+    @task(owner="team-a")
+    def t():
+        pass
+
+    t()
+"""
+
 BROKEN_DAG = """
 raise RuntimeError("deliberately broken smoke test Dag")
 """
@@ -2268,6 +2288,51 @@ def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
         "test_regular.py",
     )
     without_db_test.assert_outcomes(passed=3, deselected=3)
+
+
+def test_markexpr_override_reaches_every_conditional_smoke_item(
+    pytester: pytest.Pytester,
+) -> None:
+    """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 5.
+
+    `_SMOKE_ITEM_MARK_SETS` is hand-synced with the `add_marker` calls scattered across nine
+    `pytest.Item` subclasses; the other `-m`-override regression tests only enable the five
+    unconditional items. Enabling all four ini-gated policies too (every item, like every
+    other, carries only `smoke` + `timeout`) would catch a future item adding a marker
+    `_SMOKE_ITEM_MARK_SETS` doesn't yet know about. The Dag sets an explicit non-stock owner
+    so `airflow_forbid_default_owner` passes rather than exercising its failure path.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG_WITH_OWNER)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_dag_id_pattern = ^valid_\n"
+        "airflow_required_dag_tags =\n    team-a\n"
+        "airflow_forbid_default_owner = true\n"
+        "airflow_dag_snapshot_dir = snapshots\n"
+    )
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    every_item = pytester.runpytest_subprocess(
+        "-q",
+        "--dag-folder=dags",
+        "--airflow-smoke-update",
+        "-m",
+        "smoke and timeout",
+        "test_regular.py",
+    )
+    every_item.assert_outcomes(passed=9, deselected=1)
+
+    only_db_test = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "-m", "smoke and db_test", "test_regular.py"
+    )
+    only_db_test.assert_outcomes(passed=2, deselected=8)
 
 
 def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
