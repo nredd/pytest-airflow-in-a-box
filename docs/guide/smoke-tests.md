@@ -7,12 +7,18 @@ no files written. Off unless configured:
 pytest --airflow-smoke --dag-folder=dags/
 ```
 
-or persistently via the `airflow_smoke` ini option. Every item carries `smoke`, so `-m smoke` /
-`-m "not smoke"` select exactly the bundled catalog. Explicit selection is honored: pointing
-pytest at a file or node ID (`pytest tests/test_x.py`, `pytest tests/test_x.py::test_one`) runs
-*only* that selection and drops the catalog, while directory positionals (`pytest tests/`),
-bare runs, and `testpaths`-driven runs keep it. `-k`, `-m`, and `--deselect ::smoke::<name>`
-apply to the items as usual:
+or persistently via the `airflow_smoke` ini option. Every item carries `smoke` (plus `timeout`,
+and `db_test` on the Dag-integrity and pool-reference checks), so `-m smoke` / `-m "not smoke"`
+select exactly the bundled catalog. Explicit selection is honored: pointing pytest at a file or
+node ID (`pytest tests/test_x.py`, `pytest tests/test_x.py::test_one`) runs *only* that
+selection and drops the catalog, while directory positionals (`pytest tests/`), bare runs, and
+`testpaths`-driven runs keep it -- *unless* an explicit `-m` expression mentions `smoke` and
+would itself select a real smoke item (e.g. `-m smoke`, `-m "smoke and db_test"`), in which
+case that unambiguous opt-in overrides the file/node-ID scoping and the catalog stays in. An
+`-m` expression that never mentions `smoke` (`-m db_test`, `-m "not slow"`) does not, even if
+it happens to match some smoke item's other marks -- otherwise an unrelated filter on an
+explicitly scoped run could silently pull in the whole catalog. `-k` and `--deselect
+::smoke::<name>` apply to the items as usual:
 
 Under `pytest-xdist`, bundled items remain independently schedulable across workers. The first item
 to need the corpus parses it once and publishes a serialized artifact below the isolated run root;

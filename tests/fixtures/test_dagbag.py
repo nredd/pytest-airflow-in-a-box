@@ -231,6 +231,7 @@ def _fake_config(
         args_source=pytest.Config.ArgsSource.ARGS if args else pytest.Config.ArgsSource.TESTPATHS,
         invocation_params=SimpleNamespace(dir=tmp_path),
         args=args,
+        option=SimpleNamespace(markexpr=""),
     )
 
 

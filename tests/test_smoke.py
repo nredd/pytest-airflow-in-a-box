@@ -126,7 +126,11 @@ def test_smoke_enabled_rejects_non_boolean_ini() -> None:
 
 
 def _scope_config(
-    *, args_source: pytest.Config.ArgsSource, args: list[str], invocation_dir: Path
+    *,
+    args_source: pytest.Config.ArgsSource,
+    args: list[str],
+    invocation_dir: Path,
+    markexpr: str = "",
 ) -> Any:
     """Create a minimal configuration double for `_smoke_in_scope` tests.
 
@@ -134,13 +138,17 @@ def _scope_config(
         args_source: pytest.Config.ArgsSource describing where the positional args came from.
         args: list[str] of resolved positional args.
         invocation_dir: pathlib.Path of the invocation directory.
+        markexpr: str resolved `-m` mark expression.
 
     Returns:
         types.SimpleNamespace shaped like the configuration surface under test.
     """
 
     return SimpleNamespace(
-        args_source=args_source, args=args, invocation_params=SimpleNamespace(dir=invocation_dir)
+        args_source=args_source,
+        args=args,
+        invocation_params=SimpleNamespace(dir=invocation_dir),
+        option=SimpleNamespace(markexpr=markexpr),
     )
 
 
@@ -176,6 +184,83 @@ def test_smoke_in_scope_keeps_catalog_for_directory_arg(tmp_path: Path) -> None:
         args_source=pytest.Config.ArgsSource.ARGS,
         args=["missing.py::test_one", "sub"],
         invocation_dir=tmp_path,
+    )
+
+    assert smoke._smoke_in_scope(config) is True
+
+
+@pytest.mark.parametrize(
+    ("markexpr", "expected"),
+    [
+        ("", False),
+        ("smoke", True),
+        ("not smoke", False),
+        ("smoke or unrelated_marker", True),
+        ("unrelated_marker", False),
+        # No literal `smoke` token: must NOT force the catalog into scope even though the
+        # expression happens to match real smoke-item marks once vacuously true (absence of
+        # an unrelated marker) or by name alone. Forcing scope here would silently balloon
+        # any explicitly-scoped run that merely deselects by an unrelated marker.
+        ("not slow", False),
+        ("timeout", False),
+        ("db_test", False),
+        # `timeout` and `db_test` are real markers every/some smoke items carry too -- once
+        # `smoke` is explicitly mentioned, conjoining with either must still resolve.
+        ("smoke and timeout", True),
+        ("smoke and db_test", True),
+        # Only the 7 non-`db_test` items match; a flat union-of-names matcher would
+        # wrongly return False here since `db_test` is present on *some* smoke item.
+        ("smoke and not db_test", True),
+        # No real smoke item carries `db_test` without `timeout`.
+        ("smoke and db_test and not timeout", False),
+        # No real smoke item's `smoke` mark takes keyword arguments.
+        ("smoke(iteration=1)", False),
+        ("smoke(", False),
+    ],
+    ids=[
+        "empty",
+        "bare",
+        "negated",
+        "or-clause",
+        "unrelated",
+        "negated-unrelated",
+        "timeout-alone",
+        "db-test-alone",
+        "smoke-and-timeout",
+        "smoke-and-db-test",
+        "smoke-and-not-db-test",
+        "impossible-combo",
+        "kwargs-blind",
+        "malformed",
+    ],
+)
+def test_markexpr_wants_smoke(markexpr: str, expected: bool, tmp_path: Path) -> None:
+    """Resolve whether a `-m` expression explicitly opts into the smoke catalog."""
+
+    config = _scope_config(
+        args_source=pytest.Config.ArgsSource.ARGS,
+        args=[],
+        invocation_dir=tmp_path,
+        markexpr=markexpr,
+    )
+
+    assert smoke._markexpr_wants_smoke(config) is expected
+
+
+def test_smoke_in_scope_mark_expression_overrides_node_id_and_file_args(
+    tmp_path: Path,
+) -> None:
+    """Keep the catalog when `-m` explicitly selects `smoke`, even with file/node-ID args.
+
+    Regression test for https://github.com/nredd/pytest-airflow-in-a-box/issues/133.
+    """
+
+    (tmp_path / "test_x.py").write_text("", encoding="utf-8")
+    config = _scope_config(
+        args_source=pytest.Config.ArgsSource.ARGS,
+        args=["test_x.py::test_one", "test_x.py"],
+        invocation_dir=tmp_path,
+        markexpr="smoke",
     )
 
     assert smoke._smoke_in_scope(config) is True
@@ -1653,6 +1738,17 @@ with DAG(dag_id="valid_dag", schedule=None, tags=["team-a"]) as dag:
     t()
 """
 
+VALID_DAG_WITH_OWNER = """
+from airflow.sdk import DAG, task
+
+with DAG(dag_id="valid_dag", schedule=None, tags=["team-a"]) as dag:
+    @task(owner="team-a")
+    def t():
+        pass
+
+    t()
+"""
+
 BROKEN_DAG = """
 raise RuntimeError("deliberately broken smoke test Dag")
 """
@@ -2111,6 +2207,132 @@ def test_explicit_node_id_and_file_args_exclude_smoke_catalog(
     file = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "test_regular.py")
     file.assert_outcomes(passed=1)
     file.stdout.no_fnmatch_line("*::smoke*")
+
+
+def test_explicit_mark_expression_overrides_positional_exclusion(
+    pytester: pytest.Pytester,
+) -> None:
+    """Let an explicit `-m` expression selecting `smoke` win over positional scoping.
+
+    Regression test for https://github.com/nredd/pytest-airflow-in-a-box/issues/133: an
+    explicit file or node-ID positional used to drop the smoke catalog unconditionally, so
+    `-m smoke` combined with either had nothing to select.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    file_selected = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke", "test_regular.py"
+    )
+    file_selected.assert_outcomes(passed=5, deselected=1)
+
+    node_selected = pytester.runpytest_subprocess(
+        "-q",
+        "--airflow-smoke",
+        "--dag-folder=dags",
+        "-m",
+        "smoke",
+        "test_regular.py::test_regular",
+    )
+    node_selected.assert_outcomes(passed=5, deselected=1)
+
+    file_excluded = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke", "test_regular.py"
+    )
+    file_excluded.assert_outcomes(passed=1)
+    file_excluded.stdout.no_fnmatch_line("*::smoke*")
+
+
+def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
+    pytester: pytest.Pytester,
+) -> None:
+    """Let a conjunction with a non-`smoke` marker a real item carries win too.
+
+    A flat matcher over the union of every known smoke marker name would wrongly resolve
+    `-m "smoke and not db_test"`: `db_test` names a marker on *some* smoke items
+    (`DagBagIntegrityItem`, `PoolReferencesExistItem`), so the union sees it as "present"
+    and negating it evaluates to `False` -- even though the other seven bundled items
+    genuinely lack `db_test` and the expression does select them.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    with_db_test = pytester.runpytest_subprocess(
+        "-q",
+        "--airflow-smoke",
+        "--dag-folder=dags",
+        "-m",
+        "smoke and db_test",
+        "test_regular.py",
+    )
+    with_db_test.assert_outcomes(passed=2, deselected=4)
+
+    without_db_test = pytester.runpytest_subprocess(
+        "-q",
+        "--airflow-smoke",
+        "--dag-folder=dags",
+        "-m",
+        "smoke and not db_test",
+        "test_regular.py",
+    )
+    without_db_test.assert_outcomes(passed=3, deselected=3)
+
+
+def test_markexpr_override_reaches_every_conditional_smoke_item(
+    pytester: pytest.Pytester,
+) -> None:
+    """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 5.
+
+    `_SMOKE_ITEM_MARK_SETS` is hand-synced with the `add_marker` calls scattered across nine
+    `pytest.Item` subclasses; the other `-m`-override regression tests only enable the five
+    unconditional items. Enabling all four ini-gated policies too (every item, like every
+    other, carries only `smoke` + `timeout`) would catch a future item adding a marker
+    `_SMOKE_ITEM_MARK_SETS` doesn't yet know about. The Dag sets an explicit non-stock owner
+    so `airflow_forbid_default_owner` passes rather than exercising its failure path.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG_WITH_OWNER)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_dag_id_pattern = ^valid_\n"
+        "airflow_required_dag_tags =\n    team-a\n"
+        "airflow_forbid_default_owner = true\n"
+        "airflow_dag_snapshot_dir = snapshots\n"
+    )
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    every_item = pytester.runpytest_subprocess(
+        "-q",
+        "--dag-folder=dags",
+        "--airflow-smoke-update",
+        "-m",
+        "smoke and timeout",
+        "test_regular.py",
+    )
+    every_item.assert_outcomes(passed=9, deselected=1)
+
+    only_db_test = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "-m", "smoke and db_test", "test_regular.py"
+    )
+    only_db_test.assert_outcomes(passed=2, deselected=8)
 
 
 def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
