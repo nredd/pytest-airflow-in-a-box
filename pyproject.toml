@@ -63,6 +63,9 @@ Repository = "https://github.com/nredd/pytest-airflow-in-a-box"
 [project.entry-points.pytest11]
 pytest_airflow_in_a_box = "pytest_airflow_in_a_box.plugin"
 
+[project.scripts]
+airflow-migration-diff = "pytest_airflow_in_a_box.migration.cli:main"
+
 [dependency-groups]
 # The dev group carries the 3.x pins directly so `uv sync` / `uv run` keep a working
 # Airflow without naming an extra; the mutually-exclusive `airflow2` extra stays

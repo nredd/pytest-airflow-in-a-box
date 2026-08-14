@@ -56,6 +56,7 @@ nav:
       - Database: guide/database.md
       - Live REST API: guide/rest-api.md
       - Migration outcome diff: guide/migration-diff.md
+      - Migration diff orchestrator: guide/migration-orchestrator.md
       - Cookbook: guide/cookbook.md
   - Reference:
       - Markers: reference/markers.md

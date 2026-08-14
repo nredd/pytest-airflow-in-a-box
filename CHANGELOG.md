@@ -51,6 +51,12 @@ All notable changes to this project will be documented in this file. The format 
   from inside the runtest phase's own warning context, where any consumer `error::` filter
   covering a warning Airflow's own bootstrap happens to raise could already turn database
   initialization into a misleading `AirflowCompatibilityError` on that worker's first test.
+- `airflow-migration-diff`, a console script that `uv`-provisions a disposable Airflow 2.x
+  environment and a disposable Airflow 3.x environment, records outcomes on each with
+  `--airflow-record`/`--airflow-baseline`, and prints the categorized migration diff; exit
+  code 0 means no regressions, 1 means at least one was found, and 2 means the orchestrator
+  itself failed. Categorization is `--airflow-record`'s own `compute_categories`, not a
+  reimplementation ([#44](https://github.com/nredd/pytest-airflow-in-a-box/issues/44)).
 
 ### Changed
 
