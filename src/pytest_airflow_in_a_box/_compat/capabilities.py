@@ -36,6 +36,7 @@ SUPPORTED_RELEASES: tuple[Release, ...] = (
     (3, 2, 1),
     (3, 2, 2),
     (3, 3, 0),
+    (3, 3, 1),
 )
 SUPPORTED_VERSIONS = tuple(
     ".".join(str(part) for part in release) for release in SUPPORTED_RELEASES
@@ -210,6 +211,15 @@ _CERTIFIED_CAPABILITIES = {
         startup_details_supports_sentry=True,
         runtime_task_instance_supports_queue=True,
     ),
+    (3, 3, 1): AirflowCapabilities(
+        release=(3, 3, 1),
+        dag_bag_location=DagBagLocation.DAG_PROCESSING,
+        dag_bag_supports_include_examples=False,
+        task_instance_runner=TaskInstanceRunner.SDK_RUN_TASK,
+        refresh_from_task_supports_dag_run=True,
+        startup_details_supports_sentry=True,
+        runtime_task_instance_supports_queue=True,
+    ),
 }
 _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 1, 0): _SerializedDagLocation.SERIALIZED_OBJECTS,
@@ -224,6 +234,7 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 2, 1): _SerializedDagLocation.DEFINITIONS,
     (3, 2, 2): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
+    (3, 3, 1): _SerializedDagLocation.DEFINITIONS,
 }
 _REQUIRED_SYMBOLS = (
     ("airflow.sdk", "DAG"),
