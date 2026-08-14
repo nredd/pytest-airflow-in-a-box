@@ -33,19 +33,24 @@ pytest --airflow-baseline=baseline.json --airflow-baseline-select=passing
 ```
 
 - `passing` -- every possible regression lives here; the migration iteration loop runs this
-- `failing` -- fixed/broken-on-both candidates (baseline `failed` or `error`)
+  (baseline `passed` or `xpassed`, the same `pass` projection the comparison uses)
+- `failing` -- fixed/broken-on-both candidates (baseline `failed`, `error`, or `xfailed`, the same
+  `fail` projection the comparison uses)
 - `new` -- nodeids absent from the baseline
 
-Composes with `-k`/`-m`. `missing` is not selectable -- nothing to collect. A baseline
-`skipped`/`xfailed`/`xpassed` entry is eligible for none of the three selectors, matching how the
-comparison folds a neutral outcome away from `regression`/`fixed`.
+Composes with `-k`/`-m`. `missing` is not selectable -- nothing to collect. Only a genuinely
+neutral baseline entry (a non-gated `skipped`) is eligible for none of the three selectors,
+matching how the comparison folds a neutral outcome away from `regression`/`fixed`.
 
 ## Non-strict xfail during migration
 
 `--airflow-baseline-xfail=PATH` takes a *prior live recording from this same environment*
 (produced by `--airflow-record` alongside a `--airflow-baseline` run) and non-strict xfail-marks
-every known regression -- a nodeid that passed on the baseline and failed or errored in that prior
-live run:
+every known regression -- a nodeid that passed (or xpassed) on the baseline and failed, errored, or
+xfailed in that prior live run. The prior-live side accepts `xfailed` too, on purpose: once a
+regression has been auto-marked once, re-recording the live side while it is still unfixed records
+it as `xfailed`, not `failed`, and the marking must stay self-sustaining across repeated
+`--airflow-baseline-xfail` runs rather than losing track of it:
 
 ```console
 pytest --airflow-baseline=baseline.json --airflow-baseline-xfail=prior-live.json
@@ -96,8 +101,11 @@ top of the artifact.
 `--airflow-record=PATH` writes this JSON at `pytest_sessionfinish`, once, from the xdist
 controller (or the single process, when not running under `pytest-xdist`) -- test reports already
 funnel there, so no worker coordination is needed. A `KeyboardInterrupt` or internal-error session
-still writes, flagged `complete: false`. A hard kill (SIGKILL, OOM) writes nothing -- there is no
-crash-safe partial artifact, by design.
+still writes, flagged `complete: false`. A hard kill of the whole pytest process (SIGKILL, OOM)
+writes nothing -- there is no crash-safe partial artifact, by design. An individual `pytest-xdist`
+*worker* subprocess crashing mid-test is a different, survivable case: the controller keeps
+running, and the crashed nodeid still gets a real `failed` outcome in the artifact rather than
+silently vanishing (see [Outcome derivation](#outcome-derivation)).
 
 This is the public contract [`pytest_airflow_in_a_box.artifact`](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/src/pytest_airflow_in_a_box/artifact.py)
 exposes for other tooling to build on: `Outcome`, `OutcomeEntry`, `Artifact`, and
@@ -136,6 +144,9 @@ Reports fold in as setup/call/teardown arrive and finalize at teardown:
    unexpected pass is already reported `failed` by pytest itself, so no extra handling is needed),
    or `skipped` (`xfailed` if xfail-marked).
 4. No call report at all (setup skipped, no failure) is `skipped`.
+5. A crashed `pytest-xdist` worker reports its in-flight nodeid once, with no setup/call/teardown
+   phase to attribute the failure to: `failed`, `phase: null` (not `error` -- that stays reserved
+   for a `setup`/`teardown` phase exception specifically).
 
 `gated` is computed by semantically recomputing the family-marker condition -- never by parsing
 the skip reason -- so an environment-caused skip on a family-marked test is never mistagged as

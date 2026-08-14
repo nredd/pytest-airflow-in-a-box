@@ -126,18 +126,6 @@ def _fake_config(
     return config
 
 
-@pytest.fixture(autouse=True)
-def _isolate_active_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Snapshot and restore the module-global active config around each test.
-
-    `record._ACTIVE_CONFIG` is process-global and the real plugin session running this
-    test suite has already set it; tests that call `configure`/`unconfigure` or read
-    `_ACTIVE_CONFIG` must not leak a fake config into the rest of the suite.
-    """
-
-    monkeypatch.setattr(record, "_ACTIVE_CONFIG", record._ACTIVE_CONFIG)
-
-
 @pytest.mark.parametrize(
     ("record_value", "baseline_value", "select_value", "xfail_value", "expected"),
     [
@@ -167,8 +155,8 @@ def test_is_recording_active(
     assert record._is_recording_active(config) is expected
 
 
-def test_configure_installs_stash_and_remembers_config() -> None:
-    """Install the accumulator stash and set the module-level active config."""
+def test_configure_installs_stash_and_pushes_active_config() -> None:
+    """Install the accumulator stash and push the module-level active config."""
 
     config = _fake_config(airflow_record="out.json")
 
@@ -177,24 +165,66 @@ def test_configure_installs_stash_and_remembers_config() -> None:
     assert config.stash[record._ACTIVE_KEY] is True
     assert config.stash[record._ACCUMULATOR_KEY] == {}
     assert config.stash[record._OUTCOMES_KEY] == {}
-    assert record._ACTIVE_CONFIG is config
+    assert record._ACTIVE_CONFIG_STACK[-1] is config
 
 
-def test_unconfigure_forgets_only_the_matching_config() -> None:
-    """Clear the active config only when it matches the one being unconfigured."""
+def test_unconfigure_pops_a_matching_top_of_stack() -> None:
+    """Pop the active config stack in LIFO order, matching nested sessions.
 
+    The stack is not asserted to be empty at any point: the real session running this
+    test suite has already pushed its own config onto it, underneath everything this
+    test pushes.
+    """
+
+    baseline_stack = list(record._ACTIVE_CONFIG_STACK)
+    outer = _fake_config()
+    record.configure(outer)
+
+    inner = _fake_config()
+    record.configure(inner)  # a nested in-process `pytest.main()` session
+
+    assert record._ACTIVE_CONFIG_STACK[-1] is inner
+
+    record.unconfigure(inner)
+
+    assert record._ACTIVE_CONFIG_STACK[-1] is outer  # the outer session is live again
+
+    record.unconfigure(outer)
+
+    assert baseline_stack == record._ACTIVE_CONFIG_STACK
+
+
+def test_unconfigure_removes_a_non_top_entry_defensively() -> None:
+    """Remove a non-LIFO ``unconfigure`` call by identity rather than leaving debris.
+
+    This ordering should never happen through real pytest sessions -- nested
+    ``configure``/``unconfigure`` calls are strictly bracketed -- but the fallback is
+    directly unit-testable and keeps the stack from accumulating stale entries if it
+    ever did.
+    """
+
+    baseline_stack = list(record._ACTIVE_CONFIG_STACK)
     first = _fake_config()
     second = _fake_config()
     record.configure(first)
     record.configure(second)
 
-    record.unconfigure(first)  # stale: `second` is now active, must survive
+    record.unconfigure(first)  # out of LIFO order: `second` is still on top
 
-    assert record._ACTIVE_CONFIG is second
+    assert first not in record._ACTIVE_CONFIG_STACK
+    assert [*baseline_stack, second] == record._ACTIVE_CONFIG_STACK
 
-    record.unconfigure(second)
 
-    assert record._ACTIVE_CONFIG is None
+def test_unconfigure_noop_for_an_unknown_config() -> None:
+    """Leave the stack untouched when the config was never pushed."""
+
+    baseline_stack = list(record._ACTIVE_CONFIG_STACK)
+    known = _fake_config()
+    record.configure(known)
+
+    record.unconfigure(_fake_config())  # never configured
+
+    assert [*baseline_stack, known] == record._ACTIVE_CONFIG_STACK
 
 
 def test_stash_gated_property_noop_when_inactive() -> None:
@@ -266,11 +296,11 @@ def test_accumulate_setup_call_teardown_phases() -> None:
     assert node.teardown_failed is False
 
 
-def test_accumulate_ignores_unrecognized_phase() -> None:
-    """Update duration/gated but no phase field for an unrecognized `when` value."""
+def test_accumulate_marks_crashed_for_an_unrecognized_phase() -> None:
+    """Flag `crashed` (not a normal phase field) for a non-setup/call/teardown report."""
 
     accumulators: dict[str, record._NodeAccumulator] = {}
-    report = _report(when="collect", outcome="passed", duration=0.5)
+    report = _report(when="???", outcome="failed", duration=0.5)
 
     record._accumulate(accumulators, report)
 
@@ -279,6 +309,7 @@ def test_accumulate_ignores_unrecognized_phase() -> None:
     assert node.setup_failed is False
     assert node.call_outcome is None
     assert node.teardown_failed is False
+    assert node.crashed is True
 
 
 def test_accumulate_records_call_wasxfail() -> None:
@@ -340,11 +371,36 @@ def test_finalize_derives_every_outcome(
     )
 
 
+def test_finalize_crashed_wins_over_every_other_phase_field() -> None:
+    """Report a crashed worker as `failed` even if other phase fields were also set.
+
+    A crash report is always the sole report for its nodeid in practice, so the other
+    fields stay at their defaults -- but `crashed` is checked first regardless, so a
+    hypothetical future combination cannot silently fall through to a misleading
+    `error`/`skipped` classification instead.
+    """
+
+    node = record._NodeAccumulator(
+        gated=True,
+        duration=1.0,
+        setup_failed=True,
+        teardown_failed=True,
+        call_outcome="passed",
+        crashed=True,
+    )
+
+    entry = record._finalize(node)
+
+    assert entry == OutcomeEntry(
+        outcome=Outcome.FAILED.value, phase=None, gated=True, duration=1.0
+    )
+
+
 def test_handle_logreport_noop_on_xdist_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip accumulation entirely on an xdist worker."""
 
     monkeypatch.setenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, "gw0")
-    monkeypatch.setattr(record, "_ACTIVE_CONFIG", _fake_config(airflow_record="x.json"))
+    monkeypatch.setattr(record, "_ACTIVE_CONFIG_STACK", [_fake_config(airflow_record="x.json")])
 
     record.handle_logreport(_report(when="teardown"))  # must not raise
 
@@ -353,7 +409,7 @@ def test_handle_logreport_noop_without_active_config(monkeypatch: pytest.MonkeyP
     """Skip accumulation when no config has been configured yet."""
 
     monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
-    monkeypatch.setattr(record, "_ACTIVE_CONFIG", None)
+    monkeypatch.setattr(record, "_ACTIVE_CONFIG_STACK", [])
 
     record.handle_logreport(_report(when="teardown"))  # must not raise
 
@@ -364,11 +420,30 @@ def test_handle_logreport_noop_when_inactive(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
     config = _fake_config()
     config.stash[record._ACTIVE_KEY] = False
-    monkeypatch.setattr(record, "_ACTIVE_CONFIG", config)
+    monkeypatch.setattr(record, "_ACTIVE_CONFIG_STACK", [config])
 
     record.handle_logreport(_report(when="teardown"))
 
     assert record._OUTCOMES_KEY not in config.stash
+
+
+def test_handle_logreport_uses_the_top_of_a_nested_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route reports to the innermost active config, not an outer one underneath it."""
+
+    monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    outer = _fake_config(airflow_record="outer.json")
+    record.configure(outer)
+    inner = _fake_config(airflow_record="inner.json")
+    record.configure(inner)
+
+    record.handle_logreport(_report(when="setup", outcome="passed"))
+    record.handle_logreport(_report(when="call", outcome="passed"))
+    record.handle_logreport(_report(when="teardown", outcome="passed"))
+
+    assert "tests/x.py::test_a" in inner.stash[record._OUTCOMES_KEY]
+    assert outer.stash[record._OUTCOMES_KEY] == {}
 
 
 def test_handle_logreport_accumulates_without_finalizing_before_teardown(
@@ -379,7 +454,6 @@ def test_handle_logreport_accumulates_without_finalizing_before_teardown(
     monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
     config = _fake_config(airflow_record="x.json")
     record.configure(config)
-    monkeypatch.setattr(record, "_ACTIVE_CONFIG", config)
 
     record.handle_logreport(_report(when="setup", outcome="passed"))
 
@@ -393,7 +467,6 @@ def test_handle_logreport_finalizes_at_teardown(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
     config = _fake_config(airflow_record="x.json")
     record.configure(config)
-    monkeypatch.setattr(record, "_ACTIVE_CONFIG", config)
 
     record.handle_logreport(_report(when="setup", outcome="passed", duration=0.1))
     record.handle_logreport(_report(when="call", outcome="passed", duration=0.2))
@@ -401,6 +474,29 @@ def test_handle_logreport_finalizes_at_teardown(monkeypatch: pytest.MonkeyPatch)
 
     outcomes = config.stash[record._OUTCOMES_KEY]
     assert outcomes["tests/x.py::test_a"]["outcome"] == Outcome.PASSED.value
+
+
+def test_handle_logreport_finalizes_a_crashed_xdist_worker_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finalize a crashed-worker report (`when="???"`) as `failed`, not lost.
+
+    `xdist.dsession.DSession.handle_crashitem` synthesizes exactly one report with
+    this `when` value for the item a crashed worker was running, with no setup/call/
+    teardown reports either before or after it.
+    """
+
+    monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    config = _fake_config(airflow_record="x.json")
+    record.configure(config)
+
+    record.handle_logreport(_report(when="???", outcome="failed", duration=0.4))
+
+    outcomes = config.stash[record._OUTCOMES_KEY]
+    assert outcomes["tests/x.py::test_a"] == OutcomeEntry(
+        outcome=Outcome.FAILED.value, phase=None, gated=False, duration=0.4
+    )
+    assert "tests/x.py::test_a" not in config.stash[record._ACCUMULATOR_KEY]
     assert outcomes["tests/x.py::test_a"]["duration"] == pytest.approx(0.4)
     assert "tests/x.py::test_a" not in config.stash[record._ACCUMULATOR_KEY]
 

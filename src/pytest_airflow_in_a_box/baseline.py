@@ -386,8 +386,11 @@ def _selected(nodeid: str, baseline: Artifact, selector: str) -> bool:
     Selection is computed from the *baseline* outcome, before live outcomes exist:
     `passing` is where every possible regression lives (the migration iteration loop),
     `failing` covers fixed/broken-on-both candidates, `new` covers nodeids absent from
-    the baseline. Skipped/xfailed/xpassed baseline entries are eligible for none of the
-    three, matching `_project`'s neutral treatment.
+    the baseline. `passing` and `failing` reuse `_PASS_OUTCOMES`/`_FAIL_OUTCOMES`, the
+    same projection `compute_categories` uses, so a baseline `xpassed` entry is
+    selectable under `passing` and a baseline `xfailed` entry is selectable under
+    `failing` -- only a genuinely neutral (non-gated `skipped`) baseline entry is
+    eligible for none of the three selectors.
 
     Parameters:
         nodeid: str containing the live item's nodeid.
@@ -404,8 +407,8 @@ def _selected(nodeid: str, baseline: Artifact, selector: str) -> bool:
     if entry is None:
         return False
     if selector == "passing":
-        return entry["outcome"] == Outcome.PASSED.value
-    return entry["outcome"] in (Outcome.FAILED.value, Outcome.ERROR.value)
+        return entry["outcome"] in _PASS_OUTCOMES
+    return entry["outcome"] in _FAIL_OUTCOMES
 
 
 def _deselect(config: pytest.Config, items: list[pytest.Item], kept: list[pytest.Item]) -> None:
@@ -448,8 +451,12 @@ def _apply_select(config: pytest.Config, items: list[pytest.Item]) -> None:
 def _apply_xfail(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Non-strict xfail-mark every known regression, unless already user-xfail-marked.
 
-    A known regression is a nodeid that passed on the baseline and failed/errored in
-    the prior live recording -- computable at collection from the two artifacts alone.
+    A known regression is a nodeid that passed (`_PASS_OUTCOMES`, the same projection
+    `compute_categories` uses -- an `xpassed` baseline counts) on the baseline and
+    failed or errored (`_FAIL_OUTCOMES`, so a previously auto-marked regression that
+    re-recorded as `xfailed` still counts, keeping repeated `--airflow-baseline-xfail`
+    runs self-sustaining) in the prior live recording -- computable at collection from
+    the two artifacts alone.
 
     Parameters:
         config: pytest.Config containing the xfail options and cache stash.
@@ -469,7 +476,7 @@ def _apply_xfail(config: pytest.Config, items: list[pytest.Item]) -> None:
     known_regressions = frozenset(
         nodeid
         for nodeid, baseline_entry in baseline["outcomes"].items()
-        if baseline_entry["outcome"] == Outcome.PASSED.value
+        if baseline_entry["outcome"] in _PASS_OUTCOMES
         and prior_live is not None
         and _outcome_of(prior_live, nodeid) in _FAIL_OUTCOMES
     )

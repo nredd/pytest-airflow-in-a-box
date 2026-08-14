@@ -410,22 +410,34 @@ def test_outcome_of_present_and_absent() -> None:
         ("new", "absent", True),
         ("passing", "absent", False),
         ("passing", "present_passed", True),
+        ("passing", "present_xpassed", True),
         ("passing", "present_failed", False),
+        ("passing", "present_skipped", False),
         ("failing", "absent", False),
         ("failing", "present_failed", True),
         ("failing", "present_error", True),
+        ("failing", "present_xfailed", True),
         ("failing", "present_passed", False),
+        ("failing", "present_skipped", False),
     ],
 )
 def test_selected_matches_baseline_bucket(selector: str, nodeid: str, expected: bool) -> None:
-    """Select strictly by baseline outcome, matching `_project`'s neutral treatment."""
+    """Select by the same pass/fail projection `_project`/`compute_categories` use.
+
+    A baseline `xpassed` entry is selectable under `passing` and a baseline `xfailed`
+    entry is selectable under `failing` -- only a genuinely neutral `skipped` entry is
+    eligible for neither.
+    """
 
     artifact = _artifact(
         {
             "present": _entry(outcome="passed"),
             "present_passed": _entry(outcome="passed"),
+            "present_xpassed": _entry(outcome="xpassed"),
             "present_failed": _entry(outcome="failed"),
             "present_error": _entry(outcome="error"),
+            "present_xfailed": _entry(outcome="xfailed"),
+            "present_skipped": _entry(outcome="skipped"),
         }
     )
 
@@ -569,8 +581,43 @@ def test_apply_xfail_marks_known_regressions_and_skips_user_marked(tmp_path: Pat
         "tests/x.py::test_user_marked",
     }
     assert len(regressed.added_markers) == 1
+    added_mark = regressed.added_markers[0]
+    assert added_mark.name == "xfail"
+    assert added_mark.kwargs["strict"] is False
+    assert baseline._XFAIL_REASON_PREFIX in added_mark.kwargs["reason"]
     assert user_marked.added_markers == []
     assert still_failing.added_markers == []
+
+
+def test_apply_xfail_treats_xpassed_baseline_and_xfailed_prior_live_as_matching(
+    tmp_path: Path,
+) -> None:
+    """Mark a known regression whose baseline is `xpassed` and prior-live is `xfailed`.
+
+    Both count under the same `_PASS_OUTCOMES`/`_FAIL_OUTCOMES` projection
+    `compute_categories` uses: an `xpassed` baseline is still a "passed" nodeid for
+    this purpose, and an `xfailed` prior-live is what a previously auto-marked
+    regression re-records as on a repeated `--airflow-baseline-xfail` run, so it must
+    keep counting as a known regression rather than dropping out.
+    """
+
+    baseline_path = tmp_path / "baseline.json"
+    write_artifact(
+        baseline_path, _artifact({"tests/x.py::test_regressed": _entry(outcome="xpassed")})
+    )
+    prior_path = tmp_path / "prior-live.json"
+    write_artifact(
+        prior_path, _artifact({"tests/x.py::test_regressed": _entry(outcome="xfailed")})
+    )
+    config = _fake_config(
+        airflow_baseline=str(baseline_path), airflow_baseline_xfail=str(prior_path)
+    )
+    item = _item("tests/x.py::test_regressed")
+
+    baseline._apply_xfail(config, [item])
+
+    assert config.stash[baseline._KNOWN_REGRESSIONS_KEY] == {"tests/x.py::test_regressed"}
+    assert len(item.added_markers) == 1
 
 
 def test_apply_xfail_ignores_a_cached_none_prior_live(tmp_path: Path) -> None:

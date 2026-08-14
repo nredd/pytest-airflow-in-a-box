@@ -156,7 +156,10 @@ def test_baseline_select_stays_collection_consistent_under_xdist(
         "2",
     )
 
-    result.assert_outcomes(passed=1)
+    # `passing` selects both `test_pass` (baseline `passed`) and `test_xpass`
+    # (baseline `xpassed`, which counts under the same pass projection
+    # `compute_categories` uses); `test_fail`/`test_skip`/`test_xfail` are deselected.
+    result.assert_outcomes(passed=1, xpassed=1)
     assert "Different tests were collected" not in result.stdout.str()
 
 
@@ -191,3 +194,42 @@ def test_baseline_xfail_stays_collection_consistent_under_xdist(
     # `test_xpass` carries its own xfail marker and XPASSes independently.
     result.assert_outcomes(xpassed=2, failed=1, skipped=1, xfailed=1)
     assert "Different tests were collected" not in result.stdout.str()
+
+
+def test_record_survives_a_crashed_xdist_worker(pytester: pytest.Pytester) -> None:
+    """Record a crashed worker's nodeid as `failed`, not silently missing.
+
+    `xdist.dsession.DSession.handle_crashitem` synthesizes exactly one report with
+    `when="???"` for the item a crashed worker was running, with no setup/call/
+    teardown reports around it; `os._exit` reliably kills the worker process the way a
+    segfault or OOM kill would, without pytest's normal exception machinery ever
+    running.
+
+    Parameters:
+        pytester: pytest.Pytester running the `-n 2` invocation in a subprocess.
+    """
+
+    pytester.makepyfile(
+        """
+        import os
+
+
+        def test_survivor():
+            assert True
+
+
+        def test_crasher():
+            os._exit(1)
+        """
+    )
+    destination = pytester.path / "record.json"
+
+    result = pytester.runpytest_subprocess(f"--airflow-record={destination}", "-q", "-n", "2")
+
+    result.assert_outcomes(passed=1, failed=1)
+    recorded = artifact.load_artifact(destination)
+    by_name = {nodeid.rsplit("::", 1)[-1]: entry for nodeid, entry in recorded["outcomes"].items()}
+    assert by_name["test_survivor"]["outcome"] == "passed"
+    assert by_name["test_crasher"]["outcome"] == "failed"
+    assert by_name["test_crasher"]["phase"] is None
+    assert by_name["test_crasher"]["gated"] is False
