@@ -8,6 +8,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- Migration outcome diff: `--airflow-record=PATH` writes a versioned JSON artifact of
+  per-test outcomes at session finish, `--airflow-baseline=PATH` compares live outcomes
+  against a prior recording (seven categories: still-passing, broken-on-both,
+  regression, fixed, gated, new, missing), `--airflow-baseline-select` filters
+  collection by baseline outcome, and `--airflow-baseline-xfail=PATH` non-strict
+  xfail-marks known regressions during the migration
+  ([#42](https://github.com/nredd/pytest-airflow-in-a-box/issues/42)).
 - The Airflow 2.x compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)),
   certified against 2.9.3, 2.10.5, and 2.11.2 on CPython 3.10-3.12
   ([#41](https://github.com/nredd/pytest-airflow-in-a-box/issues/41)): `dag_maker` (2.x
@@ -34,13 +41,22 @@ All notable changes to this project will be documented in this file. The format 
   DB-free runner now sends explicit `None` for the declared `DagRun` fields
   (`end_date`, the new `partition_key`) and `FakeSupervisorComms` completes seeded
   `ConnectionResult` payloads the same way, keyed by validation alias.
+- `--airflow-migration-strict` / `airflow_migration_strict` ini option: on the Airflow 2.x
+  family, promotes `RemovedInAirflow3Warning` and `AirflowProviderDeprecationWarning` to
+  test-phase errors, turning a 2.11 run into a forecast of 3.x breakage with no 3.x
+  environment needed; a no-op (warned once) off 2.x
+  ([#43](https://github.com/nredd/pytest-airflow-in-a-box/issues/43)). Fixing this also
+  closed a latent bug independent of the new flag: `ensure_database` now runs under its own
+  default-filter warnings context unconditionally, because on an `xdist` worker it executes
+  from inside the runtest phase's own warning context, where any consumer `error::` filter
+  covering a warning Airflow's own bootstrap happens to raise could already turn database
+  initialization into a misleading `AirflowCompatibilityError` on that worker's first test.
 - `airflow-migration-diff`, a console script that `uv`-provisions a disposable Airflow 2.x
-  environment and a disposable Airflow 3.x environment, records outcomes on each, and prints
-  the categorized migration diff; exit code 0 means no regressions, 1 means at least one was
-  found, and 2 means the orchestrator itself failed. Ships as a draft pending
-  [#42](https://github.com/nredd/pytest-airflow-in-a-box/issues/42)'s artifact contract, which
-  it is built against behind an internal seam rather than duplicating
-  ([#44](https://github.com/nredd/pytest-airflow-in-a-box/issues/44)).
+  environment and a disposable Airflow 3.x environment, records outcomes on each with
+  `--airflow-record`/`--airflow-baseline`, and prints the categorized migration diff; exit
+  code 0 means no regressions, 1 means at least one was found, and 2 means the orchestrator
+  itself failed. Categorization is `--airflow-record`'s own `compute_categories`, not a
+  reimplementation ([#44](https://github.com/nredd/pytest-airflow-in-a-box/issues/44)).
 
 ### Changed
 

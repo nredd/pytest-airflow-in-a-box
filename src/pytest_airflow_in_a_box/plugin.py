@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+from pytest_airflow_in_a_box import baseline, record
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
@@ -59,9 +62,16 @@ from pytest_airflow_in_a_box.markers import (
     apply_family_gate,
     register_markers,
 )
+from pytest_airflow_in_a_box.migration_strict import (
+    apply_migration_strict_filterwarnings,
+    warn_if_migration_strict_is_a_noop,
+)
 from pytest_airflow_in_a_box.reporting import configure_reporting
 from pytest_airflow_in_a_box.results import assertrepr_compare
 from pytest_airflow_in_a_box.smoke import collect_smoke_items
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 __all__ = (
     "airflow_connections",
@@ -233,6 +243,25 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         dest="airflow_doctor",
         help="Print a one-shot diagnostics report and exit without running tests.",
     )
+    group.addoption(
+        "--airflow-migration-strict",
+        action="store_true",
+        default=None,
+        dest="airflow_migration_strict",
+        help=(
+            "Promote Airflow's own RemovedInAirflow3Warning and "
+            "AirflowProviderDeprecationWarning to test-phase errors on a 2.x run; a "
+            "no-op on 3.x."
+        ),
+    )
+    parser.addini(
+        "airflow_migration_strict",
+        "Promote Airflow's 2->3 deprecation categories to test-phase errors on a 2.x run.",
+        type="bool",
+        default=False,
+    )
+    record.register_options(parser)
+    baseline.register_options(parser)
     register_ini_defaults(parser)
 
 
@@ -290,6 +319,8 @@ def pytest_configure(config: pytest.Config) -> None:
     configure_reporting(config)
     apply_option_defaults(config)
     apply_filterwarnings(config)
+    record.configure(config)
+    warn_if_migration_strict_is_a_noop(config)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -299,7 +330,7 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         config: pytest.Config for the completed test session.
     """
 
-    del config
+    record.unconfigure(config)
     _uninstall_dict_config_interceptor()
 
 
@@ -340,7 +371,11 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Drop duplicate Dag-file items and append the bundled smoke catalog.
+    """Drop duplicate Dag-file items, append the smoke catalog, then apply the baseline.
+
+    `baseline.apply_selection_and_xfail` runs last, at effectively normal priority
+    relative to the deduplication and smoke-item injection above it: it must see the
+    final collected item list, not an intermediate one.
 
     Parameters:
         session: pytest.Session that owns the synthetic smoke collector.
@@ -350,6 +385,7 @@ def pytest_collection_modifyitems(
 
     prune_duplicate_items(config, items)
     collect_smoke_items(session, config, items)
+    baseline.apply_selection_and_xfail(session, config, items)
 
 
 def _requires_database(item: pytest.Item) -> bool:
@@ -393,12 +429,21 @@ def _requires_database_at_collection(item: pytest.Item) -> bool:
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
-    """Initialize the database when the surviving collection requires it.
+    """Apply migration-strict filters, then initialize the database when required.
 
-    Runs after deselection so `pytest -k unrelated` stays free, and before the
-    run phase so test execution never absorbs the one-time migration cost.
-    Family- and environment-gated items that will skip do not trigger
-    initialization.
+    The migration-strict mutation runs first and unconditionally with respect to the
+    worker check below it: pytest re-reads the `filterwarnings` ini list per warning
+    context, so mutating it here (rather than `pytest_configure`) leaves the plugin's
+    error filters absent during collection's own warning context and present for
+    every runtest-phase warning context. On an xdist worker this hook still runs once
+    per worker process, and each worker parses its own copy of the ini list, so every
+    worker needs its own mutation -- unlike the database initialization below, which
+    is genuinely once-per-run and skips workers.
+
+    Database initialization runs after deselection so `pytest -k unrelated` stays
+    free, and before the run phase so test execution never absorbs the one-time
+    migration cost. Family- and environment-gated items that will skip do not
+    trigger initialization.
 
     On an xdist worker the eager initialization is skipped: a `pytest.UsageError`
     raised from this hook escapes through execnet as a crashed-node traceback wall,
@@ -410,6 +455,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         session: pytest.Session whose deselected item list is final.
     """
 
+    apply_migration_strict_filterwarnings(session.config)
     if os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE) is not None:
         return
     if any(_requires_database_at_collection(item) for item in session.items):
@@ -427,6 +473,20 @@ def _ensure_database_or_usage_error(root: Path) -> None:
     `pytest_runtest_setup` safety net, where the same message renders as per-test
     errors instead of a crashed node.
 
+    The `ensure_database` call is wrapped in its own default-filter warnings context,
+    unconditionally, regardless of `--airflow-migration-strict` or any user-supplied
+    `error::` filter. On an xdist worker the eager `pytest_collection_finish`
+    initialization is skipped (see that hook's docstring), so this call runs from the
+    `pytest_runtest_setup` safety net instead -- inside the runtest phase's own warning
+    context. Airflow 2.11.2 raises `RemovedInAirflow3Warning` from
+    `airflow.metrics.protocols` on first import, so under any active `error::` filter
+    covering that category, every worker's *first* test fails on database
+    initialization with a misleading `AirflowCompatibilityError`, misattributed by
+    `_resolve_symbol`'s exception wrapping to an installation problem rather than the
+    warning-turned-exception it actually is. This is a latent bug independent of
+    migration-strict mode -- any consumer with their own `error::` filter over a
+    warning Airflow's import-time bootstrap happens to raise hits it today.
+
     Parameters:
         root: Path containing the bootstrap run directory.
 
@@ -435,7 +495,9 @@ def _ensure_database_or_usage_error(root: Path) -> None:
     """
 
     try:
-        ensure_database(root)
+        with warnings.catch_warnings():
+            warnings.simplefilter("default")
+            ensure_database(root)
     except AirflowCompatibilityError as error:
         raise pytest.UsageError(str(error)) from error
 
@@ -479,6 +541,64 @@ def pytest_assertrepr_compare(
 
     del config
     return assertrepr_compare(op, left, right)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Stash the migration-diff family-gate flag onto every phase report.
+
+    Parameters:
+        item: pytest.Item under test.
+        call: pytest.CallInfo describing the executed phase.
+
+    Yields:
+        None, delegating report construction to inner hookimpls.
+
+    Returns:
+        pytest.TestReport carrying the stashed `gated` user property.
+    """
+
+    del call
+    report = yield
+    record.stash_gated_property(item, report)
+    return report
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Accumulate one migration-diff outcome report, local or forwarded from xdist.
+
+    Parameters:
+        report: pytest.TestReport for one setup/call/teardown phase.
+    """
+
+    record.handle_logreport(report)
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter, exitstatus: int, config: pytest.Config
+) -> None:
+    """Render the `--airflow-baseline` migration diff summary.
+
+    Parameters:
+        terminalreporter: pytest.TerminalReporter receiving the rendered summary.
+        exitstatus: int containing pytest's raw session exit status.
+        config: pytest.Config containing plugin options and accumulated outcomes.
+    """
+
+    baseline.render_terminal_summary(terminalreporter, exitstatus, config)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Write the `--airflow-record` migration outcome artifact.
+
+    Parameters:
+        session: pytest.Session that finished collecting and running tests.
+        exitstatus: int containing pytest's raw session exit status.
+    """
+
+    record.write_recorded_artifact(session, exitstatus)
 
 
 @pytest.hookimpl(optionalhook=True)

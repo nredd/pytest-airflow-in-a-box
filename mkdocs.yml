@@ -52,8 +52,10 @@ nav:
       - Dag-file collection: guide/dag-collection.md
       - Airflow configuration: guide/configuration.md
       - Smoke tests: guide/smoke-tests.md
+      - Migration-strict mode: guide/migration-strict.md
       - Database: guide/database.md
       - Live REST API: guide/rest-api.md
+      - Migration outcome diff: guide/migration-diff.md
       - Migration diff orchestrator: guide/migration-orchestrator.md
       - Cookbook: guide/cookbook.md
   - Reference:

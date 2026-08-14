@@ -362,6 +362,47 @@ def test_api_server_section_reports_not_started() -> None:
     assert any("Not started" in line and "api_server_url" in line for line in lines)
 
 
+def test_migration_strict_section_reports_disabled(tmp_path: Path) -> None:
+    """Report disabled when migration-strict mode is off."""
+
+    state = _state(tmp_path)
+    config: Any = SimpleNamespace(
+        getoption=lambda _name: None, getini=lambda _name: False, stash=pytest.Stash()
+    )
+
+    lines = doctor._migration_strict_section(config, state)
+
+    assert lines == ["- `--airflow-migration-strict`: disabled"]
+
+
+def test_migration_strict_section_reports_enabled_on_v2(tmp_path: Path) -> None:
+    """Report enabled when migration-strict mode is on for a 2.x family state."""
+
+    state = _state(tmp_path, family=AirflowFamily.V2.value)
+    config: Any = SimpleNamespace(
+        getoption=lambda _name: True, getini=lambda _name: False, stash=pytest.Stash()
+    )
+
+    lines = doctor._migration_strict_section(config, state)
+
+    assert lines == ["- `--airflow-migration-strict`: enabled"]
+
+
+def test_migration_strict_section_flags_noop_off_v2(tmp_path: Path) -> None:
+    """Flag migration-strict mode as a no-op when enabled off the 2.x family."""
+
+    state = _state(tmp_path, family=AirflowFamily.V3.value)
+    config: Any = SimpleNamespace(
+        getoption=lambda _name: True, getini=lambda _name: False, stash=pytest.Stash()
+    )
+
+    lines = doctor._migration_strict_section(config, state)
+
+    assert len(lines) == 1
+    assert "no-op" in lines[0]
+    assert "Airflow 2.x" in lines[0]
+
+
 def test_render_doctor_report_combines_every_section(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -379,13 +420,16 @@ def test_render_doctor_report_combines_every_section(
 
     monkeypatch.setattr(doctor, "get_bootstrap_state", _fake_get_bootstrap_state)
 
-    fake_config: Any = SimpleNamespace()
+    fake_config: Any = SimpleNamespace(
+        getoption=lambda _name: None, getini=lambda _name: False, stash=pytest.Stash()
+    )
     report = doctor.render_doctor_report(config=fake_config)
 
     assert report.startswith(doctor.REPORT_TITLE)
     assert "## Storage" in report
     assert "## AIRFLOW_HOME and database" in report
     assert "## Executor" in report
+    assert "## Migration-strict" in report
     assert "## Versions and capabilities" in report
     assert "## API server" in report
     assert report.endswith("\n")
@@ -413,6 +457,8 @@ def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> No
             "*Apache Airflow:*",
             "*## Executor*",
             "*core.executor*: `*`",
+            "*## Migration-strict*",
+            "*--airflow-migration-strict*: disabled*",
             "*## API server*",
             "*Not started*",
         ]
