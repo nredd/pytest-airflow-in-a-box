@@ -6,6 +6,7 @@ __pycache__/
 # Environments
 .venv/
 .venv-ci/
+.venv-airflow-in-a-box/
 
 # Test and analysis output
 .coverage
