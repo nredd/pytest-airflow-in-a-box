@@ -1,0 +1,142 @@
+name: pytest-airflow-in-a-box
+description: >-
+  Provision a constraints-pinned Apache Airflow environment with
+  pytest-airflow-in-a-box installed from PyPI, for a Dag repo's own CI.
+author: nredd
+
+inputs:
+  airflow-version:
+    description: Exact Apache Airflow version to install (e.g. "3.3.0").
+    required: true
+  python-version:
+    description: Python version to provision (e.g. "3.12").
+    required: true
+  extra:
+    description: >-
+      pytest-airflow-in-a-box extra to install: "airflow3" or "airflow2".
+    required: false
+    default: airflow3
+  plugin-version:
+    description: >-
+      Exact pytest-airflow-in-a-box version to install. Defaults to the
+      latest release on PyPI.
+    required: false
+    default: ""
+  uv-version:
+    description: uv version to install and use for environment setup.
+    required: false
+    default: "0.12.2"
+  working-directory:
+    description: >-
+      Directory to run in (venv creation, requirements-file lookup).
+    required: false
+    default: "."
+  requirements-file:
+    description: >-
+      Optional path (relative to working-directory) to a requirements file
+      with additional dependencies (custom operators/providers) to install
+      into the same environment, after the primary install.
+    required: false
+    default: ""
+
+outputs:
+  python-path:
+    description: Absolute path to the provisioned venv's python interpreter.
+    value: ${{ steps.setup-env.outputs.python-path }}
+  venv-path:
+    description: >-
+      Absolute path to the provisioned venv directory, for invoking console
+      scripts directly (e.g. "<venv-path>/bin/airflow-migration-diff").
+    value: ${{ steps.setup-env.outputs.venv-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        EXTRA: ${{ inputs.extra }}
+        AIRFLOW_VERSION: ${{ inputs.airflow-version }}
+        PYTHON_VERSION: ${{ inputs.python-version }}
+      run: |
+        set -euo pipefail
+        case "$EXTRA" in
+          airflow3|airflow2) ;;
+          *)
+            echo "::error::extra '${EXTRA}' is not supported; use 'airflow3' or 'airflow2'." >&2
+            exit 1
+            ;;
+        esac
+        if ! [[ "$AIRFLOW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::airflow-version '${AIRFLOW_VERSION}' must be an exact X.Y.Z release, e.g. '3.3.0'." >&2
+          exit 1
+        fi
+        if ! [[ "$PYTHON_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::python-version '${PYTHON_VERSION}' must be X.Y, e.g. '3.12'." >&2
+          exit 1
+        fi
+
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install uv
+      shell: bash
+      env:
+        UV_VERSION: ${{ inputs.uv-version }}
+        UV_INSTALL_DIR: ${{ runner.temp }}/uv
+        INSTALLER_NO_MODIFY_PATH: "1"
+      run: |
+        set -euo pipefail
+        curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+        echo "${UV_INSTALL_DIR}" >> "$GITHUB_PATH"
+
+    - name: Set up the constrained environment
+      id: setup-env
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AIRFLOW_VERSION: ${{ inputs.airflow-version }}
+        PYTHON_VERSION: ${{ inputs.python-version }}
+        EXTRA: ${{ inputs.extra }}
+        PLUGIN_VERSION: ${{ inputs.plugin-version }}
+        REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+      run: |
+        set -euo pipefail
+        uv venv --python "$PYTHON_VERSION" .venv-airflow-in-a-box
+
+        constraints_file="$(mktemp)"
+        curl --fail --location --silent --show-error \
+          "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
+          --output "$constraints_file"
+
+        plugin_spec="pytest-airflow-in-a-box[${EXTRA}]"
+        if [ -n "$PLUGIN_VERSION" ]; then
+          plugin_spec="pytest-airflow-in-a-box[${EXTRA}]==${PLUGIN_VERSION}"
+        fi
+
+        if [ "$EXTRA" = "airflow2" ]; then
+          # Two-pass install, matching this repo's own compat matrix: Airflow
+          # first under constraints, then the plugin unconstrained -- 2.x
+          # constraints pin pytest as low as 7.4.4, below the plugin's
+          # `pytest>=8` floor, so pytest gets an explicit ceiling instead.
+          uv pip install --python .venv-airflow-in-a-box/bin/python \
+            --constraint "$constraints_file" \
+            "apache-airflow==${AIRFLOW_VERSION}"
+          uv pip install --python .venv-airflow-in-a-box/bin/python \
+            "$plugin_spec" "pytest>=8,<9"
+        else
+          uv pip install --python .venv-airflow-in-a-box/bin/python \
+            --constraint "$constraints_file" \
+            "$plugin_spec" \
+            "apache-airflow-core==${AIRFLOW_VERSION}" \
+            "apache-airflow-providers-sqlite>=4.1,<5"
+        fi
+
+        if [ -n "$REQUIREMENTS_FILE" ]; then
+          uv pip install --python .venv-airflow-in-a-box/bin/python -r "$REQUIREMENTS_FILE"
+        fi
+
+        venv_path="$(pwd)/.venv-airflow-in-a-box"
+        echo "venv-path=${venv_path}" >> "$GITHUB_OUTPUT"
+        echo "python-path=${venv_path}/bin/python" >> "$GITHUB_OUTPUT"
