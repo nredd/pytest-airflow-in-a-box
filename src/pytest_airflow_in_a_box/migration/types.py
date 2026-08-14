@@ -3,14 +3,17 @@
 `DiffResult` and `ComputeCategoryDiff` are the ONE thin interface this package uses to
 reach the seven-bucket categorization owned by issue #42 (`--airflow-record` /
 `--airflow-baseline`). This package never loads an artifact or re-derives a category
-itself; `provision.py` and `run.py` depend only on the callable shape below, and the
-default implementation (`run.unavailable_compute_category_diff`) fails loudly until this
-package is rebased onto #42 and wired to its real `artifact.py` loader plus its exported
-`compute_categories(baseline, live)` function. See `CHANGELOG.md` and issue #44.
+itself; `provision.py` and `run.py` depend only on the callable shape below.
+`run.default_compute_category_diff` is the real implementation, loading both artifacts
+through `pytest_airflow_in_a_box.artifact.load_artifact` and categorizing them through
+`pytest_airflow_in_a_box.baseline.compute_categories` -- the seam stays injectable so
+tests can still drive `cli.execute`/`run.compute_diff` against a fake. See
+`CHANGELOG.md` and issue #44.
 
 References:
     https://github.com/nredd/pytest-airflow-in-a-box/issues/42
     https://github.com/nredd/pytest-airflow-in-a-box/issues/44
+    https://github.com/nredd/pytest-airflow-in-a-box/blob/main/docs/guide/migration-diff.md
 """
 
 from __future__ import annotations

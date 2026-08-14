@@ -286,7 +286,12 @@ def provision_environment(
         plugin_spec_step=False,
         plugin_spec_is_default=plugin_spec_is_default,
     )
-    python_path = (venv_dir / "bin" / "python").resolve()
+    # Deliberately not `.resolve()`d: a `uv venv`'s `bin/python` is a symlink to a
+    # shared base interpreter (often outside any venv, under uv's own Python store),
+    # and `uv` refuses to `pip install` directly into that externally-managed base
+    # interpreter. Resolving the symlink away here would silently point every install
+    # step at the wrong (unmanaged, shared) interpreter instead of this venv.
+    python_path = venv_dir / "bin" / "python"
 
     constraints_text = constraints_fetcher(airflow_version, python_version)
     constraints_path = work_dir / f"constraints-{family.name.lower()}.txt"

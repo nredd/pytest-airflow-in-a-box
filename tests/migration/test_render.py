@@ -49,9 +49,10 @@ def test_render_diff_reports_no_regressions_and_empty_nodeid_sections() -> None:
     assert report.startswith("pytest-airflow-in-a-box migration diff\n")
     assert "Airflow 2.11.2 (V2) on Python 3.12" in report
     assert "Airflow 3.3.1 (V3) on Python 3.12" in report
-    assert "- Regression: 0" in report
-    assert "- Still passing: 5" in report
-    assert "- Gated: 2" in report
+    # Named exactly as docs/guide/migration-diff.md's seven categories.
+    assert "- regression: 0" in report
+    assert "- still-passing: 5" in report
+    assert "- gated: 2" in report
     assert report.count("- (none)") == 4
     assert "## Warnings" not in report
     assert report.rstrip("\n").endswith("Result: no regressions")
@@ -85,6 +86,33 @@ def test_render_diff_lists_nodeids_and_warnings_when_present() -> None:
     assert "## Warnings" in report
     assert "- baseline and live are the same Airflow family" in report
     assert report.rstrip("\n").endswith("Result: REGRESSIONS FOUND")
+
+
+def test_render_diff_counts_use_the_documented_seven_bucket_names() -> None:
+    """Match `docs/guide/migration-diff.md`'s seven bucket names exactly, not a paraphrase."""
+    diff = DiffResult(
+        counts=CategoryCounts(
+            regression=1, fixed=2, broken_on_both=3, still_passing=4, gated=5, new=6, missing=7
+        ),
+        regression_nodeids=(),
+        fixed_nodeids=(),
+        new_nodeids=(),
+        missing_nodeids=(),
+        warnings=(),
+    )
+
+    report = render_diff(diff, baseline_env=_BASELINE_ENV, live_env=_LIVE_ENV)
+
+    for label, count in (
+        ("still-passing", 4),
+        ("broken-on-both", 3),
+        ("gated", 5),
+        ("regression", 1),
+        ("fixed", 2),
+        ("new", 6),
+        ("missing", 7),
+    ):
+        assert f"- {label}: {count}" in report
 
 
 def test_render_diff_ends_with_single_trailing_newline() -> None:

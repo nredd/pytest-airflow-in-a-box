@@ -1,15 +1,10 @@
-<!--
-TODO(redd): link to guide/migration-diff.md (issue #42's own doc page, workflow and
-artifact schema) once #42 merges and this page rebases onto it (issue #44).
--->
-
 # Migration diff orchestrator
 
 `airflow-migration-diff` is a console script (not a pytest option) that runs the full
 2.x -> 3.x migration diff workflow in one command: it `uv`-provisions a disposable
 Airflow 2.x environment and a disposable Airflow 3.x environment, records outcomes on
-each with the plugin's `--airflow-record`/`--airflow-baseline` flags, and prints the
-categorized diff.
+each with the plugin's [`--airflow-record`/`--airflow-baseline`](migration-diff.md)
+flags, and prints the categorized diff.
 
 ```console
 uv tool install pytest-airflow-in-a-box
@@ -24,7 +19,7 @@ Everything after a literal `--` forwards verbatim to both `pytest` invocations.
 | --- | --- |
 | `0` | No regressions. |
 | `1` | At least one regression was found. |
-| `2` | The orchestrator itself failed: `uv` missing, a provisioning failure, a record run that crashed before writing its artifact, or an absent/malformed/incomplete artifact. |
+| `2` | The orchestrator itself failed: `uv` missing, a provisioning failure, a record run that crashed before writing its artifact, or an absent/malformed/unsupported-schema-version/incomplete artifact. |
 
 Only `1` describes the migration itself -- `0` and `2` both mean "not a migration
 regression," for different reasons.
@@ -46,11 +41,12 @@ regression," for different reasons.
 ## What it does not do
 
 `airflow-migration-diff` never reimplements the seven-category diff algorithm -- it
-drives the same `--airflow-record`/`--airflow-baseline` contract the plugin exposes
-directly, the same code whether run by hand across two manually-managed environments or
-through this one command. The category definitions (regression, fixed, broken-on-both,
-still-passing, gated, new, missing) and the artifact schema live with that contract, not
-with this orchestrator.
+drives the same `pytest_airflow_in_a_box.baseline.compute_categories` [Migration
+outcome diff](migration-diff.md) contract exposes directly, the same code whether run
+by hand across two manually-managed environments or through this one command. The
+category definitions (`regression`, `fixed`, `broken-on-both`, `still-passing`,
+`gated`, `new`, `missing`) and the artifact schema live with that contract, not with
+this orchestrator.
 
 ## Real environments, not your test process
 

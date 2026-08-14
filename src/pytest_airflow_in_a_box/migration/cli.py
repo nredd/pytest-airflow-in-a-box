@@ -375,7 +375,7 @@ def execute(
     *,
     provision_environment: Callable[..., ProvisionedEnvironment] = provision.provision_environment,
     run_record: Callable[..., None] = run.run_record,
-    compute_category_diff: ComputeCategoryDiff = run.unavailable_compute_category_diff,
+    compute_category_diff: ComputeCategoryDiff = run.default_compute_category_diff,
 ) -> tuple[int, str]:
     """Run the full provision -> record -> categorize -> render pipeline.
 

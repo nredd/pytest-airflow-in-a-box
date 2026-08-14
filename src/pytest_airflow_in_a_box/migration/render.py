@@ -38,7 +38,7 @@ def _environment_lines(
 
 
 def _counts_lines(diff: DiffResult) -> list[str]:
-    """Render all seven category counts.
+    """Render all seven category counts, named exactly as `docs/guide/migration-diff.md`.
 
     Parameters:
         diff: DiffResult containing the categorized migration diff.
@@ -49,13 +49,13 @@ def _counts_lines(diff: DiffResult) -> list[str]:
 
     counts = diff.counts
     return [
-        f"- Regression: {counts.regression}",
-        f"- Fixed: {counts.fixed}",
-        f"- Broken on both: {counts.broken_on_both}",
-        f"- Still passing: {counts.still_passing}",
-        f"- Gated: {counts.gated}",
-        f"- New: {counts.new}",
-        f"- Missing: {counts.missing}",
+        f"- still-passing: {counts.still_passing}",
+        f"- broken-on-both: {counts.broken_on_both}",
+        f"- gated: {counts.gated}",
+        f"- regression: {counts.regression}",
+        f"- fixed: {counts.fixed}",
+        f"- new: {counts.new}",
+        f"- missing: {counts.missing}",
     ]
 
 
@@ -101,13 +101,13 @@ def render_diff(
     lines.append("## Counts")
     lines.extend(_counts_lines(diff))
     lines.append("")
-    lines.extend(_nodeid_section("Regressions", diff.regression_nodeids))
+    lines.extend(_nodeid_section("regression", diff.regression_nodeids))
     lines.append("")
-    lines.extend(_nodeid_section("Fixed", diff.fixed_nodeids))
+    lines.extend(_nodeid_section("fixed", diff.fixed_nodeids))
     lines.append("")
-    lines.extend(_nodeid_section("New", diff.new_nodeids))
+    lines.extend(_nodeid_section("new", diff.new_nodeids))
     lines.append("")
-    lines.extend(_nodeid_section("Missing", diff.missing_nodeids))
+    lines.extend(_nodeid_section("missing", diff.missing_nodeids))
     if diff.warnings:
         lines.append("")
         lines.append("## Warnings")

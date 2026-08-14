@@ -6,6 +6,12 @@ provisioned 3.x environment to produce a live artifact and (for the user watchin
 stream) pytest's own on-screen summary. Ordinary pytest test-failure exit codes are not
 fatal here -- see issue #42's own record contract -- only a missing artifact afterward is.
 
+`default_compute_category_diff` is the real `ComputeCategoryDiff` seam (see
+`migration/types.py`): it loads both artifacts through
+`pytest_airflow_in_a_box.artifact.load_artifact` and categorizes them through
+`pytest_airflow_in_a_box.baseline.compute_categories`, issue #42's own pure
+seven-bucket comparison. This module never re-derives a category itself.
+
 References:
     https://github.com/nredd/pytest-airflow-in-a-box/issues/42
     https://docs.python.org/3/library/subprocess.html#subprocess.run
@@ -18,6 +24,10 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+
+from pytest_airflow_in_a_box.artifact import Artifact, load_artifact
+from pytest_airflow_in_a_box.baseline import compute_categories
 from pytest_airflow_in_a_box.migration.provision import (
     ProvisionedEnvironment,
     SubprocessRunner,
@@ -25,43 +35,13 @@ from pytest_airflow_in_a_box.migration.provision import (
 )
 from pytest_airflow_in_a_box.migration.types import (
     ArtifactError,
+    CategoryCounts,
     ComputeCategoryDiff,
     DiffResult,
     RecordRunError,
 )
 
 LOGGER = logging.getLogger(__name__)
-
-
-def unavailable_compute_category_diff(
-    baseline_path: Path,
-    live_path: Path,
-    allow_incomplete_baseline: bool,
-    allow_incomplete_live: bool,
-) -> DiffResult:
-    """Report that no category-computation implementation is wired in yet.
-
-    This package ships ahead of issue #42's artifact contract by design (see
-    `migration/types.py`); this is the default `ComputeCategoryDiff` until a rebase onto
-    #42 replaces it with a real loader plus `compute_categories(baseline, live)` call.
-
-    Parameters:
-        baseline_path: pathlib.Path containing the recorded 2.x baseline artifact.
-        live_path: pathlib.Path containing the recorded 3.x live artifact.
-        allow_incomplete_baseline: bool ignored by this placeholder.
-        allow_incomplete_live: bool ignored by this placeholder.
-
-    Raises:
-        ArtifactError: Always -- no category-computation implementation is wired in.
-    """
-
-    del allow_incomplete_baseline, allow_incomplete_live
-    raise ArtifactError(
-        "No category-computation implementation is wired in: this build of "
-        "`airflow-migration-diff` predates issue #42's artifact contract. Recorded "
-        f"artifacts are available at '{baseline_path}' and '{live_path}' for manual "
-        "inspection; rerun once this package has been rebased onto #42."
-    )
 
 
 def run_record(
@@ -111,13 +91,114 @@ def run_record(
         )
 
 
+def _load(path: Path) -> Artifact:
+    """Load one migration artifact, translating pytest's error type to this package's own.
+
+    Parameters:
+        path: pathlib.Path containing the artifact JSON file.
+
+    Returns:
+        Artifact containing the validated artifact.
+
+    Raises:
+        ArtifactError: The artifact is absent, malformed, or an unsupported schema
+            version (`load_artifact` itself raises `pytest.UsageError`, a type this
+            package's callers -- a bare console script, not a pytest session -- have no
+            reason to know about).
+    """
+
+    try:
+        return load_artifact(path)
+    except pytest.UsageError as error:
+        raise ArtifactError(str(error)) from error
+
+
+def _check_complete(artifact: Artifact, path: Path, allow_incomplete: bool, role: str) -> None:
+    """Reject an incomplete artifact unless the matching override is set.
+
+    Parameters:
+        artifact: Artifact loaded from `path`.
+        path: pathlib.Path containing the artifact file, named in the error message.
+        allow_incomplete: bool overriding the rejection.
+        role: str naming the artifact's role (`baseline` or `live`), named in the error
+            message and the suggested flag.
+
+    Raises:
+        ArtifactError: `artifact["complete"]` is `False` and `allow_incomplete` is
+            `False`.
+    """
+
+    if artifact["complete"] or allow_incomplete:
+        return
+    raise ArtifactError(
+        f"The {role} artifact `{path}` was recorded from an incomplete session "
+        f"(`complete: false`); pass `--allow-incomplete-{role}` to use it anyway."
+    )
+
+
+def default_compute_category_diff(
+    baseline_path: Path,
+    live_path: Path,
+    allow_incomplete_baseline: bool,
+    allow_incomplete_live: bool,
+) -> DiffResult:
+    """Load both recorded artifacts and categorize them via issue #42's own contract.
+
+    Parameters:
+        baseline_path: pathlib.Path containing the recorded 2.x baseline artifact.
+        live_path: pathlib.Path containing the recorded 3.x live artifact.
+        allow_incomplete_baseline: bool overriding the incomplete-baseline error.
+        allow_incomplete_live: bool overriding the incomplete-live error.
+
+    Returns:
+        DiffResult containing the categorized migration diff.
+
+    Raises:
+        ArtifactError: An artifact was absent, malformed, an unsupported schema
+            version, or (without the matching override) incomplete.
+    """
+
+    baseline = _load(baseline_path)
+    live = _load(live_path)
+    _check_complete(baseline, baseline_path, allow_incomplete_baseline, "baseline")
+    _check_complete(live, live_path, allow_incomplete_live, "live")
+
+    warnings: list[str] = []
+    if baseline["airflow_family"] == live["airflow_family"]:
+        warnings.append(
+            f"Baseline and live artifacts were both recorded on the same Airflow "
+            f"family (`{baseline['airflow_family']}`) -- a same-family comparison is "
+            f"legitimately useful (e.g. 3.1 -> 3.3), but is not the cross-family "
+            f"2.x -> 3.x migration this orchestrator targets by default."
+        )
+
+    buckets = compute_categories(baseline, live)
+    counts = CategoryCounts(
+        regression=len(buckets["regression"]),
+        fixed=len(buckets["fixed"]),
+        broken_on_both=len(buckets["broken_on_both"]),
+        still_passing=len(buckets["still_passing"]),
+        gated=len(buckets["gated"]),
+        new=len(buckets["new"]),
+        missing=len(buckets["missing"]),
+    )
+    return DiffResult(
+        counts=counts,
+        regression_nodeids=buckets["regression"],
+        fixed_nodeids=buckets["fixed"],
+        new_nodeids=buckets["new"],
+        missing_nodeids=buckets["missing"],
+        warnings=tuple(warnings),
+    )
+
+
 def compute_diff(
     *,
     baseline_path: Path,
     live_path: Path,
     allow_incomplete_baseline: bool,
     allow_incomplete_live: bool,
-    compute_category_diff: ComputeCategoryDiff = unavailable_compute_category_diff,
+    compute_category_diff: ComputeCategoryDiff = default_compute_category_diff,
 ) -> DiffResult:
     """Categorize the recorded baseline and live artifacts through the injected seam.
 
@@ -127,14 +208,15 @@ def compute_diff(
         allow_incomplete_baseline: bool overriding the incomplete-baseline error.
         allow_incomplete_live: bool overriding the incomplete-live error.
         compute_category_diff: ComputeCategoryDiff loading and categorizing both
-            artifacts; defaults to a placeholder that always raises `ArtifactError`.
+            artifacts; defaults to `default_compute_category_diff`, the real
+            implementation.
 
     Returns:
         DiffResult containing the categorized migration diff.
 
     Raises:
-        ArtifactError: An artifact was absent, malformed, schema-mismatched, or (without
-            the matching override) incomplete.
+        ArtifactError: An artifact was absent, malformed, an unsupported schema
+            version, or (without the matching override) incomplete.
     """
 
     return compute_category_diff(
@@ -145,4 +227,4 @@ def compute_diff(
     )
 
 
-__all__ = ("compute_diff", "run_record", "unavailable_compute_category_diff")
+__all__ = ("compute_diff", "default_compute_category_diff", "run_record")

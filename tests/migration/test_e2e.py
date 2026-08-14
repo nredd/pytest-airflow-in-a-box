@@ -1,4 +1,4 @@
-"""Real end-to-end coverage for `airflow-migration-diff`, against real `uv`/network.
+"""Real end-to-end coverage for `airflow-migration-diff`, against real `uv`/network/Airflow.
 
 Opt-in only, on two independent gates: the `migration_e2e` marker (excluded from
 `make test`/`make all` by `-m "not migration_e2e"`, see `Makefile`/`tests/conftest.py`)
@@ -15,26 +15,23 @@ Every other test in `tests/migration/` proves the orchestrator's own logic throu
 injected seams, with no real `uv`, network, or Airflow install. This module is the one
 place that provisions real environments, which is slow (two fresh Airflow installs).
 
-PRE-#42 SCOPE: issue #42's `--airflow-record`/`--airflow-baseline` flags do not exist in
-this codebase yet (see `migration/types.py`), so a real run cannot record an artifact or
-detect a regression today. This test instead proves the part that IS real right now:
-`uv` provisioning genuinely builds both environments end to end. It expects the run to
-fail cleanly at the recording step (`RecordRunError`, exit code 2) because pytest
-rejects the still-nonexistent `--airflow-record` flag as an unrecognized argument.
-
-POST-#42 TODO: once this package is rebased onto #42 (see `migration/run.py`'s
-`unavailable_compute_category_diff` and issue #44's sequencing note), replace this
-xfail-shaped assertion with the real empirical case: plant one deliberate regression in
-a tiny throwaway suite, assert both artifacts recorded `complete: true`, assert the
-regression was categorized, and assert exit code 1. Capture real output for the PR body.
+`--plugin-spec` is pinned to this checkout's own worktree path: this branch's version
+(still `0.4.0` in `pyproject.toml`) is already released, but the *code* at this commit
+-- the migration-diff artifact contract (#42) and this orchestrator (#44) -- is not on
+PyPI under any released version, so the default `--plugin-spec` (which resolves to
+`pytest-airflow-in-a-box==<installed version>` from an index) would silently install a
+prior release lacking `--airflow-record` entirely. Installing from the local worktree
+instead exercises the actual code under test.
 
 References:
     https://github.com/nredd/pytest-airflow-in-a-box/issues/42
     https://github.com/nredd/pytest-airflow-in-a-box/issues/44
+    https://github.com/nredd/pytest-airflow-in-a-box/blob/main/docs/guide/migration-diff.md
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -49,13 +46,39 @@ pytestmark = pytest.mark.migration_e2e
 # bare `pytest` invocation might not apply. `make test-migration-e2e` sets this.
 E2E_OPT_IN_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_MIGRATION_E2E"
 
+_PLANTED_REGRESSION_TEST = '''\
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 
-def test_real_provisioning_then_clean_record_failure_pre_42(tmp_path: Path) -> None:
-    """Provision real 2.x and 3.x environments with `uv`, then fail cleanly at recording.
+
+def test_survives_the_migration():
+    """Pass on the Airflow 2.x recording pass, fail on the 3.x live pass -- planted."""
+    assert installed_family() is AirflowFamily.V2
+'''
+_PLANTED_REGRESSION_NODEID = "test_planted_regression.py::test_survives_the_migration"
+
+
+def _worktree_root() -> Path:
+    """Resolve this checkout's repository root, for a local `--plugin-spec`.
+
+    Returns:
+        pathlib.Path containing the repository root (three parents up from this file:
+        `tests/migration/test_e2e.py` -> `tests/migration` -> `tests` -> root).
+    """
+
+    return Path(__file__).resolve().parents[2]
+
+
+def test_real_migration_diff_categorizes_a_planted_regression(tmp_path: Path) -> None:
+    """Provision real 2.x/3.x environments, run a real recording pass in each, and diff them.
+
+    Plants exactly one regression: a test asserting `installed_family() is
+    AirflowFamily.V2`, true (passing) on the 2.x recording pass and false (failing) on
+    the 3.x live pass. Verifies both artifacts recorded `complete: true`, the planted
+    nodeid is categorized as `regression`, and the process exit code is 1.
 
     Parameters:
-        tmp_path: pathlib.Path used as both `--project-dir` (empty, so project
-            installation is skipped) and `--work-dir`.
+        tmp_path: pathlib.Path used as both `--project-dir` (the planted test file) and
+            the base of `--work-dir`.
 
     Raises:
         pytest.skip.Exception: The `PYTEST_AIRFLOW_IN_A_BOX_MIGRATION_E2E` opt-in
@@ -71,24 +94,31 @@ def test_real_provisioning_then_clean_record_failure_pre_42(tmp_path: Path) -> N
     if shutil.which("uv") is None:
         pytest.skip("uv is not installed on $PATH")
 
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "test_planted_regression.py").write_text(
+        _PLANTED_REGRESSION_TEST, encoding="utf-8"
+    )
+    work_dir = tmp_path / "work"
+
     exit_code = cli.main(
         [
             "--project-dir",
-            str(tmp_path),
+            str(project_dir),
             "--work-dir",
-            str(tmp_path / "work"),
+            str(work_dir),
+            "--plugin-spec",
+            str(_worktree_root()),
             "--keep-work-dir",
         ]
     )
 
-    # Pre-#42: pytest rejects the still-nonexistent `--airflow-record` flag as an
-    # unrecognized argument, so no artifact is ever written and the orchestrator's own
-    # "artifact absent after the run" check maps that to a clean exit code 2 -- proving
-    # real provisioning succeeded (both venvs were really built) without a real diff.
-    assert exit_code == cli.EXIT_TOOLING_ERROR
-    work_dir = tmp_path / "work"
-    run_dirs = list(work_dir.iterdir())
-    assert len(run_dirs) == 1
-    (run_dir,) = run_dirs
-    assert (run_dir / "venv-v2" / "bin" / "python").is_file()
-    assert (run_dir / "venv-v3" / "bin" / "python").is_file()
+    (run_dir,) = list(work_dir.iterdir())
+    baseline = json.loads((run_dir / "baseline.json").read_text(encoding="utf-8"))
+    live = json.loads((run_dir / "live.json").read_text(encoding="utf-8"))
+
+    assert baseline["complete"] is True, baseline
+    assert live["complete"] is True, live
+    assert baseline["outcomes"][_PLANTED_REGRESSION_NODEID]["outcome"] == "passed"
+    assert live["outcomes"][_PLANTED_REGRESSION_NODEID]["outcome"] == "failed"
+    assert exit_code == cli.EXIT_REGRESSIONS

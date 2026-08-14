@@ -1,17 +1,13 @@
-"""Table-driven tests for the seam boundary this package owns pre-#42.
+"""Table-driven tests exercising the seam boundary through the REAL #42 contract.
 
-This package never computes a category itself (see `migration/types.py`): the seven
-buckets, the schema-version/family/`complete` checks, and the `--allow-incomplete-*`
-overrides all belong to issue #42's `compute_categories`. What this package DOES own is
-faithfully driving that seam from `execute()` through to `render_diff()` -- passing the
-right paths and override flags in, and turning whatever comes back (a `DiffResult` or a
-raised `ArtifactError`) into the right exit code and report text.
-
-Each fake `compute_category_diff` below stands in for a slice of #42's real contract,
-shaped from issue #42's own body (the seven categories, the schema/family/complete
-rules, the two override flags). When this package is rebased onto #42, these fakes are
-replaced by the real `artifact.py` loader plus `compute_categories`, and these same
-scenarios should keep passing unchanged -- the whole point of table-driving them here.
+Post-#42-rebase: `run_record` is faked (no real `uv`/`pytest` subprocess), but it
+writes genuine `Artifact` JSON via `pytest_airflow_in_a_box.artifact.write_artifact`,
+and `compute_category_diff` is left at its real default
+(`migration.run.default_compute_category_diff`) rather than a canned `DiffResult`. Every
+scenario below therefore runs through the actual `load_artifact` +
+`pytest_airflow_in_a_box.baseline.compute_categories` this package depends on, exactly
+as `docs/guide/migration-diff.md` documents it -- this package supplies real recorded
+artifacts and asserts on the real categorized result, never a stand-in.
 """
 
 from __future__ import annotations
@@ -22,32 +18,54 @@ from pathlib import Path
 import pytest
 
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
+from pytest_airflow_in_a_box.artifact import Artifact, Outcome, OutcomeEntry, write_artifact
 from pytest_airflow_in_a_box.migration import cli
 from pytest_airflow_in_a_box.migration.provision import ProvisionedEnvironment
-from pytest_airflow_in_a_box.migration.types import ArtifactError, CategoryCounts, DiffResult
-
-_ZERO_COUNTS = {
-    "regression": 0,
-    "fixed": 0,
-    "broken_on_both": 0,
-    "still_passing": 0,
-    "gated": 0,
-    "new": 0,
-    "missing": 0,
-}
+from pytest_airflow_in_a_box.migration.types import ArtifactError, CategoryCounts
 
 
-def _counts(**overrides: int) -> CategoryCounts:
-    """Build a `CategoryCounts` with every field zeroed except the given overrides.
+def _entry(outcome: Outcome, *, gated: bool = False) -> OutcomeEntry:
+    """Build one minimal, schema-valid `OutcomeEntry`.
 
     Parameters:
-        overrides: int values keyed by field name to override.
+        outcome: Outcome containing the recorded outcome.
+        gated: bool recording whether a family marker would gate this item.
 
     Returns:
-        CategoryCounts containing the requested counts.
+        OutcomeEntry containing the constructed entry. `phase` is set to `teardown`
+        when `outcome` is `error` and left `None` otherwise, matching `artifact.py`'s
+        `phase` set-if-and-only-if-`error` invariant.
     """
 
-    return CategoryCounts(**{**_ZERO_COUNTS, **overrides})
+    phase = "teardown" if outcome is Outcome.ERROR else None
+    return OutcomeEntry(outcome=outcome.value, phase=phase, gated=gated, duration=0.01)
+
+
+def _artifact(
+    *, family: AirflowFamily, complete: bool = True, outcomes: dict[str, OutcomeEntry]
+) -> Artifact:
+    """Build one minimal, schema-valid `Artifact`.
+
+    Parameters:
+        family: AirflowFamily naming the recorded Airflow family.
+        complete: bool recording whether the recording session finished cleanly.
+        outcomes: dict[str, OutcomeEntry] mapping nodeid to its recorded outcome.
+
+    Returns:
+        Artifact containing the constructed artifact.
+    """
+
+    return Artifact(
+        schema_version=1,
+        plugin_version="0.4.0",
+        airflow_version="2.11.2" if family is AirflowFamily.V2 else "3.3.1",
+        airflow_family=family.value,
+        python_version="3.12.0",
+        pytest_version="8.4.2",
+        created_at="2026-08-14T00:00:00+00:00",
+        complete=complete,
+        outcomes=outcomes,
+    )
 
 
 def _env(family: AirflowFamily) -> ProvisionedEnvironment:
@@ -83,11 +101,24 @@ def _config(work_dir: Path) -> cli.ResolvedConfig:
     return cli.resolve_config(args, [])
 
 
-def _execute(diff: DiffResult, work_dir: Path, **config_overrides: object) -> tuple[int, str]:
-    """Run `execute()` with a fake seam that always returns `diff`.
+def _execute_through_real_seam(
+    baseline_artifact: Artifact,
+    live_artifact: Artifact,
+    work_dir: Path,
+    **config_overrides: object,
+) -> tuple[int, str]:
+    """Run `execute()` with faked provisioning/recording but the REAL category seam.
+
+    `run_record`'s fake writes `baseline_artifact`/`live_artifact` to whatever path
+    `execute()` asks it to record to (distinguishing the two passes by `baseline_path`,
+    exactly as `run.run_record` does: `None` on the 2.x pass, set on the 3.x pass) --
+    `compute_category_diff` is left at its real default, so the whole chain from
+    "recorded artifact on disk" through `compute_categories` to the rendered report
+    runs for real.
 
     Parameters:
-        diff: DiffResult the fake seam returns regardless of its arguments.
+        baseline_artifact: Artifact written to the 2.x recording pass's `record_path`.
+        live_artifact: Artifact written to the 3.x recording pass's `record_path`.
         work_dir: pathlib.Path used as `--work-dir`, cleaned up by pytest's `tmp_path`.
         config_overrides: object values overriding `_config()`'s fields.
 
@@ -95,157 +126,126 @@ def _execute(diff: DiffResult, work_dir: Path, **config_overrides: object) -> tu
         tuple[int, str] containing `execute()`'s exit code and rendered report.
     """
 
+    def fake_run_record(
+        *,
+        env: ProvisionedEnvironment,
+        project_dir: Path,
+        record_path: Path,
+        baseline_path: Path | None,
+        pytest_args: tuple[str, ...],
+    ) -> None:
+        del env, project_dir, pytest_args
+        write_artifact(record_path, baseline_artifact if baseline_path is None else live_artifact)
+
     cfg = dataclasses.replace(_config(work_dir), **config_overrides)
     return cli.execute(
         cfg,
         provision_environment=lambda *, family, **_kwargs: _env(family),
-        run_record=lambda **_kwargs: None,
-        compute_category_diff=lambda *_args: diff,
+        run_record=fake_run_record,
     )
 
 
 @pytest.mark.parametrize(
-    ("scenario", "diff", "expected_exit", "expected_snippets"),
+    ("scenario", "baseline_outcome", "live_outcome", "expected_exit", "expected_snippets"),
     [
-        (
-            "regression",
-            DiffResult(
-                counts=_counts(regression=1, still_passing=4),
-                regression_nodeids=("tests/test_a.py::test_regressed",),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=(),
-            ),
-            cli.EXIT_REGRESSIONS,
-            ("REGRESSIONS FOUND", "tests/test_a.py::test_regressed"),
-        ),
-        (
-            "fixed",
-            DiffResult(
-                counts=_counts(fixed=1, still_passing=4),
-                regression_nodeids=(),
-                fixed_nodeids=("tests/test_b.py::test_fixed",),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=(),
-            ),
-            cli.EXIT_OK,
-            ("no regressions", "tests/test_b.py::test_fixed"),
-        ),
+        ("regression", Outcome.PASSED, Outcome.FAILED, cli.EXIT_REGRESSIONS, ("- regression: 1",)),
+        ("fixed", Outcome.FAILED, Outcome.PASSED, cli.EXIT_OK, ("- fixed: 1",)),
         (
             "broken_on_both",
-            DiffResult(
-                counts=_counts(broken_on_both=2, still_passing=4),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=(),
-            ),
+            Outcome.FAILED,
+            Outcome.ERROR,
             cli.EXIT_OK,
-            ("Broken on both: 2",),
+            ("- broken-on-both: 1",),
+        ),
+        ("still_passing", Outcome.PASSED, Outcome.PASSED, cli.EXIT_OK, ("- still-passing: 1",)),
+        (
+            "neutral_baseline_never_becomes_a_fix",
+            # A neutral (non-gated skip) baseline outcome must never count as `fixed`,
+            # even though the live side passes -- it folds to `still-passing` per
+            # docs/guide/migration-diff.md's projection table.
+            Outcome.SKIPPED,
+            Outcome.PASSED,
+            cli.EXIT_OK,
+            ("- still-passing: 1", "- fixed: 0", "- regression: 0"),
         ),
         (
-            "still_passing",
-            DiffResult(
-                counts=_counts(still_passing=10),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=(),
-            ),
+            "neutral_live_never_becomes_a_regression",
+            Outcome.PASSED,
+            Outcome.SKIPPED,
             cli.EXIT_OK,
-            ("Still passing: 10",),
-        ),
-        (
-            "gated_either_side",
-            DiffResult(
-                counts=_counts(gated=3, still_passing=4),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=(),
-            ),
-            cli.EXIT_OK,
-            ("Gated: 3",),
-        ),
-        (
-            "new",
-            DiffResult(
-                counts=_counts(new=1, still_passing=4),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=("tests/test_c.py::test_new",),
-                missing_nodeids=(),
-                warnings=(),
-            ),
-            cli.EXIT_OK,
-            ("tests/test_c.py::test_new",),
-        ),
-        (
-            "missing",
-            DiffResult(
-                counts=_counts(missing=1, still_passing=4),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=("tests/test_d.py::test_missing",),
-                warnings=(),
-            ),
-            cli.EXIT_OK,
-            ("tests/test_d.py::test_missing",),
-        ),
-        (
-            "neutral_projections_never_appear_as_a_category",
-            # xfailed/xpassed/non-gated-skipped fold to neutral on either end (issue #42):
-            # they must never surface as their own bucket, and never as a regression/fix.
-            # A neutral-only transition is represented here as an untouched still_passing
-            # count, with no regression and no fixed nodeids.
-            DiffResult(
-                counts=_counts(still_passing=4, broken_on_both=1),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=(),
-            ),
-            cli.EXIT_OK,
-            ("Regression: 0", "Fixed: 0"),
-        ),
-        (
-            "cross_family_warning",
-            # Same-family baseline/live is a warning, not an error (issue #42): still
-            # exit 0 absent an actual regression, but the warning must render.
-            DiffResult(
-                counts=_counts(still_passing=4),
-                regression_nodeids=(),
-                fixed_nodeids=(),
-                new_nodeids=(),
-                missing_nodeids=(),
-                warnings=("baseline and live artifacts are the same Airflow family",),
-            ),
-            cli.EXIT_OK,
-            ("## Warnings", "same Airflow family"),
+            ("- still-passing: 1", "- regression: 0"),
         ),
     ],
 )
-def test_category_scenarios_drive_exit_code_and_report(
+def test_category_scenarios_drive_exit_code_and_report_through_the_real_seam(
     scenario: str,
-    diff: DiffResult,
+    baseline_outcome: Outcome,
+    live_outcome: Outcome,
     expected_exit: int,
     expected_snippets: tuple[str, ...],
     tmp_path: Path,
 ) -> None:
-    """Drive every named category scenario from the seam through to the rendered report."""
-    del scenario
-    exit_code, report = _execute(diff, tmp_path)
+    """Drive each pass/fail/neutral transition through the real `compute_categories`."""
+    nodeid = f"test_a.py::test_{scenario}"
+    baseline = _artifact(family=AirflowFamily.V2, outcomes={nodeid: _entry(baseline_outcome)})
+    live = _artifact(family=AirflowFamily.V3, outcomes={nodeid: _entry(live_outcome)})
+
+    exit_code, report = _execute_through_real_seam(baseline, live, tmp_path)
 
     assert exit_code == expected_exit
     for snippet in expected_snippets:
         assert snippet in report
+    if expected_exit == cli.EXIT_REGRESSIONS:
+        assert f"`{nodeid}`" in report
+
+
+def test_gated_either_side_is_never_a_regression_or_fix(tmp_path: Path) -> None:
+    """Bucket a family-marker-gated nodeid as `gated`, never regression/fixed/broken."""
+    nodeid = "test_a.py::test_v2_only"
+    baseline = _artifact(family=AirflowFamily.V2, outcomes={nodeid: _entry(Outcome.PASSED)})
+    live = _artifact(
+        family=AirflowFamily.V3, outcomes={nodeid: _entry(Outcome.SKIPPED, gated=True)}
+    )
+
+    exit_code, report = _execute_through_real_seam(baseline, live, tmp_path)
+
+    assert exit_code == cli.EXIT_OK
+    assert "- gated: 1" in report
+    assert "- regression: 0" in report
+
+
+def test_new_and_missing_nodeids_render(tmp_path: Path) -> None:
+    """Bucket a live-only nodeid as `new` and a baseline-only nodeid as `missing`."""
+    baseline = _artifact(
+        family=AirflowFamily.V2,
+        outcomes={"test_a.py::test_missing": _entry(Outcome.PASSED)},
+    )
+    live = _artifact(
+        family=AirflowFamily.V3,
+        outcomes={"test_a.py::test_new": _entry(Outcome.PASSED)},
+    )
+
+    exit_code, report = _execute_through_real_seam(baseline, live, tmp_path)
+
+    assert exit_code == cli.EXIT_OK
+    assert "- new: 1" in report
+    assert "- missing: 1" in report
+    assert "`test_a.py::test_new`" in report
+    assert "`test_a.py::test_missing`" in report
+
+
+def test_cross_family_warning_renders_without_failing(tmp_path: Path) -> None:
+    """Warn, but still exit 0 absent a real regression, on a same-family comparison."""
+    baseline = _artifact(
+        family=AirflowFamily.V3, outcomes={"test_a.py::t": _entry(Outcome.PASSED)}
+    )
+    live = _artifact(family=AirflowFamily.V3, outcomes={"test_a.py::t": _entry(Outcome.PASSED)})
+
+    exit_code, report = _execute_through_real_seam(baseline, live, tmp_path)
+
+    assert exit_code == cli.EXIT_OK
+    assert "## Warnings" in report
+    assert "same Airflow family" in report
 
 
 def test_category_counts_has_exactly_the_seven_documented_fields() -> None:
@@ -263,74 +263,35 @@ def test_category_counts_has_exactly_the_seven_documented_fields() -> None:
     }
 
 
-def test_schema_mismatch_propagates_as_artifact_error(tmp_path: Path) -> None:
-    """Propagate a schema-version mismatch as ArtifactError (an error, not a warning)."""
+def test_schema_mismatch_propagates_as_an_error(tmp_path: Path) -> None:
+    """Reject an artifact whose `schema_version` this plugin does not support."""
+    baseline_artifact: Artifact = {
+        **_artifact(family=AirflowFamily.V2, outcomes={}),
+        "schema_version": 2,
+    }
+    live = _artifact(family=AirflowFamily.V3, outcomes={})
 
-    def mismatched_schema_seam(*_args: object) -> DiffResult:
-        raise ArtifactError("schema_version mismatch: baseline=1 live=2")
-
-    with pytest.raises(ArtifactError, match="schema_version mismatch"):
-        cli.execute(
-            _config(tmp_path),
-            provision_environment=lambda *, family, **_kwargs: _env(family),
-            run_record=lambda **_kwargs: None,
-            compute_category_diff=mismatched_schema_seam,
-        )
+    with pytest.raises(ArtifactError, match="schema_version") as excinfo:
+        _execute_through_real_seam(baseline_artifact, live, tmp_path)
+    assert "schema_version" in str(excinfo.value)
 
 
 def test_incomplete_baseline_without_override_fails_closed(tmp_path: Path) -> None:
     """Fail an incomplete (`complete: false`) baseline without `--allow-incomplete-baseline`."""
-
-    def seam(
-        _baseline_path: Path, _live_path: Path, allow_incomplete_baseline: bool, _allow_live: bool
-    ) -> DiffResult:
-        if not allow_incomplete_baseline:
-            raise ArtifactError("baseline artifact recorded complete: false")
-        return DiffResult(
-            counts=_counts(still_passing=1),
-            regression_nodeids=(),
-            fixed_nodeids=(),
-            new_nodeids=(),
-            missing_nodeids=(),
-            warnings=(),
-        )
-
-    cfg = _config(tmp_path)
-    assert cfg.allow_incomplete_baseline is False
+    baseline = _artifact(family=AirflowFamily.V2, complete=False, outcomes={})
+    live = _artifact(family=AirflowFamily.V3, outcomes={})
 
     with pytest.raises(ArtifactError, match="complete: false"):
-        cli.execute(
-            cfg,
-            provision_environment=lambda *, family, **_kwargs: _env(family),
-            run_record=lambda **_kwargs: None,
-            compute_category_diff=seam,
-        )
+        _execute_through_real_seam(baseline, live, tmp_path)
 
 
-def test_allow_incomplete_baseline_override_reaches_the_seam(tmp_path: Path) -> None:
-    """Forward `--allow-incomplete-baseline` through to the seam, unblocking the run."""
+def test_allow_incomplete_baseline_override_reaches_the_real_seam(tmp_path: Path) -> None:
+    """Forward `--allow-incomplete-baseline` through to the real seam, unblocking the run."""
+    baseline = _artifact(family=AirflowFamily.V2, complete=False, outcomes={})
+    live = _artifact(family=AirflowFamily.V3, outcomes={})
 
-    def seam(
-        _baseline_path: Path, _live_path: Path, allow_incomplete_baseline: bool, _allow_live: bool
-    ) -> DiffResult:
-        if not allow_incomplete_baseline:
-            raise ArtifactError("baseline artifact recorded complete: false")
-        return DiffResult(
-            counts=_counts(still_passing=1),
-            regression_nodeids=(),
-            fixed_nodeids=(),
-            new_nodeids=(),
-            missing_nodeids=(),
-            warnings=(),
-        )
-
-    cfg = dataclasses.replace(_config(tmp_path), allow_incomplete_baseline=True)
-
-    exit_code, _report = cli.execute(
-        cfg,
-        provision_environment=lambda *, family, **_kwargs: _env(family),
-        run_record=lambda **_kwargs: None,
-        compute_category_diff=seam,
+    exit_code, _report = _execute_through_real_seam(
+        baseline, live, tmp_path, allow_incomplete_baseline=True
     )
 
     assert exit_code == cli.EXIT_OK
@@ -338,25 +299,20 @@ def test_allow_incomplete_baseline_override_reaches_the_seam(tmp_path: Path) -> 
 
 def test_incomplete_live_without_override_fails_closed(tmp_path: Path) -> None:
     """Fail an incomplete (`complete: false`) live artifact without `--allow-incomplete-live`."""
-
-    def seam(
-        _baseline_path: Path, _live_path: Path, _allow_baseline: bool, allow_incomplete_live: bool
-    ) -> DiffResult:
-        if not allow_incomplete_live:
-            raise ArtifactError("live artifact recorded complete: false")
-        return DiffResult(
-            counts=_counts(still_passing=1),
-            regression_nodeids=(),
-            fixed_nodeids=(),
-            new_nodeids=(),
-            missing_nodeids=(),
-            warnings=(),
-        )
+    baseline = _artifact(family=AirflowFamily.V2, outcomes={})
+    live = _artifact(family=AirflowFamily.V3, complete=False, outcomes={})
 
     with pytest.raises(ArtifactError, match="complete: false"):
-        cli.execute(
-            _config(tmp_path),
-            provision_environment=lambda *, family, **_kwargs: _env(family),
-            run_record=lambda **_kwargs: None,
-            compute_category_diff=seam,
-        )
+        _execute_through_real_seam(baseline, live, tmp_path)
+
+
+def test_allow_incomplete_live_override_reaches_the_real_seam(tmp_path: Path) -> None:
+    """Forward `--allow-incomplete-live` through to the real seam, unblocking the run."""
+    baseline = _artifact(family=AirflowFamily.V2, outcomes={})
+    live = _artifact(family=AirflowFamily.V3, complete=False, outcomes={})
+
+    exit_code, _report = _execute_through_real_seam(
+        baseline, live, tmp_path, allow_incomplete_live=True
+    )
+
+    assert exit_code == cli.EXIT_OK
