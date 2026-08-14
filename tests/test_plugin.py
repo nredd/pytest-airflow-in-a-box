@@ -104,3 +104,57 @@ def test_incompatibility_renders_per_test_errors_under_xdist(
     assert "No Airflow distribution is installed (fake probe)" in output
     assert "INTERNALERROR" not in output
     assert "crashed" not in output
+
+
+_FAKE_WARNING_ENSURE_DATABASE_CONFTEST = """
+    import warnings
+
+    import pytest_airflow_in_a_box.plugin as plugin
+
+
+    class FakeAirflowImportWarning(UserWarning):
+        pass
+
+
+    def _fake_ensure_database(root):
+        warnings.warn(
+            FakeAirflowImportWarning("simulated Airflow import-time warning")
+        )
+
+
+    plugin.ensure_database = _fake_ensure_database
+"""
+
+_ERROR_ON_USER_WARNING_INI = "[pytest]\nfilterwarnings =\n    error::UserWarning\n"
+
+
+def test_ensure_database_warning_does_not_fail_first_test_under_xdist(
+    pytester: pytest.Pytester,
+) -> None:
+    """Suppress a warning `ensure_database` raises, even under a user `error::` filter.
+
+    Regression test for a latent bug (#43): on an xdist worker, the eager
+    `pytest_collection_finish` database initialization is skipped, so
+    `_ensure_database_or_usage_error` runs from the `pytest_runtest_setup` safety net
+    instead -- inside the runtest phase's own warning context. A warning raised there
+    under an active `error::` filter turned into an exception unrelated to
+    `AirflowCompatibilityError`, so it went unhandled and failed the worker's first
+    test with a misleading error. `_ensure_database_or_usage_error` now wraps the
+    `ensure_database` call in its own default-filter warnings context, unconditionally,
+    so both workers' first test passes here even with a real user `error::UserWarning`
+    filter active.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makeconftest(_FAKE_WARNING_ENSURE_DATABASE_CONFTEST)
+    pytester.makeini(_ERROR_ON_USER_WARNING_INI)
+    pytester.makepyfile(test_warned=_DATABASE_SUITE)
+
+    result = pytester.runpytest_subprocess("-n", "2")
+
+    result.assert_outcomes(passed=2)
+    output = result.stdout.str() + result.stderr.str()
+    assert "INTERNALERROR" not in output
+    assert "crashed" not in output

@@ -25,6 +25,7 @@ from pytest_airflow_in_a_box._compat import (
 )
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
+from pytest_airflow_in_a_box.migration_strict import migration_strict_enabled
 from pytest_airflow_in_a_box.storage.provision import DbBackend
 
 REPORT_TITLE = "# pytest-airflow-in-a-box diagnostics"
@@ -205,6 +206,27 @@ def _version_section() -> list[str]:
     return lines
 
 
+def _migration_strict_section(config: pytest.Config, state: BootstrapState) -> list[str]:
+    """Render whether migration-strict mode is enabled, and flag an off-2.x no-op.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+        state: BootstrapState containing the resolved Airflow family.
+
+    Returns:
+        list[str] containing one Markdown bullet line.
+    """
+
+    if not migration_strict_enabled(config):
+        return ["- `--airflow-migration-strict`: disabled"]
+    if state.family != AirflowFamily.V2.value:
+        return [
+            "- `--airflow-migration-strict`: enabled, but a no-op off the Airflow 2.x "
+            "family -- nothing to forecast"
+        ]
+    return ["- `--airflow-migration-strict`: enabled"]
+
+
 def _api_server_section() -> list[str]:
     """Render the API server section, which never has live state for this invocation.
 
@@ -238,6 +260,7 @@ def render_doctor_report(config: pytest.Config) -> str:
         ("AIRFLOW_HOME and database", _database_section(state)),
         ("Versions and capabilities", _version_section()),
         ("Executor", _executor_section(state)),
+        ("Migration-strict", _migration_strict_section(config, state)),
         ("API server", _api_server_section()),
     )
     lines = [REPORT_TITLE, ""]
