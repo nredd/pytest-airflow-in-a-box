@@ -7,24 +7,11 @@ from typing import Any
 
 from provider_package._hook import ExampleHook
 
-
-def _resolve(*candidates: str) -> Any:
-    """Import the first available module; the corpus parses on both Airflow families.
-
-    Parameters:
-        candidates: str module paths ordered newest family first.
-
-    Returns:
-        Any containing the first importable module.
-    """
-
-    for name in candidates[:-1]:
-        try:
-            return import_module(name)
-        except ImportError:
-            continue
-    return import_module(candidates[-1])
-
+# Both entry points into this package prime `sys.path` with `tests/dags` first --
+# `provider.py` for DagBag parsing, and `tests/enduser/test_provider_package.py`'s
+# direct `syspath_prepend` + `import_module("provider_package")` -- which is also how
+# `_family` itself is reached.
+_resolve = import_module("_family")._resolve
 
 # Airflow 2.x carries the base class in `airflow.models`.
 BaseOperator = _resolve("airflow.sdk", "airflow.models").BaseOperator
