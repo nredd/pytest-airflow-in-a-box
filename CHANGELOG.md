@@ -20,6 +20,16 @@ All notable changes to this project will be documented in this file. The format 
   with a copy-pasteable fix when it does not
   ([#138](https://github.com/nredd/pytest-airflow-in-a-box/issues/138)).
 
+### Fixed
+
+- Flip the `action.yml` symlink direction so the repo root holds the real composite-action
+  manifest and `action/action.yml` symlinks back to it, instead of the other way around.
+  GitHub Marketplace's publish-eligibility check reads the root `action.yml` as a raw git
+  blob and doesn't follow symlinks, so a `120000` symlink blob there kept the "Publish this
+  Action to the GitHub Marketplace" banner from ever appearing even though the Contents API
+  and the Actions runner both resolved it fine
+  ([#142](https://github.com/nredd/pytest-airflow-in-a-box/issues/142)).
+
 ## [0.6.0] - 2026-08-15
 
 ### Added
