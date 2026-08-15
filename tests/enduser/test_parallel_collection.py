@@ -60,9 +60,16 @@ _SHARED_SMOKE_DAG = """
 
     try:
         from airflow.sdk import DAG, task
-    except ImportError:  # Airflow 2.x: the pre-Task-SDK authoring surface.
+
+        DAG_KWARGS = {{}}
+    except ImportError:  # Airflow 2.x: the pre-Task-SDK authoring surface, and below
+        # 2.8 an unscheduled Dag still needs an explicit `start_date`.
+        from datetime import datetime, timezone
+
         from airflow.decorators import task
         from airflow.models.dag import DAG
+
+        DAG_KWARGS = {{"start_date": datetime(2024, 1, 1, tzinfo=timezone.utc)}}
 
     RECORD_DIR = Path({record_dir!r})
     record = {{"worker": os.environ["PYTEST_XDIST_WORKER"], "pid": os.getpid()}}
@@ -70,7 +77,7 @@ _SHARED_SMOKE_DAG = """
         json.dumps(record), encoding="utf-8"
     )
 
-    with DAG(dag_id="shared_smoke", schedule=None, tags=["team-a"]) as dag:
+    with DAG(dag_id="shared_smoke", schedule=None, tags=["team-a"], **DAG_KWARGS) as dag:
         @task
         def work():
             pass

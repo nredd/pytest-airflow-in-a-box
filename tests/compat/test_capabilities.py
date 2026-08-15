@@ -305,6 +305,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -326,6 +328,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -347,6 +351,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -368,6 +374,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -389,6 +397,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -410,6 +420,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -431,6 +443,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -452,6 +466,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -473,6 +489,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -494,6 +512,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -515,6 +535,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
         (
@@ -536,6 +558,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 api_surface=ApiSurface.API_SERVER,
                 params_location=ParamsLocation.SDK,
                 timezone_location=TimezoneLocation.SDK,
+                max_python=None,
+                dag_requires_start_date=False,
             ),
         ),
     ],
@@ -627,15 +651,39 @@ def test_wraps_unexpected_metadata_failure(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.parametrize(
-    ("meta_version", "release"),
-    [("2.9.3", (2, 9, 3)), ("2.10.5", (2, 10, 5)), ("2.11.2", (2, 11, 2))],
+    ("meta_version", "release", "max_python", "requires_start_date"),
+    [
+        ("2.7.3", (2, 7, 3), (3, 11), True),
+        ("2.8.4", (2, 8, 4), (3, 11), False),
+        ("2.9.3", (2, 9, 3), (3, 12), False),
+        ("2.10.5", (2, 10, 5), (3, 12), False),
+        ("2.11.2", (2, 11, 2), (3, 12), False),
+    ],
 )
 def test_resolves_certified_v2_release_capabilities(
-    monkeypatch: pytest.MonkeyPatch, meta_version: str, release: tuple[int, int, int]
+    monkeypatch: pytest.MonkeyPatch,
+    meta_version: str,
+    release: tuple[int, int, int],
+    max_python: tuple[int, int],
+    requires_start_date: bool,
 ) -> None:
-    """Resolve the full certified 2.x contract from a monolith-only environment."""
+    """Resolve the full certified 2.x contract from a monolith-only environment.
 
-    _install_fake_environment(monkeypatch, None, _fake_v2_modules(), meta_version=meta_version)
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        meta_version: str reported as the installed `apache-airflow` version.
+        release: tuple[int, int, int] expected as the parsed base release.
+        max_python: tuple[int, int] expected as the release's own Python ceiling.
+        requires_start_date: bool expected as the schedule-free `start_date` demand.
+    """
+
+    _install_fake_environment(
+        monkeypatch,
+        None,
+        _fake_v2_modules(),
+        meta_version=meta_version,
+        python_version=(3, 11),
+    )
 
     resolved = capability_module.resolve_capabilities()
 
@@ -655,10 +703,29 @@ def test_resolves_certified_v2_release_capabilities(
         api_surface=ApiSurface.WEBSERVER,
         params_location=ParamsLocation.MODELS,
         timezone_location=TimezoneLocation.UTILS,
+        max_python=max_python,
+        dag_requires_start_date=requires_start_date,
     )
 
 
-@pytest.mark.parametrize("meta_version", ["2.8.1", "2.10.4", "2.11.3"])
+def test_certified_v2_releases_track_the_python_ceiling_table() -> None:
+    """Derive the certified 2.x release list from the per-release ceiling table.
+
+    The two cannot drift because `SUPPORTED_RELEASES_BY_FAMILY` reads its 2.x row from
+    `V2_MAX_PYTHON_BY_RELEASE`; this pins that they stay wired that way, and that every
+    certified release carries its ceiling on the resolved row.
+    """
+
+    releases = capability_module.SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]
+
+    assert releases == tuple(capability_module.V2_MAX_PYTHON_BY_RELEASE)
+    assert {
+        release: capability_module._CERTIFIED_CAPABILITIES[release].max_python
+        for release in releases
+    } == capability_module.V2_MAX_PYTHON_BY_RELEASE
+
+
+@pytest.mark.parametrize("meta_version", ["2.6.3", "2.8.1", "2.10.4", "2.11.3"])
 def test_rejects_uncertified_v2_release(
     monkeypatch: pytest.MonkeyPatch, meta_version: str
 ) -> None:
@@ -671,7 +738,7 @@ def test_rejects_uncertified_v2_release(
 
     message = str(caught.value)
     assert f"installed version '{meta_version}'" in message
-    assert "2.9.3, 2.10.5, 2.11.2" in message
+    assert "2.7.3, 2.8.4, 2.9.3, 2.10.5, 2.11.2" in message
 
 
 @pytest.mark.parametrize(
@@ -766,7 +833,12 @@ def test_running_python_reports_the_interpreter() -> None:
 def test_v2_python_cap_is_enforced(
     monkeypatch: pytest.MonkeyPatch, python_version: tuple[int, int]
 ) -> None:
-    """Reject a certified 2.x release on a Python the family never supported."""
+    """Reject a certified 2.x release on a Python the family never supported.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        python_version: tuple[int, int] reported as the running interpreter.
+    """
 
     _install_fake_environment(
         monkeypatch, None, {}, meta_version="2.11.2", python_version=python_version
@@ -778,6 +850,81 @@ def test_v2_python_cap_is_enforced(
     message = str(caught.value)
     assert "'2.11.2'" in message
     assert "3.10-3.12" in message
+
+
+@pytest.mark.parametrize("meta_version", ["2.7.3", "2.8.4"])
+def test_v2_python_cap_is_per_release(monkeypatch: pytest.MonkeyPatch, meta_version: str) -> None:
+    """Reject a pre-2.9 release on CPython 3.12, which the family as a whole supports.
+
+    The releases below 2.9 declare `requires-python` `~=3.8,<3.12` and publish no 3.12
+    constraints file, so a family-wide ceiling of 3.12 would let them through and fail
+    somewhere deeper.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        meta_version: str reported as the installed `apache-airflow` version.
+    """
+
+    _install_fake_environment(
+        monkeypatch, None, {}, meta_version=meta_version, python_version=(3, 12)
+    )
+
+    with pytest.raises(AirflowCompatibilityError, match="does not support Python") as caught:
+        capability_module.resolve_capabilities()
+
+    message = str(caught.value)
+    assert f"'{meta_version}'" in message
+    assert "3.10-3.11" in message
+
+
+@pytest.mark.parametrize("meta_version", ["2.7.3", "2.8.4"])
+def test_v2_python_cap_admits_the_release_ceiling(
+    monkeypatch: pytest.MonkeyPatch, meta_version: str
+) -> None:
+    """Accept a pre-2.9 release on its own ceiling rather than clamping it further.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        meta_version: str reported as the installed `apache-airflow` version.
+    """
+
+    _install_fake_environment(
+        monkeypatch,
+        None,
+        _fake_v2_modules(),
+        meta_version=meta_version,
+        python_version=(3, 11),
+    )
+
+    assert capability_module.resolve_capabilities().max_python == (3, 11)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("2.7.3", (3, 11)),
+        ("2.8.4", (3, 11)),
+        ("2.9.3", (3, 12)),
+        ("2.11.2", (3, 12)),
+        # Uncertified and unparseable versions take the lowest certified ceiling: every
+        # certified release accepts it, and guessing high is the failure mode the
+        # per-release table exists to remove.
+        ("2.10.4", (3, 11)),
+        ("2.11", (3, 11)),
+        ("not-a-version", (3, 11)),
+    ],
+)
+def test_max_v2_python_reports_the_release_ceiling(
+    version: str, expected: tuple[int, int]
+) -> None:
+    """Report each 2.x version's Python ceiling, conservatively for unknown versions.
+
+    Parameters:
+        version: str containing the Airflow 2.x version to look up.
+        expected: tuple[int, int] expected as that version's ceiling.
+    """
+
+    assert capability_module.max_v2_python(version) == expected
 
 
 def test_meta_without_core_is_reported_broken(monkeypatch: pytest.MonkeyPatch) -> None:

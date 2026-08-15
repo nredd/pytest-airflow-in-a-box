@@ -107,12 +107,28 @@ def test_max_release_returns_a_dotted_version_string(family: AirflowFamily) -> N
 
 def test_default_python_v2_uses_current_interpreter_when_in_range() -> None:
     """Default the 2.x Python version to the current interpreter when it is supported."""
-    assert cli._default_python_v2((3, 11)) == "3.11"
+    assert cli._default_python_v2((3, 11), "2.11.2") == "3.11"
 
 
-def test_default_python_v2_falls_back_when_out_of_range() -> None:
-    """Fall back to the known-good Python version outside the 2.x-supported range."""
-    assert cli._default_python_v2((3, 14)) == cli._FALLBACK_PYTHON
+def test_default_python_v2_clamps_to_the_requested_release_ceiling() -> None:
+    """Clamp an over-cap interpreter to the requested release's own ceiling.
+
+    2.11.2 reaches 3.12 while 2.7.3 and 2.8.4 cap at 3.11, so a family-wide clamp
+    would provision a 3.12 environment for a release with no 3.12 constraints file.
+    """
+    assert cli._default_python_v2((3, 14), "2.11.2") == "3.12"
+    assert cli._default_python_v2((3, 12), "2.7.3") == "3.11"
+    assert cli._default_python_v2((3, 14), "2.8.4") == "3.11"
+
+
+def test_default_python_v2_clamps_up_to_the_floor() -> None:
+    """Clamp an interpreter below the 2.x floor up to it rather than past the ceiling.
+
+    Unreachable through the console script -- this package's own `requires-python` is
+    `>=3.10` -- but `resolve_config` accepts an injected `current_python`, so the bound
+    is pinned rather than assumed.
+    """
+    assert cli._default_python_v2((3, 8), "2.7.3") == "3.10"
 
 
 def test_default_python_v3_uses_current_interpreter_when_in_range() -> None:
@@ -304,6 +320,27 @@ def test_resolve_config_defaults_versions_and_python_to_certified_matrix(tmp_pat
     assert cfg.airflow3_version == cli._max_release(AirflowFamily.V3)
     assert cfg.python_airflow2 == "3.11"
     assert cfg.python_airflow3 == "3.11"
+
+
+def test_resolve_config_defaults_python_v2_from_the_requested_release(tmp_path: Path) -> None:
+    """Default `--python-airflow2` from `--airflow2-version`, not the family ceiling.
+
+    Parameters:
+        tmp_path: pathlib.Path anchoring the run's work directory.
+    """
+    args = _parse(
+        "--work-dir",
+        str(tmp_path),
+        "--uv-path",
+        "/opt/uv",
+        "--airflow2-version",
+        "2.7.3",
+    )
+
+    cfg = cli.resolve_config(args, [], current_python=(3, 12))
+
+    assert cfg.airflow2_version == "2.7.3"
+    assert cfg.python_airflow2 == "3.11"
 
 
 def test_resolve_config_honors_explicit_versions_and_python(tmp_path: Path) -> None:

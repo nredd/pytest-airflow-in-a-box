@@ -43,9 +43,12 @@ airflow3 = [
     "apache-airflow-providers-sqlite>=4.1,<5",
 ]
 airflow2 = [
-    # The explicit marker is the cap: Airflow 2.11's own `Requires-Python` uses bare
-    # `!=3.13,!=3.14` exclusions that do not stop patch releases like 3.13.2.
-    "apache-airflow>=2.9,<3; python_version < '3.13'",
+    # The floor is the oldest certified release (#139), not the oldest the plugin might
+    # happen to import on. The explicit marker is the cap: Airflow 2.11's own
+    # `Requires-Python` uses bare `!=3.13,!=3.14` exclusions that do not stop patch
+    # releases like 3.13.2. Tighter per-release ceilings (2.7.3 and 2.8.4 cap at 3.11)
+    # are enforced by the plugin's own runtime check, which names the exact release.
+    "apache-airflow>=2.7,<3; python_version < '3.13'",
 ]
 postgres = [
     "asyncpg>=0.29,<1",

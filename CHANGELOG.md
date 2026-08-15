@@ -50,6 +50,21 @@ All notable changes to this project will be documented in this file. The format 
   artifact. The PR coverage comment stays a short `TOTAL` line by default, with the same
   table one click away in a collapsed `<details>` section and a link to the run's summary
   page ([#148](https://github.com/nredd/pytest-airflow-in-a-box/issues/148)).
+- Certified Airflow 2.7.3 and 2.8.4, reaching the 2.x tier back across the whole 2.x era
+  -- 24 alembic revisions and the FAB auth-manager package extraction below the previous
+  floor. Both run the consumer contract (`tests/enduser`) on CPython 3.11 in the compat
+  matrix, and the `airflow2` extra floor drops to `apache-airflow>=2.7,<3`
+  ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
+- `AirflowCapabilities.max_python` carries each certified release's own Python ceiling,
+  so the 2.x guard rejects, for example, 2.7.3 on CPython 3.12 (for which Airflow
+  publishes no constraints file) instead of letting it fail opaquely later
+  ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
+- `AirflowCapabilities.dag_requires_start_date` gates a `dag_maker` shim that supplies an
+  implicit `start_date` on releases below 2.8, whose `DAG.add_task` rejects a Dag when
+  neither it nor its tasks carry one even with no schedule declared. The injection is
+  scoped to exactly the case 2.8 stopped rejecting, so a scheduled Dag without a
+  `start_date` still raises on every certified release
+  ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
 
 ### Fixed
 
@@ -58,6 +73,18 @@ All notable changes to this project will be documented in this file. The format 
   `pytest.UsageError`, which the bootstrap cleanup path did not catch, so every failed
   `--airflow-db-backend=postgres` attempt left a full run root behind
   ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
+- `_register_v2_orm_models` now falls back to the in-tree
+  `airflow.auth.managers.fab.models` when `airflow.providers.fab.auth_manager.models` is
+  absent. Below Airflow 2.9 the FAB auth-manager models had not yet been extracted into
+  `apache-airflow-providers-fab`, so the provider-only import failed unconditionally and
+  the shim degraded to an INFO log, leaving `ab_user` unregistered in any process that
+  did not itself migrate -- an xdist worker that loses the `ensure_database` race and
+  then flushes a `TaskInstanceNote`
+  ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
+- `airflow-migration-diff` defaults `--python-airflow2` from the requested
+  `--airflow2-version`'s own ceiling rather than the family-wide one, so
+  `--airflow2-version 2.7.3` on a CPython 3.12 host provisions 3.11
+  ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
 - Flip the `action.yml` symlink direction so the repo root holds the real composite-action
   manifest and `action/action.yml` symlinks back to it, instead of the other way around.
   GitHub Marketplace's publish-eligibility check reads the root `action.yml` as a raw git

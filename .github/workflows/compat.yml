@@ -64,9 +64,11 @@ jobs:
           - airflow-version: "3.3.0"
             python-version: "3.12"
             os: ubuntu-24.04-arm
-          # The Airflow 2.x tier (#25): certified releases per #41, on the Python each
-          # leg's constraints file targets. 2.x caps Python at 3.12, so the matrix is
-          # deliberately ragged. The legs run only `tests/enduser` -- the consumer
+          # The Airflow 2.x tier (#25): certified releases per #41 and #139, on the
+          # Python each leg's constraints file targets. The ceiling is per release --
+          # 2.9+ reach 3.12, 2.7.3 and 2.8.4 cap at 3.11 and publish no 3.12 constraints
+          # file -- so the matrix is deliberately ragged. The legs run only
+          # `tests/enduser` -- the consumer
           # contract, dual-family since #83 -- because the inner unit suite (`tests/`
           # proper) exercises the plugin's own internals against 3.x-only modules at
           # module scope and does not collect on 2.x; its 2.x branches are covered by
@@ -89,6 +91,19 @@ jobs:
             pytest-paths: "tests/enduser"
           - airflow-version: "2.9.3"
             python-version: "3.10"
+            airflow-family: "airflow2"
+            pytest-paths: "tests/enduser"
+          # The #139 reach-back legs: the last release of the 2.8 and 2.7 lines, both on
+          # 3.11 -- the highest interpreter either supports and what their constraints
+          # files target. Below 2.9 the FAB auth-manager models live in-tree at
+          # `airflow.auth.managers.fab.models`, so these legs are the only coverage of
+          # `_register_v2_orm_models`'s in-tree branch against real Airflow.
+          - airflow-version: "2.8.4"
+            python-version: "3.11"
+            airflow-family: "airflow2"
+            pytest-paths: "tests/enduser"
+          - airflow-version: "2.7.3"
+            python-version: "3.11"
             airflow-family: "airflow2"
             pytest-paths: "tests/enduser"
     steps:

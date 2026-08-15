@@ -54,6 +54,8 @@ def _capabilities() -> AirflowCapabilities:
         api_surface=ApiSurface.API_SERVER,
         params_location=ParamsLocation.SDK,
         timezone_location=TimezoneLocation.SDK,
+        max_python=None,
+        dag_requires_start_date=False,
     )
 
 

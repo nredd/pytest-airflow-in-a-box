@@ -9,8 +9,15 @@ way `provider.py` reaches `provider_package`: insert `tests/dags` onto `sys.path
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any
+
+from packaging.version import Version
+
+from pytest_airflow_in_a_box._compat.capabilities import V2_START_DATE_REQUIRED_BELOW
+
+_CORPUS_START_DATE = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 def _absent(name: str, error: ModuleNotFoundError) -> bool:
@@ -54,3 +61,27 @@ def _resolve(*candidates: str) -> Any:
                 raise
             continue
     return import_module(candidates[-1])
+
+
+def _dag_kwargs() -> dict[str, Any]:
+    """Return the extra Dag keyword arguments the installed Airflow release demands.
+
+    Airflow below 2.8 raises `DAG is missing the start_date parameter` from
+    `DAG.add_task` whenever neither the Dag nor the task carries a `start_date`, even
+    for an unscheduled Dag; 2.8 narrowed that to Dags declaring a schedule. Every later
+    release therefore parses these files unchanged, so the corpus keeps its authoring
+    surface minimal where it can and pays the argument only where it must.
+
+    The threshold is imported from the plugin rather than restated, so it cannot drift
+    into an opaque DagBag parse failure on a compat leg. The import is safe during Dag
+    parsing: `_compat.capabilities` never imports Airflow at module scope.
+
+    Returns:
+        dict[str, Any] containing `start_date` on releases that require one, else an
+        empty mapping.
+    """
+
+    release = Version(import_module("airflow").__version__).release
+    if release < V2_START_DATE_REQUIRED_BELOW:
+        return {"start_date": _CORPUS_START_DATE}
+    return {}

@@ -35,6 +35,25 @@ class AirflowFamily(str, Enum):
     V3 = "apache-airflow-core"
 
 
+# The certified 2.x releases, each carrying its own Python ceiling. Ordering is the
+# certified order, so this mapping is also the family's `SUPPORTED_RELEASES` source and
+# the two cannot drift. Certified per issue #41 (the final 2.x release, Composer 3's
+# exact 2.10 patch, and the oldest line still shipped by a managed vendor) and issue
+# #139, which reaches back to the last release of the 2.8 and 2.7 lines as a proof that
+# the plugin spans the whole 2.x era. Spike-verified 2026-08-11 (2.9/2.10/2.11) and
+# 2026-08-14 (2.7/2.8).
+#
+# The ceiling is per release, not per family: 2.7.3 and 2.8.4 declare `requires-python`
+# `~=3.8,<3.12` and publish no 3.12 constraints file, while 2.9.3 and later reach 3.12.
+# A family-wide cap let 2.7.3 sail past the guard on CPython 3.12 and fail opaquely
+# somewhere deeper.
+V2_MAX_PYTHON_BY_RELEASE: dict[Release, tuple[int, int]] = {
+    (2, 7, 3): (3, 11),
+    (2, 8, 4): (3, 11),
+    (2, 9, 3): (3, 12),
+    (2, 10, 5): (3, 12),
+    (2, 11, 2): (3, 12),
+}
 SUPPORTED_RELEASES_BY_FAMILY: dict[AirflowFamily, tuple[Release, ...]] = {
     AirflowFamily.V3: (
         (3, 1, 0),
@@ -51,13 +70,7 @@ SUPPORTED_RELEASES_BY_FAMILY: dict[AirflowFamily, tuple[Release, ...]] = {
         (3, 3, 0),
         (3, 3, 1),
     ),
-    # Certified per issue #41: the final 2.x release, Composer 3's exact 2.10 patch, and
-    # the oldest line still shipped by a managed vendor. Spike-verified 2026-08-11.
-    AirflowFamily.V2: (
-        (2, 9, 3),
-        (2, 10, 5),
-        (2, 11, 2),
-    ),
+    AirflowFamily.V2: tuple(V2_MAX_PYTHON_BY_RELEASE),
 }
 SUPPORTED_RELEASES = SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
 SUPPORTED_VERSIONS = tuple(
@@ -67,10 +80,12 @@ SUPPORTED_VERSIONS_V2 = tuple(
     ".".join(str(part) for part in release)
     for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]
 )
-# The Python range the 2.x family supports; 2.x never runs on 3.13+ and its
-# `requires-python` uses bare `!=3.13` exclusions pip does not enforce (see #41).
+# The floor of the Python range the 2.x family supports. 2.7.3 and 2.8.4 themselves
+# reach down to 3.8, but this package's own `requires-python` is `>=3.10`, so a running
+# interpreter can never be below the floor and comparing against it would be dead code.
+# It is interpolated into the over-cap message so the reported range is the usable one.
+# The ceiling is per release -- see `V2_MAX_PYTHON_BY_RELEASE`.
 MIN_V2_PYTHON = (3, 10)
-MAX_V2_PYTHON = (3, 12)
 AIRFLOW_DISTRIBUTION = AirflowFamily.V3.value
 AIRFLOW_META_DISTRIBUTION = AirflowFamily.V2.value
 # Escape hatch for the fail-closed metadata corruption check: an Airflow source
@@ -159,6 +174,11 @@ class AirflowCapabilities:
         api_surface: ApiSurface naming the REST API server entry point.
         params_location: ParamsLocation naming the params-validation module.
         timezone_location: TimezoneLocation naming the timezone-helper module.
+        max_python: tuple[int, int] | None containing the highest CPython `(major,
+            minor)` this release supports; None on 3.x, whose `requires-python` bounds
+            the installer actually enforces.
+        dag_requires_start_date: bool indicating that constructing a Dag without a
+            `start_date` fails even when the Dag declares no schedule.
     """
 
     release: Release
@@ -176,6 +196,34 @@ class AirflowCapabilities:
     api_surface: ApiSurface
     params_location: ParamsLocation
     timezone_location: TimezoneLocation
+    max_python: tuple[int, int] | None
+    dag_requires_start_date: bool
+
+
+# Airflow below 2.8 raises `DAG is missing the start_date parameter` from
+# `DAG.add_task` whenever neither the Dag nor the task carries a `start_date`. 2.8.0
+# moved the check into `DAG.__init__` and narrowed it to Dags that actually declare a
+# scheduling argument, which is the behavior every later release keeps.
+#
+# References:
+#     https://github.com/apache/airflow/blob/2.7.3/airflow/models/dag.py#L2555
+#     https://github.com/apache/airflow/blob/2.8.4/airflow/models/dag.py#L557
+V2_START_DATE_REQUIRED_BELOW: Release = (2, 8, 0)
+
+
+def _dag_requires_start_date(family: AirflowFamily, release: Release) -> bool:
+    """Report whether Dag construction demands a `start_date` regardless of schedule.
+
+    Parameters:
+        family: AirflowFamily naming the installed distribution family.
+        release: tuple[int, int, int] containing the certified base release.
+
+    Returns:
+        bool marking the release as one that rejects a schedule-free Dag without a
+        `start_date`.
+    """
+
+    return family is AirflowFamily.V2 and release < V2_START_DATE_REQUIRED_BELOW
 
 
 def _certify_v3(
@@ -219,6 +267,8 @@ def _certify_v3(
         api_surface=ApiSurface.API_SERVER,
         params_location=ParamsLocation.SDK,
         timezone_location=TimezoneLocation.SDK,
+        max_python=None,
+        dag_requires_start_date=False,
     )
 
 
@@ -226,8 +276,12 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
     """Build one certified 2.x contract row.
 
     Every probed value is uniform across the certified 2.x releases -- the Phase 1a
-    spike (2026-08-11) observed identical signatures on 2.9.3, 2.10.5, and 2.11.2 for
-    every symbol the plugin touches.
+    spike (2026-08-11) observed identical signatures on 2.9.3, 2.10.5, and 2.11.2, and
+    the #139 reach-back spike (2026-08-14) observed the same ones on 2.7.3 and 2.8.4,
+    for every symbol the plugin touches. Two fields do vary by release rather than by
+    family and are derived rather than passed: the Python ceiling comes from
+    `V2_MAX_PYTHON_BY_RELEASE`, and the schedule-free `start_date` demand from
+    `_dag_requires_start_date`.
 
     Parameters:
         release: tuple[int, int, int] containing the certified base release.
@@ -252,6 +306,8 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         api_surface=ApiSurface.WEBSERVER,
         params_location=ParamsLocation.MODELS,
         timezone_location=TimezoneLocation.UTILS,
+        max_python=V2_MAX_PYTHON_BY_RELEASE[release],
+        dag_requires_start_date=_dag_requires_start_date(AirflowFamily.V2, release),
     )
 
 
@@ -319,6 +375,8 @@ _CERTIFIED_CAPABILITIES = (
     }
 )
 _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
+    (2, 7, 3): _SerializedDagLocation.SERIALIZED_OBJECTS,
+    (2, 8, 4): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (2, 9, 3): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (2, 10, 5): _SerializedDagLocation.SERIALIZED_OBJECTS,
     (2, 11, 2): _SerializedDagLocation.SERIALIZED_OBJECTS,
@@ -362,8 +420,8 @@ _V3_REQUIRED_SYMBOLS = (
     ("airflow.sdk.api.datamodels._generated", "TaskInstanceState"),
     ("airflow.sdk.api.datamodels._generated", "TIRunContext"),
 )
-# Spike-verified present on 2.9.3/2.10.5/2.11.2 (2026-08-11); the surface Phase 2's
-# fixture branches consume.
+# Spike-verified present on 2.9.3/2.10.5/2.11.2 (2026-08-11) and on 2.7.3/2.8.4
+# (2026-08-14, #139); the surface Phase 2's fixture branches consume.
 _V2_REQUIRED_SYMBOLS = (
     ("airflow.models.dag", "DAG"),
     ("airflow.models.param", "ParamsDict"),
@@ -569,6 +627,34 @@ def _running_python() -> tuple[int, int]:
     return sys.version_info[:2]
 
 
+def max_v2_python(version: str) -> tuple[int, int]:
+    """Report the Python ceiling for one Airflow 2.x version string.
+
+    An uncertified or unparseable version falls back to the lowest ceiling any certified
+    release declares, which every certified release supports: the caller (the
+    `airflow-migration-diff` CLI) accepts an arbitrary `--airflow2-version`, and the
+    provisioned environment's own `resolve_capabilities()` is the authority that rejects
+    it. Guessing high would reintroduce exactly the failure this mapping exists to stop.
+
+    Parameters:
+        version: str containing an Airflow 2.x version, certified or not.
+
+    Returns:
+        tuple[int, int] containing the highest CPython `(major, minor)` that version
+        supports.
+    """
+
+    match = VERSION_PATTERN.fullmatch(version)
+    if match is None:
+        return min(V2_MAX_PYTHON_BY_RELEASE.values())
+    release = (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+    )
+    return V2_MAX_PYTHON_BY_RELEASE.get(release, min(V2_MAX_PYTHON_BY_RELEASE.values()))
+
+
 def _installed_v2_release(
     error: metadata.PackageNotFoundError,
 ) -> tuple[str, Release, AirflowFamily]:
@@ -630,15 +716,18 @@ def _installed_v2_release(
             AIRFLOW_META_DISTRIBUTION,
             certified_error,
         )
-    if _running_python() > MAX_V2_PYTHON:
+    release_max_python = V2_MAX_PYTHON_BY_RELEASE[release]
+    if _running_python() > release_max_python:
         running = ".".join(str(part) for part in _running_python())
         minimum = ".".join(str(part) for part in MIN_V2_PYTHON)
-        maximum = ".".join(str(part) for part in MAX_V2_PYTHON)
+        maximum = ".".join(str(part) for part in release_max_python)
         raise AirflowCompatibilityError(
             f"Apache Airflow 2.x (`{AIRFLOW_META_DISTRIBUTION}` '{meta.version}') does "
-            f"not support Python '{running}' -- its `requires-python` caps at "
-            f"{maximum} but uses bare `!=` exclusions the installer does not enforce. "
-            f"Use Python {minimum}-{maximum} for the 2.x tier, or upgrade to Airflow 3."
+            f"not support Python '{running}': the certified ceiling for this release "
+            f"is {maximum}. Some 2.x releases spell that bound with bare `!=` "
+            f"exclusions the installer does not enforce against patch releases, which "
+            f"is why this check exists at all. Use Python {minimum}-{maximum} for "
+            f"Airflow '{meta.version}', or upgrade to Airflow 3."
         ) from error
     return meta.version, release, AirflowFamily.V2
 
@@ -902,7 +991,10 @@ def _verify_contract(
     certified row. The family-derived fields (`family`, `has_task_sdk`,
     `uses_structlog`, `has_dag_versioning`, `dagrun_interface`, `api_surface`,
     `params_location`, `timezone_location`) are computed from the same family on both
-    sides, so their comparison is a self-consistency guard, not a probe. The real
+    sides, so their comparison is a self-consistency guard, not a probe. `max_python`
+    and `dag_requires_start_date` are release-derived rather than family-derived, but
+    both sides read them from the same declaration (`V2_MAX_PYTHON_BY_RELEASE` and
+    `_dag_requires_start_date`), so they are guards of the same kind. The real
     enforcement for the module-valued fields is `_REQUIRED_SYMBOLS_BY_FAMILY`, which
     imports each named module and fails resolution when upstream moves it;
     `api_surface` is exercised only when the API fixtures actually launch the server.
@@ -1008,6 +1100,8 @@ def _resolve_uncached(
         api_surface=ApiSurface.API_SERVER if is_v3 else ApiSurface.WEBSERVER,
         params_location=ParamsLocation.SDK if is_v3 else ParamsLocation.MODELS,
         timezone_location=TimezoneLocation.SDK if is_v3 else TimezoneLocation.UTILS,
+        max_python=None if is_v3 else V2_MAX_PYTHON_BY_RELEASE[release],
+        dag_requires_start_date=_dag_requires_start_date(family, release),
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:

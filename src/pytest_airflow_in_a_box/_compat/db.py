@@ -134,7 +134,9 @@ _OPTIONAL_SPECS: frozenset[ModelSpec] = frozenset(
 # `TableGroup` enum stay family-independent: `deadlines` and `bundles` are vacuously
 # satisfied (the tables arrived in 3.x), `assets` maps to the renamed `dataset*`
 # tables, and the XCom delete target is the `BaseXCom` ORM model because 2.x `XCom`
-# is a backend-resolved alias. Spike-verified on 2.9.3/2.10.5/2.11.2 (2026-08-11);
+# is a backend-resolved alias. Spike-verified on 2.9.3/2.10.5/2.11.2 (2026-08-11) and
+# on 2.7.3/2.8.4 (2026-08-14, #139), where every required spec resolves unchanged and
+# every `_OPTIONAL_SPECS_V2` entry is absent exactly as it is at 2.9.3;
 # `dataset_alias_dataset_event_assocation_table` spells "assocation" as upstream does.
 _V2_TABLE_REGISTRY: Registry = (
     ("xcom", (("airflow.models.xcom", "BaseXCom"),)),
@@ -194,7 +196,7 @@ _V2_TABLE_REGISTRY: Registry = (
     ("connections", (("airflow.models.connection", "Connection"),)),
 )
 
-# Dataset aliases and task-instance history arrived in 2.10; absent on 2.9.3.
+# Dataset aliases and task-instance history arrived in 2.10; absent on 2.9.3 and below.
 _OPTIONAL_SPECS_V2: frozenset[ModelSpec] = frozenset(
     {
         ("airflow.models.taskinstancehistory", "TaskInstanceHistory"),

@@ -37,7 +37,7 @@ regression," for different reasons.
 | `--work-dir` | A fresh temporary directory. A unique run subdirectory is created inside it either way. |
 | `--keep-work-dir` | Off -- the run's scratch directory (venvs, constraints files, artifacts) is removed on exit. |
 | `--airflow2-version` / `--airflow3-version` | The newest certified release per family. |
-| `--python-airflow2` / `--python-airflow3` | The current interpreter, clamped into each family's supported Python range. |
+| `--python-airflow2` / `--python-airflow3` | The current interpreter, clamped into the supported Python range. For 2.x that is the range of the exact `--airflow2-version` requested, since 2.7.3 and 2.8.4 cap at 3.11 while 2.9 and later reach 3.12. |
 | `--plugin-spec` | This checkout's installed plugin version. Pass explicitly for an unreleased version -- an unreleased version will not resolve from an index, and the orchestrator names `--plugin-spec` as the fix when the default fails to resolve. |
 | `--uv-path` | Resolved from `$PATH`. `uv` is required; there is no bundled fallback. |
 | `--baseline-artifact` / `--live-artifact` | `baseline.json`/`live.json` under the run's work directory. |
