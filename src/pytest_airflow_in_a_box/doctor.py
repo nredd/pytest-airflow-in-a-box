@@ -5,6 +5,7 @@ References:
     https://github.com/apache/airflow/blob/2.11.2/airflow/executors/executor_loader.py
     https://github.com/apache/airflow/blob/2.11.2/airflow/config_templates/unit_tests.cfg
     https://airflow.apache.org/docs/apache-airflow/2.10.0/core-concepts/executor/index.html#using-multiple-executors-concurrently
+    https://pytest-cov.readthedocs.io/en/latest/config.html
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import platform
 import urllib.parse
 from dataclasses import fields
 from enum import Enum
+from pathlib import Path
 
 import pytest
 
@@ -25,7 +27,10 @@ from pytest_airflow_in_a_box._compat import (
 )
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
+from pytest_airflow_in_a_box.collection import collection_folder
+from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
 from pytest_airflow_in_a_box.migration_strict import migration_strict_enabled
+from pytest_airflow_in_a_box.reporting import PYTEST_COV_PLUGIN_NAME
 from pytest_airflow_in_a_box.storage.provision import DbBackend
 
 REPORT_TITLE = "# pytest-airflow-in-a-box diagnostics"
@@ -36,6 +41,10 @@ _SINGLE_THREADED_EXECUTORS = frozenset({"SequentialExecutor", "DebugExecutor"})
 # Airflow's own escape hatch for this exact check; set by a consumer who has already
 # decided SQLite + their executor is fine for their test.
 _SKIP_CHECK_ENVIRONMENT_VARIABLE = "_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK"
+# pytest-cov's `--cov` option destination; the option existing at all (its parsed default
+# is an empty list) is how an installed-but-inactive pytest-cov is told apart from an
+# absent one, without ever importing `pytest_cov`.
+_COV_SOURCE_OPTION = "cov_source"
 
 
 def _storage_section(state: BootstrapState) -> list[str]:
@@ -227,6 +236,131 @@ def _migration_strict_section(config: pytest.Config, state: BootstrapState) -> l
     return ["- `--airflow-migration-strict`: enabled"]
 
 
+def _cov_sources(config: pytest.Config) -> list[object] | None:
+    """Read `pytest-cov`'s parsed `--cov` sources without importing `pytest_cov`.
+
+    Parameters:
+        config: pytest.Config containing plugin options.
+
+    Returns:
+        list[object] | None containing the parsed `--cov` values (path or package-name
+        strings, or ``True`` for the bare everything-recording form), an empty list when
+        `pytest-cov` is installed but no `--cov` was given, or ``None`` when `pytest-cov`
+        is not installed and the option does not exist.
+
+    Raises:
+        pytest.UsageError: The `cov_source` option exists but did not parse to a list.
+    """
+
+    value: object = config.getoption(_COV_SOURCE_OPTION, default=None)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise pytest.UsageError("Option `--cov` must parse to a list of sources")
+    return value
+
+
+def _covering_source(dag_folder: Path, sources: list[object], invocation_dir: Path) -> str | None:
+    """Find the first `--cov` source that measures files below the Dag folder.
+
+    A bare ``--cov`` parses as ``True`` and disables source filtering entirely, so it
+    covers any folder. A string source may also be an importable package name rather
+    than a path; a name that does not resolve to a directory containing the Dag folder
+    simply never matches, which is correct -- a Dag folder is a directory `pytest-cov`
+    would receive as a path, not resolve by import.
+
+    Parameters:
+        dag_folder: pathlib.Path containing the resolved absolute Dag folder.
+        sources: list[object] containing `pytest-cov`'s parsed `--cov` values.
+        invocation_dir: pathlib.Path resolving relative path sources, matching the
+            working directory `pytest-cov` hands them to `coverage.py` from.
+
+    Returns:
+        str | None containing the matching source's command-line form, or ``None`` when
+        no source measures the Dag folder.
+    """
+
+    for source in sources:
+        if not isinstance(source, str):
+            return "--cov"
+        candidate = Path(source)
+        if not candidate.is_absolute():
+            candidate = invocation_dir / candidate
+        if dag_folder.is_relative_to(Path(str(candidate)).resolve()):
+            return f"--cov={source}"
+    return None
+
+
+def _coverage_section(config: pytest.Config, state: BootstrapState) -> list[str]:
+    """Render Dag coverage diagnostics: resolved folders and `--cov` containment.
+
+    `pytest-cov` registers its controller under the plugin name `_cov` only once a
+    `--cov` option activates it, so `hasplugin` distinguishes an active coverage run
+    while the `cov_source` option existing at all distinguishes an installed
+    `pytest-cov`. Neither check imports `pytest_cov` -- this module sits on
+    `plugin.py`'s import path and must stay import-light.
+
+    Parameters:
+        config: pytest.Config containing plugin options, ini values, and rootpath.
+        state: BootstrapState containing the scratch fallback Dag folder.
+
+    Returns:
+        list[str] containing Markdown bullet lines.
+
+    Raises:
+        pytest.UsageError: A Dag folder or `--cov` option has an invalid type or value.
+    """
+
+    dag_folder = Path(str(_dag_folder(config))).resolve()
+    fallback = dag_folder == Path(str(state.dags_folder)).resolve()
+    if fallback:
+        lines = [
+            f"- Dag folder: `{dag_folder}` (bootstrap scratch fallback -- neither "
+            f"`--dag-folder` nor `airflow_dags_folder` is configured)"
+        ]
+    else:
+        lines = [f"- Dag folder: `{dag_folder}`"]
+    collect_folder = collection_folder(config)
+    if collect_folder is None:
+        lines.append(
+            "- Collection folder: not configured (`--collect-dag-folder` / "
+            "`airflow_collect_dags_folder`)"
+        )
+    else:
+        lines.append(f"- Collection folder: `{collect_folder}`")
+
+    sources = _cov_sources(config)
+    if sources is None:
+        lines.append(
+            "- `pytest-cov`: not installed -- Dag files are not measured. Install it and "
+            "pass `--cov=<dag folder>` (see the Dag coverage guide)"
+        )
+        return lines
+    if not config.pluginmanager.hasplugin(PYTEST_COV_PLUGIN_NAME):
+        lines.append(
+            "- `pytest-cov`: installed but inactive -- no `--cov` was given, so Dag files "
+            "are not measured. Pass `--cov=<dag folder> --cov-report=term-missing`"
+        )
+        return lines
+    if fallback:
+        lines.append(
+            "- NOT MEASURABLE: the fallback Dag folder is a disposable bootstrap scratch "
+            "directory; never feed it to `--cov`. Configure `--dag-folder` or "
+            "`airflow_dags_folder` first, then add that folder as a `--cov` source"
+        )
+        return lines
+    covering = _covering_source(dag_folder, sources, Path(str(config.invocation_params.dir)))
+    if covering is None:
+        lines.append(
+            f"- NOT COVERED: the Dag folder sits outside every configured `--cov` source, "
+            f"so Dag files are silently missing from the report. Add it: "
+            f"`pytest --cov={dag_folder} --cov-report=term-missing`"
+        )
+    else:
+        lines.append(f"- Dag folder covered by `{covering}`")
+    return lines
+
+
 def _api_server_section() -> list[str]:
     """Render the API server section, which never has live state for this invocation.
 
@@ -261,6 +395,7 @@ def render_doctor_report(config: pytest.Config) -> str:
         ("Versions and capabilities", _version_section()),
         ("Executor", _executor_section(state)),
         ("Migration-strict", _migration_strict_section(config, state)),
+        ("Dag coverage", _coverage_section(config, state)),
         ("API server", _api_server_section()),
     )
     lines = [REPORT_TITLE, ""]

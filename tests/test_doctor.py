@@ -354,6 +354,170 @@ def test_version_section_reports_incompatibility_without_raising(
     assert not any(line.startswith("- Apache Airflow: `") for line in lines)
 
 
+def _coverage_config(
+    invocation_dir: Path,
+    *,
+    cov_source: object = None,
+    has_cov_plugin: bool = False,
+) -> Any:
+    """Build a fabricated pytest configuration for coverage-section unit tests.
+
+    Parameters:
+        invocation_dir: pathlib.Path containing the fabricated invocation directory.
+        cov_source: object containing the fabricated parsed `--cov` values, or ``None``
+            to simulate an absent `pytest-cov` whose option falls back to the default.
+        has_cov_plugin: bool containing whether the `_cov` plugin reports as registered.
+
+    Returns:
+        Any containing a `SimpleNamespace` standing in for `pytest.Config`.
+    """
+
+    return SimpleNamespace(
+        getoption=lambda _name, default=None: cov_source if cov_source is not None else default,
+        pluginmanager=SimpleNamespace(hasplugin=lambda _name: has_cov_plugin),
+        invocation_params=SimpleNamespace(dir=invocation_dir),
+    )
+
+
+def test_cov_sources_returns_none_without_pytest_cov(tmp_path: Path) -> None:
+    """Fall back to None when the `cov_source` option does not exist."""
+
+    config = _coverage_config(tmp_path)
+
+    assert doctor._cov_sources(config) is None
+
+
+def test_cov_sources_rejects_a_non_list_value(tmp_path: Path) -> None:
+    """Reject a `cov_source` option that did not parse to a list."""
+
+    config = _coverage_config(tmp_path, cov_source="dags")
+
+    with pytest.raises(pytest.UsageError, match="must parse to a list"):
+        doctor._cov_sources(config)
+
+
+def test_covering_source_matches_the_bare_everything_form(tmp_path: Path) -> None:
+    """A bare `--cov` parses as True, disables filtering, and covers any folder."""
+
+    covering = doctor._covering_source(tmp_path / "dags", [True], tmp_path)
+
+    assert covering == "--cov"
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_covering_source_matches_relative_and_absolute_path_sources(
+    tmp_path: Path, absolute: bool
+) -> None:
+    """Resolve a relative source against the invocation directory before containment.
+
+    Parameters:
+        tmp_path: pathlib.Path providing a throwaway invocation directory.
+        absolute: bool selecting the absolute or relative source spelling.
+    """
+
+    source = str(tmp_path / "dags") if absolute else "dags"
+
+    covering = doctor._covering_source(tmp_path / "dags" / "etl.py", [source], tmp_path)
+
+    assert covering == f"--cov={source}"
+
+
+def test_covering_source_returns_none_when_no_source_contains_the_folder(
+    tmp_path: Path,
+) -> None:
+    """Report no match when every source is a disjoint path or a package name."""
+
+    covering = doctor._covering_source(tmp_path / "dags", ["src", "my_package"], tmp_path)
+
+    assert covering is None
+
+
+def test_coverage_section_reports_folders_and_missing_pytest_cov(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Render the resolved folders and flag an absent `pytest-cov` install."""
+
+    state = _state(tmp_path / "scratch")
+    dag_folder = tmp_path / "repo" / "dags"
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: dag_folder)
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: None)
+    config = _coverage_config(tmp_path)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert f"- Dag folder: `{dag_folder}`" in lines
+    assert any("Collection folder: not configured" in line for line in lines)
+    assert any("`pytest-cov`: not installed" in line for line in lines)
+
+
+def test_coverage_section_reports_inactive_pytest_cov(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Flag an installed `pytest-cov` that no `--cov` option activated."""
+
+    state = _state(tmp_path / "scratch")
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: tmp_path / "dags")
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: None)
+    config = _coverage_config(tmp_path, cov_source=[], has_cov_plugin=False)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert any("installed but inactive" in line for line in lines)
+
+
+def test_coverage_section_flags_the_scratch_fallback_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Never recommend feeding the disposable bootstrap scratch folder to `--cov`."""
+
+    state = _state(tmp_path / "scratch")
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: state.dags_folder)
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: None)
+    config = _coverage_config(tmp_path, cov_source=["dags"], has_cov_plugin=True)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert any("scratch fallback" in line for line in lines)
+    assert any("NOT MEASURABLE" in line for line in lines)
+    assert not any("covered by" in line for line in lines)
+
+
+def test_coverage_section_reports_a_covered_dag_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Name the containing `--cov` source when the Dag folder is measured."""
+
+    state = _state(tmp_path / "scratch")
+    dag_folder = tmp_path / "repo" / "dags"
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: dag_folder)
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: dag_folder)
+    config = _coverage_config(tmp_path, cov_source=["repo"], has_cov_plugin=True)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert f"- Collection folder: `{dag_folder}`" in lines
+    assert "- Dag folder covered by `--cov=repo`" in lines
+
+
+def test_coverage_section_reports_an_uncovered_dag_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Flag a Dag folder outside every source, with a copy-pasteable fix."""
+
+    state = _state(tmp_path / "scratch")
+    dag_folder = tmp_path / "repo" / "dags"
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: dag_folder)
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: None)
+    config = _coverage_config(tmp_path, cov_source=["src"], has_cov_plugin=True)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert any(
+        "NOT COVERED" in line and f"`pytest --cov={dag_folder} --cov-report=term-missing`" in line
+        for line in lines
+    )
+
+
 def test_api_server_section_reports_not_started() -> None:
     """Report that the API server was never requested by this invocation."""
 
@@ -411,6 +575,8 @@ def test_render_doctor_report_combines_every_section(
     state = _state(tmp_path)
     monkeypatch.setattr(doctor, "resolve_capabilities", lambda: CAPABILITIES)
     monkeypatch.setattr(doctor, "_resolve_executor", lambda: "LocalExecutor")
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: tmp_path / "repo" / "dags")
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: None)
 
     def _fake_get_bootstrap_state(config: Any) -> Any:
         """Return the fabricated state regardless of the passed configuration."""
@@ -421,7 +587,9 @@ def test_render_doctor_report_combines_every_section(
     monkeypatch.setattr(doctor, "get_bootstrap_state", _fake_get_bootstrap_state)
 
     fake_config: Any = SimpleNamespace(
-        getoption=lambda _name: None, getini=lambda _name: False, stash=pytest.Stash()
+        getoption=lambda _name, default=None: default,
+        getini=lambda _name: False,
+        stash=pytest.Stash(),
     )
     report = doctor.render_doctor_report(config=fake_config)
 
@@ -430,6 +598,7 @@ def test_render_doctor_report_combines_every_section(
     assert "## AIRFLOW_HOME and database" in report
     assert "## Executor" in report
     assert "## Migration-strict" in report
+    assert "## Dag coverage" in report
     assert "## Versions and capabilities" in report
     assert "## API server" in report
     assert report.endswith("\n")
@@ -459,6 +628,9 @@ def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> No
             "*core.executor*: `*`",
             "*## Migration-strict*",
             "*--airflow-migration-strict*: disabled*",
+            "*## Dag coverage*",
+            "*- Dag folder: *scratch fallback*",
+            "*- Collection folder: not configured*",
             "*## API server*",
             "*Not started*",
         ]
