@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- A "Dag coverage" guide page documenting how Dag-repo authors measure their own Dag
+  files (`--cov=dags`), why the in-process `SourceFileLoader` parse makes it work, the
+  `--cov=src`-only footgun, the two Dag folder options plus the scratch fallback to
+  never feed to `--cov`, `relative_files = true` for CI merging, and the xdist
+  per-worker data-file story
+  ([#138](https://github.com/nredd/pytest-airflow-in-a-box/issues/138)).
+- `--airflow-doctor` now prints a "Dag coverage" section: the resolved Dag and
+  collection folders, whether `pytest-cov` is installed and active (detected without
+  importing it), and whether the Dag folder sits inside a configured `--cov` source,
+  with a copy-pasteable fix when it does not
+  ([#138](https://github.com/nredd/pytest-airflow-in-a-box/issues/138)).
+
 ## [0.6.0] - 2026-08-15
 
 ### Added

@@ -50,6 +50,7 @@ nav:
       - Seeding Variables and Connections: guide/seeding.md
       - Structlog capture: guide/structlog.md
       - Dag-file collection: guide/dag-collection.md
+      - Dag coverage: guide/dag-coverage.md
       - Airflow configuration: guide/configuration.md
       - Smoke tests: guide/smoke-tests.md
       - Migration-strict mode: guide/migration-strict.md
