@@ -19,6 +19,20 @@ All notable changes to this project will be documented in this file. The format 
   importing it), and whether the Dag folder sits inside a configured `--cov` source,
   with a copy-pasteable fix when it does not
   ([#138](https://github.com/nredd/pytest-airflow-in-a-box/issues/138)).
+- Every run now names its isolated `AIRFLOW_HOME` in the pytest session header, along with the
+  storage-ladder rung that chose the base and the metadata database backend, e.g.
+  `pytest-airflow-in-a-box: AIRFLOW_HOME=/dev/shm/pytest-airflow-in-a-box-8f2a1c (storage:
+  shared-memory, db: sqlite)`
+  ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
+- `--airflow-home-retention` and the `airflow_home_retention_policy` ini option keep the isolated
+  run directory after a session -- `all`, `failed`, or `none`, defaulting to `failed` to match
+  the house `tmp_path_retention_policy`. A retained directory is reported again in the terminal
+  summary, with an extra warning when it sits on RAM-backed `/dev/shm`. A session that died
+  before pytest could record an outcome is treated as failed, so a crash retains rather than
+  discards; a session that collected no tests is not, since nothing ever touched the directory.
+  The metadata database provisioner still stops on every policy, so a retained run never leaks a
+  testcontainers Postgres container
+  ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
 
 ### Fixed
 

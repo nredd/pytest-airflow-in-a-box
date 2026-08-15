@@ -6,3 +6,7 @@ and ini settings always win. Warning filters silence traced third-party deprecat
 (`flask_appbuilder`, `flask_sqlalchemy`, `starlette`) while keeping Airflow's own deprecation
 warnings visible, and promote pytest's collection and unraisable warnings to errors. User-supplied
 `filterwarnings` lines take precedence.
+
+The isolated `AIRFLOW_HOME` carries the same failed-only default under its own
+`airflow_home_retention_policy` ini option and `--airflow-home-retention` flag; see
+[the isolated `AIRFLOW_HOME`](../guide/airflow-home.md).

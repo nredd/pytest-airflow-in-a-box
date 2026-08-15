@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pytest_airflow_in_a_box import baseline, record
+from pytest_airflow_in_a_box import airflow_home, baseline, record
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
@@ -260,6 +260,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type="bool",
         default=False,
     )
+    airflow_home.register_options(parser)
     record.register_options(parser)
     baseline.register_options(parser)
     register_ini_defaults(parser)
@@ -290,6 +291,10 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     here because ``pytest_load_initial_conftests`` runs during argument parsing,
     which completes before pytest dispatches this hook.
 
+    Short-circuiting also skips ``pytest_sessionfinish``, so the successful outcome is
+    recorded here by hand. Without it the diagnostic run's own bootstrap directory would
+    look like a crashed session to the retention policy and survive.
+
     Parameters:
         config: pytest.Config for the active invocation.
 
@@ -300,6 +305,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     if not config.option.airflow_doctor:
         return None
     sys.stdout.write(render_doctor_report(config))
+    airflow_home.record_session_outcome(config, int(pytest.ExitCode.OK))
     return 0
 
 
@@ -310,6 +316,11 @@ def pytest_configure(config: pytest.Config) -> None:
     Runs ``tryfirst`` so worker artifact paths are rewritten before pytest's
     logging plugin reads the ``log_file`` option during its own configuration.
 
+    The ``AIRFLOW_HOME`` retention policy is resolved eagerly here, and its value
+    discarded: resolution caches onto the config stash, so a malformed ini value aborts
+    the session with an actionable usage error instead of raising from the cleanup
+    callback that reads it at unconfigure time.
+
     Parameters:
         config: pytest.Config for the active test session.
     """
@@ -319,6 +330,7 @@ def pytest_configure(config: pytest.Config) -> None:
     configure_reporting(config)
     apply_option_defaults(config)
     apply_filterwarnings(config)
+    airflow_home.resolve_retention_policy(config)
     record.configure(config)
     warn_if_migration_strict_is_a_noop(config)
 
@@ -348,6 +360,25 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     del session
     _install_dict_config_interceptor()
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    """Name this run's isolated `AIRFLOW_HOME` in the session header.
+
+    Bootstrap state is stashed eagerly during ``pytest_load_initial_conftests``, so the
+    run root already exists by the time pytest collects header lines. ``BootstrapState``
+    is a plain dataclass and reading it imports no Airflow, which keeps this module
+    import-light. pytest suppresses the header entirely under ``-q`` and
+    ``--no-header``, and prints only the controller's lines under xdist.
+
+    Parameters:
+        config: pytest.Config for the active test session.
+
+    Returns:
+        list[str] containing one header line, or no lines on an xdist worker.
+    """
+
+    return airflow_home.report_header(get_bootstrap_state(config))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -579,7 +610,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 def pytest_terminal_summary(
     terminalreporter: pytest.TerminalReporter, exitstatus: int, config: pytest.Config
 ) -> None:
-    """Render the `--airflow-baseline` migration diff summary.
+    """Render the `--airflow-baseline` migration diff summary and a retained run root.
 
     Parameters:
         terminalreporter: pytest.TerminalReporter receiving the rendered summary.
@@ -588,10 +619,17 @@ def pytest_terminal_summary(
     """
 
     baseline.render_terminal_summary(terminalreporter, exitstatus, config)
+    airflow_home.terminal_summary(terminalreporter, config, get_bootstrap_state(config))
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Write the `--airflow-record` migration outcome artifact.
+    """Write the `--airflow-record` artifact and record the outcome for cleanup.
+
+    The `AIRFLOW_HOME` cleanup closure registered during bootstrap is a
+    ``config.add_cleanup`` callback with no view of the session outcome, and this is the
+    hook that has one. pytest dispatches it before the terminal reporter's wrapper calls
+    ``pytest_terminal_summary`` and long before any cleanup runs, so the recorded
+    outcome is available to both.
 
     Parameters:
         session: pytest.Session that finished collecting and running tests.
@@ -599,6 +637,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
 
     record.write_recorded_artifact(session, exitstatus)
+    airflow_home.record_session_outcome(session.config, exitstatus)
 
 
 @pytest.hookimpl(optionalhook=True)
