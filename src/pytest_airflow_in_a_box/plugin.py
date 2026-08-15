@@ -316,21 +316,22 @@ def pytest_configure(config: pytest.Config) -> None:
     Runs ``tryfirst`` so worker artifact paths are rewritten before pytest's
     logging plugin reads the ``log_file`` option during its own configuration.
 
-    The ``AIRFLOW_HOME`` retention policy is resolved eagerly here, and its value
-    discarded: resolution caches onto the config stash, so a malformed ini value aborts
-    the session with an actionable usage error instead of raising from the cleanup
-    callback that reads it at unconfigure time.
+    The ``AIRFLOW_HOME`` retention policy is resolved first and its value discarded:
+    resolution caches onto the config stash, so a malformed ini value aborts the session
+    with an actionable usage error instead of raising from the cleanup callback that
+    reads it at unconfigure time, and an explicit ``--airflow-home-retention`` still
+    governs cleanup when a later configure step fails.
 
     Parameters:
         config: pytest.Config for the active test session.
     """
 
+    airflow_home.resolve_retention_policy(config)
     register_markers(config)
     validate_configure(config)
     configure_reporting(config)
     apply_option_defaults(config)
     apply_filterwarnings(config)
-    airflow_home.resolve_retention_policy(config)
     record.configure(config)
     warn_if_migration_strict_is_a_noop(config)
 
