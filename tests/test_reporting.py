@@ -485,6 +485,48 @@ def test_report_dir_scopes_log_files_across_xdist_workers(pytester: pytest.Pytes
     assert (pytester.path / "reports" / "pytest.xml").is_file()
 
 
+def test_report_dir_survives_disabled_logging_across_xdist_workers(
+    pytester: pytest.Pytester,
+) -> None:
+    """Derive and scope on the same run with the logging plugin disabled.
+
+    The one composition where both halves of this module have to no-op together:
+    ``configure_report_dir`` skips the log-file derivation and ``configure_reporting``
+    skips the worker scoping, while the JUnit XML derivation still has to land.
+
+    Parameters:
+        pytester: pytest.Pytester driving a real subprocess run.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/151
+    """
+
+    pytester.makepyfile(
+        test_reported_no_logging="""
+        def test_one():
+            assert True
+
+        def test_two():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "no:logging",
+        "--airflow-report-dir=reports",
+        "-n",
+        "2",
+        "-q",
+    )
+
+    result.assert_outcomes(passed=2)
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+    assert list((pytester.path / "reports").iterdir()) == [
+        pytester.path / "reports" / "pytest.xml"
+    ]
+
+
 @pytest.mark.parametrize(
     "disabled",
     [
