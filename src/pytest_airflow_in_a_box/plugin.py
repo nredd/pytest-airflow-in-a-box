@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pytest_airflow_in_a_box import baseline, record
+from pytest_airflow_in_a_box import airflow_home, baseline, record
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
@@ -260,6 +260,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type="bool",
         default=False,
     )
+    airflow_home.register_options(parser)
     record.register_options(parser)
     baseline.register_options(parser)
     register_ini_defaults(parser)
@@ -290,6 +291,11 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     here because ``pytest_load_initial_conftests`` runs during argument parsing,
     which completes before pytest dispatches this hook.
 
+    Short-circuiting also skips ``pytest_configure``, so the retention policy is resolved
+    here instead. A diagnostic run is not a failed test run and discards its own bootstrap
+    directory under the default policy, but an explicit ``--airflow-home-retention=all``
+    still keeps the tree whose path the report just printed.
+
     Parameters:
         config: pytest.Config for the active invocation.
 
@@ -300,6 +306,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     if not config.option.airflow_doctor:
         return None
     sys.stdout.write(render_doctor_report(config))
+    airflow_home.resolve_retention_policy(config)
     return 0
 
 
@@ -310,10 +317,17 @@ def pytest_configure(config: pytest.Config) -> None:
     Runs ``tryfirst`` so worker artifact paths are rewritten before pytest's
     logging plugin reads the ``log_file`` option during its own configuration.
 
+    The ``AIRFLOW_HOME`` retention policy is resolved first and its value discarded:
+    resolution caches onto the config stash, so a malformed ini value aborts the session
+    with an actionable usage error instead of raising from the cleanup callback that
+    reads it at unconfigure time, and an explicit ``--airflow-home-retention`` still
+    governs cleanup when a later configure step fails.
+
     Parameters:
         config: pytest.Config for the active test session.
     """
 
+    airflow_home.resolve_retention_policy(config)
     register_markers(config)
     validate_configure(config)
     configure_reporting(config)
@@ -336,7 +350,14 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Install logging protection before any test or plugin configures logging.
+    """Mark the session started, then install logging protection before anything else.
+
+    The `AIRFLOW_HOME` mark goes first and this hookimpl runs ``tryfirst``, so a session
+    that dies anywhere after startup begins -- a crashing conftest hookimpl, an internal
+    error, a killed controller -- still reads as failed and keeps its run directory. An
+    invocation that never starts a session at all (``--help``, ``--markers``, an argparse
+    usage error, an abort during ``pytest_configure``) leaves the mark unset and its
+    bootstrap directory is discarded.
 
     Database initialization is deliberately absent: it is deferred to the first
     test that requires the metadata database (see ``pytest_runtest_setup``), so
@@ -346,8 +367,27 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         session: pytest.Session about to start collecting and running tests.
     """
 
-    del session
+    airflow_home.mark_session_started(session.config)
     _install_dict_config_interceptor()
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    """Name this run's isolated `AIRFLOW_HOME` in the session header.
+
+    Bootstrap state is stashed eagerly during ``pytest_load_initial_conftests``, so the
+    run root already exists by the time pytest collects header lines. ``BootstrapState``
+    is a plain dataclass and reading it imports no Airflow, which keeps this module
+    import-light. pytest suppresses the header entirely under ``-q`` and
+    ``--no-header``, and prints only the controller's lines under xdist.
+
+    Parameters:
+        config: pytest.Config for the active test session.
+
+    Returns:
+        list[str] containing one header line, or no lines on an xdist worker.
+    """
+
+    return airflow_home.report_header(get_bootstrap_state(config))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -579,7 +619,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 def pytest_terminal_summary(
     terminalreporter: pytest.TerminalReporter, exitstatus: int, config: pytest.Config
 ) -> None:
-    """Render the `--airflow-baseline` migration diff summary.
+    """Render the `--airflow-baseline` migration diff summary and a retained run root.
 
     Parameters:
         terminalreporter: pytest.TerminalReporter receiving the rendered summary.
@@ -588,10 +628,17 @@ def pytest_terminal_summary(
     """
 
     baseline.render_terminal_summary(terminalreporter, exitstatus, config)
+    airflow_home.terminal_summary(terminalreporter, config, get_bootstrap_state(config))
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Write the `--airflow-record` migration outcome artifact.
+    """Write the `--airflow-record` artifact and record the outcome for cleanup.
+
+    The `AIRFLOW_HOME` cleanup closure registered during bootstrap is a
+    ``config.add_cleanup`` callback with no view of the session outcome, and this is the
+    hook that has one. pytest dispatches it before the terminal reporter's wrapper calls
+    ``pytest_terminal_summary`` and long before any cleanup runs, so the recorded
+    outcome is available to both.
 
     Parameters:
         session: pytest.Session that finished collecting and running tests.
@@ -599,6 +646,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
 
     record.write_recorded_artifact(session, exitstatus)
+    airflow_home.record_session_outcome(session.config, exitstatus)
 
 
 @pytest.hookimpl(optionalhook=True)

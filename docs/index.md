@@ -67,6 +67,7 @@ pytest -p no:pytest_airflow_in_a_box
 
 - [Task execution](guide/task-execution.md) and the `dag_maker` fixture
 - [Database backends](guide/database.md) -- SQLite by default, Postgres on request
+- [The isolated `AIRFLOW_HOME`](guide/airflow-home.md) -- where it lands, and how to keep it
 - [Markers](reference/markers.md) for a quick index of everything the plugin registers
 - [Development](development.md) to build the plugin itself
 
