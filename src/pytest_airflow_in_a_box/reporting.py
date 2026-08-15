@@ -43,6 +43,9 @@ REPORT_DIR_SETTING = "airflow_report_dir"
 REPORT_LOG_FILE_NAME = "pytest.log"
 REPORT_LOG_FILE_LEVEL = "DEBUG"
 REPORT_JUNIT_XML_NAME = "pytest.xml"
+# pytest resolves the log-file level as `log_file_level` first, then `log_level`;
+# an explicit value in either one is a level the user chose, so neither is derived.
+LOG_LEVEL_SETTINGS = ("log_file_level", "log_level")
 
 
 def worker_suffixed_path(path: Path, worker: str) -> Path:
@@ -118,6 +121,10 @@ def _configured_value(config: pytest.Config, name: str) -> str | None:
     as a command-line option and an ini key under the same name, with the parsed
     option winning over the ini value and either possibly absent.
 
+    Callers must establish that the pair is registered at all: ``pytest
+    -p no:logging`` leaves neither the option attribute nor the ini key, and
+    ``getini`` raises rather than answering for an unknown key.
+
     Parameters:
         config: pytest.Config containing parsed options and ini values.
         name: str naming the option destination and the matching ini key.
@@ -140,14 +147,21 @@ def configure_report_dir(config: pytest.Config) -> None:
 
     Inert unless ``--airflow-report-dir`` or the ``airflow_report_dir`` ini value
     is set. Every derived destination yields to an explicit one, so
-    ``--log-file``, ``--log-file-level``, and ``--junit-xml`` (and their ini
-    forms) always win. ``junit_family`` is deliberately untouched: pytest already
-    defaults it to ``xunit2``.
+    ``--log-file``, ``--log-file-level``, ``--log-level`` (pytest's own fallback
+    for the log-file level), and ``--junit-xml`` -- and their ini forms -- always
+    win. ``junit_family`` is deliberately untouched: pytest already defaults it to
+    ``xunit2``.
 
     Must run before ``configure_reporting`` so a derived log file is scoped per
     xdist worker exactly like a user-supplied one, and inside a ``tryfirst``
     ``pytest_configure`` so both land before pytest's own ``logging`` and
-    ``junitxml`` plugins read these settings.
+    ``junitxml`` plugins read these settings. Each destination is derived only
+    when the plugin owning it is loaded: ``pytest -p no:junitxml`` has no
+    ``xmlpath`` option to write, and writing one would be a crash, not a feature.
+
+    Deriving ``log_file_level`` is not a write-only side effect: pytest lowers the
+    root logger to that level for the session, so more records reach ``caplog``
+    than an unflagged run captures.
 
     Parameters:
         config: pytest.Config for the active test process.
@@ -166,11 +180,17 @@ def configure_report_dir(config: pytest.Config) -> None:
         raise pytest.UsageError(
             f"Could not create report directory `{report_dir}`: {error}"
         ) from error
-    if _configured_value(config, "log_file") is None:
-        config.option.log_file = str(report_dir / REPORT_LOG_FILE_NAME)
-    if _configured_value(config, "log_file_level") is None:
-        config.option.log_file_level = REPORT_LOG_FILE_LEVEL
-    if config.option.xmlpath is None:
+    # One guard for the whole logging block: pytest's own `logging` plugin
+    # registers `log_file`, `log_file_level`, and `log_level` together, so either
+    # all three exist or the plugin is disabled and none of them do.
+    if hasattr(config.option, "log_file"):
+        if _configured_value(config, "log_file") is None:
+            config.option.log_file = str(report_dir / REPORT_LOG_FILE_NAME)
+        if all(_configured_value(config, name) is None for name in LOG_LEVEL_SETTINGS):
+            config.option.log_file_level = REPORT_LOG_FILE_LEVEL
+    # `xmlpath` is the one destination with no ini form, so `_configured_value`
+    # cannot answer for it: pytest's `junitxml` plugin registers the option alone.
+    if hasattr(config.option, "xmlpath") and config.option.xmlpath is None:
         config.option.xmlpath = str(report_dir / REPORT_JUNIT_XML_NAME)
     LOGGER.debug(f"Derived report artifact destinations below '{report_dir}'")
 

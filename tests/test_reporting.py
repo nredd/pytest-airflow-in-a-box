@@ -19,10 +19,13 @@ def _config(
     log_file_ini: object = None,
     log_file_level: str | None = None,
     log_file_level_ini: object = None,
+    log_level: str | None = None,
+    log_level_ini: object = None,
     xmlpath: str | None = None,
     report_dir: str | None = None,
     report_dir_ini: object = None,
     has_cov_plugin: bool = False,
+    registered: frozenset[str] = frozenset({"log_file", "log_file_level", "log_level", "xmlpath"}),
 ) -> Any:
     """Create a minimal configuration double for reporting tests.
 
@@ -32,28 +35,36 @@ def _config(
         log_file_ini: object containing the ``log_file`` ini value.
         log_file_level: str | None containing the parsed ``--log-file-level`` value.
         log_file_level_ini: object containing the ``log_file_level`` ini value.
+        log_level: str | None containing the parsed ``--log-level`` option value.
+        log_level_ini: object containing the ``log_level`` ini value.
         xmlpath: str | None containing the parsed ``--junit-xml`` option value.
         report_dir: str | None containing the parsed ``--airflow-report-dir`` value.
         report_dir_ini: object containing the ``airflow_report_dir`` ini value.
         has_cov_plugin: bool registering a fake pytest-cov plugin.
+        registered: frozenset[str] naming the pytest settings whose owning builtin
+            plugin is loaded; anything absent is omitted from both the option
+            namespace and the ini mapping, as ``pytest -p no:logging`` leaves it.
+            ``log_level`` follows ``log_file_level``: one plugin registers both.
 
     Returns:
         types.SimpleNamespace shaped like the configuration surface under test.
     """
 
-    ini_values = {
-        "log_file": log_file_ini,
-        "log_file_level": log_file_level_ini,
-        reporting.REPORT_DIR_SETTING: report_dir_ini,
-    }
+    ini_values: dict[str, object] = {reporting.REPORT_DIR_SETTING: report_dir_ini}
+    options: dict[str, object] = {"airflow_report_dir": report_dir}
+    for name, option_value, ini_value in (
+        ("log_file", log_file, log_file_ini),
+        ("log_file_level", log_file_level, log_file_level_ini),
+        ("log_level", log_level, log_level_ini),
+    ):
+        if name in registered:
+            options[name] = option_value
+            ini_values[name] = ini_value
+    if "xmlpath" in registered:
+        options["xmlpath"] = xmlpath
     plugins = {reporting.PYTEST_COV_PLUGIN_NAME} if has_cov_plugin else set()
     config = SimpleNamespace(
-        option=SimpleNamespace(
-            log_file=log_file,
-            log_file_level=log_file_level,
-            xmlpath=xmlpath,
-            airflow_report_dir=report_dir,
-        ),
+        option=SimpleNamespace(**options),
         getini=lambda name: ini_values[name],
         pluginmanager=SimpleNamespace(hasplugin=lambda name: name in plugins),
     )
@@ -195,7 +206,7 @@ def test_configure_reporting_without_coverage_file_changes_nothing(
     assert reporting.COVERAGE_FILE_ENVIRONMENT_VARIABLE not in reporting.os.environ
 
 
-def test_configure_report_dir_without_configuration_changes_nothing(tmp_path: Path) -> None:
+def test_configure_report_dir_without_configuration_changes_nothing() -> None:
     """Stay inert when neither the option nor the ini value names a directory."""
 
     config = _config()
@@ -205,7 +216,6 @@ def test_configure_report_dir_without_configuration_changes_nothing(tmp_path: Pa
     assert config.option.log_file is None
     assert config.option.log_file_level is None
     assert config.option.xmlpath is None
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_configure_report_dir_derives_every_destination(tmp_path: Path) -> None:
@@ -288,6 +298,29 @@ def test_configure_report_dir_preserves_explicit_log_file_level(
     assert config.option.log_file_level == option
 
 
+@pytest.mark.parametrize(
+    ("option", "ini"),
+    [("WARNING", None), (None, "WARNING")],
+)
+def test_configure_report_dir_preserves_explicit_log_level(
+    tmp_path: Path,
+    option: str | None,
+    ini: object,
+) -> None:
+    """Derive no log-file level when ``log_level`` alone chose one.
+
+    pytest falls back to ``log_level`` when ``log_file_level`` is unset, and
+    implements the level by lowering the root logger for the whole session, so
+    deriving ``DEBUG`` here would override a level the user explicitly asked for.
+    """
+
+    config = _config(report_dir=str(tmp_path / "reports"), log_level=option, log_level_ini=ini)
+
+    reporting.configure_report_dir(config)
+
+    assert config.option.log_file_level is None
+
+
 def test_configure_report_dir_preserves_explicit_junit_xml(tmp_path: Path) -> None:
     """Leave an explicitly configured ``--junit-xml`` destination untouched."""
 
@@ -307,6 +340,25 @@ def test_configure_report_dir_rejects_an_uncreatable_directory(tmp_path: Path) -
 
     with pytest.raises(pytest.UsageError, match="Could not create report directory"):
         reporting.configure_report_dir(config)
+
+
+def test_configure_report_dir_skips_unregistered_settings(tmp_path: Path) -> None:
+    """Derive nothing for a setting whose builtin pytest plugin is not loaded.
+
+    ``pytest -p no:logging`` leaves neither a ``log_file`` option nor a ``log_file``
+    ini key, so reading either would raise instead of answering, and writing one
+    would only invent an attribute nothing reads.
+    """
+
+    report_dir = tmp_path / "reports"
+    config = _config(report_dir=str(report_dir), registered=frozenset())
+
+    reporting.configure_report_dir(config)
+
+    assert report_dir.is_dir()
+    assert not hasattr(config.option, "log_file")
+    assert not hasattr(config.option, "log_file_level")
+    assert not hasattr(config.option, "xmlpath")
 
 
 def test_configure_report_dir_composes_with_worker_scoping(tmp_path: Path) -> None:
@@ -343,6 +395,48 @@ def test_report_dir_writes_both_artifacts(pytester: pytest.Pytester) -> None:
     testsuite = ElementTree.parse(xml_file).getroot().find("testsuite")
     assert testsuite is not None
     assert testsuite.get("tests") == "1"
+
+
+def test_report_dir_writes_nothing_when_unset(pytester: pytest.Pytester) -> None:
+    """Leave a plain run's working directory free of report files."""
+
+    pytester.makepyfile(
+        test_unreported="""
+        def test_one():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=1)
+    assert list(pytester.path.glob("**/*.log")) == []
+    assert list(pytester.path.glob("**/*.xml")) == []
+    assert not (pytester.path / "reports").exists()
+
+
+def test_report_dir_survives_disabled_builtin_plugins(pytester: pytest.Pytester) -> None:
+    """Run cleanly when the plugins owning the derived settings are disabled."""
+
+    pytester.makepyfile(
+        test_no_builtins="""
+        def test_one():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-p",
+        "no:logging",
+        "-p",
+        "no:junitxml",
+        "--airflow-report-dir=reports",
+        "-q",
+    )
+
+    result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+    assert list((pytester.path / "reports").iterdir()) == []
 
 
 def test_report_dir_scopes_log_files_across_xdist_workers(pytester: pytest.Pytester) -> None:

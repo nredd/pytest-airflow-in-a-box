@@ -22,9 +22,18 @@ The plugin writes no report files unless one of those is set -- this deliberatel
 the [zero-ini defaults](../reference/defaults.md), which are display-only and never put files
 in your repository.
 
-Every derived destination yields to an explicit one, so `--log-file`, `--log-file-level`, and
-`--junit-xml` (and their ini forms) always win. Mixing is fine: `--airflow-report-dir=reports
---log-file-level=INFO` still writes both artifacts, at `INFO`.
+Every derived destination yields to an explicit one, so `--log-file`, `--log-file-level`,
+`--log-level`, and `--junit-xml` (and their ini forms) always win. Mixing is fine:
+`--airflow-report-dir=reports --log-file-level=INFO` still writes both artifacts, at `INFO`.
+
+!!! note "The derived `DEBUG` level is not write-only"
+
+    `--log-file-level` is how pytest decides what reaches the log file, and pytest implements
+    it by lowering the *root* logger to that level for the session. So a run with
+    `--airflow-report-dir` and no level of its own captures more in `caplog` than the same run
+    without it -- a test asserting an exact `len(caplog.records)` can start failing on the flag
+    alone. Set `--log-file-level` or `--log-level` (pytest's own fallback for the former, and
+    honored here for exactly that reason) to keep the session's level where it was.
 
 Under `pytest-xdist` the log file is scoped per worker (`reports/pytest.gw0.log`,
 `reports/pytest.gw1.log`, ...) because pytest's logging plugin has no worker guard and the
@@ -51,7 +60,7 @@ The [composite action](https://github.com/nredd/pytest-airflow-in-a-box/tree/mai
 no changes, and exposes the absolute path as the `report-dir` output for the upload step:
 
 ```yaml
-- uses: nredd/pytest-airflow-in-a-box/action@v0
+- uses: nredd/pytest-airflow-in-a-box/action@main
   id: airflow-env
   with:
     airflow-version: "3.3.0"

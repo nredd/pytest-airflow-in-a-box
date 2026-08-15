@@ -38,11 +38,11 @@ All notable changes to this project will be documented in this file. The format 
 - `--airflow-report-dir=PATH` (ini: `airflow_report_dir`) derives pytest's own report
   destinations inside PATH: `pytest.log` at `--log-file-level=DEBUG` and `pytest.xml` in the
   stock `xunit2` family. Opt-in and inert when unset, every derived destination yields to an
-  explicit `--log-file` / `--log-file-level` / `--junit-xml`, and the log file is scoped per
-  `pytest-xdist` worker like any other. `action/action.yml` gains a matching `report-dir`
-  input (creates the directory, appends the flag to `PYTEST_ADDOPTS`, skipping the append
-  when the installed plugin version predates the option) plus a `report-dir` output, and
-  every CI pytest invocation now archives its reports with `if: always()`
+  explicit `--log-file` / `--log-file-level` / `--log-level` / `--junit-xml`, and the log file
+  is scoped per `pytest-xdist` worker like any other. `action/action.yml` gains a matching
+  `report-dir` input (creates the directory, appends the flag to `PYTEST_ADDOPTS`, skipping
+  the append when the installed plugin version predates the option) plus a `report-dir`
+  output, and every CI pytest invocation now archives its reports with `if: always()`
   ([#137](https://github.com/nredd/pytest-airflow-in-a-box/issues/137)).
 
 ### Fixed
