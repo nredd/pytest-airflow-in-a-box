@@ -27,10 +27,10 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 from pytest_airflow_in_a_box._compat.capabilities import (
-    MAX_V2_PYTHON,
     MIN_V2_PYTHON,
     SUPPORTED_RELEASES_BY_FAMILY,
     AirflowFamily,
+    max_v2_python,
 )
 from pytest_airflow_in_a_box.migration import provision, render, run
 from pytest_airflow_in_a_box.migration.provision import ProvisionedEnvironment
@@ -48,7 +48,8 @@ EXIT_TOOLING_ERROR = 2
 WORK_DIR_PREFIX = "airflow-migration-diff-"
 # The plugin has no `apache-airflow-core` release above 3.x's certified ceiling to fall
 # back to, so an out-of-range interpreter (this package's own 3.10-3.14 support matrix)
-# falls back to the same known-good 3.12 the 2.x default also uses.
+# falls back to a known-good 3.12. The 2.x default clamps to the requested release's own
+# bounds instead, because 2.7/2.8 cap at 3.11 and 2.9+ reach 3.12.
 _FALLBACK_PYTHON = "3.12"
 _MIN_V3_PYTHON = (3, 10)
 _MAX_V3_PYTHON = (3, 14)
@@ -125,20 +126,30 @@ def _max_release(family: AirflowFamily) -> str:
     return ".".join(str(part) for part in release)
 
 
-def _default_python_v2(current: tuple[int, int]) -> str:
-    """Default `--python-airflow2` to the current interpreter, clamped to the 2.x range.
+def _default_python_v2(current: tuple[int, int], airflow2_version: str) -> str:
+    """Default `--python-airflow2` to the current interpreter, clamped for that release.
+
+    The ceiling is the requested release's own, not the family's: 2.7.3 and 2.8.4 cap at
+    3.11 and publish no 3.12 constraints file, so a family-wide clamp would hand a 3.12
+    interpreter straight through and fail deep inside provisioning.
 
     Parameters:
         current: tuple[int, int] containing the running interpreter's `(major, minor)`.
+        airflow2_version: str containing the already-defaulted 2.x release to install.
 
     Returns:
         str containing the current interpreter's `X.Y` version when it falls inside
-        `[MIN_V2_PYTHON, MAX_V2_PYTHON]`, else the `_FALLBACK_PYTHON` constant.
+        `[MIN_V2_PYTHON, max_v2_python(airflow2_version)]`, else the nearer bound. A
+        clamp rather than one shared fallback constant, because there is no single
+        version every certified 2.x release accepts.
     """
 
-    if MIN_V2_PYTHON <= current <= MAX_V2_PYTHON:
-        return f"{current[0]}.{current[1]}"
-    return _FALLBACK_PYTHON
+    maximum = max_v2_python(airflow2_version)
+    if current > maximum:
+        return f"{maximum[0]}.{maximum[1]}"
+    if current < MIN_V2_PYTHON:
+        return f"{MIN_V2_PYTHON[0]}.{MIN_V2_PYTHON[1]}"
+    return f"{current[0]}.{current[1]}"
 
 
 def _default_python_v3(current: tuple[int, int]) -> str:
@@ -350,14 +361,16 @@ def resolve_config(
     plugin_spec_is_default = args.plugin_spec is None
     baseline_artifact = args.baseline_artifact or (work_dir / "baseline.json")
     live_artifact = args.live_artifact or (work_dir / "live.json")
+    airflow2_version = args.airflow2_version or _max_release(AirflowFamily.V2)
 
     return ResolvedConfig(
         project_dir=project_dir,
         work_dir=work_dir,
         keep_work_dir=args.keep_work_dir,
-        airflow2_version=args.airflow2_version or _max_release(AirflowFamily.V2),
+        airflow2_version=airflow2_version,
         airflow3_version=args.airflow3_version or _max_release(AirflowFamily.V3),
-        python_airflow2=args.python_airflow2 or _default_python_v2(resolved_python),
+        python_airflow2=args.python_airflow2
+        or _default_python_v2(resolved_python, airflow2_version),
         python_airflow3=args.python_airflow3 or _default_python_v3(resolved_python),
         plugin_spec=args.plugin_spec or _default_plugin_spec(),
         plugin_spec_is_default=plugin_spec_is_default,

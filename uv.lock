@@ -3679,7 +3679,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apache-airflow", marker = "python_full_version < '3.13' and extra == 'airflow2'", specifier = ">=2.9,<3" },
+    { name = "apache-airflow", marker = "python_full_version < '3.13' and extra == 'airflow2'", specifier = ">=2.7,<3" },
     { name = "apache-airflow", marker = "extra == 'airflow3'", specifier = ">=3.1,<4" },
     { name = "apache-airflow-providers-sqlite", marker = "extra == 'airflow3'", specifier = ">=4.1,<5" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29,<1" },

@@ -101,7 +101,7 @@ Airflow's published constraints files:
 | Tier                   | Airflow versions                                                                | Python           | OS                                       | Metadata DB                    |
 | ----------------------- | -------------------------------------------------------------------------------- | ----------------- | ------------------------------------------ | -------------------------------- |
 | 3.x (primary)           | 3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, 3.3.1 | 3.10 - 3.14        | Linux (glibc, musl, arm64), macOS          | SQLite (WAL), Postgres (testcontainers) |
-| 2.x (certified, [#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)) | 2.9.3, 2.10.5, 2.11.2                                                             | 3.10 - 3.12 (Airflow 2.x never supported 3.13+) | Linux                                     | SQLite (WAL)                     |
+| 2.x (certified, [#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)) | 2.7.3, 2.8.4, 2.9.3, 2.10.5, 2.11.2                                               | 3.10 - 3.12 on 2.9+, 3.10 - 3.11 on 2.7/2.8 (Airflow 2.x never supported 3.13+) | Linux                                     | SQLite (WAL)                     |
 
 On the 2.x family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable
 errors naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip
@@ -126,14 +126,16 @@ Airflow's published constraints files -- can install the plugin bare:
 pip install pytest-airflow-in-a-box
 ```
 
-The `airflow2` extra (`apache-airflow>=2.9,<3`, carrying an explicit `python_version < '3.13'`
+The `airflow2` extra (`apache-airflow>=2.7,<3`, carrying an explicit `python_version < '3.13'`
 marker because Airflow 2.x never supported 3.13 -- on newer interpreters the extra resolves to
 nothing and the plugin's runtime check names the fix) installs the certified Airflow 2.x
 compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)):
 `dag_maker` (including whole-DagRun execution through `dag_maker.run()`), `run_ti`,
-`full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run against 2.9.3, 2.10.5,
-and 2.11.2. Requesting both Airflow extras together fails at resolution for pip and uv alike,
-since the `apache-airflow` version ranges are disjoint.
+`full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run against 2.7.3, 2.8.4,
+2.9.3, 2.10.5, and 2.11.2. The marker is the family-wide cap; 2.7.3 and 2.8.4 cap lower still,
+at 3.11, and the plugin's runtime check names the offending release. Requesting both Airflow
+extras together fails at resolution for pip and uv alike, since the `apache-airflow` version
+ranges are disjoint.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

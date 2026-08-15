@@ -9,8 +9,15 @@ way `provider.py` reaches `provider_package`: insert `tests/dags` onto `sys.path
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any
+
+from packaging.version import Version
+
+# Airflow below 2.8 rejects a Dag whose tasks carry no `start_date`, scheduled or not.
+_START_DATE_REQUIRED_BELOW = (2, 8)
+_CORPUS_START_DATE = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
 def _absent(name: str, error: ModuleNotFoundError) -> bool:
@@ -54,3 +61,23 @@ def _resolve(*candidates: str) -> Any:
                 raise
             continue
     return import_module(candidates[-1])
+
+
+def _dag_kwargs() -> dict[str, Any]:
+    """Return the extra Dag keyword arguments the installed Airflow release demands.
+
+    Airflow below 2.8 raises `DAG is missing the start_date parameter` from
+    `DAG.add_task` whenever neither the Dag nor the task carries a `start_date`, even
+    for an unscheduled Dag; 2.8 narrowed that to Dags declaring a schedule. Every later
+    release therefore parses these files unchanged, so the corpus keeps its authoring
+    surface minimal where it can and pays the argument only where it must.
+
+    Returns:
+        dict[str, Any] containing `start_date` on releases that require one, else an
+        empty mapping.
+    """
+
+    release = Version(import_module("airflow").__version__).release
+    if release[:2] < _START_DATE_REQUIRED_BELOW:
+        return {"start_date": _CORPUS_START_DATE}
+    return {}

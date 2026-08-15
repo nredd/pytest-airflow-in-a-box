@@ -20,9 +20,10 @@ Airflow support.
 
 The released compatibility matrix is exercised against Airflow 3.1.0, 3.1.1, 3.1.2, 3.1.3,
 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, and 3.3.1 across CPython 3.10 through 3.14
-using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.9.3,
-2.10.5, and 2.11.2 on CPython 3.10-3.12, exercised through the end-user consumer contract
-(Airflow 2.x never supported 3.13).
+using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.7.3,
+2.8.4, 2.9.3, 2.10.5, and 2.11.2 -- 2.9 and later on CPython 3.10-3.12, 2.7.3 and 2.8.4 on
+CPython 3.10-3.11 -- exercised through the end-user consumer contract (Airflow 2.x never
+supported 3.13).
 
 ## Installation
 
@@ -33,7 +34,7 @@ uv add --dev "pytest-airflow-in-a-box[airflow3]"
 The plugin does not depend on Airflow directly -- the `airflow3` extra pins
 `apache-airflow>=3.1,<4`, and projects that pin Airflow themselves (for example through
 Airflow's published constraints files) can install the plugin bare. The `airflow2` extra
-(`apache-airflow>=2.9,<3`) installs the certified Airflow 2.x compatibility tier
+(`apache-airflow>=2.7,<3`) installs the certified Airflow 2.x compatibility tier
 ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`
 (including whole-DagRun execution through `dag_maker.run()`), `run_ti`, `full_dag_bag`,
 `clear_db`, seeding, and the bundled smoke checks run on both families, while `run_task`,

@@ -75,6 +75,91 @@ def test_build_dag_uses_the_v2_authoring_class(monkeypatch: pytest.MonkeyPatch) 
     assert not hasattr(dag, "relative_fileloc")
 
 
+@pytest.fixture
+def v2_7_capabilities(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Pin `_compat.dag` to the certified 2.7.3 contract.
+
+    2.7.3 is the one certified release whose `DAG.add_task` rejects a Dag with no
+    `start_date` on it or its tasks, scheduled or not.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the resolver.
+
+    Returns:
+        AirflowCapabilities containing the certified 2.7.3 contract.
+    """
+
+    capabilities = _CERTIFIED_CAPABILITIES[(2, 7, 3)]
+    monkeypatch.setattr(dag_module, "resolve_capabilities", lambda: capabilities)
+    return capabilities
+
+
+@pytest.mark.usefixtures("v2_7_capabilities")
+def test_build_dag_supplies_a_start_date_below_2_8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inject the implicit `start_date` on the releases that demand one.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake authoring class.
+    """
+
+    constructed: dict[str, Any] = {}
+
+    class FakeDag:
+        """Record 2.x authoring construction."""
+
+        def __init__(self, dag_id: str, schedule: Any = None, **kwargs: Any) -> None:
+            constructed.update({"dag_id": dag_id, "schedule": schedule, **kwargs})
+
+    monkeypatch.setitem(sys.modules, "airflow.models.dag", SimpleNamespace(DAG=FakeDag))
+
+    dag_module.build_dag("fake_dag", "/suite/test_module.py", {})
+
+    assert constructed["start_date"] == dag_module.IMPLICIT_V2_START_DATE
+
+
+@pytest.mark.parametrize(
+    ("release", "schedule", "dag_kwargs", "expected"),
+    [
+        ((2, 7, 3), None, {}, True),
+        # A scheduled Dag without a `start_date` is a real authoring error on every
+        # certified release, so the shim leaves it to raise.
+        ((2, 7, 3), "@daily", {}, False),
+        ((2, 7, 3), None, {"start_date": datetime(2024, 1, 1, tzinfo=timezone.utc)}, False),
+        (
+            (2, 7, 3),
+            None,
+            {"default_args": {"start_date": datetime(2024, 1, 1, tzinfo=timezone.utc)}},
+            False,
+        ),
+        ((2, 7, 3), None, {"default_args": {}}, True),
+        ((2, 8, 4), None, {}, False),
+        ((2, 11, 2), None, {}, False),
+        ((3, 3, 1), None, {}, False),
+    ],
+)
+def test_needs_implicit_start_date_matches_the_2_8_rule(
+    monkeypatch: pytest.MonkeyPatch,
+    release: tuple[int, int, int],
+    schedule: Any,
+    dag_kwargs: dict[str, Any],
+    expected: bool,
+) -> None:
+    """Inject only where Airflow 2.8 stopped rejecting a `start_date`-free Dag.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the resolver.
+        release: tuple[int, int, int] selecting the certified contract to pin.
+        schedule: Any standing in for the popped scheduling argument.
+        dag_kwargs: dict[str, Any] forwarded to the authoring constructor.
+        expected: bool expected from the probe.
+    """
+
+    capabilities = _CERTIFIED_CAPABILITIES[release]
+    monkeypatch.setattr(dag_module, "resolve_capabilities", lambda: capabilities)
+
+    assert dag_module._needs_implicit_start_date(schedule, dag_kwargs) is expected
+
+
 @pytest.mark.usefixtures("v2_capabilities")
 def test_ensure_bundle_is_vacuous_on_v2() -> None:
     """Skip bundle creation entirely on the 2.x family."""
@@ -413,42 +498,100 @@ def test_cleanup_dag_tolerates_an_absent_dag_model() -> None:
     assert session.committed is True
 
 
-def test_register_v2_orm_models_imports_the_fab_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Import the FAB provider models once and succeed silently."""
+def _fab_import_probe(monkeypatch: pytest.MonkeyPatch, importable: frozenset[str]) -> list[str]:
+    """Replace `_compat.dag`'s importer with one resolving only the named modules.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing `import_module`.
+        importable: frozenset[str] naming the module paths the probe resolves.
+
+    Returns:
+        list[str] recording every attempted module path, in order.
+    """
 
     attempts: list[str] = []
 
     def fake_import(name: str) -> Any:
+        """Record the attempt, then resolve or raise like `importlib.import_module`."""
+
         attempts.append(name)
+        if name not in importable:
+            raise ModuleNotFoundError(f"No module named '{name}'", name=name)
         return SimpleNamespace()
 
     monkeypatch.setattr(dag_module, "import_module", fake_import)
+    return attempts
+
+
+def test_register_v2_orm_models_imports_the_fab_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop at the provider models on 2.9 and later, never probing the in-tree path.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing `import_module`.
+    """
+
+    attempts = _fab_import_probe(
+        monkeypatch, frozenset({"airflow.providers.fab.auth_manager.models"})
+    )
+
     dag_module._register_v2_orm_models()
 
     assert attempts == ["airflow.providers.fab.auth_manager.models"]
+
+
+def test_register_v2_orm_models_falls_back_to_the_in_tree_models(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Register the in-tree FAB models on 2.7/2.8, where the provider does not exist.
+
+    FAB's auth-manager models were extracted into `apache-airflow-providers-fab` for
+    2.9; below that they live at `airflow.auth.managers.fab.models` and the provider is
+    absent from those releases' constraints files entirely, so a provider-only import
+    left the shim dead on exactly the releases it was silent about.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing `import_module`.
+        caplog: pytest.LogCaptureFixture proving the fallback is not the failure path.
+    """
+
+    attempts = _fab_import_probe(monkeypatch, frozenset({"airflow.auth.managers.fab.models"}))
+
+    with caplog.at_level("INFO", logger=dag_module.__name__):
+        dag_module._register_v2_orm_models()
+
+    assert attempts == [
+        "airflow.providers.fab.auth_manager.models",
+        "airflow.auth.managers.fab.models",
+    ]
+    assert caplog.messages == []
 
 
 def test_register_v2_orm_models_logs_a_stripped_install(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Name the missing FAB models module instead of failing the fixture.
+    """Name both missing FAB models modules instead of failing the fixture.
 
-    Every certified 2.x release depends on `apache-airflow-providers-fab`
-    unconditionally, so this only fires on a hand-stripped install -- the log line
-    is the diagnostic breadcrumb for the mapper failure that follows.
+    Every certified 2.x release carries the models at one of the two locations, so this
+    only fires on a hand-stripped install -- the log line is the diagnostic breadcrumb
+    for the mapper failure that follows.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing `import_module`.
+        caplog: pytest.LogCaptureFixture capturing the INFO diagnostic.
     """
 
-    monkeypatch.setattr(
-        dag_module, "import_module", lambda name: (_ for _ in ()).throw(ImportError(name))
-    )
+    attempts = _fab_import_probe(monkeypatch, frozenset())
 
     with caplog.at_level("INFO", logger=dag_module.__name__):
         dag_module._register_v2_orm_models()
 
+    assert attempts == list(dag_module._V2_FAB_MODEL_MODULES)
     assert any("`ab_user`" in message for message in caplog.messages)
+    assert any("airflow.auth.managers.fab.models" in message for message in caplog.messages)
 
 
 def test_is_v2_reports_the_v3_family(monkeypatch: pytest.MonkeyPatch) -> None:

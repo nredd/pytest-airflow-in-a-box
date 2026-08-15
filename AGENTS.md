@@ -88,7 +88,7 @@ pytester `runpytest_subprocess`, which is why the coverage `.pth` exists. Marker
 
 ## CI
 
-`ci.yml`: check job (lint, type, hooks, build), 18-leg compat matrix (`compat.yml`,
+`ci.yml`: check job (lint, type, hooks, build), 25-leg compat matrix (`compat.yml`,
 Airflow 3.1.0-3.3.0 x Python 3.10-3.14 via Airflow constraints files, plus pytest-floor,
 xdist, macOS, arm, musl legs), a real-Docker postgres job, and a coverage-combine job
 that enforces the 100% union. `airflow-canary.yml` runs weekly against the newest

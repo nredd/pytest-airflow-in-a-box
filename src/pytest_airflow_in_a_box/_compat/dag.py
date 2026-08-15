@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -25,9 +26,13 @@ from pytest_airflow_in_a_box._compat.registry import (
 
 LOGGER = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
-    from datetime import datetime
+# Supplied to releases whose Dag construction demands a `start_date` even without a
+# schedule (see `AirflowCapabilities.dag_requires_start_date`). The epoch is chosen so
+# it can never fall after a caller's `logical_date` and strand a task instance behind
+# its own task's start date.
+IMPLICIT_V2_START_DATE = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
+if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
     from airflow.models.taskinstance import TaskInstance
     from airflow.sdk import DAG
@@ -83,6 +88,32 @@ def _is_v2() -> bool:
     return resolve_capabilities().family is AirflowFamily.V2
 
 
+def _needs_implicit_start_date(schedule: Any, dag_kwargs: dict[str, Any]) -> bool:
+    """Report whether this Dag would trip a pre-2.8 `start_date` requirement.
+
+    The injection is scoped to exactly the case Airflow 2.8 stopped rejecting: no
+    scheduling argument and no `start_date` anywhere. A scheduled Dag without one still
+    raises, identically worded, on every certified release, so the shim never converts a
+    real authoring error into a silent default.
+
+    Parameters:
+        schedule: Any containing the scheduling argument already popped from the kwargs.
+        dag_kwargs: dict[str, Any] forwarded to the authoring constructor.
+
+    Returns:
+        bool marking the Dag as one needing an implicit `start_date`.
+    """
+
+    if not resolve_capabilities().dag_requires_start_date:
+        return False
+    if schedule:
+        return False
+    if dag_kwargs.get("start_date") is not None:
+        return False
+    default_args = dag_kwargs.get("default_args") or {}
+    return default_args.get("start_date") is None
+
+
 def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
     """Construct one public authoring Dag while keeping the Airflow import deferred.
 
@@ -103,6 +134,8 @@ def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
         from airflow.sdk import DAG
 
     schedule = dag_kwargs.pop("schedule", None)
+    if _needs_implicit_start_date(schedule, dag_kwargs):
+        dag_kwargs["start_date"] = IMPLICIT_V2_START_DATE
     dag = DAG(dag_id=dag_id, schedule=schedule, **dag_kwargs)
     dag.fileloc = fileloc
     if not _is_v2():
@@ -111,27 +144,48 @@ def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
     return dag
 
 
+# FAB's auth-manager models were extracted from Airflow core into
+# `apache-airflow-providers-fab` for 2.9; 2.7.3 and 2.8.4 carry them in-tree and their
+# constraints files do not pin the provider at all, so the provider-only import failed
+# unconditionally below 2.9 and left the shim silently dead. Ordered newest-location
+# first so the certified releases that have the provider stop at one import.
+_V2_FAB_MODEL_MODULES = (
+    "airflow.providers.fab.auth_manager.models",
+    "airflow.auth.managers.fab.models",
+)
+
+
 def _register_v2_orm_models() -> None:
     """Register the FAB tables 2.x ORM mapper configuration depends on.
 
     Flushing a 2.x `TaskInstance` or `DagRun` configures the note mappers, whose
     foreign keys target FAB's `ab_user` table; importing the FAB models registers that
     table so mapper configuration can resolve it regardless of what else the process
-    imported first.
+    imported first. The blast radius when it does not resolve is narrow but real:
+    Airflow's own `initdb()` performs the same import, so any process that migrates
+    self-registers `ab_user`, and the processes that do not are exactly the xdist
+    workers that lose the `ensure_database` race and jump straight to the ready
+    sentinel.
+
+    References:
+        https://github.com/apache/airflow/blob/2.9.3/airflow/providers/fab/auth_manager/models/__init__.py
+        https://github.com/apache/airflow/blob/2.8.4/airflow/auth/managers/fab/models/__init__.py
     """
 
-    try:
-        # Every certified 2.x release depends on `apache-airflow-providers-fab`
-        # unconditionally, so this import only fails on a hand-stripped install.
-        import_module("airflow.providers.fab.auth_manager.models")
-    except ImportError:
-        # INFO because Airflow's dictConfig caps handlers at INFO; a DEBUG line
-        # would vanish exactly when this diagnostic matters.
-        LOGGER.info(
-            "`airflow.providers.fab.auth_manager.models` is not importable; 2.x "
-            "note-mapper configuration may fail to resolve the `ab_user` table on "
-            "ORM flushes"
-        )
+    for module_name in _V2_FAB_MODEL_MODULES:
+        try:
+            import_module(module_name)
+        except ImportError:
+            continue
+        return
+    # INFO because Airflow's dictConfig caps handlers at INFO; a DEBUG line would
+    # vanish exactly when this diagnostic matters.
+    locations = ", ".join(f"`{module_name}`" for module_name in _V2_FAB_MODEL_MODULES)
+    LOGGER.info(
+        f"No FAB auth-manager models module is importable ({locations}); 2.x "
+        f"note-mapper configuration may fail to resolve the `ab_user` table on "
+        f"ORM flushes"
+    )
 
 
 def open_dag_session(dag_id: str) -> Session:
@@ -404,10 +458,10 @@ def create_dag_run(
 
     # The 2.x module is dynamically resolved so static checking stays valid against an
     # installed 3.x tree, which has no `airflow.utils.timezone`.
-    timezone: Any = import_module(resolve_capabilities().timezone_location.value)
-    coerce_datetime = timezone.coerce_datetime
-    convert_to_utc = timezone.convert_to_utc
-    utcnow = timezone.utcnow
+    airflow_timezone: Any = import_module(resolve_capabilities().timezone_location.value)
+    coerce_datetime = airflow_timezone.coerce_datetime
+    convert_to_utc = airflow_timezone.convert_to_utc
+    utcnow = airflow_timezone.utcnow
     from airflow.utils.state import DagRunState
     from airflow.utils.types import DagRunType
 

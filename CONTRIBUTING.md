@@ -53,7 +53,7 @@ of the compat matrix (`.github/workflows/compat.yml`) still need a real PR to ex
 
 `make test` enforces 100% branch coverage (`fail_under = 100` in
 `[tool.coverage.report]`), checked locally per-run and in CI as the union across the
-whole 18-leg compat matrix. Two things make that number honest instead of a lie:
+whole 25-leg compat matrix. Two things make that number honest instead of a lie:
 
 - **Subprocess measurement.** Many tests drive the plugin through pytester's
   `runpytest_subprocess`, which spawns a real child interpreter. `make test` installs a

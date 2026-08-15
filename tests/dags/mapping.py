@@ -7,7 +7,9 @@ from importlib import import_module
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-_resolve = import_module("_family")._resolve
+_family = import_module("_family")
+_resolve = _family._resolve
+_dag_kwargs = _family._dag_kwargs
 
 _authoring = _resolve("airflow.sdk", "airflow.decorators")
 dag = _authoring.dag
@@ -16,7 +18,7 @@ task = _authoring.task
 PYTEST_DAG_CASES = {"smoke": {"factor": 2}}
 
 
-@dag(schedule=None, params={"factor": 2})
+@dag(schedule=None, params={"factor": 2}, **_dag_kwargs())
 def mapped() -> None:
     """Map one pure transformation over literal values."""
 

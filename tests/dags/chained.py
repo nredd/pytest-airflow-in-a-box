@@ -12,14 +12,16 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
-_resolve = import_module("_family")._resolve
+_family = import_module("_family")
+_resolve = _family._resolve
+_dag_kwargs = _family._dag_kwargs
 
 _authoring = _resolve("airflow.sdk", "airflow.decorators")
 dag = _authoring.dag
 task = _authoring.task
 
 
-@dag(schedule=None)
+@dag(schedule=None, **_dag_kwargs())
 def chained() -> None:
     """Chain one producer into one consumer."""
 
