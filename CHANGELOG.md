@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-15
+
 ### Added
 
 - A "Dag coverage" guide page documenting how Dag-repo authors measure their own Dag
@@ -460,7 +462,9 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.0
+[0.6.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.6.0
 [0.5.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.5.0
 [0.4.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.4.0
 [0.3.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.3.0

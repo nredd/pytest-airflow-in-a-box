@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml/badge.svg)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
 [![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/nredd/pytest-airflow-in-a-box/badges/coverage.json)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/pytest-airflow-in-a-box?logo=pypi&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
-[![Python versions](https://img.shields.io/pypi/pyversions/pytest-airflow-in-a-box?logo=python&logoColor=white)](https://pypi.org/project/pytest-airflow-in-a-box/)
+[![PyPI](https://img.shields.io/pypi/v/pytest-airflow-in-a-box?logo=pypi&logoColor=white&cacheSeconds=300)](https://pypi.org/project/pytest-airflow-in-a-box/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pytest-airflow-in-a-box?logo=python&logoColor=white&cacheSeconds=300)](https://pypi.org/project/pytest-airflow-in-a-box/)
 [![License](https://img.shields.io/pypi/l/pytest-airflow-in-a-box?cacheSeconds=3600)](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue?logo=materialformkdocs&logoColor=white)](https://nredd.github.io/pytest-airflow-in-a-box/)
-[![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.9--2.11-017CEE?logo=apacheairflow&logoColor=white)](#requirements)
+[![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.7--2.11-017CEE?logo=apacheairflow&logoColor=white)](#requirements)
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
 Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
@@ -169,7 +169,7 @@ plugin rather than baking one blessed command into the action.
 
 ```yaml
 - uses: actions/checkout@v5
-- uses: nredd/pytest-airflow-in-a-box/action@main
+- uses: nredd/pytest-airflow-in-a-box/action@v0
   id: airflow-env
   with:
     airflow-version: "3.3.0"
@@ -201,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: nredd/pytest-airflow-in-a-box/action@main
+      - uses: nredd/pytest-airflow-in-a-box/action@v0
         id: airflow-env
         with:
           airflow-version: ${{ matrix.airflow-version }}
@@ -221,11 +221,10 @@ jobs:
 | `report-dir`         | no       | (none)     | Directory for `pytest.log`/`pytest.xml`, appended to `PYTEST_ADDOPTS`.        |
 
 Outputs: `python-path` (the provisioned venv's `python`), `venv-path` (the venv directory,
-for console scripts), and `report-dir` (the absolute report directory, for an upload step). The examples above pin `@main` because no tagged release carries the
-action yet. Once one ships, `release.yml` moves a `v<major>` tag (`v0` while pre-1.0, `v1`
-once `1.0.0` ships) to point at the latest published release on that major line -- pin to
-`@v0` at that point for an always-latest reference, or to a full release tag (e.g.
-`@v0.6.0`) for an exact, non-moving one.
+for console scripts), and `report-dir` (the absolute report directory, for an upload step).
+The examples above pin `@v0`: `release.yml` moves a `v<major>` tag (`v0` while pre-1.0, `v1`
+once `1.0.0` ships) to the latest published release on that major line, so `@v0` tracks the
+newest 0.x. Pin a full release tag (e.g. `@v0.7.0`) for an exact, non-moving reference.
 
 ## Migration diff orchestrator
 
