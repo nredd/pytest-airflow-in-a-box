@@ -279,4 +279,4 @@ months--I have some crazy 500+ task DAG templates underway (for convoluted semic
 design methodologies) that were IMPOSSIBLE to fully verify outside of a live Airflow
 instance. I yearned for a far-off land where I could develop alone in my teched-out Python
 cave, talk to absolutely no one, and ship complete Methodologies without a whisper in the
-night. This plugin is the closest thing we have to that 🫡
+night. This plugin is the closest thing we have 🫡
