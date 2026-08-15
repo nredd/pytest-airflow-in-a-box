@@ -44,6 +44,12 @@ All notable changes to this project will be documented in this file. The format 
   the append when the installed plugin version predates the option) plus a `report-dir`
   output, and every CI pytest invocation now archives its reports with `if: always()`
   ([#137](https://github.com/nredd/pytest-airflow-in-a-box/issues/137)).
+- The `Coverage` job now writes the full per-module `Stmts`/`Miss`/`Branch`/`BrPart`/`Cover`
+  table -- not just the `TOTAL` row that `skip_covered = true` leaves on a green build -- to
+  the run's job summary, viewable in the GitHub Actions web UI without downloading an
+  artifact. The PR coverage comment stays a short `TOTAL` line by default, with the same
+  table one click away in a collapsed `<details>` section and a link to the run's summary
+  page ([#148](https://github.com/nredd/pytest-airflow-in-a-box/issues/148)).
 
 ### Fixed
 
