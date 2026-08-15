@@ -53,6 +53,7 @@ nav:
       - Dag coverage: guide/dag-coverage.md
       - Airflow configuration: guide/configuration.md
       - Smoke tests: guide/smoke-tests.md
+      - Report artifacts: guide/reports.md
       - Migration-strict mode: guide/migration-strict.md
       - Database: guide/database.md
       - The isolated AIRFLOW_HOME: guide/airflow-home.md

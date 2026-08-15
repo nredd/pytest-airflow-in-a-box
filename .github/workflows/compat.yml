@@ -133,7 +133,21 @@ jobs:
         env:
           COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
-        run: .venv-ci/bin/python -m coverage run -m pytest -v ${{ matrix.pytest-args }} ${{ matrix.pytest-paths }}
+        run: >-
+          .venv-ci/bin/python -m coverage run -m pytest -v
+          --airflow-report-dir="${{ github.workspace }}/reports"
+          ${{ matrix.pytest-args }} ${{ matrix.pytest-paths }}
+      - name: Upload reports
+        # `always()` because a report from a failing leg is the whole point;
+        # `if-no-files-found: warn` because a leg that died before configuration
+        # leaves nothing behind, and a second red X would bury the real failure.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}${{ matrix.pytest-spec && '-pytest8' || '' }}${{ matrix.pytest-paths && '-enduser' || '' }}
+          path: reports
+          retention-days: 7
+          if-no-files-found: warn
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -173,7 +187,17 @@ jobs:
         env:
           COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
-        run: .venv-ci/bin/python -m coverage run -m pytest -v
+        run: >-
+          .venv-ci/bin/python -m coverage run -m pytest -v
+          --airflow-report-dir="${{ github.workspace }}/reports"
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-alpine-musl-3.3.0-3.12
+          path: reports
+          retention-days: 7
+          if-no-files-found: warn
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

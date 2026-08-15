@@ -66,7 +66,7 @@ from pytest_airflow_in_a_box.migration_strict import (
     apply_migration_strict_filterwarnings,
     warn_if_migration_strict_is_a_noop,
 )
-from pytest_airflow_in_a_box.reporting import configure_reporting
+from pytest_airflow_in_a_box.reporting import configure_report_dir, configure_reporting
 from pytest_airflow_in_a_box.results import assertrepr_compare
 from pytest_airflow_in_a_box.smoke import collect_smoke_items
 
@@ -261,6 +261,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
     )
     airflow_home.register_options(parser)
+    group.addoption(
+        "--airflow-report-dir",
+        action="store",
+        default=None,
+        dest="airflow_report_dir",
+        metavar="PATH",
+        help="Write `pytest.log` and `pytest.xml` report artifacts into PATH.",
+    )
+    parser.addini(
+        "airflow_report_dir",
+        "Directory receiving the `pytest.log` and `pytest.xml` report artifacts.",
+        default="",
+    )
     record.register_options(parser)
     baseline.register_options(parser)
     register_ini_defaults(parser)
@@ -312,10 +325,13 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Register markers, validate xdist state, and scope worker report artifacts.
+    """Register markers, validate xdist state, and configure report artifacts.
 
-    Runs ``tryfirst`` so worker artifact paths are rewritten before pytest's
-    logging plugin reads the ``log_file`` option during its own configuration.
+    Runs ``tryfirst`` so artifact paths are rewritten before pytest's logging and
+    junitxml plugins read the ``log_file`` and ``xmlpath`` options during their own
+    configuration. ``configure_report_dir`` runs before ``configure_reporting`` so a
+    destination derived from ``--airflow-report-dir`` is scoped per xdist worker
+    exactly like a user-supplied one.
 
     The ``AIRFLOW_HOME`` retention policy is resolved first and its value discarded:
     resolution caches onto the config stash, so a malformed ini value aborts the session
@@ -330,6 +346,7 @@ def pytest_configure(config: pytest.Config) -> None:
     airflow_home.resolve_retention_policy(config)
     register_markers(config)
     validate_configure(config)
+    configure_report_dir(config)
     configure_reporting(config)
     apply_option_defaults(config)
     apply_filterwarnings(config)

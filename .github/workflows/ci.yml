@@ -51,7 +51,8 @@ jobs:
           uv pip install --python .venv-bare/bin/python dist/*.whl
           mkdir -p /tmp/bare-suite
           printf 'def test_trivial() -> None:\n    assert True\n' > /tmp/bare-suite/test_trivial.py
-          (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q test_trivial.py)
+          (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q test_trivial.py \
+            --airflow-report-dir="$GITHUB_WORKSPACE/reports/bare")
           (cd /tmp/bare-suite && "$GITHUB_WORKSPACE/.venv-bare/bin/pytest" -q --airflow-doctor | grep -F "No Airflow distribution is installed")
       - name: Smoke-test the wheel through the airflow3 extra
         # Every install snippet in the docs names the `airflow3` extra, yet the compat
@@ -64,7 +65,19 @@ jobs:
           uv pip install --python .venv-extra/bin/python "$(ls dist/*.whl)[airflow3]"
           mkdir -p /tmp/extra-suite
           printf 'import pytest\n\n\n@pytest.mark.db_test\ndef test_migrates() -> None:\n    assert True\n' > /tmp/extra-suite/test_extra.py
-          (cd /tmp/extra-suite && "$GITHUB_WORKSPACE/.venv-extra/bin/pytest" -q test_extra.py)
+          (cd /tmp/extra-suite && "$GITHUB_WORKSPACE/.venv-extra/bin/pytest" -q test_extra.py \
+            --airflow-report-dir="$GITHUB_WORKSPACE/reports/extra")
+      - name: Upload wheel smoke reports
+        # `always()` because a report from a failing run is the whole point;
+        # `if-no-files-found: warn` because a run that died before configuration
+        # leaves nothing behind, and a second red X would bury the real failure.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-wheel-smoke
+          path: reports
+          retention-days: 7
+          if-no-files-found: warn
       - name: Sync docs dependencies
         run: uv sync --locked --group docs
       - name: Build docs
@@ -104,9 +117,26 @@ jobs:
           python-version: ${{ matrix.python-version }}
           extra: ${{ matrix.extra }}
           working-directory: action/smoke-test
+          report-dir: ${{ github.workspace }}/reports
       - name: Run the smoke fixture through the provisioned interpreter
+        # No `--airflow-report-dir` here on purpose: the action's `report-dir`
+        # input already appended it to `PYTEST_ADDOPTS`, which is exactly the
+        # consumer path this job exists to prove. Until the release carrying the
+        # option is on PyPI, the action's own version probe skips the append and
+        # this job uploads nothing -- see the action's `report-dir` handling.
         working-directory: action/smoke-test
         run: ${{ steps.env.outputs.python-path }} -m pytest -v
+      - name: Upload action smoke reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-action-smoke-${{ matrix.airflow-version }}-${{ matrix.extra }}
+          # Literal, not `steps.env.outputs.report-dir`: on a provisioning failure
+          # that output is empty and `upload-artifact` fails on a missing `path`,
+          # burying the real error under an input error.
+          path: ${{ github.workspace }}/reports
+          retention-days: 7
+          if-no-files-found: warn
 
   postgres:
     name: postgres / Airflow 3.3.0 / Python 3.12
@@ -149,7 +179,16 @@ jobs:
         run: >-
           .venv-ci/bin/python -m coverage run -m pytest -v
           --airflow-db-backend=postgres
+          --airflow-report-dir="${{ github.workspace }}/reports"
           -m "compat or db_test or postgres"
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-postgres-3.3.0-3.12
+          path: reports
+          retention-days: 7
+          if-no-files-found: warn
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -132,6 +132,7 @@ def test_public_surface_is_explicit() -> None:
         "session",
     )
     assert reporting.__all__ == (
+        "configure_report_dir",
         "configure_reporting",
         "worker_coverage_file",
         "worker_suffixed_path",
