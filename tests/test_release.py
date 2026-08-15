@@ -29,6 +29,10 @@ MAKEFILE_PATH = REPO_ROOT / "Makefile"
 INIT_RELATIVE_PATH = Path("src") / "pytest_airflow_in_a_box" / "__init__.py"
 STUB_VERSION = "9.9.9"
 STUB_TAG = f"v{STUB_VERSION}"
+# Inherited from an outer `make test`, these turn the nested `make` into a sub-make: GNU
+# make >= 4 then implies `-w` and writes "Entering directory" to stdout, and a `-j` parent
+# leaks a jobserver the child cannot reach.
+MAKE_RECURSION_VARIABLES = ("MAKEFLAGS", "GNUMAKEFLAGS", "MAKELEVEL", "MFLAGS")
 
 pytestmark = pytest.mark.skipif(
     shutil.which("make") is None, reason="`make` is not available on this platform"
@@ -68,19 +72,19 @@ def _write_stub(path: Path, body: str) -> None:
 def _make_release_sandbox(
     tmp_path: Path,
     *,
-    uv_version: str = STUB_VERSION,
     init_version: str = STUB_VERSION,
     git_status: str = "",
     tag_exit_code: int = 0,
+    push_exit_code: int = 0,
 ) -> ReleaseSandbox:
     """Stage the real `release` recipe against stubbed `uv` and `git` executables.
 
     Parameters:
         tmp_path: pathlib.Path containing the sandbox root.
-        uv_version: str containing the version the stub `uv version` reports.
         init_version: str containing the version written to `__init__.py`.
         git_status: str containing the stub `git status --porcelain` output.
         tag_exit_code: int containing the exit status of the stub `git tag`.
+        push_exit_code: int containing the exit status of the stub `git push`.
 
     Returns:
         ReleaseSandbox describing the staged project and its stub directory.
@@ -99,7 +103,7 @@ def _make_release_sandbox(
         bin_dir / "uv",
         f"""
         [ "$1" = "version" ] || {{ printf 'unexpected uv: %s\\n' "$*" >&2; exit 64; }}
-        printf '%s\\n' {shlex.quote(uv_version)}
+        printf '%s\\n' {shlex.quote(STUB_VERSION)}
         """,
     )
     _write_stub(
@@ -111,7 +115,10 @@ def _make_release_sandbox(
             [ {tag_exit_code} -eq 0 ] || printf 'fatal: tag already exists\\n' >&2
             exit {tag_exit_code}
             ;;
-        push) printf '%s\\n' "$*" > {shlex.quote(str(push_marker))} ;;
+        push)
+            printf '%s\\n' "$*" > {shlex.quote(str(push_marker))}
+            exit {push_exit_code}
+            ;;
         *) printf 'unexpected git: %s\\n' "$*" >&2; exit 64 ;;
         esac
         """,
@@ -129,7 +136,9 @@ def _run_release(sandbox: ReleaseSandbox) -> subprocess.CompletedProcess[str]:
         subprocess.CompletedProcess[str] carrying the recipe's status and output.
     """
 
-    env = os.environ | {"PATH": f"{sandbox.bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    env = {
+        name: value for name, value in os.environ.items() if name not in MAKE_RECURSION_VARIABLES
+    } | {"PATH": f"{sandbox.bin_dir}{os.pathsep}{os.environ['PATH']}"}
     return subprocess.run(
         ["make", "release"],
         cwd=sandbox.project,
@@ -149,6 +158,19 @@ def test_failed_tag_stops_before_push(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert not sandbox.push_marker.exists()
+    assert "pushed" not in result.stdout
+    assert "gh release create" not in result.stdout
+
+
+def test_failed_push_does_not_report_success(tmp_path: Path) -> None:
+    """Fail the recipe on a failed `git push` without printing the success banner."""
+
+    sandbox = _make_release_sandbox(tmp_path, push_exit_code=1)
+
+    result = _run_release(sandbox)
+
+    assert result.returncode != 0
+    assert sandbox.push_marker.exists()
     assert "pushed" not in result.stdout
     assert "gh release create" not in result.stdout
 
