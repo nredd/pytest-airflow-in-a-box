@@ -26,7 +26,7 @@ from pytest_airflow_in_a_box.airflow_cfg import (
     sqlite_url,
     write_airflow_config,
 )
-from pytest_airflow_in_a_box.airflow_home import retain_airflow_home
+from pytest_airflow_in_a_box.airflow_home import announce_retained_root, retain_airflow_home
 from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
@@ -559,6 +559,10 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         (see ``airflow_home.retain_airflow_home``). The provisioning-failure path below
         passes the decision explicitly instead.
 
+        A kept directory is announced on ``stderr`` unless a terminal summary already
+        named it, because this callback also runs on the paths where the session died
+        before either terminal channel could report anything.
+
         Parameters:
             retain: bool | None keeping the run directory on disk when true, or
                 ``None`` to resolve the configured retention policy.
@@ -578,7 +582,9 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
-            if not retain:
+            if retain:
+                announce_retained_root(config, root, str(location.reason))
+            else:
                 shutil.rmtree(root, ignore_errors=True)
 
     config.add_cleanup(cleanup)
@@ -629,6 +635,13 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             fernet_key=state.fernet_key,
             family=family,
         )
+    except pytest.UsageError:
+        # `PostgresProvisioner.start` raises this directly with its own actionable
+        # message (absent Docker daemon, a failed image pull), so it must not be
+        # rewrapped -- but it still has to clean up, and `pytest.UsageError` is not a
+        # subclass of either type below.
+        cleanup(retain=False)
+        raise
     except (OSError, ValueError) as error:
         # Never retained, whatever the policy says: this is a half-provisioned root, not
         # a failed test run, and the session dies here before any header or terminal

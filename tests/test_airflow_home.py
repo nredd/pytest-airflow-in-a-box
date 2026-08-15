@@ -18,7 +18,11 @@ import pytest
 from pytest_airflow_in_a_box import airflow_home
 from pytest_airflow_in_a_box.airflow_home import RetentionPolicy
 from pytest_airflow_in_a_box.bootstrap import STATE_VERSION, BootstrapState
-from pytest_airflow_in_a_box.storage.locate import SHARED_MEMORY_PATH, StorageReason
+from pytest_airflow_in_a_box.storage.locate import (
+    RUN_DIRECTORY_PREFIX,
+    SHARED_MEMORY_PATH,
+    StorageReason,
+)
 from pytest_airflow_in_a_box.storage.provision import DbBackend
 
 HEADER_PATTERN = re.compile(
@@ -137,6 +141,23 @@ def _header_root(result: pytest.RunResult) -> Path:
     return Path(match.group(1))
 
 
+def _run_roots(pytester: pytest.Pytester) -> set[Path]:
+    """List the bootstrap run directories a subprocess run could have left behind.
+
+    ``runpytest_subprocess`` passes ``--basetemp``, so the storage ladder resolves to
+    the ``caller-temp`` rung below ``pytester.path`` and every inner run's root is a
+    direct child of it.
+
+    Parameters:
+        pytester: pytest.Pytester owning the temporary directory under test.
+
+    Returns:
+        set[pathlib.Path] containing the run directories present right now.
+    """
+
+    return set(pytester.path.glob(f"{RUN_DIRECTORY_PREFIX}*"))
+
+
 # --- resolve_retention_policy -----------------------------------------------------
 
 
@@ -235,10 +256,36 @@ def test_record_session_outcome_treats_every_unclean_status_as_failure(
     assert airflow_home.session_failed(config) is expected
 
 
-def test_session_failed_treats_an_unrecorded_outcome_as_a_failure() -> None:
-    """Read a missing outcome as a failure so a crashed run keeps its artifacts."""
+def test_session_failed_reads_an_unmarked_invocation_as_no_session() -> None:
+    """Read a missing mark as "no session ran", which is not a failure.
 
-    assert airflow_home.session_failed(_config()) is True
+    `pytest --help`, `pytest --markers`, an argparse usage error, and an abort during
+    `pytest_configure` all bootstrap a run root without ever starting a session. None of
+    them is a failed run, and none of them should keep a directory.
+    """
+
+    assert airflow_home.session_failed(_config()) is False
+
+
+def test_mark_session_started_records_a_pessimistic_failure() -> None:
+    """Treat a started session as failed until `pytest_sessionfinish` overwrites it."""
+
+    config = _config()
+
+    airflow_home.mark_session_started(config)
+
+    assert airflow_home.session_failed(config) is True
+
+
+def test_a_started_session_that_never_finishes_stays_failed() -> None:
+    """Keep the pessimistic mark when the session dies between start and finish."""
+
+    config = _config()
+
+    airflow_home.mark_session_started(config)
+    airflow_home.record_session_outcome(config, int(pytest.ExitCode.OK))
+
+    assert airflow_home.session_failed(config) is False
 
 
 @pytest.mark.parametrize(
@@ -247,7 +294,7 @@ def test_session_failed_treats_an_unrecorded_outcome_as_a_failure() -> None:
         (RetentionPolicy.ALL, None, True),
         (RetentionPolicy.ALL, False, True),
         (RetentionPolicy.ALL, True, True),
-        (RetentionPolicy.FAILED, None, True),
+        (RetentionPolicy.FAILED, None, False),
         (RetentionPolicy.FAILED, False, False),
         (RetentionPolicy.FAILED, True, True),
         (RetentionPolicy.NONE, None, False),
@@ -258,12 +305,12 @@ def test_session_failed_treats_an_unrecorded_outcome_as_a_failure() -> None:
 def test_retain_airflow_home_covers_the_policy_matrix(
     policy: RetentionPolicy, recorded: bool | None, expected: bool
 ) -> None:
-    """Decide retention across every policy and every recorded outcome, crash included.
+    """Decide retention across every policy and every recorded outcome.
 
     Parameters:
         policy: RetentionPolicy resolved for the run.
-        recorded: bool | None containing the recorded failure flag, or ``None`` when
-            ``pytest_sessionfinish`` never ran.
+        recorded: bool | None containing the recorded failure flag, or ``None`` when no
+            session ever started.
         expected: bool containing the expected retention decision.
     """
 
@@ -279,7 +326,10 @@ def test_retain_airflow_home_covers_the_policy_matrix(
 def test_retain_airflow_home_falls_back_to_the_default_policy() -> None:
     """Apply the documented default when the session died before `pytest_configure`."""
 
-    assert airflow_home.retain_airflow_home(_config()) is True
+    stash = pytest.Stash()
+    stash[airflow_home.SESSION_FAILED_KEY] = True
+
+    assert airflow_home.retain_airflow_home(_config(stash=stash)) is True
 
 
 # --- report_header ----------------------------------------------------------------
@@ -326,7 +376,7 @@ def test_terminal_summary_reports_a_retained_root() -> None:
 
     assert reporter.lines == [
         "= airflow-in-a-box",
-        f"Retained AIRFLOW_HOME (airflow_home_retention_policy=all): {root}",
+        f"Retained AIRFLOW_HOME (retention policy: all): {root}",
     ]
 
 
@@ -359,6 +409,17 @@ def test_terminal_summary_is_silent_when_the_root_is_discarded() -> None:
     assert reporter.lines == []
 
 
+def test_terminal_summary_suppresses_the_stderr_fallback() -> None:
+    """Record the announcement so cleanup does not repeat it on `stderr`."""
+
+    stash = pytest.Stash()
+    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
+
+    airflow_home.terminal_summary(_terminal_reporter(), _config(stash=stash), _state())
+
+    assert stash[airflow_home.RETENTION_ANNOUNCED_KEY] is True
+
+
 def test_terminal_summary_is_silent_on_an_xdist_worker() -> None:
     """Render nothing in a process that does not own the run directory."""
 
@@ -369,6 +430,54 @@ def test_terminal_summary_is_silent_on_an_xdist_worker() -> None:
     airflow_home.terminal_summary(reporter, _config(stash=stash), _state(owner_pid=1))
 
     assert reporter.lines == []
+
+
+# --- announce_retained_root -------------------------------------------------------
+
+
+def test_announce_retained_root_names_the_directory_on_stderr(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Write the surviving path to `stderr` when no terminal summary reported it.
+
+    Parameters:
+        capsys: pytest.CaptureFixture capturing the announcement stream.
+    """
+
+    root = SHARED_MEMORY_PATH / "pytest-airflow-in-a-box-8f2a1c"
+    stash = pytest.Stash()
+    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.FAILED
+    config = _config(stash=stash)
+
+    airflow_home.announce_retained_root(config, root, str(StorageReason.SHARED_MEMORY))
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        f"pytest-airflow-in-a-box: Retained AIRFLOW_HOME "
+        f"(retention policy: failed): {root}" in captured.err
+    )
+    assert f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed" in captured.err
+    assert stash[airflow_home.RETENTION_ANNOUNCED_KEY] is True
+
+
+def test_announce_retained_root_defers_to_an_earlier_announcement(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Stay silent once the terminal summary has already named the directory.
+
+    Parameters:
+        capsys: pytest.CaptureFixture capturing the announcement stream.
+    """
+
+    stash = pytest.Stash()
+    stash[airflow_home.RETENTION_ANNOUNCED_KEY] = True
+
+    airflow_home.announce_retained_root(
+        _config(stash=stash), Path("/tmp/kept"), str(StorageReason.SYSTEM_TEMP)
+    )
+
+    assert capsys.readouterr().err == ""
 
 
 # --- end-to-end through a real session --------------------------------------------
@@ -424,7 +533,7 @@ def test_retention_matrix_end_to_end(
     assert root.is_dir() is survives
     if survives:
         result.stdout.fnmatch_lines(
-            [f"Retained AIRFLOW_HOME (airflow_home_retention_policy={policy}): {root}"]
+            [f"Retained AIRFLOW_HOME (retention policy: {policy}): {root}"]
         )
     else:
         assert "Retained AIRFLOW_HOME" not in result.stdout.str()
@@ -470,7 +579,8 @@ def test_a_crash_before_sessionfinish_retains_the_root(pytester: pytest.Pytester
 
     The root is recorded from the conftest rather than read off the header: the terminal
     reporter's own `pytest_sessionstart` hookimpl is ``trylast``, so the crash preempts
-    the header line this run would otherwise have printed.
+    the header line this run would otherwise have printed. That is exactly why cleanup
+    announces the kept path on `stderr` -- neither terminal channel ran.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
@@ -483,7 +593,10 @@ def test_a_crash_before_sessionfinish_retains_the_root(pytester: pytest.Pytester
     result = pytester.runpytest_subprocess()
 
     assert result.ret == pytest.ExitCode.INTERNAL_ERROR
-    assert Path(record_path.read_text(encoding="utf-8")).is_dir()
+    root = Path(record_path.read_text(encoding="utf-8"))
+    assert root.is_dir()
+    assert "AIRFLOW_HOME=" not in result.stdout.str()
+    assert f"Retained AIRFLOW_HOME (retention policy: failed): {root}" in (result.stderr.str())
 
 
 _RECORDING_PROVISIONER_PLUGIN = """
@@ -560,12 +673,18 @@ def test_unknown_cli_policy_is_rejected(pytester: pytest.Pytester) -> None:
 def test_blank_ini_policy_is_rejected(pytester: pytest.Pytester) -> None:
     """Fail loudly at configure time on an empty ini value, not from inside cleanup.
 
+    The aborted session never reaches `pytest_sessionstart`, so nothing marks it as a
+    started run and cleanup discards the bootstrap directory. Without that distinction a
+    developer fixing an ini typo would accumulate one full run root per attempt, in RAM
+    on a `/dev/shm` host, with nothing inside worth reading.
+
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
     """
 
     pytester.makeini("[pytest]\nairflow_home_retention_policy =\n")
     pytester.makepyfile(test_suite=_PASSING_SUITE)
+    before = _run_roots(pytester)
 
     result = pytester.runpytest_subprocess()
 
@@ -573,3 +692,53 @@ def test_blank_ini_policy_is_rejected(pytester: pytest.Pytester) -> None:
     output = result.stdout.str() + result.stderr.str()
     assert "`airflow_home_retention_policy` must be `all`, `failed`, or `none`" in output
     assert "INTERNALERROR" not in output
+    assert "Retained AIRFLOW_HOME" not in output
+    assert _run_roots(pytester) == before
+
+
+def test_doctor_honors_an_explicit_retention_request(pytester: pytest.Pytester) -> None:
+    """Keep the diagnostic run's own directory when `--airflow-home-retention=all` asks.
+
+    `--airflow-doctor` short-circuits before `pytest_configure`, so the policy is
+    resolved from `pytest_cmdline_main` instead. Without that the flag's documented
+    "always keep" would be silently ignored on exactly the invocation that just printed
+    the path.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makepyfile(test_suite=_PASSING_SUITE)
+    before = _run_roots(pytester)
+
+    kept = pytester.runpytest_subprocess("--airflow-doctor", "--airflow-home-retention=all")
+    assert kept.ret == 0
+    assert len(_run_roots(pytester) - before) == 1
+
+    discarded = pytester.runpytest_subprocess("--airflow-doctor", "--airflow-home-retention=none")
+    assert discarded.ret == 0
+    assert len(_run_roots(pytester) - before) == 1
+
+
+@pytest.mark.parametrize("arguments", [("--help",), ("--markers",), ("--nonexistent-flag",)])
+def test_an_invocation_that_starts_no_session_keeps_nothing(
+    pytester: pytest.Pytester, arguments: tuple[str, ...]
+) -> None:
+    """Discard the bootstrap directory for invocations that never run a session.
+
+    `--help`, `--markers`, and an argparse usage error all provision a run root during
+    `pytest_load_initial_conftests` and none of them starts a session. Reading an absent
+    outcome as a failure would retain every one of them, forever.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+        arguments: tuple[str, ...] containing the non-session invocation under test.
+    """
+
+    pytester.makepyfile(test_suite=_PASSING_SUITE)
+    before = _run_roots(pytester)
+
+    result = pytester.runpytest_subprocess(*arguments)
+
+    assert "Retained AIRFLOW_HOME" not in result.stdout.str() + result.stderr.str()
+    assert _run_roots(pytester) == before

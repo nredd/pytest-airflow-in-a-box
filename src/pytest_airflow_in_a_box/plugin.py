@@ -291,9 +291,10 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     here because ``pytest_load_initial_conftests`` runs during argument parsing,
     which completes before pytest dispatches this hook.
 
-    Short-circuiting also skips ``pytest_sessionfinish``, so the successful outcome is
-    recorded here by hand. Without it the diagnostic run's own bootstrap directory would
-    look like a crashed session to the retention policy and survive.
+    Short-circuiting also skips ``pytest_configure``, so the retention policy is resolved
+    here instead. A diagnostic run is not a failed test run and discards its own bootstrap
+    directory under the default policy, but an explicit ``--airflow-home-retention=all``
+    still keeps the tree whose path the report just printed.
 
     Parameters:
         config: pytest.Config for the active invocation.
@@ -305,7 +306,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     if not config.option.airflow_doctor:
         return None
     sys.stdout.write(render_doctor_report(config))
-    airflow_home.record_session_outcome(config, int(pytest.ExitCode.OK))
+    airflow_home.resolve_retention_policy(config)
     return 0
 
 
@@ -349,7 +350,14 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Install logging protection before any test or plugin configures logging.
+    """Mark the session started, then install logging protection before anything else.
+
+    The `AIRFLOW_HOME` mark goes first and this hookimpl runs ``tryfirst``, so a session
+    that dies anywhere after startup begins -- a crashing conftest hookimpl, an internal
+    error, a killed controller -- still reads as failed and keeps its run directory. An
+    invocation that never starts a session at all (``--help``, ``--markers``, an argparse
+    usage error, an abort during ``pytest_configure``) leaves the mark unset and its
+    bootstrap directory is discarded.
 
     Database initialization is deliberately absent: it is deferred to the first
     test that requires the metadata database (see ``pytest_runtest_setup``), so
@@ -359,7 +367,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         session: pytest.Session about to start collecting and running tests.
     """
 
-    del session
+    airflow_home.mark_session_started(session.config)
     _install_dict_config_interceptor()
 
 

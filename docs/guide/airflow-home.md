@@ -57,8 +57,10 @@ when given; otherwise the ini value decides.
 
 | Value | Behavior |
 | --- | --- |
+| Value | Behavior |
+| --- | --- |
 | `all` | Always keep the run directory |
-| `failed` | Keep it when the session did not end cleanly (the default) |
+| `failed` | Keep it when a session ran and did not end cleanly (the default) |
 | `none` | Always remove it |
 
 A kept directory is reported again at the end of the run, next to the failures that made you
@@ -66,25 +68,40 @@ want it:
 
 ```console
 =============================== airflow-in-a-box ===============================
-Retained AIRFLOW_HOME (airflow_home_retention_policy=failed): /dev/shm/pytest-airflow-in-a-box-8f2a1c
+Retained AIRFLOW_HOME (retention policy: failed): /dev/shm/pytest-airflow-in-a-box-8f2a1c
 WARNING: '/dev/shm' is RAM-backed, so this directory holds memory until it is removed or the machine reboots. Pass `--airflow-home=PATH` to put the run on durable storage instead.
 ```
 
-Retention is deliberately biased toward keeping too much rather than too little. Every exit
-status other than a clean pass counts as a failure -- interrupted, internal error, usage error
--- and a run that died before pytest could report an outcome at all is treated as a failure
-too, because the run that crashed is exactly the one whose state you want to look at. The one
-carve-out is "no tests collected": nothing ran, so nothing touched the directory and there is
-nothing in it to inspect. `--airflow-doctor` never retains either, since it prints its report
-and exits without running a session.
+Some runs never get that far. A crash in `pytest_sessionstart`, an internal error -- pytest
+prints no header on those, and its terminal summary does not run for every exit status either.
+Those are precisely the runs most likely to keep their directory, so the same line goes to
+`stderr` instead, prefixed with the plugin name. A kept directory is never kept silently.
+
+Under `failed`, retention is biased toward keeping too much rather than too little: every exit
+status other than a clean pass counts, interrupted and internal error included, and a run that
+started and died before pytest could report an outcome at all is treated as a failure too --
+the run that crashed is exactly the one whose state you want to look at.
+
+What does *not* count is an invocation that never started a session. `pytest --help`,
+`pytest --markers`, an argparse usage error, an abort during `pytest_configure`, and
+`--airflow-doctor` all bootstrap an `AIRFLOW_HOME` and none of them runs a test, so none of them
+keeps one. "No tests collected" is the same idea: nothing ran, so nothing touched the directory.
+`--airflow-home-retention=all` still means all, `--airflow-doctor` included, if you want to keep
+the tree the diagnostic report just named.
 
 Retention never leaks a database server. The `--airflow-db-backend=postgres` container is
 stopped on every policy, `all` included; only the directory removal is conditional. A retained
 Postgres run therefore keeps its `airflow.cfg` and logs but not a live database.
 
-Nothing else changes with the policy: cleaning up a retained directory is your job, and
-`--airflow-home-retention=all` on a long CI matrix will fill a disk (or, on `/dev/shm`, memory)
-if nothing prunes it.
+Nothing else changes with the policy: cleaning up a retained directory is your job. There is no
+retention *count* the way pytest caps `tmp_path` directories at `tmp_path_retention_count`, so a
+long CI matrix under `--airflow-home-retention=all`, or a stubbornly red suite under `failed`,
+will fill a disk (or, on `/dev/shm`, memory) if nothing prunes it.
+
+One known gap: pytest raises the exit status to `MAX_WARNINGS_ERROR` after every
+`pytest_sessionfinish` hook has already run, so a run that fails only because it breached
+`--max-warnings` is recorded as the clean status pytest reported at the time and its directory
+is removed under `failed`. Pass `--airflow-home-retention=all` when you need to inspect one.
 
 ## Pairing with report artifacts
 

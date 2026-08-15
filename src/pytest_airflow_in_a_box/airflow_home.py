@@ -15,17 +15,31 @@ next to the run's failures rather than only in the startup header. The vocabular
 the default deliberately mirror pytest's own ``tmp_path_retention_policy``, which
 ``defaults.INI_DEFAULTS`` already re-registers a ``failed`` default for.
 
-The cleanup closure receives no arguments and never sees the session outcome, so
-``record_session_outcome`` stashes it from ``pytest_sessionfinish`` first -- pytest
-dispatches every non-wrapper ``pytest_sessionfinish`` hookimpl before the terminal
-reporter's wrapper calls ``pytest_terminal_summary``, and both run before any
-registered cleanup. An absent record means the hook never ran (an internal error, a
-crashed controller, a session that died during startup) and is deliberately read as a
-failure: the run that died is exactly the one whose artifacts are worth keeping.
+The cleanup closure receives no arguments and never sees the session outcome, so it is
+threaded through the config stash in two steps. ``mark_session_started`` writes a
+pessimistic "failed" from ``pytest_sessionstart``, and ``record_session_outcome``
+overwrites it with the real answer from ``pytest_sessionfinish`` -- pytest dispatches
+every non-wrapper ``pytest_sessionfinish`` hookimpl before the terminal reporter's
+wrapper calls ``pytest_terminal_summary``, and both run before any registered cleanup.
+A run that started and never finished therefore keeps its artifacts, which is the whole
+point: the run that died is exactly the one worth looking at.
+
+The two steps are needed because "the session crashed" and "no session ever ran" are
+otherwise indistinguishable from an empty stash, and bootstrap happens far earlier than
+either. ``pytest --help``, ``pytest --markers``, an argparse usage error, and a
+configure-time abort all provision a run root and none of them is a failed test run;
+with a single record they would all retain, forever, with nothing to inspect inside.
+An absent mark now means no session started, and the directory goes.
 
 Only the ``rmtree`` is conditional. The provisioner still stops on every policy,
 ``none`` included, so a retained run never leaks the testcontainers Postgres container
 behind ``--airflow-db-backend=postgres``.
+
+Both terminal channels can be absent on exactly the runs most likely to retain -- a
+session that dies during configure prints no header, and an ``INTERNAL_ERROR`` exit
+never reaches ``pytest_terminal_summary`` -- so ``announce_retained_root`` writes the
+path to ``stderr`` from cleanup whenever neither channel got there first. A kept
+directory is never kept silently.
 
 References:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_report_header
@@ -37,6 +51,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -72,6 +88,7 @@ DEFAULT_RETENTION_POLICY = RetentionPolicy.FAILED
 
 RETENTION_POLICY_KEY = pytest.StashKey[RetentionPolicy]()
 SESSION_FAILED_KEY = pytest.StashKey[bool]()
+RETENTION_ANNOUNCED_KEY = pytest.StashKey[bool]()
 
 # Every other exit status -- tests failed, interrupted, internal error, usage error, a
 # plugin's own code -- counts as a failure worth keeping artifacts for.
@@ -148,6 +165,21 @@ def resolve_retention_policy(config: pytest.Config) -> RetentionPolicy:
     return policy
 
 
+def mark_session_started(config: pytest.Config) -> None:
+    """Mark a started session as failed until ``pytest_sessionfinish`` says otherwise.
+
+    Dispatched ``tryfirst`` from ``plugin.pytest_sessionstart`` so it lands before any
+    other plugin's hookimpl can crash the startup. Everything between this mark and
+    ``record_session_outcome`` -- a crashing conftest, an internal error, a killed
+    controller -- therefore retains under the ``failed`` policy.
+
+    Parameters:
+        config: pytest.Config receiving the pessimistic session outcome.
+    """
+
+    config.stash[SESSION_FAILED_KEY] = True
+
+
 def record_session_outcome(config: pytest.Config, exitstatus: int) -> None:
     """Record whether the finished session failed, for the cleanup closure to read.
 
@@ -155,10 +187,11 @@ def record_session_outcome(config: pytest.Config, exitstatus: int) -> None:
     ``USAGE_ERROR`` and any code a third-party plugin invents: a run that ended any way
     other than cleanly is one whose isolated state is worth inspecting.
 
-    Also called from ``plugin.pytest_cmdline_main`` for ``--airflow-doctor``, which
-    short-circuits the session before ``pytest_sessionfinish`` can run: without an
-    explicit record, the diagnostic run's own bootstrap directory would read as a crash
-    and survive.
+    One status escapes by construction. pytest flips ``session.exitstatus`` to
+    ``MAX_WARNINGS_ERROR`` inside the terminal reporter's ``pytest_sessionfinish``
+    wrapper, after every hookimpl this one included has already run, so a
+    ``--max-warnings`` breach is recorded as the clean status pytest reported at the
+    time. There is no later hook carrying the corrected value.
 
     Parameters:
         config: pytest.Config receiving the stashed session outcome.
@@ -171,17 +204,22 @@ def record_session_outcome(config: pytest.Config, exitstatus: int) -> None:
 
 
 def session_failed(config: pytest.Config) -> bool:
-    """Report whether the session failed, treating an unrecorded outcome as a failure.
+    """Report whether a session started and did not finish cleanly.
+
+    An absent record means no session ever started -- ``pytest --help``,
+    ``pytest --markers``, an argparse usage error, an abort during
+    ``pytest_configure`` -- which is not a failed run and must not retain anything.
+    ``mark_session_started`` is what distinguishes that from a session that started and
+    then died.
 
     Parameters:
         config: pytest.Config possibly carrying a recorded session outcome.
 
     Returns:
-        bool reporting whether the session failed or never reached
-        ``pytest_sessionfinish`` at all.
+        bool reporting whether a session started and did not end cleanly.
     """
 
-    return config.stash.get(SESSION_FAILED_KEY, True)
+    return config.stash.get(SESSION_FAILED_KEY, False)
 
 
 def retain_airflow_home(config: pytest.Config) -> bool:
@@ -246,6 +284,31 @@ def report_header(state: BootstrapState) -> list[str]:
     ]
 
 
+def _retained_lines(config: pytest.Config, root: Path, storage_reason: str) -> list[str]:
+    """Render the lines describing one surviving run directory.
+
+    Shared by both announcement channels so the wording cannot drift between them.
+
+    Parameters:
+        config: pytest.Config carrying the resolved retention policy.
+        root: pathlib.Path containing the surviving run directory.
+        storage_reason: str naming the storage-ladder rung that chose the base.
+
+    Returns:
+        list[str] containing the retention line plus, on ``/dev/shm``, a RAM warning.
+    """
+
+    policy = config.stash.get(RETENTION_POLICY_KEY, DEFAULT_RETENTION_POLICY)
+    lines = [f"Retained AIRFLOW_HOME (retention policy: {policy}): {root}"]
+    if storage_reason == StorageReason.SHARED_MEMORY:
+        lines.append(
+            f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed, so this directory holds "
+            f"memory until it is removed or the machine reboots. Pass "
+            f"`--airflow-home=PATH` to put the run on durable storage instead."
+        )
+    return lines
+
+
 def terminal_summary(
     terminalreporter: pytest.TerminalReporter,
     config: pytest.Config,
@@ -259,6 +322,9 @@ def terminal_summary(
     the one cleanup will act on and the directory still exists. A no-op on an xdist
     worker and whenever the directory is about to be removed.
 
+    Records that the path reached a terminal, which suppresses the ``stderr`` fallback
+    ``announce_retained_root`` would otherwise emit from cleanup.
+
     Parameters:
         terminalreporter: pytest.TerminalReporter receiving the rendered summary.
         config: pytest.Config carrying the resolved policy and the session outcome.
@@ -267,16 +333,36 @@ def terminal_summary(
 
     if not _owns_run_root(state) or not retain_airflow_home(config):
         return
-    policy = config.stash.get(RETENTION_POLICY_KEY, DEFAULT_RETENTION_POLICY)
     terminalreporter.write_sep("=", SUMMARY_TITLE)
-    terminalreporter.write_line(f"Retained AIRFLOW_HOME ({RETENTION_INI}={policy}): {state.root}")
-    if state.storage_reason == StorageReason.SHARED_MEMORY:
-        terminalreporter.write_line(
-            f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed, so this directory holds "
-            f"memory until it is removed or the machine reboots. Pass "
-            f"`--airflow-home=PATH` to put the run on durable storage instead."
-        )
+    for line in _retained_lines(config, state.root, state.storage_reason):
+        terminalreporter.write_line(line)
+    config.stash[RETENTION_ANNOUNCED_KEY] = True
     LOGGER.debug(f"Retained isolated Airflow run directory: '{state.root}'")
+
+
+def announce_retained_root(config: pytest.Config, root: Path, storage_reason: str) -> None:
+    """Name a surviving run directory on ``stderr`` when nothing else did.
+
+    Both terminal channels can be skipped entirely while retention still fires. The
+    header is written by the terminal reporter's ``trylast`` ``pytest_sessionstart``, so
+    a session that dies during configure or startup never prints it; the summary is
+    reached only through the reporter's ``pytest_sessionfinish`` wrapper, and only for
+    the exit statuses in ``_pytest.terminal.summary_exit_codes``, which excludes
+    ``INTERNAL_ERROR``. ``config.add_cleanup`` runs on every one of those paths, so this
+    is the backstop that keeps a kept directory from being kept silently.
+
+    Parameters:
+        config: pytest.Config carrying the resolved policy and the announcement record.
+        root: pathlib.Path containing the surviving run directory.
+        storage_reason: str naming the storage-ladder rung that chose the base.
+    """
+
+    if config.stash.get(RETENTION_ANNOUNCED_KEY, False):
+        return
+    for line in _retained_lines(config, root, storage_reason):
+        sys.stderr.write(f"{HEADER_PREFIX}: {line}\n")
+    config.stash[RETENTION_ANNOUNCED_KEY] = True
+    LOGGER.debug(f"Announced retained Airflow run directory on stderr: '{root}'")
 
 
 __all__ = (
@@ -285,6 +371,8 @@ __all__ = (
     "RETENTION_INI",
     "RETENTION_OPTION",
     "RetentionPolicy",
+    "announce_retained_root",
+    "mark_session_started",
     "record_session_outcome",
     "register_options",
     "report_header",

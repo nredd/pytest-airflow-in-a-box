@@ -27,11 +27,21 @@ All notable changes to this project will be documented in this file. The format 
 - `--airflow-home-retention` and the `airflow_home_retention_policy` ini option keep the isolated
   run directory after a session -- `all`, `failed`, or `none`, defaulting to `failed` to match
   the house `tmp_path_retention_policy`. A retained directory is reported again in the terminal
-  summary, with an extra warning when it sits on RAM-backed `/dev/shm`. A session that died
-  before pytest could record an outcome is treated as failed, so a crash retains rather than
-  discards; a session that collected no tests is not, since nothing ever touched the directory.
-  The metadata database provisioner still stops on every policy, so a retained run never leaks a
-  testcontainers Postgres container
+  summary, with an extra warning when it sits on RAM-backed `/dev/shm`, and on `stderr` from
+  cleanup when the session died before either terminal channel could run. A session that started
+  and died before pytest could record an outcome counts as failed, so a crash retains rather than
+  discards; an invocation that never started a session at all (`pytest --help`, an argparse usage
+  error, an abort during `pytest_configure`, `--airflow-doctor`, or a run that collected no
+  tests) does not, since nothing ever touched the directory. The metadata database provisioner
+  still stops on every policy, so a retained run never leaks a testcontainers Postgres container
+  ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
+
+### Fixed
+
+- A metadata-database provisioner failure no longer leaks the half-provisioned run directory.
+  `PostgresProvisioner.start` reports an unreachable Docker daemon or a failed image pull as a
+  `pytest.UsageError`, which the bootstrap cleanup path did not catch, so every failed
+  `--airflow-db-backend=postgres` attempt left a full run root behind
   ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
 
 ### Fixed

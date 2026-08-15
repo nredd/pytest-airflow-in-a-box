@@ -22,7 +22,8 @@ state before a test requests it or an `api_test`-marked test runs, and a standal
 `--airflow-doctor` invocation never does either.
 
 `--airflow-doctor` short-circuits the session, so the `AIRFLOW_HOME` it reports belongs to the
-diagnostic run it just bootstrapped, not to a previous test run. For the root of a session that
-actually ran tests, read the header line every run prints, and see
+diagnostic run it just bootstrapped, not to a previous test run, and that directory is removed
+again on the way out unless you pass `--airflow-home-retention=all`. For the root of a session
+that actually ran tests, read the header line every run prints, and see
 [the isolated `AIRFLOW_HOME`](../guide/airflow-home.md) for how the storage ladder picks it and
 how `--airflow-home-retention` keeps it around afterward.

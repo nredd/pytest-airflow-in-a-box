@@ -299,6 +299,67 @@ def test_owner_state_cleans_up_after_provisioning_failure(
     cleanups[0]()
 
 
+def test_owner_state_cleans_up_after_a_provisioner_usage_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remove the partial run directory when the provisioner raises its own usage error.
+
+    `PostgresProvisioner.start` reports an absent Docker daemon or a failed image pull as
+    a `pytest.UsageError`, which subclasses neither `OSError` nor `ValueError`. Left
+    uncaught it skipped cleanup entirely and leaked one fully provisioned run root per
+    failed `--airflow-db-backend=postgres` attempt. The provisioner's own message must
+    survive unwrapped, because it is the actionable one.
+
+    Parameters:
+        tmp_path: Path providing an explicit storage base.
+        monkeypatch: pytest.MonkeyPatch replacing the provisioner selection seam.
+    """
+
+    base = tmp_path / "base"
+    base.mkdir()
+    cleanups: list[Any] = []
+
+    class ExplodingProvisioner:
+        """Fail the way the Postgres provisioner fails when Docker is unreachable."""
+
+        def start(self, *, database_path: Path, database_name: str) -> str:
+            """Raise the provisioner's own actionable usage error.
+
+            Parameters:
+                database_path: pathlib.Path selecting the SQLite file location.
+                database_name: str naming a per-run server-side database.
+
+            Returns:
+                str containing the provisioned SQLAlchemy URL; never returned.
+
+            Raises:
+                pytest.UsageError: Always, standing in for an unreachable Docker daemon.
+            """
+
+            del database_path, database_name
+            raise pytest.UsageError("Docker daemon is unreachable (fake probe)")
+
+        def stop(self) -> None:
+            """Release nothing; this provisioner never started anything."""
+
+    monkeypatch.setattr(bootstrap, "select_provisioner", lambda _backend: ExplodingProvisioner())
+    config: Any = SimpleNamespace(
+        getini=lambda name: {
+            "airflow_home": str(base),
+            "allow_network_airflow_home": False,
+            "airflow_db_backend": "sqlite",
+        }[name],
+        add_cleanup=cleanups.append,
+    )
+
+    with pytest.raises(pytest.UsageError, match="Docker daemon is unreachable"):
+        bootstrap._owner_state(config, [])
+
+    assert list(base.iterdir()) == []
+    assert len(cleanups) == 1
+
+
 def test_worker_environment_mismatch_fails_loudly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
