@@ -218,8 +218,10 @@ jobs:
 
 Outputs: `python-path` (the provisioned venv's `python`) and `venv-path` (the venv directory,
 for console scripts). The examples above pin `@main` because no tagged release carries the
-action yet -- once one ships, pin to that full release tag (e.g. `@v0.6.0`) instead. A moving
-`v1` tag is tracked as a follow-up.
+action yet. Once one ships, `release.yml` moves a `v<major>` tag (`v0` while pre-1.0, `v1`
+once `1.0.0` ships) to point at the latest published release on that major line -- pin to
+`@v0` at that point for an always-latest reference, or to a full release tag (e.g.
+`@v0.6.0`) for an exact, non-moving one.
 
 ## Migration diff orchestrator
 

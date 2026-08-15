@@ -12,8 +12,11 @@ All notable changes to this project will be documented in this file. The format 
   Airflow + plugin setup for Dag repos' own CI, matrix-ready and installing the
   published PyPI package rather than an editable checkout; both the `airflow3` and
   `airflow2` extras are supported
-  ([#38](https://github.com/nredd/pytest-airflow-in-a-box/issues/38)). A maintained
-  moving `v1` tag is tracked as a follow-up -- pin to a full release tag for now.
+  ([#38](https://github.com/nredd/pytest-airflow-in-a-box/issues/38)).
+- `release.yml` now moves a `v<major>` tag (e.g. `v0`) to the latest published release on
+  that major line, and a root-level `action.yml` symlinks to `action/action.yml` so the
+  repo satisfies GitHub Marketplace's root-manifest requirement
+  ([#132](https://github.com/nredd/pytest-airflow-in-a-box/issues/132)).
 
 ### Fixed
 
