@@ -45,6 +45,9 @@ _SKIP_CHECK_ENVIRONMENT_VARIABLE = "_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILI
 # is an empty list) is how an installed-but-inactive pytest-cov is told apart from an
 # absent one, without ever importing `pytest_cov`.
 _COV_SOURCE_OPTION = "cov_source"
+# pytest-cov's `--no-cov` kill switch; it leaves the `_cov` plugin registered but
+# disables every controller, so an active-looking run may still measure nothing.
+_NO_COV_OPTION = "no_cov"
 
 
 def _storage_section(state: BootstrapState) -> list[str]:
@@ -283,6 +286,11 @@ def _covering_source(dag_folder: Path, sources: list[object], invocation_dir: Pa
     for source in sources:
         if not isinstance(source, str):
             return "--cov"
+        if not source:
+            # `--cov=` parses to one empty-string source; `coverage.py` receives it as
+            # a module name, imports nothing, and records nothing -- it must never
+            # count as covering the Dag folder.
+            continue
         candidate = Path(source)
         if not candidate.is_absolute():
             candidate = invocation_dir / candidate
@@ -297,8 +305,10 @@ def _coverage_section(config: pytest.Config, state: BootstrapState) -> list[str]
     `pytest-cov` registers its controller under the plugin name `_cov` only once a
     `--cov` option activates it, so `hasplugin` distinguishes an active coverage run
     while the `cov_source` option existing at all distinguishes an installed
-    `pytest-cov`. Neither check imports `pytest_cov` -- this module sits on
-    `plugin.py`'s import path and must stay import-light.
+    `pytest-cov`. `--no-cov` leaves `_cov` registered but disables all measurement, so
+    it is checked separately. Neither check imports `pytest_cov` -- this module sits on
+    `plugin.py`'s import path and must stay import-light. A misconfigured collection
+    folder degrades to a bullet, matching every other section in this module.
 
     Parameters:
         config: pytest.Config containing plugin options, ini values, and rootpath.
@@ -320,14 +330,18 @@ def _coverage_section(config: pytest.Config, state: BootstrapState) -> list[str]
         ]
     else:
         lines = [f"- Dag folder: `{dag_folder}`"]
-    collect_folder = collection_folder(config)
-    if collect_folder is None:
-        lines.append(
-            "- Collection folder: not configured (`--collect-dag-folder` / "
-            "`airflow_collect_dags_folder`)"
-        )
+    try:
+        collect_folder = collection_folder(config)
+    except pytest.UsageError as error:
+        lines.append(f"- Collection folder: MISCONFIGURED: {error}")
     else:
-        lines.append(f"- Collection folder: `{collect_folder}`")
+        if collect_folder is None:
+            lines.append(
+                "- Collection folder: not configured (`--collect-dag-folder` / "
+                "`airflow_collect_dags_folder`)"
+            )
+        else:
+            lines.append(f"- Collection folder: `{collect_folder}`")
 
     sources = _cov_sources(config)
     if sources is None:
@@ -340,6 +354,12 @@ def _coverage_section(config: pytest.Config, state: BootstrapState) -> list[str]
         lines.append(
             "- `pytest-cov`: installed but inactive -- no `--cov` was given, so Dag files "
             "are not measured. Pass `--cov=<dag folder> --cov-report=term-missing`"
+        )
+        return lines
+    if config.getoption(_NO_COV_OPTION, default=False):
+        lines.append(
+            "- `pytest-cov`: disabled by `--no-cov` -- Dag files are not measured despite "
+            "the configured `--cov` sources. Drop `--no-cov`"
         )
         return lines
     if fallback:

@@ -359,6 +359,7 @@ def _coverage_config(
     *,
     cov_source: object = None,
     has_cov_plugin: bool = False,
+    no_cov: bool = False,
 ) -> Any:
     """Build a fabricated pytest configuration for coverage-section unit tests.
 
@@ -367,13 +368,31 @@ def _coverage_config(
         cov_source: object containing the fabricated parsed `--cov` values, or ``None``
             to simulate an absent `pytest-cov` whose option falls back to the default.
         has_cov_plugin: bool containing whether the `_cov` plugin reports as registered.
+        no_cov: bool containing the fabricated `--no-cov` kill-switch value.
 
     Returns:
         Any containing a `SimpleNamespace` standing in for `pytest.Config`.
     """
 
+    def _getoption(name: str, default: object = None) -> object:
+        """Dispatch fabricated option values by destination name.
+
+        Parameters:
+            name: str containing the option destination looked up.
+            default: object returned for any destination without a fabricated value.
+
+        Returns:
+            object containing the fabricated value or the passed default.
+        """
+
+        if name == "cov_source" and cov_source is not None:
+            return cov_source
+        if name == "no_cov":
+            return no_cov
+        return default
+
     return SimpleNamespace(
-        getoption=lambda _name, default=None: cov_source if cov_source is not None else default,
+        getoption=_getoption,
         pluginmanager=SimpleNamespace(hasplugin=lambda _name: has_cov_plugin),
         invocation_params=SimpleNamespace(dir=invocation_dir),
     )
@@ -432,6 +451,14 @@ def test_covering_source_returns_none_when_no_source_contains_the_folder(
     assert covering is None
 
 
+def test_covering_source_skips_the_empty_filterless_form(tmp_path: Path) -> None:
+    """`--cov=` parses to an empty source that records nothing; never a match."""
+
+    covering = doctor._covering_source(tmp_path / "dags", [""], tmp_path)
+
+    assert covering is None
+
+
 def test_coverage_section_reports_folders_and_missing_pytest_cov(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -463,6 +490,55 @@ def test_coverage_section_reports_inactive_pytest_cov(
     lines = doctor._coverage_section(config, state)
 
     assert any("installed but inactive" in line for line in lines)
+
+
+def test_coverage_section_reports_a_misconfigured_collection_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Degrade a broken collection-folder configuration to a bullet, never a crash."""
+
+    state = _state(tmp_path / "scratch")
+    error = pytest.UsageError("Dag collection folder is not a directory: 'missing'")
+
+    def _raise(_config: Any) -> Path | None:
+        """Simulate a configured collection folder that does not exist.
+
+        Parameters:
+            _config: Any standing in for the unused pytest configuration.
+
+        Returns:
+            pathlib.Path | None, never reached.
+
+        Raises:
+            pytest.UsageError: Always, simulating the misconfiguration.
+        """
+
+        raise error
+
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: tmp_path / "dags")
+    monkeypatch.setattr(doctor, "collection_folder", _raise)
+    config = _coverage_config(tmp_path)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert any("Collection folder: MISCONFIGURED" in line and str(error) in line for line in lines)
+    assert any("`pytest-cov`" in line for line in lines)
+
+
+def test_coverage_section_reports_a_no_cov_disabled_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Flag `--no-cov` disabling measurement despite configured `--cov` sources."""
+
+    state = _state(tmp_path / "scratch")
+    monkeypatch.setattr(doctor, "_dag_folder", lambda _config: tmp_path / "dags")
+    monkeypatch.setattr(doctor, "collection_folder", lambda _config: None)
+    config = _coverage_config(tmp_path, cov_source=["dags"], has_cov_plugin=True, no_cov=True)
+
+    lines = doctor._coverage_section(config, state)
+
+    assert any("disabled by `--no-cov`" in line for line in lines)
+    assert not any("covered by" in line for line in lines)
 
 
 def test_coverage_section_flags_the_scratch_fallback_folder(
