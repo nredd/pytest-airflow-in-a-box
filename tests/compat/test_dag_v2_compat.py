@@ -122,8 +122,12 @@ def test_build_dag_supplies_a_start_date_below_2_8(monkeypatch: pytest.MonkeyPat
     [
         ((2, 7, 3), None, {}, True),
         # A scheduled Dag without a `start_date` is a real authoring error on every
-        # certified release, so the shim leaves it to raise.
+        # certified release, so the shim leaves it to raise -- including through the
+        # deprecated spellings 2.x's own scheduling check counts.
         ((2, 7, 3), "@daily", {}, False),
+        ((2, 7, 3), None, {"schedule_interval": "@daily"}, False),
+        ((2, 7, 3), None, {"timetable": object()}, False),
+        ((2, 7, 3), None, {"schedule_interval": None, "timetable": None}, True),
         ((2, 7, 3), None, {"start_date": datetime(2024, 1, 1, tzinfo=timezone.utc)}, False),
         (
             (2, 7, 3),

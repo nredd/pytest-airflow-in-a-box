@@ -59,6 +59,12 @@ All notable changes to this project will be documented in this file. The format 
   so the 2.x guard rejects, for example, 2.7.3 on CPython 3.12 (for which Airflow
   publishes no constraints file) instead of letting it fail opaquely later
   ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
+- `AirflowCapabilities.dag_requires_start_date` gates a `dag_maker` shim that supplies an
+  implicit `start_date` on releases below 2.8, whose `DAG.add_task` rejects a Dag when
+  neither it nor its tasks carry one even with no schedule declared. The injection is
+  scoped to exactly the case 2.8 stopped rejecting, so a scheduled Dag without a
+  `start_date` still raises on every certified release
+  ([#139](https://github.com/nredd/pytest-airflow-in-a-box/issues/139)).
 
 ### Fixed
 

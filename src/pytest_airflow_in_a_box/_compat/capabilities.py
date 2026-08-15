@@ -278,8 +278,10 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
     Every probed value is uniform across the certified 2.x releases -- the Phase 1a
     spike (2026-08-11) observed identical signatures on 2.9.3, 2.10.5, and 2.11.2, and
     the #139 reach-back spike (2026-08-14) observed the same ones on 2.7.3 and 2.8.4,
-    for every symbol the plugin touches. The Python ceiling is the one field that does
-    vary across the family, so it comes from `V2_MAX_PYTHON_BY_RELEASE`.
+    for every symbol the plugin touches. Two fields do vary by release rather than by
+    family and are derived rather than passed: the Python ceiling comes from
+    `V2_MAX_PYTHON_BY_RELEASE`, and the schedule-free `start_date` demand from
+    `_dag_requires_start_date`.
 
     Parameters:
         release: tuple[int, int, int] containing the certified base release.
@@ -721,9 +723,10 @@ def _installed_v2_release(
         maximum = ".".join(str(part) for part in release_max_python)
         raise AirflowCompatibilityError(
             f"Apache Airflow 2.x (`{AIRFLOW_META_DISTRIBUTION}` '{meta.version}') does "
-            f"not support Python '{running}' -- its `requires-python` caps at "
-            f"{maximum} but uses bare `!=` or `<` exclusions the installer does not "
-            f"enforce across the whole family. Use Python {minimum}-{maximum} for "
+            f"not support Python '{running}': the certified ceiling for this release "
+            f"is {maximum}. Some 2.x releases spell that bound with bare `!=` "
+            f"exclusions the installer does not enforce against patch releases, which "
+            f"is why this check exists at all. Use Python {minimum}-{maximum} for "
             f"Airflow '{meta.version}', or upgrade to Airflow 3."
         ) from error
     return meta.version, release, AirflowFamily.V2
@@ -988,9 +991,10 @@ def _verify_contract(
     certified row. The family-derived fields (`family`, `has_task_sdk`,
     `uses_structlog`, `has_dag_versioning`, `dagrun_interface`, `api_surface`,
     `params_location`, `timezone_location`) are computed from the same family on both
-    sides, so their comparison is a self-consistency guard, not a probe; `max_python` is
-    declared per release in `V2_MAX_PYTHON_BY_RELEASE` and read from there on both
-    sides, so it is the same kind of guard. The real
+    sides, so their comparison is a self-consistency guard, not a probe. `max_python`
+    and `dag_requires_start_date` are release-derived rather than family-derived, but
+    both sides read them from the same declaration (`V2_MAX_PYTHON_BY_RELEASE` and
+    `_dag_requires_start_date`), so they are guards of the same kind. The real
     enforcement for the module-valued fields is `_REQUIRED_SYMBOLS_BY_FAMILY`, which
     imports each named module and fails resolution when upstream moves it;
     `api_surface` is exercised only when the API fixtures actually launch the server.

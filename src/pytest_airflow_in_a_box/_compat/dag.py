@@ -31,6 +31,9 @@ LOGGER = logging.getLogger(__name__)
 # it can never fall after a caller's `logical_date` and strand a task instance behind
 # its own task's start date.
 IMPLICIT_V2_START_DATE = datetime(1970, 1, 1, tzinfo=timezone.utc)
+# The scheduling keywords 2.x's `DAG.__init__` treats as interchangeable with
+# `schedule`, minus `schedule` itself, which `build_dag` pops before probing.
+_V2_SCHEDULING_KEYWORDS = ("schedule_interval", "timetable")
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -94,7 +97,9 @@ def _needs_implicit_start_date(schedule: Any, dag_kwargs: dict[str, Any]) -> boo
     The injection is scoped to exactly the case Airflow 2.8 stopped rejecting: no
     scheduling argument and no `start_date` anywhere. A scheduled Dag without one still
     raises, identically worded, on every certified release, so the shim never converts a
-    real authoring error into a silent default.
+    real authoring error into a silent default. "Scheduled" is 2.8's own definition,
+    which counts the deprecated `schedule_interval` and `timetable` spellings alongside
+    `schedule` -- exactly the spellings a 2.7-vintage Dag is most likely to use.
 
     Parameters:
         schedule: Any containing the scheduling argument already popped from the kwargs.
@@ -102,11 +107,14 @@ def _needs_implicit_start_date(schedule: Any, dag_kwargs: dict[str, Any]) -> boo
 
     Returns:
         bool marking the Dag as one needing an implicit `start_date`.
+
+    References:
+        https://github.com/apache/airflow/blob/2.8.4/airflow/models/dag.py#L552
     """
 
     if not resolve_capabilities().dag_requires_start_date:
         return False
-    if schedule:
+    if schedule or any(dag_kwargs.get(name) for name in _V2_SCHEDULING_KEYWORDS):
         return False
     if dag_kwargs.get("start_date") is not None:
         return False
