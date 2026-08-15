@@ -26,6 +26,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 - [Documentation](#documentation)
 - [Development](#development)
 - [License](#license)
+- [Manifesto](#manifesto)
 
 ## Quickstart
 
@@ -266,3 +267,16 @@ act pull_request
 ## License
 
 Apache License 2.0. See `LICENSE`, `NOTICE`, and `PROVENANCE.md`.
+
+## Manifesto
+
+In 2024, I learned that my team was abandoning Jenkins for our nightly regressions. A
+righteous tear rolled down my cheek when I heard the replacement was Airflow: a
+Python-native workflow platform. As a lover of all things slick and hyper-engineered, I was
+overjoyed to rewrite all those DISGUSTING unversioned shell scripts into a beautiful
+library of documented, statically-analyzed, and unit-tested code. Fast forward a few
+months--I have some crazy 500+ task DAG templates underway (for convoluted semiconductor
+design methodologies) that were IMPOSSIBLE to fully verify outside of a live Airflow
+instance. I yearned for a far-off land where I could develop alone in my teched-out Python
+cave, talk to absolutely no one, and ship complete Methodologies without a whisper in the
+night. This plugin is the closest thing we have to that 🫡
