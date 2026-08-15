@@ -159,6 +159,29 @@ def test_configure_reporting_without_log_file_changes_nothing() -> None:
     assert config.option.log_file is None
 
 
+def test_configure_reporting_skips_an_unregistered_log_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scope nothing for ``log_file`` on a worker whose logging plugin is disabled.
+
+    ``pytest -p no:logging`` leaves neither the option attribute nor the ini key, so
+    reading either raises instead of answering. Only workers reach the lookup, which
+    is why the serial run stayed green while every worker died. Coverage scoping is
+    asserted alongside to prove the guard skips one setting, not the whole function.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/151
+    """
+
+    monkeypatch.setenv(reporting.COVERAGE_FILE_ENVIRONMENT_VARIABLE, ".coverage")
+    config = _config(workerinput={"workerid": "gw0"}, registered=frozenset())
+
+    reporting.configure_reporting(config)
+
+    assert not hasattr(config.option, "log_file")
+    assert reporting.os.environ[reporting.COVERAGE_FILE_ENVIRONMENT_VARIABLE] == ".coverage.gw0"
+
+
 @pytest.mark.parametrize("workerid", [7, ""])
 def test_configure_reporting_rejects_malformed_worker_identity(workerid: object) -> None:
     """Reject a missing or non-string xdist worker identity."""
@@ -460,6 +483,49 @@ def test_report_dir_scopes_log_files_across_xdist_workers(pytester: pytest.Pytes
     assert (pytester.path / "reports" / "pytest.gw0.log").is_file()
     assert (pytester.path / "reports" / "pytest.gw1.log").is_file()
     assert (pytester.path / "reports" / "pytest.xml").is_file()
+
+
+@pytest.mark.parametrize(
+    "disabled",
+    [
+        pytest.param(("logging",), id="no-logging"),
+        pytest.param(("junitxml",), id="no-junitxml"),
+        pytest.param(("logging", "junitxml"), id="no-logging-no-junitxml"),
+    ],
+)
+def test_xdist_workers_survive_disabled_builtin_plugins(
+    pytester: pytest.Pytester,
+    disabled: tuple[str, ...],
+) -> None:
+    """Run every worker cleanly when a builtin reporting plugin is disabled.
+
+    Worker scoping is the only caller that reads ``log_file`` unconditionally, so a
+    disabled ``logging`` plugin used to abort each worker with an ``AttributeError``
+    and leave xdist's controller raising ``KeyError`` over a node that never came up.
+
+    Parameters:
+        pytester: pytest.Pytester driving a real subprocess run.
+        disabled: tuple[str, ...] naming the builtin plugins to disable.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/151
+    """
+
+    pytester.makepyfile(
+        test_disabled_builtins="""
+        def test_one():
+            assert True
+
+        def test_two():
+            assert True
+        """
+    )
+    disable_args = [argument for name in disabled for argument in ("-p", f"no:{name}")]
+
+    result = pytester.runpytest_subprocess(*disable_args, "-n", "2", "-q")
+
+    result.assert_outcomes(passed=2)
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
 
 
 def test_xdist_workers_write_separate_log_files(pytester: pytest.Pytester) -> None:

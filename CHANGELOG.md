@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- `pytest -p no:logging` under xdist no longer aborts every worker with
+  `AttributeError: 'Namespace' object has no attribute 'log_file'`, nor the
+  `KeyError: <WorkerController gw0>` that xdist's controller raises downstream over a node
+  that never came up. `configure_reporting` now guards its `log_file` lookup the way the
+  sibling `configure_report_dir` already did, so a disabled `logging` plugin leaves nothing
+  to scope instead of crashing. Serial runs were never affected -- worker scoping returns
+  early off the controller, so only workers reached the lookup. `-p no:junitxml` was
+  already safe: `xmlpath` is only ever written behind its own `hasattr` guard
+  ([#151](https://github.com/nredd/pytest-airflow-in-a-box/issues/151)).
+
 ## [0.7.0] - 2026-08-15
 
 ### Added

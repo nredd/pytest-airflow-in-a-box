@@ -201,17 +201,28 @@ def configure_reporting(config: pytest.Config) -> None:
     Must run before pytest's logging plugin instantiates its file handler,
     which reads the ``log_file`` option exactly once during configuration.
 
+    ``log_file`` is only scoped when the plugin owning it is loaded: ``pytest
+    -p no:logging`` registers neither the option nor the ini key, and there is no
+    destination to scope. Only xdist workers reach the lookup at all, which is why
+    a disabled logging plugin used to fail every worker with an ``AttributeError``
+    while the serial run stayed green.
+
     Parameters:
         config: pytest.Config for the active test process.
 
     Raises:
         pytest.UsageError: xdist worker input is malformed.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/151
     """
 
     worker = _worker_identity(config)
     if worker is None:
         return
-    log_file = _configured_value(config, "log_file")
+    log_file = (
+        _configured_value(config, "log_file") if hasattr(config.option, "log_file") else None
+    )
     if log_file is not None:
         scoped_log = str(worker_suffixed_path(Path(log_file), worker))
         config.option.log_file = scoped_log
