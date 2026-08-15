@@ -17,6 +17,12 @@ All notable changes to this project will be documented in this file. The format 
   early off the controller, so only workers reached the lookup. `-p no:junitxml` was
   already safe: `xmlpath` is only ever written behind its own `hasattr` guard
   ([#151](https://github.com/nredd/pytest-airflow-in-a-box/issues/151)).
+- `make release` no longer pushes a tag it failed to create. The recipe now opens with
+  `set -eu` and chains `git tag`, `git push`, and the success banner with `&&`, so a
+  re-run against an already-existing tag stops at `git tag` instead of pushing whatever
+  that tag already pointed at and then printing "Tag vX.Y.Z pushed."
+  ([#152](https://github.com/nredd/pytest-airflow-in-a-box/issues/152)).
+>>>>>>> 803d90f (Stop `make release` from pushing a tag it failed to create)
 
 ## [0.7.0] - 2026-08-15
 

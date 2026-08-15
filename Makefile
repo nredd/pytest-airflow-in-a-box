@@ -48,7 +48,8 @@ docs-serve:  ## Serve the documentation site locally with live reload
 	uv run --group docs mkdocs serve
 
 release:  ## Tag the current version and print the gh release command (does not publish)
-	@pyproject_version="$$(uv version --short --color never)"; \
+	@set -eu; \
+	pyproject_version="$$(uv version --short --color never)"; \
 	init_version="$$(sed -n 's/^__version__ = "\(.*\)"$$/\1/p' src/pytest_airflow_in_a_box/__init__.py)"; \
 	if [ "$$pyproject_version" != "$$init_version" ]; then \
 		echo "version mismatch: pyproject.toml=$$pyproject_version __init__.py=$$init_version" >&2; \
@@ -59,9 +60,9 @@ release:  ## Tag the current version and print the gh release command (does not 
 		exit 1; \
 	fi; \
 	tag="v$$pyproject_version"; \
-	git tag -a "$$tag" -m "$$tag"; \
-	git push origin "$$tag"; \
-	echo "Tag $$tag pushed. Publish with:"; \
+	git tag -a "$$tag" -m "$$tag" && \
+	git push origin "$$tag" && \
+	echo "Tag $$tag pushed. Publish with:" && \
 	echo "  gh release create $$tag --title $$tag --generate-notes"
 
 clean:  ## Remove every git-ignored file and directory
