@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-15
+
 ### Added
 
 - A composite GitHub Action (`action/action.yml`) wrapping constraints-pinned `uv` +
