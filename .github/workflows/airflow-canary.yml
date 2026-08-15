@@ -90,8 +90,20 @@ jobs:
       - name: Run compatibility suite
         id: test
         run: |
-          .venv-ci/bin/python -m pytest -v -m compat
+          .venv-ci/bin/python -m pytest -v -m compat \
+            --airflow-report-dir="${GITHUB_WORKSPACE}/reports"
           printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Upload compatibility suite reports
+        # The canary's whole job is telling us what a new Airflow broke, so the
+        # `pytest.log`/`pytest.xml` pair matters most on the failing run.
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: airflow-canary-reports
+          path: reports
+          retention-days: 7
+          if-no-files-found: warn
 
   report:
     name: Report failure

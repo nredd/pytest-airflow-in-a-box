@@ -216,9 +216,10 @@ jobs:
 | `uv-version`         | no       | `0.12.2`   | `uv` version to install.                                                      |
 | `working-directory`  | no       | `.`        | Directory to run in.                                                         |
 | `requirements-file`  | no       | (none)     | Extra requirements file to install into the same environment.                |
+| `report-dir`         | no       | (none)     | Directory for `pytest.log`/`pytest.xml`, appended to `PYTEST_ADDOPTS`.        |
 
-Outputs: `python-path` (the provisioned venv's `python`) and `venv-path` (the venv directory,
-for console scripts). The examples above pin `@main` because no tagged release carries the
+Outputs: `python-path` (the provisioned venv's `python`), `venv-path` (the venv directory,
+for console scripts), and `report-dir` (the absolute report directory, for an upload step). The examples above pin `@main` because no tagged release carries the
 action yet. Once one ships, `release.yml` moves a `v<major>` tag (`v0` while pre-1.0, `v1`
 once `1.0.0` ships) to point at the latest published release on that major line -- pin to
 `@v0` at that point for an always-latest reference, or to a full release tag (e.g.
@@ -242,8 +243,9 @@ for the full option reference.
 ## Documentation
 
 Task execution, deferrable operators, DB-free execution, Variable/Connection seeding, structlog
-capture, Dag collection, configuration overrides, smoke tests, database backends and cleanup, the
-live REST API, the migration outcome diff, markers, and diagnostics are all covered on the
+capture, Dag collection, configuration overrides, smoke tests, report artifacts, database backends
+and cleanup, the live REST API, the migration outcome diff, markers, and diagnostics are all
+covered on the
 [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/).
 
 ## Development

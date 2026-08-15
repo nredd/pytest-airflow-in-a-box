@@ -38,6 +38,14 @@ inputs:
       into the same environment, after the primary install.
     required: false
     default: ""
+  report-dir:
+    description: >-
+      Optional directory (relative to working-directory, or absolute) for
+      pytest.log and pytest.xml report artifacts. When set, the directory is
+      created and "--airflow-report-dir=<abs path>" is appended to
+      PYTEST_ADDOPTS, so a plain pytest invocation picks it up unchanged.
+    required: false
+    default: ""
 
 outputs:
   python-path:
@@ -48,6 +56,11 @@ outputs:
       Absolute path to the provisioned venv directory, for invoking console
       scripts directly (e.g. "<venv-path>/bin/airflow-migration-diff").
     value: ${{ steps.setup-env.outputs.venv-path }}
+  report-dir:
+    description: >-
+      Absolute path to the report artifact directory, for an upload step.
+      Empty when the report-dir input was not set.
+    value: ${{ steps.setup-env.outputs.report-dir }}
 
 runs:
   using: composite
@@ -101,6 +114,7 @@ runs:
         EXTRA: ${{ inputs.extra }}
         PLUGIN_VERSION: ${{ inputs.plugin-version }}
         REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+        REPORT_DIR: ${{ inputs.report-dir }}
       run: |
         set -euo pipefail
         uv venv --python "$PYTHON_VERSION" .venv-airflow-in-a-box
@@ -140,3 +154,30 @@ runs:
         venv_path="$(pwd)/.venv-airflow-in-a-box"
         echo "venv-path=${venv_path}" >> "$GITHUB_OUTPUT"
         echo "python-path=${venv_path}/bin/python" >> "$GITHUB_OUTPUT"
+
+        report_dir=""
+        if [ -n "$REPORT_DIR" ]; then
+          mkdir -p "$REPORT_DIR"
+          report_dir="$(cd "$REPORT_DIR" && pwd)"
+          # `plugin-version` is consumer-controlled and may name a release older
+          # than `--airflow-report-dir`; appending a flag that installation cannot
+          # parse would fail every pytest run with a usage error, so probe first.
+          # Matched with `case` rather than a `grep` pipeline: `set -o pipefail`
+          # plus a short-circuiting reader turns a match into a SIGPIPE failure.
+          # The value is single-quoted because pytest `shlex.split`s PYTEST_ADDOPTS,
+          # so an unquoted directory containing a space becomes a stray positional.
+          if help_output="$(COLUMNS=200 "${venv_path}/bin/python" -m pytest --help 2>/dev/null)"; then
+            case "$help_output" in
+              *--airflow-report-dir*)
+                echo "PYTEST_ADDOPTS=${PYTEST_ADDOPTS:+${PYTEST_ADDOPTS} }--airflow-report-dir='${report_dir}'" \
+                  >> "$GITHUB_ENV"
+                ;;
+              *)
+                echo "::warning::installed pytest-airflow-in-a-box does not support --airflow-report-dir; PYTEST_ADDOPTS left unchanged."
+                ;;
+            esac
+          else
+            echo "::warning::could not probe pytest for --airflow-report-dir support; PYTEST_ADDOPTS left unchanged."
+          fi
+        fi
+        echo "report-dir=${report_dir}" >> "$GITHUB_OUTPUT"

@@ -35,6 +35,15 @@ All notable changes to this project will be documented in this file. The format 
   tests) does not, since nothing ever touched the directory. The metadata database provisioner
   still stops on every policy, so a retained run never leaks a testcontainers Postgres container
   ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
+- `--airflow-report-dir=PATH` (ini: `airflow_report_dir`) derives pytest's own report
+  destinations inside PATH: `pytest.log` at `--log-file-level=DEBUG` and `pytest.xml` in the
+  stock `xunit2` family. Opt-in and inert when unset, every derived destination yields to an
+  explicit `--log-file` / `--log-file-level` / `--junit-xml`, and the log file is scoped per
+  `pytest-xdist` worker like any other. `action/action.yml` gains a matching `report-dir`
+  input (creates the directory, appends the flag to `PYTEST_ADDOPTS`, skipping the append
+  when the installed plugin version predates the option) plus a `report-dir` output, and
+  every CI pytest invocation now archives its reports with `if: always()`
+  ([#137](https://github.com/nredd/pytest-airflow-in-a-box/issues/137)).
 
 ### Fixed
 
@@ -43,9 +52,6 @@ All notable changes to this project will be documented in this file. The format 
   `pytest.UsageError`, which the bootstrap cleanup path did not catch, so every failed
   `--airflow-db-backend=postgres` attempt left a full run root behind
   ([#140](https://github.com/nredd/pytest-airflow-in-a-box/issues/140)).
-
-### Fixed
-
 - Flip the `action.yml` symlink direction so the repo root holds the real composite-action
   manifest and `action/action.yml` symlinks back to it, instead of the other way around.
   GitHub Marketplace's publish-eligibility check reads the root `action.yml` as a raw git
