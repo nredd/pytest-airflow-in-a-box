@@ -9,8 +9,9 @@
 [![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.7--2.11-017CEE?logo=apacheairflow&logoColor=white)](#requirements)
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
-Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
-small, typed testing surface.
+Airflow deployment. It targets Airflow 3 (primary) with a certified Airflow 2.7-2.11
+compatibility tier, and provides the package and plugin foundation for a small, typed
+testing surface.
 
 The package auto-registers with pytest, creates an isolated metadata database, and provides typed
 fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
