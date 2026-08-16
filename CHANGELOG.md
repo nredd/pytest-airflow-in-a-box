@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-15
+
+### Changed
+
+- README intro now names the certified Airflow 2.7-2.11 compatibility tier alongside
+  Airflow 3, matching the badge and `Requirements` table
+  ([#160](https://github.com/nredd/pytest-airflow-in-a-box/pull/160)).
+
 ## [0.7.1] - 2026-08-15
 
 ### Fixed
@@ -481,7 +489,8 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.2
 [0.7.1]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.1
 [0.7.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.0
 [0.6.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.6.0
