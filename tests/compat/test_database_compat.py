@@ -13,6 +13,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowCapabilities,
     AirflowFamily,
     ApiSurface,
+    AssetUniqueKeyLocation,
     DagBagLocation,
     DagRunInterface,
     ParamsLocation,
@@ -58,6 +59,7 @@ def _capabilities() -> AirflowCapabilities:
         secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
         max_python=None,
         dag_requires_start_date=False,
+        asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
     )
 
 

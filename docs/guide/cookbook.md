@@ -356,8 +356,41 @@ def test_outlet_event_is_persisted(dag_maker):
     assert event.extra == {"rows": 3}
 ```
 
-Consumer/schedule assertions (`consumer.timetable.asset_condition`) go through `full_dag_bag`
+Static schedule assertions (`consumer.timetable.asset_condition`) go through `full_dag_bag`
 against a real Dag folder -- see `test_asset_dags_survive_serialization` in the same file.
+
+To assert the consumer actually gets scheduled, evaluate its condition with
+`evaluate_asset_schedules` once the producer has run. The consumer must be persisted *before* the
+producer's task runs -- Airflow only queues an asset event against Dags that already name
+themselves as subscribers, the same ordering a live deployment requires
+(`tests/enduser/test_asset_scheduling.py`):
+
+```python
+from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.sdk import Asset
+from airflow.utils.state import DagRunState
+from airflow.utils.types import DagRunType
+
+from pytest_airflow_in_a_box.assets import evaluate_asset_schedules
+
+
+def test_consumer_dagrun_is_created(dag_maker):
+    asset = Asset(uri="asset://warehouse/answers")
+    with dag_maker(dag_id="consumer", schedule=[asset]):
+        EmptyOperator(task_id="consume")
+    with dag_maker(dag_id="producer"):
+        EmitAssetOperator(task_id="emit", outlets=[asset])
+
+    dag_maker.run_ti("emit")
+
+    (consumer_run,) = evaluate_asset_schedules("consumer", session=dag_maker.session)
+
+    assert consumer_run.run_type == DagRunType.ASSET_TRIGGERED
+    assert consumer_run.state == DagRunState.QUEUED
+```
+
+`evaluate_asset_schedules` returns the created `DagRun` unrun -- pass it to `execute_dag_run` to
+run the consumer too.
 
 ### Retry behavior
 

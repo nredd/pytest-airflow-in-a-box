@@ -17,6 +17,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowCompatibilityError,
     AirflowFamily,
     ApiSurface,
+    AssetUniqueKeyLocation,
     DagBagLocation,
     DagRunInterface,
     ParamsLocation,
@@ -112,6 +113,7 @@ def _base_modules() -> dict[str, SimpleNamespace]:
     generic_class = type("GenericAirflowSymbol", (), {})
     return {
         "airflow.sdk": SimpleNamespace(DAG=generic_class),
+        "airflow.sdk.definitions.asset": SimpleNamespace(AssetUniqueKey=generic_class),
         "airflow.sdk.definitions.param": SimpleNamespace(ParamsDict=generic_class),
         "airflow.sdk.timezone": SimpleNamespace(utcnow=_callable_symbol),
         "airflow.utils.db": SimpleNamespace(initdb=_callable_symbol),
@@ -141,6 +143,9 @@ def _base_modules() -> dict[str, SimpleNamespace]:
             _get_connection=_callable_symbol,
         ),
         "airflow.sdk.execution_time.cache": SimpleNamespace(SecretCache=generic_class),
+        "airflow.assets.evaluation": SimpleNamespace(AssetEvaluator=generic_class),
+        "airflow.models.asset": SimpleNamespace(AssetDagRunQueue=generic_class),
+        "airflow.timetables.simple": SimpleNamespace(AssetTriggeredTimetable=generic_class),
     }
 
 
@@ -173,7 +178,12 @@ def _fake_v2_modules() -> dict[str, SimpleNamespace]:
             coerce_datetime=_callable_symbol,
             convert_to_utc=_callable_symbol,
         ),
-        "airflow.models.dataset": SimpleNamespace(DatasetModel=generic_class),
+        "airflow.models.dataset": SimpleNamespace(
+            DatasetModel=generic_class,
+            DatasetDagRunQueue=generic_class,
+            DagScheduleDatasetReference=generic_class,
+        ),
+        "airflow.timetables.simple": SimpleNamespace(DatasetTriggeredTimetable=generic_class),
     }
 
 
@@ -211,6 +221,9 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
         modules["airflow.models.taskinstance"] = SimpleNamespace(TaskInstance=task_instance)
         modules["airflow.serialization.definitions.dag"] = SimpleNamespace(
             SerializedDAG=generic_class
+        )
+        modules["airflow.serialization.definitions.assets"] = SimpleNamespace(
+            SerializedAssetUniqueKey=generic_class
         )
     return modules
 
@@ -314,6 +327,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -338,6 +352,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -362,6 +377,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -386,6 +402,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -410,6 +427,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -434,6 +452,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -458,6 +477,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -482,6 +502,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             ),
         ),
         (
@@ -506,6 +527,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             ),
         ),
         (
@@ -530,6 +552,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             ),
         ),
         (
@@ -554,6 +577,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             ),
         ),
         (
@@ -578,6 +602,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
                 max_python=None,
                 dag_requires_start_date=False,
+                asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             ),
         ),
     ],
@@ -724,6 +749,7 @@ def test_resolves_certified_v2_release_capabilities(
         secrets_resolution=SecretsResolution.METASTORE,
         max_python=max_python,
         dag_requires_start_date=requires_start_date,
+        asset_unique_key_location=None,
     )
 
 
@@ -1313,6 +1339,39 @@ def test_unexpected_serialized_dag_import_failure_is_wrapped(
     monkeypatch.setattr(capability_module, "import_module", broken_import)
 
     with pytest.raises(AirflowCompatibilityError, match="SerializedDAG") as caught:
+        capability_module.resolve_capabilities()
+
+    assert caught.value.__cause__ is failure
+
+
+def test_unexpected_asset_unique_key_import_failure_is_wrapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retain initialization failures from the newer asset unique-key module."""
+
+    modules = _fake_modules((3, 2, 2))
+    failure = RuntimeError("broken asset serialization module initialization")
+
+    def broken_import(name: str, package: str | None = None) -> object:
+        """Fail unexpectedly while probing the canonical asset unique-key module."""
+
+        del package
+        if name == "airflow.serialization.definitions.assets":
+            raise failure
+        return modules[name]
+
+    def fake_version(distribution_name: str) -> str:
+        """Return certified metadata for the asset unique-key failure test."""
+
+        if distribution_name == capability_module.AIRFLOW_META_DISTRIBUTION:
+            raise capability_module.metadata.PackageNotFoundError(distribution_name)
+        assert distribution_name == AIRFLOW_DISTRIBUTION
+        return "3.2.2"
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+    monkeypatch.setattr(capability_module, "import_module", broken_import)
+
+    with pytest.raises(AirflowCompatibilityError, match="SerializedAssetUniqueKey") as caught:
         capability_module.resolve_capabilities()
 
     assert caught.value.__cause__ is failure
