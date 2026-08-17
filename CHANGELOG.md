@@ -22,6 +22,12 @@ All notable changes to this project will be documented in this file. The format 
   succeed` state-math progression: asserting `try_number` and `retry_delay` at the
   `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
   ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
+- A "What a dagbag + callable test misses" section in `docs/guide/cookbook.md`, running one
+  realistic multi-task `ingest` Dag through `dag_maker` to show task relations (trigger rules,
+  branching, cross-task xcom), asset-triggered cross-Dag relations, depends-on-past/backfill
+  DagRun sequences, and retry behavior (`up_for_retry`, `try_number`) that a dagbag-import-plus
+  callable test cannot reach. Linked from README's `Why not...` section
+  ([#165](https://github.com/nredd/pytest-airflow-in-a-box/issues/165)).
 
 ### Fixed
 
