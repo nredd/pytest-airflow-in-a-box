@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file. The format 
   install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
   workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
   ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+- A "Retry behavior" recipe in `docs/guide/cookbook.md` covering `fail -> up_for_retry ->
+  succeed` state-math progression: asserting `try_number` and `retry_delay` at the
+  `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
+  ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
 - A `run_dag` fixture drives a Dag pulled from `full_dag_bag` (or otherwise authored outside
   `dag_maker`) through a full DagRun and returns the same `DagRunResult` snapshot
   `dag_maker.run()` does, so a Dag already living in your `dags/` folder can be executed
