@@ -36,6 +36,27 @@ uv add --dev "pytest-airflow-in-a-box[airflow3]"
 pip install "pytest-airflow-in-a-box[airflow3]"
 ```
 
+Point the plugin at your repo's `dags/` folder and run a real Dag end to end:
+
+```python
+def test_my_dag(full_dag_bag, run_dag):
+    dag = full_dag_bag.dags["my_dag_id"]
+
+    result = run_dag(dag)
+
+    assert result.success
+    assert result.order == ["extract", "load"]
+```
+
+```console
+pytest --dag-folder=dags
+```
+
+### Testing an adhoc Dag
+
+For a Dag authored directly in the test, rather than loaded from your `dags/` folder,
+`dag_maker` builds and persists one for you:
+
 ```python
 from airflow.sdk import task
 
@@ -64,16 +85,16 @@ def test_dag(dag_maker):
 pytest
 ```
 
-`dag_maker.run()` executes every task in dependency order and returns an inert
-`DagRunResult` snapshot: `states`, `xcoms`, `errors`, `order`, and per-task access via
-`result["task_id"]`. Single tasks run with `dag_maker.run_ti("produce")`, and
-`pytest_airflow_in_a_box.matchers` supports one-expression bulk assertions like
+`run_dag()` and `dag_maker.run()` both return the same inert `DagRunResult` snapshot:
+`states`, `xcoms`, `errors`, `order`, and per-task access via `result["task_id"]`. Single
+tasks run with `dag_maker.run_ti("produce")`, and `pytest_airflow_in_a_box.matchers`
+supports one-expression bulk assertions like
 `assert result == {"produce": succeeded(21), "consume": succeeded(42)}`.
 
 The `pytest11` entry point registers the plugin automatically -- no `pytest_plugins`
 declaration needed. See the [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/)
-for the full `dag_maker`/`run`/`run_ti` surface, sessions, DB-free task execution, deferrable
-operators, the REST API fixture, and bundled smoke checks.
+for the full `dag_maker`/`run_dag`/`run`/`run_ti` surface, sessions, DB-free task execution,
+deferrable operators, the REST API fixture, and bundled smoke checks.
 
 ## Why not...
 
@@ -132,7 +153,7 @@ marker because Airflow 2.x never supported 3.13 -- on newer interpreters the ext
 nothing and the plugin's runtime check names the fix) installs the certified Airflow 2.x
 compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)):
 `dag_maker` (including whole-DagRun execution through `dag_maker.run()`), `run_ti`,
-`full_dag_bag`, `clear_db`, seeding, and the bundled smoke checks run against 2.7.3, 2.8.4,
+`full_dag_bag`, `run_dag`, `clear_db`, seeding, and the bundled smoke checks run against 2.7.3, 2.8.4,
 2.9.3, 2.10.5, and 2.11.2. The marker is the family-wide cap; 2.7.3 and 2.8.4 cap lower still,
 at 3.11, and the plugin's runtime check names the offending release. Requesting both Airflow
 extras together fails at resolution for pip and uv alike, since the `apache-airflow` version

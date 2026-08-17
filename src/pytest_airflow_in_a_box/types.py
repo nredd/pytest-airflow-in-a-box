@@ -196,6 +196,59 @@ class DagMaker(Protocol):
         """
 
 
+class RunDag(Protocol):
+    """Persist and execute one externally-authored Dag through a full DagRun.
+
+    Unlike ``DagMaker``, which always builds its own Dag, ``RunDag`` adopts a Dag the
+    caller already authored elsewhere -- typically one pulled from ``full_dag_bag`` -- and
+    drives it through the same persist/create/execute pipeline, keyed on the Dag's own
+    ``dag_id`` rather than a synthetic one. Because the real ``dag_id`` is preserved, two
+    tests exercising the same ``dag_id`` concurrently on different ``pytest-xdist`` workers
+    can race on the shared metadata database; keep such tests on the same worker (e.g. via
+    ``pytest.mark.xdist_group``) or accept that they run serially. Metadata is cleaned up
+    when the function-scoped fixture is finalized.
+    """
+
+    def __call__(
+        self,
+        dag: DAG,
+        *,
+        run_id: str | None = None,
+        logical_date: datetime | None = None,
+        run_after: datetime | None = None,
+        start_date: datetime | None = None,
+        dag_run_kwargs: dict[str, Any] | None = None,
+        run_triggerer: bool = False,
+        trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+    ) -> DagRunResult:
+        """Persist ``dag``, create a manual DagRun, and execute every task instance.
+
+        Parameters:
+            dag: airflow.sdk.DAG containing the completed, externally-authored task graph
+                (the 2.x ``airflow.models.dag.DAG`` on that family).
+            run_id: str | None containing an explicit identifier, or ``None`` for a
+                derived one.
+            logical_date: datetime.datetime | None overriding the current UTC logical
+                date.
+            run_after: datetime.datetime | None overriding the current UTC run-after
+                date. Airflow 3.x only -- the 2.x family has no run-after concept, and
+                passing it there raises ``ValueError`` rather than silently changing run
+                semantics.
+            start_date: datetime.datetime | None overriding the current UTC start date.
+            dag_run_kwargs: dict[str, Any] | None forwarded to Airflow's scheduler Dag
+                creation method.
+            run_triggerer: bool running persisted trigger events and resuming deferrals.
+            trigger_timeout: float seconds allowed for each trigger's first event.
+
+        Returns:
+            pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+
+        Raises:
+            ValueError: ``dag.dag_id`` already has persisted metadata, or ``run_after``
+                was passed on the Airflow 2.x family.
+        """
+
+
 class TaskRunResult(Protocol):
     """Outcome of one DB-free in-process task execution."""
 
@@ -265,6 +318,7 @@ __all__ = (
     "AirflowConnections",
     "AirflowVariables",
     "DagMaker",
+    "RunDag",
     "RunTask",
     "SerializedDag",
     "TaskRunResult",

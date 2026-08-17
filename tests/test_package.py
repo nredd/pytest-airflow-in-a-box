@@ -76,6 +76,7 @@ def test_public_surface_is_explicit() -> None:
         "cap_structlog",
         "dag_maker",
         "full_dag_bag",
+        "run_dag",
         "run_task",
         "session",
     )
@@ -128,6 +129,7 @@ def test_public_surface_is_explicit() -> None:
         "dag_maker",
         "full_dag_bag",
         "get_bootstrap_state",
+        "run_dag",
         "run_task",
         "session",
     )
@@ -166,6 +168,7 @@ def test_public_surface_is_explicit() -> None:
         "AirflowConnections",
         "AirflowVariables",
         "DagMaker",
+        "RunDag",
         "RunTask",
         "SerializedDag",
         "TaskRunResult",

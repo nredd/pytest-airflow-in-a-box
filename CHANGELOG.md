@@ -14,6 +14,18 @@ All notable changes to this project will be documented in this file. The format 
   install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
   workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
   ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+- A `run_dag` fixture drives a Dag pulled from `full_dag_bag` (or otherwise authored outside
+  `dag_maker`) through a full DagRun and returns the same `DagRunResult` snapshot
+  `dag_maker.run()` does, so a Dag already living in your `dags/` folder can be executed
+  without adopting `dag_maker`'s inline-authoring shape
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
+
+### Changed
+
+- The README quickstart, `docs/index.md`, and `docs/guide/task-execution.md` now lead with
+  loading an existing Dag via `full_dag_bag` + `run_dag`; the inline `dag_maker` example moves
+  to a clearly labeled secondary "adhoc Dag" path
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
 
 ## [0.7.2] - 2026-08-15
 
