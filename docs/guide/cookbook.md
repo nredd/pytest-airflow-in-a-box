@@ -64,7 +64,9 @@ table instead of the operator's XCom output. The Airflow 2.x idiom (`ti.get_temp
 `ti.render_templates()` on the ORM `TaskInstance`) does not carry over -- template rendering moved
 into the Task SDK's execution-time `RuntimeTaskInstance`, which this table is populated from.
 `MyOperator` must declare `query` in `template_fields` (and `".sql"` in `template_ext` for a
-file-backed field) for it to render at all:
+file-backed field) for it to render at all. When the test only needs the rendered *values*, not
+proof they were persisted, the DB-free [`render_task`](db-free-execution.md#rendering-template-fields-without-running)
+fixture skips the database and the `dag_maker` recipe below entirely:
 
 ```python
 from airflow.models.renderedtifields import RenderedTaskInstanceFields
