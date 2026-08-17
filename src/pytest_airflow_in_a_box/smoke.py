@@ -207,6 +207,22 @@ def _smoke_enabled(config: pytest.Config) -> bool:
     return enabled
 
 
+# Every bundled item's `name=` as passed to `.from_parent` in `SmokeCollector.collect()` --
+# the single source of truth `_disabled_smoke_items` validates `airflow_smoke_disable` against.
+_SMOKE_ITEM_NAMES: frozenset[str] = frozenset(
+    {
+        "test_dag_bag_integrity",
+        "test_dag_serialization_roundtrip",
+        "test_no_duplicate_dag_ids",
+        "test_schedule_sanity",
+        "test_pool_references_exist",
+        "test_dag_id_pattern",
+        "test_required_dag_tags",
+        "test_forbid_default_owner",
+        "test_dag_serialization_snapshot",
+    }
+)
+
 # The two concrete mark-name combinations every synthesized smoke item actually carries
 # (`smoke` + `timeout` always, plus `db_test` on `DagBagIntegrityItem` and
 # `PoolReferencesExistItem`). Kept in sync with the `add_marker` calls in each item's
@@ -465,6 +481,52 @@ def _required_dag_tags(config: pytest.Config) -> frozenset[str]:
     return frozenset(lines)
 
 
+def _disabled_smoke_items(config: pytest.Config) -> frozenset[str]:
+    """Read the bundled smoke item names dropped from the catalog.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_smoke_disable`` ini value.
+
+    Returns:
+        frozenset[str] containing the disabled item names; empty when nothing is disabled.
+
+    Raises:
+        pytest.UsageError: The ini value is not a list of strings, or names an item outside
+            `_SMOKE_ITEM_NAMES`.
+    """
+
+    lines: object = config.getini("airflow_smoke_disable")
+    if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
+        raise pytest.UsageError("Ini option `airflow_smoke_disable` must be a list of names")
+    disabled = frozenset(lines)
+    unknown = disabled - _SMOKE_ITEM_NAMES
+    if unknown:
+        raise pytest.UsageError(
+            f"Ini option `airflow_smoke_disable` names unknown smoke item(s): "
+            f"{sorted(unknown)}; must be a subset of {sorted(_SMOKE_ITEM_NAMES)}"
+        )
+    return disabled
+
+
+def _smoke_serialization_needed(config: pytest.Config) -> bool:
+    """Report whether any still-collected item requires a serialized Dag.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_smoke_disable`` and
+            ``airflow_dag_snapshot_dir`` ini values.
+
+    Returns:
+        bool indicating whether the corpus builder must call the Airflow DAG serializer.
+    """
+
+    disabled = _disabled_smoke_items(config)
+    if "test_dag_serialization_roundtrip" not in disabled:
+        return True
+    if "test_schedule_sanity" not in disabled:
+        return True
+    return _snapshot_dir(config) is not None and "test_dag_serialization_snapshot" not in disabled
+
+
 def _pool_seeds(config: pytest.Config) -> tuple[PoolSeed, ...]:
     """Read the pools seeded before `test_pool_references_exist` runs.
 
@@ -602,15 +664,8 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         if LIVE_DAG_BAG_KEY in session.stash
         else build_dag_bag(_dag_folder(config))
     )
-    serializer = _get_dag_serializer()
-    sample_size = _serialization_sample_size(config)
-    seed = _serialization_sample_seed(config)
-    selected = _sampled_dag_ids(dag_bag.dags, sample_size=sample_size, seed=seed)
-    if len(selected) < len(dag_bag.dags):
-        LOGGER.info(
-            f"Serializing a deterministic sample of {len(selected)} of {len(dag_bag.dags)} "
-            f"Dags (seed '{seed}')"
-        )
+    serializer: Any | None = None
+    selected = _select_serialization_sample(config, dag_bag.dags)
     selected_ids = set(selected)
     dags: dict[str, SmokeDag] = {}
     total = len(selected)
@@ -620,6 +675,8 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         serialization_error = None
         serialization_seconds = 0.0
         if dag_id in selected_ids:
+            if serializer is None:
+                serializer = _get_dag_serializer()
             progress += 1
             started = time.perf_counter()
             try:
@@ -898,6 +955,34 @@ def _sampled_dag_ids(dag_ids: Iterable[str], *, sample_size: int, seed: str) -> 
     return sorted(sorted(unique_ids, key=_rank)[:sample_size])
 
 
+def _select_serialization_sample(config: pytest.Config, dag_ids: Iterable[str]) -> list[str]:
+    """Select the Dag IDs to serialize, honoring `airflow_smoke_disable`.
+
+    Skips sampling (and any Airflow DAG serializer call downstream) entirely once
+    `_smoke_serialization_needed` reports nothing still needs a serialized Dag.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+        dag_ids: Iterable[str] containing every discovered Dag identifier.
+
+    Returns:
+        list[str] containing the selected Dag IDs; empty when serialization is not needed.
+    """
+
+    if not _smoke_serialization_needed(config):
+        return []
+    dag_ids = list(dag_ids)
+    sample_size = _serialization_sample_size(config)
+    seed = _serialization_sample_seed(config)
+    selected = _sampled_dag_ids(dag_ids, sample_size=sample_size, seed=seed)
+    if len(selected) < len(dag_ids):
+        LOGGER.info(
+            f"Serializing a deterministic sample of {len(selected)} of {len(dag_ids)} "
+            f"Dags (seed '{seed}')"
+        )
+    return selected
+
+
 def _smoke_dag_bag(session: pytest.Session, config: pytest.Config) -> SmokeCorpus:
     """Return the process-cached portable Dag corpus.
 
@@ -932,14 +1017,7 @@ def _serialized_dag_cache(
         return session.stash[SERIALIZED_DAG_CACHE_KEY]
 
     dag_bag = _smoke_dag_bag(session, config)
-    sample_size = _serialization_sample_size(config)
-    seed = _serialization_sample_seed(config)
-    selected = _sampled_dag_ids(dag_bag.dags, sample_size=sample_size, seed=seed)
-    if len(selected) < len(dag_bag.dags):
-        LOGGER.info(
-            f"Serializing a deterministic sample of {len(selected)} of {len(dag_bag.dags)} "
-            f"Dags (seed '{seed}')"
-        )
+    selected = _select_serialization_sample(config, dag_bag.dags)
 
     serialized_dag_class: Any | None = None
     entries: dict[str, SerializedDagEntry] = {}
@@ -977,17 +1055,25 @@ def _serialized_dag_cache(
 def _validate_smoke_options(config: pytest.Config) -> None:
     """Reject smoke option combinations that would silently narrow coverage.
 
+    Runs unconditionally, before `_smoke_in_scope` decides whether the catalog is even
+    collected this invocation, so a malformed `airflow_smoke_disable` is always reported --
+    a file/node-ID-scoped run that never reaches `SmokeCollector.collect()` would otherwise
+    let a typo'd item name pass through silently.
+
     Parameters:
         config: pytest.Config containing plugin options and ini values.
 
     Raises:
-        pytest.UsageError: Snapshot update mode is combined with serialization sampling, which
-            would regenerate only a subset of the committed snapshots.
+        pytest.UsageError: `airflow_smoke_disable` is malformed or names an unknown item, or
+            snapshot update mode is combined with serialization sampling, which would
+            regenerate only a subset of the committed snapshots.
     """
 
+    disabled = _disabled_smoke_items(config)
     if (
         _smoke_update(config)
         and _snapshot_dir(config) is not None
+        and "test_dag_serialization_snapshot" not in disabled
         and _serialization_sample_size(config) > 0
     ):
         raise pytest.UsageError(
@@ -1313,11 +1399,16 @@ class ScheduleSanityItem(pytest.Item):
     def runtest(self) -> None:
         """Compute the next scheduled run for every scheduled Dag in the serialized cache.
 
-        Dags missing from a sampled cache, or whose serialization already failed, are skipped;
-        serialization failures belong to ``test_dag_serialization_roundtrip``.
+        Dags missing from a sampled cache are skipped. Serialization failures normally belong
+        to ``test_dag_serialization_roundtrip``; when that item is disabled via
+        ``airflow_smoke_disable``, this item reports them itself instead, so a Dag the
+        scheduler cannot serialize does not silently pass just because its usual reporter
+        is gone.
 
         Raises:
-            SmokeCheckFailure: A scheduled Dag's timetable raised while computing its next run.
+            SmokeCheckFailure: A scheduled Dag's timetable raised while computing its next run,
+                or (only when ``test_dag_serialization_roundtrip`` is disabled) a scheduled Dag
+                failed to serialize.
         """
 
         from airflow.timetables.base import TimeRestriction
@@ -1325,6 +1416,9 @@ class ScheduleSanityItem(pytest.Item):
         dag_bag = _smoke_dag_bag(self.session, self.config)
         entries = _serialized_dag_cache(self.session, self.config)
         serialized_dag_class = _get_dag_serializer()
+        roundtrip_disabled = "test_dag_serialization_roundtrip" in _disabled_smoke_items(
+            self.config
+        )
         failures: list[str] = []
         for dag_id, dag in sorted(dag_bag.dags.items()):
             can_be_scheduled = (
@@ -1335,7 +1429,11 @@ class ScheduleSanityItem(pytest.Item):
             if not can_be_scheduled:
                 continue
             entry = entries.get(dag_id)
-            if entry is None or entry.error is not None:
+            if entry is None:
+                continue
+            if entry.error is not None:
+                if roundtrip_disabled:
+                    failures.append(f"Dag `{dag_id}` failed to serialize: {entry.error}")
                 continue
             try:
                 # Deserialization mutates its input, so the shared cache gets a copy.
@@ -1677,36 +1775,43 @@ class SmokeCollector(pytest.Collector):
             Iterator[pytest.Item] containing the collected smoke items.
         """
 
-        yield DagBagIntegrityItem.from_parent(self, name="test_dag_bag_integrity")
-        yield DagSerializationRoundtripItem.from_parent(
-            self, name="test_dag_serialization_roundtrip"
-        )
-        yield NoDuplicateDagIdsItem.from_parent(self, name="test_no_duplicate_dag_ids")
-        yield ScheduleSanityItem.from_parent(self, name="test_schedule_sanity")
-        yield PoolReferencesExistItem.from_parent(
-            self,
-            name="test_pool_references_exist",
-            pools=_pool_seeds(self.config),
-        )
+        disabled = _disabled_smoke_items(self.config)
+
+        if "test_dag_bag_integrity" not in disabled:
+            yield DagBagIntegrityItem.from_parent(self, name="test_dag_bag_integrity")
+        if "test_dag_serialization_roundtrip" not in disabled:
+            yield DagSerializationRoundtripItem.from_parent(
+                self, name="test_dag_serialization_roundtrip"
+            )
+        if "test_no_duplicate_dag_ids" not in disabled:
+            yield NoDuplicateDagIdsItem.from_parent(self, name="test_no_duplicate_dag_ids")
+        if "test_schedule_sanity" not in disabled:
+            yield ScheduleSanityItem.from_parent(self, name="test_schedule_sanity")
+        if "test_pool_references_exist" not in disabled:
+            yield PoolReferencesExistItem.from_parent(
+                self,
+                name="test_pool_references_exist",
+                pools=_pool_seeds(self.config),
+            )
 
         pattern = _dag_id_pattern(self.config)
-        if pattern is not None:
+        if pattern is not None and "test_dag_id_pattern" not in disabled:
             yield DagIdPatternItem.from_parent(
                 self,
                 name="test_dag_id_pattern",
                 pattern=pattern,
             )
         required_tags = _required_dag_tags(self.config)
-        if required_tags:
+        if required_tags and "test_required_dag_tags" not in disabled:
             yield RequiredDagTagsItem.from_parent(
                 self,
                 name="test_required_dag_tags",
                 tags=required_tags,
             )
-        if _forbid_default_owner(self.config):
+        if _forbid_default_owner(self.config) and "test_forbid_default_owner" not in disabled:
             yield ForbidDefaultOwnerItem.from_parent(self, name="test_forbid_default_owner")
         snapshot_dir = _snapshot_dir(self.config)
-        if snapshot_dir is not None:
+        if snapshot_dir is not None and "test_dag_serialization_snapshot" not in disabled:
             yield SerializedDagSnapshotItem.from_parent(
                 self,
                 name="test_dag_serialization_snapshot",
