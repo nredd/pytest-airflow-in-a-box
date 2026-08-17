@@ -18,7 +18,8 @@ import pytest
 from airflow.models.renderedtifields import RenderedTaskInstanceFields
 from airflow.utils.state import TaskInstanceState
 
-from pytest_airflow_in_a_box.types import DagMaker, RunTask
+from pytest_airflow_in_a_box.matchers import rendered
+from pytest_airflow_in_a_box.types import DagMaker, RenderTask, RunTask
 
 pytestmark = pytest.mark.compat
 
@@ -152,6 +153,47 @@ def test_nested_and_file_templates_render(run_task: RunTask, tmp_path: Path) -> 
         "payload": {"items": ["42"]},
         "query": "SELECT 42",
     }
+
+
+@pytest.mark.requires_airflow3
+def test_render_task_resolves_template_fields_without_running(
+    render_task: RenderTask, tmp_path: Path
+) -> None:
+    """Resolve nested and file-backed template fields without executing the operator."""
+
+    (tmp_path / "query.sql").write_text("SELECT {{ params.value }}", encoding="utf-8")
+    with DAG(
+        dag_id="compat_render_task_templates",
+        schedule=None,
+        template_searchpath=[str(tmp_path)],
+    ) as dag:
+        TemplateOperator(
+            task_id="render",
+            payload={"items": ["{{ params.value }}"]},
+            query="query.sql",
+        )
+
+    rendered_operator = render_task(dag.get_task("render"), params={"value": "42"})
+
+    assert rendered(payload={"items": ["42"]}, query="SELECT 42") == rendered_operator
+
+
+@pytest.mark.requires_airflow3
+def test_render_task_resolves_a_mapped_operator_to_its_concrete_instance(
+    render_task: RenderTask,
+) -> None:
+    """Render one mapped index onto the concrete unmapped instance Airflow produces."""
+
+    with DAG(dag_id="compat_render_task_mapped", schedule=None) as dag:
+        TemplateOperator.partial(task_id="render", query="SELECT 1").expand(
+            payload=[{"items": ["{{ 1 + 1 }}"]}, {"items": ["{{ 2 + 2 }}"]}]
+        )
+    mapped_operator = dag.get_task("render")
+
+    rendered_operator = render_task(mapped_operator, map_index=1)
+
+    assert rendered_operator is not mapped_operator
+    assert rendered(payload={"items": ["4"]}) == rendered_operator
 
 
 @pytest.mark.db_test

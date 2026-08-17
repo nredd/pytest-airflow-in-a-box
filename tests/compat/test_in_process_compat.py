@@ -30,6 +30,7 @@ from pytest_airflow_in_a_box._compat.in_process import (
     _dag_run_payload_extras,
     _fill_declared_nones,
     _task_runner_module,
+    render_task_in_process,
     run_task_in_process,
 )
 
@@ -101,6 +102,38 @@ class SkipOperator(BaseOperator):
 
         del context
         raise AirflowSkipException("skipped on purpose")
+
+
+class ExecutionTrackingOperator(BaseOperator):
+    """Record whether ``execute`` was ever called."""
+
+    template_fields = ("expression",)
+
+    def __init__(self, *, expression: Any, **kwargs: Any) -> None:
+        """Store the templated expression and reset the execution flag.
+
+        Parameters:
+            expression: Any containing a possibly templated value.
+            kwargs: Any forwarded to ``BaseOperator``.
+        """
+
+        super().__init__(**kwargs)
+        self.expression = expression
+        self.executed = False
+
+    def execute(self, context: Any) -> Any:
+        """Record that execution happened and return the expression.
+
+        Parameters:
+            context: Any containing the task execution context.
+
+        Returns:
+            Any containing the stored expression.
+        """
+
+        del context
+        self.executed = True
+        return self.expression
 
 
 class XComRoundTripOperator(BaseOperator):
@@ -261,6 +294,134 @@ def test_rejects_invalid_try_number() -> None:
 
     with pytest.raises(ValueError, match="`try_number` must be at least 1"):
         run_task_in_process(operator, try_number=0)
+
+
+def test_render_task_resolves_templated_fields_without_mutating_the_original() -> None:
+    """Resolve template fields on a fresh copy, leaving the caller's operator untouched."""
+
+    operator = _build(ReturnOperator, "in_process_render", expression="{{ 21 * 2 }}")
+
+    rendered_operator = render_task_in_process(operator)
+
+    assert rendered_operator is not operator
+    assert rendered_operator.expression == "42"
+    assert operator.expression == "{{ 21 * 2 }}"
+
+
+def test_render_task_does_not_contaminate_a_shared_operator_across_calls() -> None:
+    """Render the same shared operator twice, each call independent of the other."""
+
+    operator = _build(ReturnOperator, "in_process_render_reuse", expression="{{ custom }}")
+
+    first = render_task_in_process(operator, context_overrides={"custom": "first-value"})
+    second = render_task_in_process(operator, context_overrides={"custom": "second-value"})
+
+    assert first.expression == "first-value"
+    assert second.expression == "second-value"
+    assert operator.expression == "{{ custom }}"
+
+
+def test_render_task_does_not_execute_the_operator() -> None:
+    """Render fields without ever calling ``execute``."""
+
+    operator = _build(ExecutionTrackingOperator, "in_process_render_no_run", expression="x")
+
+    rendered_operator = render_task_in_process(operator)
+
+    assert rendered_operator.executed is False
+    assert operator.executed is False
+
+
+def test_render_task_merges_context_overrides() -> None:
+    """Merge caller-supplied context keys into the synthesized context before rendering."""
+
+    operator = _build(ReturnOperator, "in_process_render_overrides", expression="{{ custom }}")
+
+    rendered_operator = render_task_in_process(
+        operator, context_overrides={"custom": "override-value"}
+    )
+
+    assert rendered_operator.expression == "override-value"
+
+
+def test_render_task_params_render_like_run_task() -> None:
+    """Render declared Dag params overridden by the call's ``params``, without running."""
+
+    declared_params: Any = {"left": "declared"}
+    with DAG(dag_id="in_process_render_params", schedule=None, params=declared_params) as dag:
+        ReturnOperator(task_id="probe", expression="{{ params.left }}")
+    operator: Any = dag.get_task("probe")
+
+    rendered_operator = render_task_in_process(operator, params={"left": "overridden"})
+
+    assert rendered_operator.expression == "overridden"
+
+
+def test_render_task_variables_and_connections_resolve_through_templates() -> None:
+    """Serve seeded Variables and Connections while rendering, same as ``run_task``."""
+
+    operator = _build(
+        ReturnOperator,
+        "in_process_render_seeded",
+        expression="{{ var.value.answer }}-{{ conn.db.host }}",
+    )
+    comms = FakeSupervisorComms(
+        variables={"answer": "42"},
+        connections={"db": {"conn_type": "postgres", "host": "example.com"}},
+    )
+
+    rendered_operator = render_task_in_process(operator, comms=comms)
+
+    assert rendered_operator.expression == "42-example.com"
+
+
+def test_render_task_resolves_a_mapped_operator_to_its_concrete_instance() -> None:
+    """Render one mapped index onto the concrete unmapped instance Airflow produces."""
+
+    with DAG(dag_id="in_process_render_mapped", schedule=None) as dag:
+        ReturnOperator.partial(task_id="probe").expand(expression=["{{ 1 + 1 }}", "{{ 2 + 2 }}"])
+    mapped_operator = dag.get_task("probe")
+
+    rendered_operator = render_task_in_process(mapped_operator, map_index=1)
+
+    assert rendered_operator is not mapped_operator
+    assert rendered_operator.expression == "4"
+
+
+def test_render_task_supervisor_comms_deleted_when_previously_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remove the installed fake when no supervisor was registered before."""
+
+    task_runner = _task_runner_module()
+    monkeypatch.delattr(task_runner, "SUPERVISOR_COMMS", raising=False)
+    operator = _build(ReturnOperator, "in_process_render_absent", expression="x")
+
+    render_task_in_process(operator)
+
+    assert not hasattr(task_runner, "SUPERVISOR_COMMS")
+
+
+def test_render_task_supervisor_comms_restored_when_previously_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reinstall the prior supervisor object after rendering."""
+
+    task_runner = _task_runner_module()
+    sentinel = object()
+    monkeypatch.setattr(task_runner, "SUPERVISOR_COMMS", sentinel, raising=False)
+    operator = _build(ReturnOperator, "in_process_render_present", expression="x")
+
+    render_task_in_process(operator)
+
+    assert task_runner.SUPERVISOR_COMMS is sentinel
+
+
+def test_render_task_rejects_task_without_task_id() -> None:
+    """Reject objects that are not operators, same guard as ``run_task_in_process``."""
+
+    with pytest.raises(TypeError, match="must be an Airflow operator"):
+        render_task_in_process(object())
 
 
 def test_fake_comms_answers_xcom_traffic() -> None:
