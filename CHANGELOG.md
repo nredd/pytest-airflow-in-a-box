@@ -13,6 +13,16 @@ All notable changes to this project will be documented in this file. The format 
   plus a `rendered(...)` matcher for one-expression assertions -- the documented replacement
   for `TaskInstance.render_templates()`, which Airflow 3.2+ removed
   ([#118](https://github.com/nredd/pytest-airflow-in-a-box/issues/118)).
+- A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
+  garbage-collector race that can exit a session non-zero despite an all-passed summary, why this
+  plugin's `tmp_path_retention_policy = "failed"` default makes it likelier than a bare pytest
+  install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
+  workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
+  ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+- A "Retry behavior" recipe in `docs/guide/cookbook.md` covering `fail -> up_for_retry ->
+  succeed` state-math progression: asserting `try_number` and `retry_delay` at the
+  `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
+  ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
 
 ## [0.7.2] - 2026-08-15
 
