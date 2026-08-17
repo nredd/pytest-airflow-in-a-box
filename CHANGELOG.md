@@ -19,6 +19,16 @@ All notable changes to this project will be documented in this file. The format 
   `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
   ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
 
+### Fixed
+
+- The bundled smoke catalog no longer parses the Dag folder a second time, in parallel,
+  when a `full_dag_bag` consumer lands on a different `pytest-xdist` worker under
+  `--dist loadgroup`. When both are present in a run, the plugin now puts the catalog
+  and every `full_dag_bag` consumer into one shared `xdist_group`, so they are forced
+  onto the same worker and the existing process-local `DagBag` reuse actually triggers
+  instead of two workers each paying a full parse concurrently
+  ([#163](https://github.com/nredd/pytest-airflow-in-a-box/issues/163)).
+
 ## [0.7.2] - 2026-08-15
 
 ### Changed

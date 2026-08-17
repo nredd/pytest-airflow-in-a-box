@@ -52,6 +52,10 @@ from pytest_airflow_in_a_box.fixtures import (
     run_task,
     session,
 )
+from pytest_airflow_in_a_box.fixtures.dagbag import (
+    FULL_DAG_BAG_FIXTURE_NAME,
+    FULL_DAG_BAG_XDIST_GROUP,
+)
 from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
@@ -431,8 +435,8 @@ def pytest_collection_modifyitems(
     """Drop duplicate Dag-file items, append the smoke catalog, then apply the baseline.
 
     `baseline.apply_selection_and_xfail` runs last, at effectively normal priority
-    relative to the deduplication and smoke-item injection above it: it must see the
-    final collected item list, not an intermediate one.
+    relative to the deduplication, smoke-item injection, and xdist co-location above
+    it: it must see the final collected item list, not an intermediate one.
 
     Parameters:
         session: pytest.Session that owns the synthetic smoke collector.
@@ -441,8 +445,55 @@ def pytest_collection_modifyitems(
     """
 
     prune_duplicate_items(config, items)
+    before_ids = {id(item) for item in items}
     collect_smoke_items(session, config, items)
+    smoke_items = [item for item in items if id(item) not in before_ids]
+    _colocate_smoke_catalog_with_full_dag_bag(items, smoke_items)
     baseline.apply_selection_and_xfail(session, config, items)
+
+
+def _requires_full_dag_bag(item: pytest.Item) -> bool:
+    """Report whether one collected test consumes the `full_dag_bag` fixture.
+
+    Parameters:
+        item: pytest.Item inspected for `full_dag_bag` fixture usage.
+
+    Returns:
+        bool reporting whether the item requires `full_dag_bag`.
+    """
+
+    fixturenames: tuple[str, ...] = tuple(getattr(item, "fixturenames", ()))
+    return FULL_DAG_BAG_FIXTURE_NAME in fixturenames
+
+
+def _colocate_smoke_catalog_with_full_dag_bag(
+    items: list[pytest.Item], smoke_items: list[pytest.Item]
+) -> None:
+    """Force the smoke catalog onto `full_dag_bag`'s xdist worker, if one is in play.
+
+    Under `--dist loadgroup`, an ungrouped smoke item can land on a different worker
+    than a `full_dag_bag` consumer. Since the process-local live-DagBag cache
+    (`fixtures/dagbag.py::LIVE_DAG_BAG_KEY`) only helps when both share a worker, that
+    split causes the Dag folder to be parsed twice, in parallel. Only co-locate when a
+    `full_dag_bag` consumer actually exists in this run, so a smoke-only run keeps
+    distributing the catalog's checks across workers.
+
+    Parameters:
+        items: list[pytest.Item] surviving collection, inspected for `full_dag_bag` use.
+        smoke_items: list[pytest.Item] containing the synthesized smoke catalog items.
+
+    Returns:
+        None. Mutates matching items in place by adding an `xdist_group` marker.
+    """
+
+    if not smoke_items:
+        return
+    dag_bag_items = [item for item in items if _requires_full_dag_bag(item)]
+    if not dag_bag_items:
+        return
+    for item in (*smoke_items, *dag_bag_items):
+        if item.get_closest_marker("xdist_group") is None:
+            item.add_marker(pytest.mark.xdist_group(name=FULL_DAG_BAG_XDIST_GROUP))
 
 
 def _requires_database(item: pytest.Item) -> bool:

@@ -6,12 +6,15 @@ References:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
 from pytest_airflow_in_a_box import plugin
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError
+from pytest_airflow_in_a_box.fixtures.dagbag import FULL_DAG_BAG_XDIST_GROUP
 
 
 def test_database_incompatibility_renders_as_usage_error(
@@ -158,3 +161,88 @@ def test_ensure_database_warning_does_not_fail_first_test_under_xdist(
     output = result.stdout.str() + result.stderr.str()
     assert "INTERNALERROR" not in output
     assert "crashed" not in output
+
+
+_XDIST_GROUP_REPORTING_CONFTEST = """
+    import json
+    from pathlib import Path
+
+    import pytest
+
+    RECORD_DIR = Path({record_dir!r})
+
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(items):
+        record = {{}}
+        for item in items:
+            marker = item.get_closest_marker("xdist_group")
+            record[item.nodeid] = marker.kwargs.get("name") if marker else None
+        (RECORD_DIR / "groups.json").write_text(json.dumps(record), encoding="utf-8")
+"""
+
+_COLOCATION_DAG = """
+    from airflow.sdk import DAG, task
+
+    with DAG(dag_id="colocate_dag", schedule=None, tags=["team-a"]) as dag:
+        @task
+        def work():
+            pass
+
+        work()
+"""
+
+
+def test_smoke_catalog_and_full_dag_bag_consumers_share_one_xdist_group(
+    pytester: pytest.Pytester,
+) -> None:
+    """Group the smoke catalog with `full_dag_bag` consumers, but respect an explicit group.
+
+    Regression test for issue #163: under `--dist loadgroup`, an ungrouped smoke item
+    could land on a different `pytest-xdist` worker than a `full_dag_bag` consumer, so
+    the Dag folder was parsed twice, concurrently.
+    `plugin._colocate_smoke_catalog_with_full_dag_bag` now forces every synthesized
+    smoke item and every `full_dag_bag` consumer onto the shared
+    `FULL_DAG_BAG_XDIST_GROUP`, except for an item that already carries its own
+    explicit `xdist_group`, which is left alone.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_consumer(full_dag_bag):
+            pass
+
+        @pytest.mark.xdist_group(name="user-group")
+        def test_pre_grouped(full_dag_bag):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=7)
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group == FULL_DAG_BAG_XDIST_GROUP for group in smoke_groups.values())
+    consumer_group = next(
+        group for name, group in groups.items() if name.endswith("::test_consumer")
+    )
+    pre_grouped_group = next(
+        group for name, group in groups.items() if name.endswith("::test_pre_grouped")
+    )
+    assert consumer_group == FULL_DAG_BAG_XDIST_GROUP
+    assert pre_grouped_group == "user-group"

@@ -32,6 +32,14 @@ catalog is enabled this way, `airflow_dag_parse_timeout` also governs `full_dag_
 a Dag file that exceeds it lands in `full_dag_bag.import_errors` instead of `full_dag_bag.dags`.
 Treat a shared `DagBag` as read-only: a consumer's mutation is visible to the catalog's checks too.
 
+That same-process reuse depends on the corpus builder and a `full_dag_bag` consumer landing on the
+same worker, which plain load-balanced scheduling does not guarantee. Under `--dist loadgroup`, if
+this run also has a test that uses `full_dag_bag`, the plugin puts the whole catalog and every
+`full_dag_bag` consumer into one shared `xdist_group`, so they are forced onto the same worker and
+the reuse above actually applies -- instead of the corpus builder and `full_dag_bag` independently
+parsing the same folder in parallel on two workers. A smoke-only run with no `full_dag_bag`
+consumer is unaffected and keeps distributing the catalog across workers as described above.
+
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
