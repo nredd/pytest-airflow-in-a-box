@@ -238,7 +238,7 @@ def test_smoke_catalog_and_full_dag_bag_consumers_share_one_xdist_group(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=8)
+    result.assert_outcomes(passed=13)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
@@ -299,7 +299,7 @@ def test_colocation_skips_a_full_dag_bag_consumer_dropped_by_mark_expression(
         "smoke",
     )
 
-    result.assert_outcomes(passed=5)
+    result.assert_outcomes(passed=10)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     assert all(group is None for group in groups.values())
 
@@ -338,7 +338,7 @@ def test_colocation_is_a_noop_without_the_xdist_plugin(pytester: pytest.Pytester
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=11)
     output = result.stdout.str() + result.stderr.str()
     assert "INTERNALERROR" not in output
 
