@@ -18,7 +18,6 @@ from airflow.models.dagbundle import DagBundleModel
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.utils.session import create_session
-from airflow.utils.state import DagRunState
 from sqlalchemy import func, select
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
@@ -465,6 +464,54 @@ def test_run_dag_rejects_a_colliding_dag_id(dag_maker: DagMaker, run_dag: RunDag
     assert _row_counts("run_dag_duplicate") == (1, 1, 1, 1)
 
 
+def test_run_dag_closes_the_session_when_persist_dag_fails(
+    run_dag: RunDag,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close the metadata session even when persistence fails after commit."""
+
+    failure = OSError("serialized read failed")
+
+    def fail_load(record: dag_compat.DagPersistenceRecord) -> None:
+        """Fail after the persistence transaction has committed."""
+
+        del record
+        raise failure
+
+    monkeypatch.setattr(dag_compat, "_load_serialized_dag", fail_load)
+
+    real_open_dag_session = dag_fixture.open_dag_session
+    closed = {"value": False}
+
+    def spying_open_dag_session(dag_id: str) -> Any:
+        """Wrap the opened session to record whether it was closed."""
+
+        session = real_open_dag_session(dag_id)
+        original_close = session.close
+
+        def spy_close() -> None:
+            closed["value"] = True
+            original_close()
+
+        monkeypatch.setattr(session, "close", spy_close)
+        return session
+
+    monkeypatch.setattr(dag_fixture, "open_dag_session", spying_open_dag_session)
+
+    dag = dag_compat.build_dag("run_dag_persist_failure", __file__, {})
+    with dag:
+        EmptyOperator(task_id="empty")
+
+    with pytest.raises(
+        DagPersistenceError, match="loading persisted serialized Dag metadata"
+    ) as caught:
+        run_dag(dag)
+
+    assert caught.value.__cause__ is failure
+    assert closed["value"]
+    assert _row_counts("run_dag_persist_failure") == (0, 0, 0, 0)
+
+
 def test_run_dag_supports_multiple_independent_dags_in_one_test(run_dag: RunDag) -> None:
     """Persist, execute, and independently own metadata across repeated calls."""
 
@@ -499,11 +546,12 @@ def test_run_dag_passes_through_run_id_logical_date_and_dag_run_kwargs(
         dag,
         run_id="pinned-run-dag",
         logical_date=pinned_date,
-        dag_run_kwargs={"state": DagRunState.RUNNING},
+        dag_run_kwargs={"conf": {"probe": 1}},
     )
 
     assert result.run_id == "pinned-run-dag"
     assert result.dag_run.logical_date == pinned_date
+    assert result.dag_run.conf == {"probe": 1}
 
 
 def test_run_dag_cleanup_continues_after_one_failure(monkeypatch: pytest.MonkeyPatch) -> None:

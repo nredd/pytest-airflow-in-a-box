@@ -204,9 +204,11 @@ class RunDag(Protocol):
     drives it through the same persist/create/execute pipeline, keyed on the Dag's own
     ``dag_id`` rather than a synthetic one. Because the real ``dag_id`` is preserved, two
     tests exercising the same ``dag_id`` concurrently on different ``pytest-xdist`` workers
-    can race on the shared metadata database; keep such tests on the same worker (e.g. via
-    ``pytest.mark.xdist_group``) or accept that they run serially. Metadata is cleaned up
-    when the function-scoped fixture is finalized.
+    can race on the shared metadata database -- not always cleanly: the loser may raise
+    before persisting, or the two workers may silently share one bundle row and have
+    whichever tears down first delete metadata the other's still-running test depends on.
+    Keep such tests on the same worker (e.g. via ``pytest.mark.xdist_group``) or accept that
+    they run serially. Metadata is cleaned up when the function-scoped fixture is finalized.
     """
 
     def __call__(

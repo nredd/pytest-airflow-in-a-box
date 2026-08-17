@@ -137,6 +137,31 @@ def _default_run_id(dag_id: str, invocation: int) -> str:
     return f"{prefix}-{dag_id[:available]}-{digest}"
 
 
+def _close_records(records: list[DagPersistenceRecord]) -> None:
+    """Clean every owned Dag in reverse creation order, aggregating failures.
+
+    Shared teardown for both `_DagFactory.close` and `_DagRunner.close`.
+
+    Parameters:
+        records: list[DagPersistenceRecord] owned by the caller, drained in place.
+
+    Raises:
+        DagCleanupError: One or more owned Dags could not be cleaned.
+    """
+
+    failures: list[Exception] = []
+    while records:
+        try:
+            cleanup_dag(records.pop())
+        except Exception as error:
+            failures.append(error)
+    if failures:
+        details = "; ".join(str(error) for error in failures)
+        raise DagCleanupError(
+            f"Could not clean {len(failures)} fixture-owned Airflow Dags: {details}"
+        ) from failures[0]
+
+
 class _DagContext(AbstractContextManager["DAG"]):
     """Own one Dag authoring context and metadata session."""
 
@@ -559,17 +584,7 @@ class _DagFactory:
             DagCleanupError: One or more owned Dags could not be cleaned.
         """
 
-        failures: list[Exception] = []
-        while self._records:
-            try:
-                cleanup_dag(self._records.pop())
-            except Exception as error:
-                failures.append(error)
-        if failures:
-            details = "; ".join(str(error) for error in failures)
-            raise DagCleanupError(
-                f"Could not clean {len(failures)} fixture-owned Airflow Dags: {details}"
-            ) from failures[0]
+        _close_records(self._records)
 
 
 class _DagRunner:
@@ -627,7 +642,11 @@ class _DagRunner:
             bundle_name=_bundle_name(dag_id),
             session=session,
         )
-        scheduler_dag = persist_dag(dag, record)
+        try:
+            scheduler_dag = persist_dag(dag, record)
+        except Exception:
+            session.close()
+            raise
         self._records.append(record)
         self._invocations += 1
         resolved_run_id = _default_run_id(dag_id, self._invocations) if run_id is None else run_id
@@ -656,17 +675,7 @@ class _DagRunner:
             DagCleanupError: One or more owned Dags could not be cleaned.
         """
 
-        failures: list[Exception] = []
-        while self._records:
-            try:
-                cleanup_dag(self._records.pop())
-            except Exception as error:
-                failures.append(error)
-        if failures:
-            details = "; ".join(str(error) for error in failures)
-            raise DagCleanupError(
-                f"Could not clean {len(failures)} fixture-owned Airflow Dags: {details}"
-            ) from failures[0]
+        _close_records(self._records)
 
 
 @pytest.fixture

@@ -25,10 +25,16 @@ what your real Dag declares. `--dag-folder`/`airflow_dags_folder` is a different
 
 Because the persisted `dag_id` is the real one, running the same `dag_id` through `run_dag`
 from two different tests scheduled onto different `pytest-xdist` workers at the same time can
-race on the shared metadata database (whichever loses gets `run_dag`'s `ValueError` for a
-`dag_id` that already has persisted metadata). Keep such tests on one worker (e.g.
-`pytest.mark.xdist_group`) or accept that they run serially; a single worker process never
-hits this, since one test's metadata is cleaned up before the next test's setup runs.
+race on the shared metadata database. That race is not guaranteed to fail cleanly: if both
+workers pass the absence check before either commits, they silently share one bundle/`DagModel`
+row instead, and whichever worker tears down first deletes metadata the other worker's
+still-running test depends on -- surfacing later as a `DagPersistenceError`,
+`DagRunCreationError`, or a task-resolution failure with no obvious link back to the race. Keep
+such tests on one worker (e.g. `pytest.mark.xdist_group`) or accept that they run serially; a
+single worker process never hits this, since one test's metadata is fully cleaned up before the
+next test's setup runs. This window already exists for `dag_maker(dag_id="fixed")` with an
+explicit pinned id -- `run_dag` just makes a fixed real `dag_id` the only mode, which is why it
+is called out here.
 
 ## Whole-DagRun execution
 
