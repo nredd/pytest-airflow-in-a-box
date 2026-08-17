@@ -4,12 +4,17 @@
 release, but the installed dev environment resolves to the newer serialization
 location -- `airflow.sdk.definitions.asset.AssetUniqueKey` still exists on later
 releases too, just not as the canonical one `dags_needing_dagruns` reads from, so this
-exercises the fallback directly rather than through a full capability fake.
+exercises the fallback directly rather than through a full capability fake. The
+serialization module itself does not exist before 3.2.0, so that one test
+`importorskip`s instead of importing unconditionally -- otherwise it would abort
+collection on every certified 3.1.x compat leg.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+import pytest
 
 from pytest_airflow_in_a_box._compat import asset_schedule as schedule_module
 from pytest_airflow_in_a_box._compat.capabilities import AssetUniqueKeyLocation
@@ -28,7 +33,8 @@ def test_asset_unique_key_type_falls_back_to_the_sdk_location() -> None:
 def test_asset_unique_key_type_uses_the_serialization_location() -> None:
     """Resolve `SerializedAssetUniqueKey` off the newer serialization location."""
 
-    from airflow.serialization.definitions.assets import SerializedAssetUniqueKey
+    serialization_module = pytest.importorskip("airflow.serialization.definitions.assets")
+    SerializedAssetUniqueKey = serialization_module.SerializedAssetUniqueKey
 
     capabilities = SimpleNamespace(asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION)
 
