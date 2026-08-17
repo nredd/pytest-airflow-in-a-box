@@ -107,6 +107,11 @@ deferrable operators, the REST API fixture, and bundled smoke checks.
   rather than testing DAGs under pytest) and unmaintained
 - **`airflow-pytest-plugin`** -- generates JUnit-XML dashboards from DAG runs; not aimed at
   isolated, fixture-driven unit testing
+- **a dagbag import test plus calling `task.function` directly** -- covers "the Dag parses"
+  and "the callable works" and nothing in between: task relations, cross-Dag asset triggering,
+  DagRun-to-DagRun relations, and retry behavior. See the
+  [cookbook](https://nredd.github.io/pytest-airflow-in-a-box/guide/cookbook/#what-a-dagbag-callable-test-misses)
+  for what it misses
 
 ## Requirements
 
