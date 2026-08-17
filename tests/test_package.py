@@ -69,6 +69,7 @@ def test_public_surface_is_explicit() -> None:
     )
     assert fixtures.__all__ == (
         "airflow_connections",
+        "airflow_parse_secrets",
         "airflow_variables",
         "api_base_url",
         "api_client",
@@ -77,6 +78,7 @@ def test_public_surface_is_explicit() -> None:
         "dag_maker",
         "full_dag_bag",
         "render_task",
+        "run_dag",
         "run_task",
         "session",
     )
@@ -121,6 +123,7 @@ def test_public_surface_is_explicit() -> None:
     )
     assert plugin.__all__ == (
         "airflow_connections",
+        "airflow_parse_secrets",
         "airflow_variables",
         "api_base_url",
         "api_client",
@@ -130,6 +133,7 @@ def test_public_surface_is_explicit() -> None:
         "full_dag_bag",
         "get_bootstrap_state",
         "render_task",
+        "run_dag",
         "run_task",
         "session",
     )
@@ -171,6 +175,7 @@ def test_public_surface_is_explicit() -> None:
         "AirflowVariables",
         "DagMaker",
         "RenderTask",
+        "RunDag",
         "RunTask",
         "SerializedDag",
         "TaskRunResult",
@@ -185,6 +190,7 @@ def test_public_surface_is_explicit() -> None:
         "FakeSupervisorComms",
         "InProcessRunResult",
         "ParamsCaseError",
+        "ParseTimeComms",
         "SeedCleanupError",
         "SeedPersistenceError",
         "SeedRecord",
@@ -196,6 +202,7 @@ def test_public_surface_is_explicit() -> None:
         "implied_groups",
         "initialize_database",
         "open_seed_session",
+        "parse_time_supervision",
         "render_task_in_process",
         "resolve_capabilities",
         "run_task_in_process",

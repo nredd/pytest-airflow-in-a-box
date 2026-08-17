@@ -14,6 +14,7 @@ import pytest
 
 from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
+from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box._compat.dagbag import DagBag
@@ -82,7 +83,9 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 
         if _smoke_enabled(config) and _smoke_in_scope(config):
             os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(_parse_timeout(config))
-        session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
+        session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(
+            _dag_folder(config), comms=parse_time_comms(config)
+        )
     return session.stash[LIVE_DAG_BAG_KEY]
 
 

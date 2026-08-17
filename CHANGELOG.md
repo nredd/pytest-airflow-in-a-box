@@ -27,12 +27,46 @@ All notable changes to this project will be documented in this file. The format 
   succeed` state-math progression: asserting `try_number` and `retry_delay` at the
   `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
   ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
+- A `run_dag` fixture drives a Dag pulled from `full_dag_bag` (or otherwise authored outside
+  `dag_maker`) through a full DagRun and returns the same `DagRunResult` snapshot
+  `dag_maker.run()` does, so a Dag already living in your `dags/` folder can be executed
+  without adopting `dag_maker`'s inline-authoring shape
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
 - A "What a dagbag + callable test misses" section in `docs/guide/cookbook.md`, running one
   realistic multi-task `ingest` Dag through `dag_maker` to show task relations (trigger rules,
   branching, cross-task xcom), asset-triggered cross-Dag relations, depends-on-past/backfill
   DagRun sequences, and retry behavior (`up_for_retry`, `try_number`) that a dagbag-import-plus
   callable test cannot reach. Linked from README's `Why not...` section
   ([#165](https://github.com/nredd/pytest-airflow-in-a-box/issues/165)).
+- `Variable.get()` and `BaseHook.get_connection()` written at Dag *top level* now resolve
+  from the rows `airflow_variables` / `airflow_connections` commit, instead of failing with
+  `ImportError: cannot import name 'SUPERVISOR_COMMS'` on Airflow 3.1 or missing silently
+  on 3.2+. Airflow 3 routes both lookups through a supervisor the test process does not
+  have, so the plugin installs one for the duration of every parse it runs --
+  `full_dag_bag`, the `--collect-dag-folder` import items, and the smoke catalog's corpus
+  build. Lookups are lazy, so a Dag folder that never reads a Variable or Connection never
+  opens the database. Airflow 2.x reads the metastore directly at parse time and is
+  unaffected. Upstream has had this open since 2025
+  ([apache/airflow#51816](https://github.com/apache/airflow/issues/51816),
+  [#48554](https://github.com/apache/airflow/issues/48554)) and
+  [PR #61630](https://github.com/apache/airflow/pull/61630) states plainly that it does not
+  fix the root cause
+  ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+- `airflow_parse_secrets` fixture, resolving the same top-level lookups for a whole test
+  rather than for one parse -- for a `Variable.get()` inside a `with dag_maker(...)` block
+  or in the test body, where no Dag file is being parsed
+  ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+- `--airflow-parse-secrets` and the `airflow_parse_secrets` ini option select the parse-time
+  resolution policy, `metastore` (default) or `off`; `off` leaves Airflow's own resolution
+  in place for tests that assert the un-shimmed behavior
+  ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+
+### Changed
+
+- The README quickstart, `docs/index.md`, and `docs/guide/task-execution.md` now lead with
+  loading an existing Dag via `full_dag_bag` + `run_dag`; the inline `dag_maker` example moves
+  to a clearly labeled secondary "adhoc Dag" path
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
 
 ### Fixed
 

@@ -9,7 +9,11 @@ import pytest
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
 from pytest_airflow_in_a_box._compat import registry
-from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, TimezoneLocation
+from pytest_airflow_in_a_box._compat.capabilities import (
+    AirflowFamily,
+    SecretsResolution,
+    TimezoneLocation,
+)
 from pytest_airflow_in_a_box._compat.dag import (
     DagCleanupError,
     DagPersistenceError,
@@ -474,6 +478,7 @@ def test_legacy_refresh_and_explicit_data_interval(monkeypatch: pytest.MonkeyPat
         lambda: SimpleNamespace(
             family=AirflowFamily.V3,
             timezone_location=TimezoneLocation.SDK,
+            secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
             refresh_from_task_supports_dag_run=False,
         ),
     )

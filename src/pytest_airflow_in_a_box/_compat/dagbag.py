@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pytest_airflow_in_a_box._compat.capabilities import DagBagLocation, resolve_capabilities
+from pytest_airflow_in_a_box._compat.parse_time import parse_time_supervision
 
 if TYPE_CHECKING:
     from airflow.models.dagbag import DagBag
+
+    from pytest_airflow_in_a_box._compat.parse_time import ParseTimeComms
 
 
 class DagBagConstructionError(RuntimeError):
@@ -63,11 +66,16 @@ def _build_dag_processing_dag_bag(path: Path, *, include_examples: bool) -> DagB
     return DagBag(dag_folder=path, safe_mode=False, load_op_links=False)
 
 
-def build_dag_bag(path: str | Path) -> DagBag:
+def build_dag_bag(path: str | Path, *, comms: ParseTimeComms | None = None) -> DagBag:
     """Validate a Dag location and parse it with the certified Airflow interface.
+
+    This is the one place the plugin executes user Dag modules, so it is also where
+    parse-time Variable and Connection resolution is installed.
 
     Parameters:
         path: str | pathlib.Path naming an existing Dag directory or Dag file.
+        comms: ParseTimeComms | None answering Variable and Connection lookups that
+            run at Dag top level, or None to leave Airflow's own resolution untouched.
 
     Returns:
         airflow.models.dagbag.DagBag containing parsed Dags and import errors.
@@ -86,20 +94,24 @@ def build_dag_bag(path: str | Path) -> DagBag:
         raise ValueError(f"Dag location is neither a directory nor a file: '{resolved_path}'")
 
     capabilities = resolve_capabilities()
-    try:
-        if capabilities.dag_bag_location is DagBagLocation.MODELS:
-            return _build_models_dag_bag(
+    # The supervision block wraps the try rather than the reverse: its own setup and
+    # teardown are not Dag construction, and relabeling them `DagBagConstructionError`
+    # would blame the Dag folder for a failure that has nothing to do with it.
+    with parse_time_supervision(comms):
+        try:
+            if capabilities.dag_bag_location is DagBagLocation.MODELS:
+                return _build_models_dag_bag(
+                    resolved_path,
+                    include_examples=capabilities.dag_bag_supports_include_examples,
+                )
+            return _build_dag_processing_dag_bag(
                 resolved_path,
                 include_examples=capabilities.dag_bag_supports_include_examples,
             )
-        return _build_dag_processing_dag_bag(
-            resolved_path,
-            include_examples=capabilities.dag_bag_supports_include_examples,
-        )
-    except Exception as error:
-        raise DagBagConstructionError(
-            f"Could not construct an Airflow Dag bag from '{resolved_path}': {error}"
-        ) from error
+        except Exception as error:
+            raise DagBagConstructionError(
+                f"Could not construct an Airflow Dag bag from '{resolved_path}': {error}"
+            ) from error
 
 
 __all__ = ("DagBagConstructionError", "build_dag_bag")

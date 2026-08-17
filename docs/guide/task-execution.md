@@ -1,7 +1,44 @@
 # Task execution
 
+## Testing a Dag defined elsewhere
+
+Point `full_dag_bag` at your repo's Dag folder -- via `--dag-folder=PATH` or the
+`airflow_dags_folder` ini option -- grab a Dag by id, and drive it with `run_dag`:
+
+```python
+def test_orders_dag(full_dag_bag, run_dag):
+    dag = full_dag_bag.dags["orders"]
+
+    result = run_dag(dag)
+
+    assert result.success
+    assert result["extract"].xcom == {"rows": 3}
+```
+
+`run_dag` persists the Dag, creates a manual DagRun, executes every task instance in
+dependency order, and returns the same `DagRunResult` snapshot `dag_maker.run()` does (see
+below) -- keyed on the Dag's own `dag_id`, not a synthetic one, so `result.dag_id` matches
+what your real Dag declares. `--dag-folder`/`airflow_dags_folder` is a different option from
+`--collect-dag-folder`/`airflow_collect_dags_folder`, which drives
+[Dag-file collection](dag-collection.md) instead -- see
+[the two Dag folder options](dag-coverage.md#footguns) if you're wiring both up.
+
+Because the persisted `dag_id` is the real one, running the same `dag_id` through `run_dag`
+from two different tests scheduled onto different `pytest-xdist` workers at the same time can
+race on the shared metadata database. That race is not guaranteed to fail cleanly: if both
+workers pass the absence check before either commits, they silently share one bundle/`DagModel`
+row instead, and whichever worker tears down first deletes metadata the other worker's
+still-running test depends on -- surfacing later as a `DagPersistenceError`,
+`DagRunCreationError`, or a task-resolution failure with no obvious link back to the race. Keep
+such tests on one worker (e.g. `pytest.mark.xdist_group`) or accept that they run serially; a
+single worker process never hits this, since one test's metadata is fully cleaned up before the
+next test's setup runs. This window already exists for `dag_maker(dag_id="fixed")` with an
+explicit pinned id -- `run_dag` just makes a fixed real `dag_id` the only mode, which is why it
+is called out here.
+
 ## Whole-DagRun execution
 
+For a Dag authored directly in the test, rather than loaded from your `dags/` folder,
 `dag_maker.run()` creates the DagRun (when you did not), executes every task instance in
 dependency order, and returns an inert `DagRunResult` snapshot:
 
@@ -110,8 +147,10 @@ Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `execute_dag
 `run_task_instance`, `ordered_task_instances`, `run_trigger`, `TaskResolutionError`, and
 `TriggerExecutionError`. `run_task_instance` resolves the executable task automatically for
 any `dag_maker`-persisted Dag, including task instances queried through a different session
-(e.g. the `session` fixture); pass `task=` only for Dags the plugin does not own. The
-`DagMaker` protocol additionally exposes `run`, `create_dagrun`, `create_ti`, and `run_ti`.
-Passing `map_index` expands a mapped task on demand; upstream-XCom mapping works after its
-producer has run in the same DagRun. Passing `run_triggerer=True` runs the persisted trigger
-event and resumes a deferred task inline, bounded by `trigger_timeout` seconds.
+(e.g. the `session` fixture); pass `task=` only for Dags the plugin does not own -- see
+[Testing a Dag defined elsewhere](#testing-a-dag-defined-elsewhere) for `run_dag`, which
+covers that whole-DagRun case directly. The `DagMaker` protocol additionally exposes `run`,
+`create_dagrun`, `create_ti`, and `run_ti`. Passing `map_index` expands a mapped task on
+demand; upstream-XCom mapping works after its producer has run in the same DagRun. Passing
+`run_triggerer=True` runs the persisted trigger event and resumes a deferred task inline,
+bounded by `trigger_timeout` seconds.
