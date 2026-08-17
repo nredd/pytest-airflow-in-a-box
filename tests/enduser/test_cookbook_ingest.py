@@ -18,7 +18,7 @@ from airflow.utils.state import DagRunState, TaskInstanceState
 from pytest_airflow_in_a_box.matchers import skipped, succeeded
 from pytest_airflow_in_a_box.types import DagMaker, RunTask
 
-pytestmark = [pytest.mark.compat, pytest.mark.db_test]
+pytestmark = pytest.mark.compat
 
 _resolve = import_module("_authoring")._resolve
 
@@ -35,6 +35,7 @@ class PageOnRepeatedFailure(BaseOperator):
         return {"paged": context["ti"].try_number >= 2}
 
 
+@pytest.mark.db_test
 def test_ingest_shows_branch_skip_trigger_rule_and_cross_task_xcom(
     dag_maker: DagMaker,
 ) -> None:
@@ -81,6 +82,7 @@ def test_ingest_shows_branch_skip_trigger_rule_and_cross_task_xcom(
     }
 
 
+@pytest.mark.db_test
 def test_ingest_strands_a_retrying_load_visibly(dag_maker: DagMaker) -> None:
     """Settle a retry-configured `load` failure as `up_for_retry` and keep the DagRun running.
 
@@ -132,10 +134,18 @@ def test_load_only_pages_on_the_second_attempt(run_task: RunTask) -> None:
     assert second.xcoms["return_value"] == {"paged": True}
 
 
+@pytest.mark.db_test
 def test_ingest_second_run_waits_on_the_first_days_extract(dag_maker: DagMaker) -> None:
-    """Block a `depends_on_past` extract until the prior logical date's attempt succeeds."""
+    """Block a `depends_on_past` extract until the prior logical date's attempt succeeds.
 
-    with dag_maker(dag_id="ingest_backfill"):
+    ``catchup=False`` is explicit, not cosmetic: it pins the dependency check to Airflow's
+    `PrevDagrunDep.get_previous_dagrun` branch on *both* families. The 2.x family defaults
+    `catchup_by_default` to `True`, which takes the other branch
+    (`get_previous_scheduled_dagrun`) and, since every `dag_maker`-created run is a manual
+    run, never sees day one's run at all -- silently passing this test for the wrong reason.
+    """
+
+    with dag_maker(dag_id="ingest_backfill", catchup=False):
 
         @task(depends_on_past=True)
         def extract() -> dict[str, Any]:
@@ -152,12 +162,7 @@ def test_ingest_second_run_waits_on_the_first_days_extract(dag_maker: DagMaker) 
 
     assert blocked.state is None
 
-    rescued = dag_maker.run_ti(
-        "extract",
-        day_two_run,
-        ignore_depends_on_past=True,
-        ignore_ti_state=True,
-    )
+    rescued = dag_maker.run_ti("extract", day_two_run, ignore_depends_on_past=True)
 
     assert rescued.state == TaskInstanceState.SUCCESS
     assert rescued.xcom_pull(task_ids="extract", session=dag_maker.session) == {"rows": 1}

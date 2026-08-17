@@ -4,11 +4,13 @@
 
 The common Dag-testing workflow is two-stage: a dagbag import test, then a unit test that
 pulls a Dag from a dagbag fixture and calls `task_name.function` directly. That proves "the
-Dag parses" and "the callable works" -- and nothing in between. The four recipes below run one
-realistic multi-task `ingest` Dag through `dag_maker` and show, one seam at a time, what the
-two-stage workflow cannot reach: task relations, cross-Dag asset triggering, DagRun-to-DagRun
-relations, and retry behavior. Every recipe is backed by a real, passing test in
-`tests/enduser/test_cookbook_ingest.py` or `test_cookbook_digest.py`.
+Dag parses" and "the callable works" -- and nothing in between. The four recipes below center
+on one realistic multi-task `ingest` Dag and show, one seam at a time, what the two-stage
+workflow cannot reach: task relations, cross-Dag asset triggering, DagRun-to-DagRun relations,
+and retry behavior (the last of these also reaches for the DB-free `run_task` fixture, on a
+throwaway single-task Dag, to test attempt-dependent logic without a real retry). Every recipe
+is backed by a real, passing test in `tests/enduser/test_cookbook_ingest.py` or
+`test_cookbook_digest.py`.
 
 ### Task relations: trigger rules, branching, and cross-task xcom
 
@@ -75,11 +77,12 @@ with no argument when you only care that it ran.
 
 ### Cross-Dag relations: asset-triggered downstream Dags
 
-`notify`'s outlet asset (`asset://warehouse/ingest-report`) pairs with a second, minimal
-`digest` Dag scheduled on that asset. `full_dag_bag` can already prove a consumer's *schedule*
-is wired to the right asset (see
+A minimal producer Dag -- an `ingest`-shaped `notify` step that emits an outlet asset
+(`asset://warehouse/ingest-report`) instead of just returning a string -- pairs with a second,
+minimal `digest` Dag scheduled on that asset. `full_dag_bag` can already prove a consumer's
+*schedule* is wired to the right asset (see
 [Assets: outlet/consumer testing](#assets-outletconsumer-testing) below), but neither that check
-nor a callable test ever sees a real `AssetEvent` or the data it carries. Run `ingest` for
+nor a callable test ever sees a real `AssetEvent` or the data it carries. Run the producer for
 real, hand its `AssetEvent` to a `digest` DagRun the way the scheduler would, and let `digest`'s
 task read it back through the genuine `triggering_asset_events` runtime context:
 
@@ -148,7 +151,10 @@ against the actual triggering event rather than a fabricated one.
 `dag_maker.create_dagrun(logical_date=...)` runs stand in for a backfill: day two's `extract`
 never even starts (`ti.state is None`, not a failure) until day one's has succeeded, and
 `ignore_depends_on_past=True` on `run_ti` rescues it -- the same escape hatch a real backfill
-replay needs:
+replay needs. `catchup=False` is not cosmetic: Airflow's dependency check takes a different
+code path depending on it, and the 2.x family defaults `catchup_by_default` to `True` --
+without it, the check silently never sees day one's run at all, since `dag_maker` runs are
+always manual runs:
 
 ```python
 from datetime import datetime, timezone
@@ -159,7 +165,7 @@ from airflow.utils.state import TaskInstanceState
 
 
 def test_ingest_second_run_waits_on_the_first_days_extract(dag_maker) -> None:
-    with dag_maker(dag_id="ingest_backfill"):
+    with dag_maker(dag_id="ingest_backfill", catchup=False):
 
         @task(depends_on_past=True)
         def extract() -> dict[str, Any]:
@@ -176,12 +182,7 @@ def test_ingest_second_run_waits_on_the_first_days_extract(dag_maker) -> None:
 
     assert blocked.state is None
 
-    rescued = dag_maker.run_ti(
-        "extract",
-        day_two_run,
-        ignore_depends_on_past=True,
-        ignore_ti_state=True,
-    )
+    rescued = dag_maker.run_ti("extract", day_two_run, ignore_depends_on_past=True)
 
     assert rescued.state == TaskInstanceState.SUCCESS
 ```
