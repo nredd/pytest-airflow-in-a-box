@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import ParamsCaseError, build_dag_bag, validate_dag_params
+from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -132,7 +133,7 @@ class DagImportItem(pytest.Item):
             DagFileImportError: The file failed to import or defines no Dags.
         """
 
-        dag_bag = build_dag_bag(self.path)
+        dag_bag = build_dag_bag(self.path, comms=parse_time_comms(self.config))
         errors = {str(path): str(message) for path, message in dag_bag.import_errors.items()}
         if errors:
             raise DagFileImportError(errors)
@@ -255,7 +256,7 @@ class DagParamsCaseItem(pytest.Item):
                 a Dag's param schema rejects the pinned values.
         """
 
-        dag_bag = build_dag_bag(self.path)
+        dag_bag = build_dag_bag(self.path, comms=parse_time_comms(self.config))
         errors = {str(path): str(message) for path, message in dag_bag.import_errors.items()}
         if errors:
             raise DagFileImportError(errors)

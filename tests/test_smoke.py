@@ -66,10 +66,15 @@ def _config(
         "airflow_serialization_sample_size": sample_size,
         "airflow_serialization_sample_seed": sample_seed,
         "airflow_pools": list(pools) if isinstance(pools, (list, tuple)) else pools,
+        # Parse-time secrets resolution has its own end-to-end coverage in
+        # `tests/enduser/test_parse_time_secrets.py`; the corpus builder is under test
+        # here, so the shim stays out of the way.
+        "airflow_parse_secrets": "off",
     }
     option_values = {
         "airflow_smoke": airflow_smoke,
         "airflow_smoke_update": airflow_smoke_update,
+        "airflow_parse_secrets": None,
     }
     return SimpleNamespace(
         getoption=lambda name: option_values[name],
@@ -1604,7 +1609,7 @@ def test_smoke_corpus_build_extracts_portable_data(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw2")
     monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
-    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder: dag_bag)
+    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
     monkeypatch.setattr(
         smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=serialize)
     )
@@ -1668,7 +1673,7 @@ def test_smoke_corpus_does_not_pin_dag_bag_when_full_dag_bag_never_ran(
     monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "master")
     monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
-    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder: dag_bag)
+    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",

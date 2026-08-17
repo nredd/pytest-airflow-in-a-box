@@ -42,6 +42,7 @@ from pytest_airflow_in_a_box.doctor import render_doctor_report
 from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
     airflow_connections,
+    airflow_parse_secrets,
     airflow_variables,
     api_base_url,
     api_client,
@@ -75,6 +76,7 @@ if TYPE_CHECKING:
 
 __all__ = (
     "airflow_connections",
+    "airflow_parse_secrets",
     "airflow_variables",
     "api_base_url",
     "api_client",
@@ -155,6 +157,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "airflow_collect_dags_folder",
         "Directory whose Dag files are collected as import-check test items.",
         default="",
+    )
+    group.addoption(
+        "--airflow-parse-secrets",
+        action="store",
+        default=None,
+        dest="airflow_parse_secrets",
+        choices=("metastore", "off"),
+        metavar="POLICY",
+        help="Resolve top-level Dag Variable and Connection lookups during a parse.",
+    )
+    parser.addini(
+        "airflow_parse_secrets",
+        "Parse-time Variable and Connection resolution: `metastore` or `off`.",
+        default="metastore",
     )
     parser.addini(
         "airflow_environments",

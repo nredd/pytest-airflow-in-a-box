@@ -152,6 +152,19 @@ class TimezoneLocation(str, Enum):
     SDK = "airflow.sdk.timezone"
 
 
+class SecretsResolution(str, Enum):
+    """Closed set of certified Variable and Connection resolution endpoints.
+
+    Names how a lookup reaches storage when no supervisor process is running, which is
+    the situation every Dag parse under test is in. 2.x reads the metastore backend
+    directly; 3.x routes through the Task SDK's supervisor endpoint, which is why
+    `_compat.parse_time` has to install one.
+    """
+
+    METASTORE = "airflow.secrets.metastore.MetastoreBackend"
+    SUPERVISOR_COMMS = "airflow.sdk.execution_time.task_runner.SUPERVISOR_COMMS"
+
+
 @dataclass(frozen=True)
 class AirflowCapabilities:
     """Immutable metadata describing a validated Airflow private interface.
@@ -174,6 +187,8 @@ class AirflowCapabilities:
         api_surface: ApiSurface naming the REST API server entry point.
         params_location: ParamsLocation naming the params-validation module.
         timezone_location: TimezoneLocation naming the timezone-helper module.
+        secrets_resolution: SecretsResolution naming how a supervisor-free Variable or
+            Connection lookup reaches storage.
         max_python: tuple[int, int] | None containing the highest CPython `(major,
             minor)` this release supports; None on 3.x, whose `requires-python` bounds
             the installer actually enforces.
@@ -196,6 +211,7 @@ class AirflowCapabilities:
     api_surface: ApiSurface
     params_location: ParamsLocation
     timezone_location: TimezoneLocation
+    secrets_resolution: SecretsResolution
     max_python: tuple[int, int] | None
     dag_requires_start_date: bool
 
@@ -267,6 +283,7 @@ def _certify_v3(
         api_surface=ApiSurface.API_SERVER,
         params_location=ParamsLocation.SDK,
         timezone_location=TimezoneLocation.SDK,
+        secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
         max_python=None,
         dag_requires_start_date=False,
     )
@@ -306,6 +323,7 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         api_surface=ApiSurface.WEBSERVER,
         params_location=ParamsLocation.MODELS,
         timezone_location=TimezoneLocation.UTILS,
+        secrets_resolution=SecretsResolution.METASTORE,
         max_python=V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(AirflowFamily.V2, release),
     )
@@ -415,6 +433,14 @@ _V3_REQUIRED_SYMBOLS = (
     ("airflow.sdk.execution_time.comms", "BundleInfo"),
     ("airflow.sdk.execution_time.comms", "ToSupervisor"),
     ("airflow.sdk.execution_time.xcom", "XCom"),
+    # The two private lookups that route a supervisor-free Variable or Connection read
+    # through `SUPERVISOR_COMMS`, plus the cache sitting in front of them. This is the
+    # exact surface `_compat.parse_time` shims, and apache/airflow#61630 announces it is
+    # about to move to a lazy-init `InProcessExecutionAPI`; requiring the symbols turns
+    # that move into a loud compatibility failure rather than a silent no-op shim.
+    ("airflow.sdk.execution_time.context", "_get_variable"),
+    ("airflow.sdk.execution_time.context", "_get_connection"),
+    ("airflow.sdk.execution_time.cache", "SecretCache"),
     ("airflow.sdk.api.datamodels._generated", "DagRun"),
     ("airflow.sdk.api.datamodels._generated", "DagRunState"),
     ("airflow.sdk.api.datamodels._generated", "TaskInstanceState"),
@@ -990,7 +1016,8 @@ def _verify_contract(
     serialized-Dag location) are real runtime observations that can contradict the
     certified row. The family-derived fields (`family`, `has_task_sdk`,
     `uses_structlog`, `has_dag_versioning`, `dagrun_interface`, `api_surface`,
-    `params_location`, `timezone_location`) are computed from the same family on both
+    `params_location`, `timezone_location`, `secrets_resolution`) are computed from the
+    same family on both
     sides, so their comparison is a self-consistency guard, not a probe. `max_python`
     and `dag_requires_start_date` are release-derived rather than family-derived, but
     both sides read them from the same declaration (`V2_MAX_PYTHON_BY_RELEASE` and
@@ -1100,6 +1127,9 @@ def _resolve_uncached(
         api_surface=ApiSurface.API_SERVER if is_v3 else ApiSurface.WEBSERVER,
         params_location=ParamsLocation.SDK if is_v3 else ParamsLocation.MODELS,
         timezone_location=TimezoneLocation.SDK if is_v3 else TimezoneLocation.UTILS,
+        secrets_resolution=(
+            SecretsResolution.SUPERVISOR_COMMS if is_v3 else SecretsResolution.METASTORE
+        ),
         max_python=None if is_v3 else V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(family, release),
     )
@@ -1146,6 +1176,7 @@ __all__ = (
     "DagBagLocation",
     "DagRunInterface",
     "ParamsLocation",
+    "SecretsResolution",
     "TaskInstanceRunner",
     "TimezoneLocation",
     "installed_family",

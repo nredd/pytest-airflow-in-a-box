@@ -60,7 +60,9 @@ class FakeSupervisorComms:
         Unseeded Variable and Connection requests are answered with the same
         not-found ``ErrorResponse`` a real supervisor produces, so tasks fail
         exactly as they would against a live deployment; the seeding hint
-        travels in the response ``detail``.
+        travels in the response ``detail``. Those two lookups delegate to
+        ``_lookup_variable`` / ``_lookup_connection`` so a subclass can answer
+        them from another store without re-deriving the response shaping.
 
         Parameters:
             msg: Any containing one Task SDK supervisor message.
@@ -98,31 +100,78 @@ class FakeSupervisorComms:
         if name == "GetXComCount":
             return XComCountResponse(len=int(msg.key in self.xcoms))
         if name == "GetVariable":
-            if msg.key not in self.variables:
+            value = self._lookup_variable(msg.key)
+            if value is None:
                 return ErrorResponse(
                     error=ErrorType.VARIABLE_NOT_FOUND,
-                    detail={
-                        "hint": f"Seed it via `run_task(..., variables={{{msg.key!r}: ...}})`"
-                    },
+                    detail={"hint": self._variable_hint(msg.key)},
                 )
-            return VariableResult(key=msg.key, value=self.variables[msg.key])
+            return VariableResult(key=msg.key, value=value)
         if name == "GetConnection":
-            if msg.conn_id not in self.connections:
+            fields = self._lookup_connection(msg.conn_id)
+            if fields is None:
                 return ErrorResponse(
                     error=ErrorType.CONNECTION_NOT_FOUND,
-                    detail={
-                        "hint": (
-                            f"Seed it via `run_task(..., connections="
-                            f"{{{msg.conn_id!r}: {{'conn_type': ...}}}})`"
-                        )
-                    },
+                    detail={"hint": self._connection_hint(msg.conn_id)},
                 )
-            fields = self.connections[msg.conn_id]
             payload = {"conn_type": "generic", **fields, "conn_id": msg.conn_id}
             return ConnectionResult.model_validate(_fill_declared_nones(ConnectionResult, payload))
         if name == "ValidateInletsAndOutlets":
             return InactiveAssetsResult(inactive_assets=[])
         return None
+
+    def _lookup_variable(self, key: str) -> str | None:
+        """Resolve one Variable value, or report it absent.
+
+        Subclasses override this to answer from a different store; `send` owns the
+        response shaping either way. A Variable value is always a string, so `None`
+        unambiguously means absent.
+
+        Parameters:
+            key: str naming the requested Variable.
+
+        Returns:
+            str | None containing the seeded value, or None when it is unseeded.
+        """
+
+        return self.variables.get(key)
+
+    def _lookup_connection(self, conn_id: str) -> dict[str, Any] | None:
+        """Resolve one Connection's fields, or report it absent.
+
+        Parameters:
+            conn_id: str naming the requested Connection.
+
+        Returns:
+            dict[str, Any] | None containing the seeded fields, or None when it is
+            unseeded.
+        """
+
+        return self.connections.get(conn_id)
+
+    def _variable_hint(self, key: str) -> str:
+        """Build the seeding hint carried by an unseeded Variable response.
+
+        Parameters:
+            key: str naming the requested Variable.
+
+        Returns:
+            str containing the actionable seeding hint.
+        """
+
+        return f"Seed it via `run_task(..., variables={{{key!r}: ...}})`"
+
+    def _connection_hint(self, conn_id: str) -> str:
+        """Build the seeding hint carried by an unseeded Connection response.
+
+        Parameters:
+            conn_id: str naming the requested Connection.
+
+        Returns:
+            str containing the actionable seeding hint.
+        """
+
+        return f"Seed it via `run_task(..., connections={{{conn_id!r}: {{'conn_type': ...}}}})`"
 
 
 @dataclass(frozen=True)

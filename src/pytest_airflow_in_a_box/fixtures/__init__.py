@@ -10,13 +10,18 @@ from pytest_airflow_in_a_box.fixtures.api import api_base_url, api_client, api_s
 from pytest_airflow_in_a_box.fixtures.dag import dag_maker
 from pytest_airflow_in_a_box.fixtures.dagbag import full_dag_bag
 from pytest_airflow_in_a_box.fixtures.logging import cap_structlog
-from pytest_airflow_in_a_box.fixtures.seed import airflow_connections, airflow_variables
+from pytest_airflow_in_a_box.fixtures.seed import (
+    airflow_connections,
+    airflow_parse_secrets,
+    airflow_variables,
+)
 from pytest_airflow_in_a_box.fixtures.session import session
 from pytest_airflow_in_a_box.fixtures.taskrun import run_task
 
 DATABASE_FIXTURE_NAMES = frozenset(
     {
         "airflow_connections",
+        "airflow_parse_secrets",
         "airflow_variables",
         "api_client",
         "api_server_url",
@@ -28,6 +33,7 @@ DATABASE_FIXTURE_NAMES = frozenset(
 
 __all__ = (
     "airflow_connections",
+    "airflow_parse_secrets",
     "airflow_variables",
     "api_base_url",
     "api_client",

@@ -37,6 +37,7 @@ from pytest_airflow_in_a_box._compat import build_dag_bag
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.fixtures.dagbag import LIVE_DAG_BAG_KEY, _dag_folder
+from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -600,7 +601,7 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
     dag_bag = (
         session.stash[LIVE_DAG_BAG_KEY]
         if LIVE_DAG_BAG_KEY in session.stash
-        else build_dag_bag(_dag_folder(config))
+        else build_dag_bag(_dag_folder(config), comms=parse_time_comms(config))
     )
     serializer = _get_dag_serializer()
     sample_size = _serialization_sample_size(config)
