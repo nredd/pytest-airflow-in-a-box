@@ -124,11 +124,14 @@ def test_full_dag_bag_resolves_top_level_lookups(pytester: pytest.Pytester) -> N
     result.assert_outcomes(passed=1)
 
 
+@pytest.mark.requires_airflow3
 def test_opting_out_reproduces_the_unshimmed_failure(pytester: pytest.Pytester) -> None:
     """Leave Airflow's own resolution in place under `--airflow-parse-secrets=off`.
 
     This is the regression canary for the day upstream lands its own fix: the parse
     fails here for as long as a supervisor-free Airflow 3 cannot resolve a seeded row.
+    Airflow 2.x resolves top-level lookups from the metastore with no shim, so there is
+    no unshimmed failure to reproduce there.
 
     Parameters:
         pytester: pytest.Pytester running the nested session.
