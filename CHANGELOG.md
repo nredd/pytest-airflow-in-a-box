@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- `airflow_smoke_disable` ini option to persistently drop any bundled smoke item from the
+  catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
+  entirely while building the corpus
+  ([#162](https://github.com/nredd/pytest-airflow-in-a-box/issues/162)).
 - A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
   garbage-collector race that can exit a session non-zero despite an all-passed summary, why this
   plugin's `tmp_path_retention_policy = "failed"` default makes it likelier than a bare pytest
@@ -24,6 +28,20 @@ All notable changes to this project will be documented in this file. The format 
   DagRun sequences, and retry behavior (`up_for_retry`, `try_number`) that a dagbag-import-plus
   callable test cannot reach. Linked from README's `Why not...` section
   ([#165](https://github.com/nredd/pytest-airflow-in-a-box/issues/165)).
+
+### Fixed
+
+- The bundled smoke catalog no longer parses the Dag folder a second time, in parallel,
+  when a `full_dag_bag` consumer lands on a different `pytest-xdist` worker under
+  `--dist loadgroup`. When both are present in the run and would survive an active `-m`
+  expression, the plugin now puts the catalog and one `full_dag_bag` consumer into a
+  shared `xdist_group`, forcing `--dist loadgroup` to schedule them onto the same worker
+  so the existing process-local `DagBag` cache has a chance to be reused instead of two
+  workers each paying a full parse concurrently. An item that already carries its own
+  explicit `xdist_group` is left untouched, and only one consumer is ever grouped, so a
+  suite with many `full_dag_bag` consumers does not have all of their execution
+  serialized onto a single worker just to save one parse
+  ([#163](https://github.com/nredd/pytest-airflow-in-a-box/issues/163)).
 
 ## [0.7.2] - 2026-08-15
 
