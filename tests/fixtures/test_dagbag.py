@@ -245,9 +245,13 @@ def _fake_config(
         types.SimpleNamespace shaped like the configuration surface under test.
     """
 
-    option_values = {"dag_folder": None, "airflow_smoke": None}
+    option_values = {"dag_folder": None, "airflow_smoke": None, "airflow_parse_secrets": None}
     ini_values = {
         "airflow_dags_folder": "",
+        # Parse-time secrets resolution is exercised end to end in
+        # `tests/enduser/test_parse_time_secrets.py`; these unit tests are about caching
+        # and the parse timeout, so the shim stays out of their way.
+        "airflow_parse_secrets": "off",
         "airflow_smoke": airflow_smoke,
         "airflow_dag_parse_timeout": parse_timeout,
     }
@@ -279,7 +283,7 @@ def test_cached_dag_bag_builds_once_per_session(
     monkeypatch.setattr(
         fixtures_dagbag,
         "build_dag_bag",
-        lambda folder: (builds.append(folder), sentinel)[1],
+        lambda folder, **_kwargs: (builds.append(folder), sentinel)[1],
     )
     session: Any = SimpleNamespace(stash=pytest.Stash())
 
@@ -313,7 +317,7 @@ def test_cached_dag_bag_never_touches_the_database(
         "get_bootstrap_state",
         lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
     )
-    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder, **_kwargs: sentinel)
     session: Any = SimpleNamespace(stash=pytest.Stash())
 
     result = fixtures_dagbag._cached_dag_bag(session, config)
@@ -334,7 +338,7 @@ def test_cached_dag_bag_ignores_parse_timeout_when_smoke_disabled(
         "get_bootstrap_state",
         lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
     )
-    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder, **_kwargs: sentinel)
     session: Any = SimpleNamespace(stash=pytest.Stash())
 
     result = fixtures_dagbag._cached_dag_bag(session, config)
@@ -362,7 +366,7 @@ def test_cached_dag_bag_applies_parse_timeout_when_smoke_enabled(
         "get_bootstrap_state",
         lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
     )
-    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder, **_kwargs: sentinel)
     monkeypatch.setattr(
         fixtures_dagbag, "record_secrets_lookups", _fake_recorder([lookup, lookup])
     )
@@ -398,7 +402,7 @@ def test_cached_dag_bag_ignores_parse_timeout_when_smoke_out_of_scope(
         "get_bootstrap_state",
         lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
     )
-    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder: sentinel)
+    monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder, **_kwargs: sentinel)
     session: Any = SimpleNamespace(stash=pytest.Stash())
 
     result = fixtures_dagbag._cached_dag_bag(session, config)

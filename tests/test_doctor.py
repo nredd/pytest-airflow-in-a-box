@@ -17,6 +17,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     DagBagLocation,
     DagRunInterface,
     ParamsLocation,
+    SecretsResolution,
     TaskInstanceRunner,
     TimezoneLocation,
 )
@@ -39,6 +40,7 @@ CAPABILITIES = AirflowCapabilities(
     api_surface=ApiSurface.API_SERVER,
     params_location=ParamsLocation.SDK,
     timezone_location=TimezoneLocation.SDK,
+    secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
     max_python=None,
     dag_requires_start_date=False,
 )

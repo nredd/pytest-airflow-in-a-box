@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import ensure_database
+from pytest_airflow_in_a_box._compat.parse_time import parse_time_supervision
 from pytest_airflow_in_a_box._compat.seed import (
     SeedRecord,
     cleanup_seeds,
@@ -28,6 +29,7 @@ from pytest_airflow_in_a_box._compat.seed import (
     validate_variables,
 )
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
+from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box.types import AirflowConnections, AirflowVariables
@@ -129,4 +131,28 @@ def airflow_connections(pytestconfig: pytest.Config) -> Iterator[AirflowConnecti
         cleanup_seeds(record)
 
 
-__all__ = ("airflow_connections", "airflow_variables")
+@pytest.fixture
+def airflow_parse_secrets(pytestconfig: pytest.Config) -> Iterator[None]:
+    """Resolve top-level Variable and Connection lookups for the whole test.
+
+    Every Dag parse site installs this shim itself, so this fixture is for the lookups
+    that run outside one: inside a `with dag_maker(...)` block, or in the test body.
+    Seed first and request the fixture second -- a batch committed while the fixture is
+    active is visible immediately, because the shim reads the metadata database per
+    lookup rather than snapshotting it up front.
+
+    A no-op on Airflow 2.x, which resolves both from the metastore with no shim, and
+    under `--airflow-parse-secrets=off`.
+
+    Parameters:
+        pytestconfig: pytest.Config carrying plugin options and bootstrap state.
+
+    Yields:
+        None, with parse-time resolution installed for the duration of the test.
+    """
+
+    with parse_time_supervision(parse_time_comms(pytestconfig)):
+        yield
+
+
+__all__ = ("airflow_connections", "airflow_parse_secrets", "airflow_variables")

@@ -326,7 +326,7 @@ def test_foreign_runtest_errors_keep_standard_reporting(pytester: pytest.Pyteste
         import pytest_airflow_in_a_box.collection as collection
 
 
-        def _explode(path):
+        def _explode(path, *, comms=None):
             raise RuntimeError("unexpected parser failure")
 
 

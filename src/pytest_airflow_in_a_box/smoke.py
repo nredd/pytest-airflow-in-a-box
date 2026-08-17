@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import build_dag_bag
+from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
 from pytest_airflow_in_a_box._compat.introspection import (
     SecretsLookup,
@@ -53,6 +53,7 @@ from pytest_airflow_in_a_box.fixtures.dagbag import (
     LIVE_DAG_BAG_LOOKUPS_KEY,
     _dag_folder,
 )
+from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -856,8 +857,17 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         # survives only for a bag parsed outside that path.
         runtime_lookups = session.stash.get(LIVE_DAG_BAG_LOOKUPS_KEY, None)
     else:
+        comms = parse_time_comms(config)
+        if comms is not None:
+            # Several smoke items are deliberately not `db_test`, so nothing has
+            # initialized the database by the time they run. A Dag with a top-level
+            # Variable or Connection lookup would otherwise charge the whole one-time
+            # migration to this item's parse timeout, which budgets for parsing and
+            # serialization alone. `--airflow-parse-secrets=off` keeps the build
+            # database-free.
+            ensure_database(get_bootstrap_state(config).root)
         with record_secrets_lookups(_dag_folder(config)) as recorded:
-            dag_bag = build_dag_bag(_dag_folder(config))
+            dag_bag = build_dag_bag(_dag_folder(config), comms=comms)
         runtime_lookups = tuple(dict.fromkeys(recorded))
     serializer: Any | None = None
     selected = _select_serialization_sample(config, dag_bag.dags)
