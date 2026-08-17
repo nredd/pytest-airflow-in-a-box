@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- A DB-free `render_task` fixture (and matching `_compat.render_task_in_process`) rendering
+  one operator's `template_fields` through the Task SDK's public `render_template_fields`,
+  plus a `rendered(...)` matcher for one-expression assertions -- the documented replacement
+  for `TaskInstance.render_templates()`, which Airflow 3.2+ removed
+  ([#118](https://github.com/nredd/pytest-airflow-in-a-box/issues/118)).
 - `airflow_smoke_disable` ini option to persistently drop any bundled smoke item from the
   catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
   entirely while building the corpus
