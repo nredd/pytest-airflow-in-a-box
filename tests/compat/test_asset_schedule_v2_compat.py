@@ -69,6 +69,15 @@ class FakeDagScheduleDatasetReference(_Base):
     dataset_id = Column(Integer, ForeignKey("fake_dataset.id"), primary_key=True)
 
 
+class FakeDagScheduleDatasetAliasReference(_Base):
+    """Stand in for `airflow.models.dataset.DagScheduleDatasetAliasReference`."""
+
+    __tablename__ = "fake_dag_schedule_dataset_alias_reference"
+
+    dag_id = Column(String, primary_key=True)
+    alias_id = Column(Integer, primary_key=True)
+
+
 class FakeDatasetTriggeredTimetable:
     """Stand in for `airflow.timetables.simple.DatasetTriggeredTimetable`."""
 
@@ -88,6 +97,7 @@ def fake_dataset_module(monkeypatch: pytest.MonkeyPatch) -> Any:
         DatasetDagRunQueue=FakeDatasetDagRunQueue,
         DatasetEvent=FakeDatasetEvent,
         DagScheduleDatasetReference=FakeDagScheduleDatasetReference,
+        DagScheduleDatasetAliasReference=FakeDagScheduleDatasetAliasReference,
     )
     monkeypatch.setitem(sys.modules, "airflow.models.dataset", fake_module)
     return fake_module
@@ -198,6 +208,21 @@ def test_pending_v2_dag_ids_lists_distinct_target_dag_ids(in_memory_session: Any
     assert schedule_module._pending_v2_dag_ids(in_memory_session) == ("a", "b")
 
 
+def test_evaluate_v2_dag_rejects_a_release_below_2_10(
+    monkeypatch: pytest.MonkeyPatch, in_memory_session: Any
+) -> None:
+    """Reject a certified 2.x release older than the `dataset_condition` boundary."""
+
+    monkeypatch.setattr(
+        schedule_module,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V2, release=(2, 9, 3)),
+    )
+
+    with pytest.raises(ValueError, match=r"requires Airflow '2\.10\.0' or newer"):
+        schedule_module._evaluate_v2_dag("consumer", in_memory_session)
+
+
 @pytest.mark.usefixtures(
     "fake_dataset_module", "fake_dataset_triggered_timetable", "fake_dataset_triggered_run_type"
 )
@@ -213,6 +238,23 @@ def test_evaluate_v2_dag_rejects_a_dag_not_scheduled_by_a_dataset(
     )
 
     with pytest.raises(ValueError, match="is not scheduled by a `Dataset`"):
+        schedule_module._evaluate_v2_dag("consumer", in_memory_session)
+
+
+@pytest.mark.usefixtures(
+    "fake_dataset_module", "fake_dataset_triggered_timetable", "fake_dataset_triggered_run_type"
+)
+def test_evaluate_v2_dag_rejects_a_dataset_alias_consumer(
+    monkeypatch: pytest.MonkeyPatch, in_memory_session: Any
+) -> None:
+    """Reject a Dag scheduled through a `DatasetAlias` rather than a bare Dataset."""
+
+    dag = _fake_dag(timetable_cls=FakeDatasetTriggeredTimetable, condition_result=True, created={})
+    monkeypatch.setattr(schedule_module, "_resolve_scheduler_dag", lambda *_args: dag)
+    in_memory_session.add(FakeDagScheduleDatasetAliasReference(dag_id="consumer", alias_id=1))
+    in_memory_session.flush()
+
+    with pytest.raises(ValueError, match="is scheduled through a `DatasetAlias`"):
         schedule_module._evaluate_v2_dag("consumer", in_memory_session)
 
 
