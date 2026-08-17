@@ -52,6 +52,10 @@ from pytest_airflow_in_a_box.fixtures import (
     run_task,
     session,
 )
+from pytest_airflow_in_a_box.fixtures.dagbag import (
+    FULL_DAG_BAG_FIXTURE_NAME,
+    FULL_DAG_BAG_XDIST_GROUP,
+)
 from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
@@ -436,9 +440,11 @@ def pytest_collection_modifyitems(
 ) -> None:
     """Drop duplicate Dag-file items, append the smoke catalog, then apply the baseline.
 
-    `baseline.apply_selection_and_xfail` runs last, at effectively normal priority
-    relative to the deduplication and smoke-item injection above it: it must see the
-    final collected item list, not an intermediate one.
+    `baseline.apply_selection_and_xfail` and the xdist co-location step run last: both
+    must see the final collected item list, not an intermediate one, and co-location
+    also needs the baseline's own deselection (`--airflow-baseline-select`) already
+    applied so it does not group the catalog with a consumer that baseline just
+    dropped.
 
     Parameters:
         session: pytest.Session that owns the synthetic smoke collector.
@@ -447,8 +453,148 @@ def pytest_collection_modifyitems(
     """
 
     prune_duplicate_items(config, items)
+    smoke_start = len(items)
     collect_smoke_items(session, config, items)
+    # `collect_smoke_items` only ever appends (`items.extend(...)`), so the smoke
+    # catalog is exactly this tail slice -- captured by id here, before
+    # `apply_selection_and_xfail` can deselect some of it, and re-filtered against the
+    # post-deselection `items` below so a deselected smoke item is not still treated as
+    # live when co-location decides whether the catalog needs a worker to share.
+    smoke_ids = {id(item) for item in items[smoke_start:]}
     baseline.apply_selection_and_xfail(session, config, items)
+    smoke_items = [item for item in items if id(item) in smoke_ids]
+    _colocate_smoke_catalog_with_full_dag_bag(items, smoke_items, config)
+
+
+def _requires_full_dag_bag(item: pytest.Item) -> bool:
+    """Report whether one collected test consumes the `full_dag_bag` fixture.
+
+    Parameters:
+        item: pytest.Item inspected for `full_dag_bag` fixture usage.
+
+    Returns:
+        bool reporting whether the item requires `full_dag_bag`.
+    """
+
+    fixturenames: tuple[str, ...] = tuple(getattr(item, "fixturenames", ()))
+    return FULL_DAG_BAG_FIXTURE_NAME in fixturenames
+
+
+def _survives_markexpr(item: pytest.Item, config: pytest.Config) -> bool:
+    """Predict whether an active `-m` expression would keep one item selected.
+
+    `_pytest.mark`'s own deselection hook is normal priority, so it has not run yet by
+    the time this plugin's `tryfirst` collection hook decides xdist co-location --
+    unlike `--airflow-baseline-select`, which this plugin applies itself earlier in the
+    same hook. Predicting the `-m` result here avoids grouping the smoke catalog with a
+    `full_dag_bag` consumer that `-m` is about to drop from the run anyway, wasting the
+    catalog's own cross-worker distribution for no reuse benefit. Mirrors
+    `smoke.py::_markexpr_wants_smoke`'s use of the same private, version-coupled
+    symbol, deferred and exception-guarded the same way and for the same reason: an
+    unparsable or unsupported expression is handled again, correctly, by pytest's own
+    `-m` handling right after this hook returns, so failing open here is safe. `-k`
+    keyword deselection is not predicted, matching `_markexpr_wants_smoke`'s own
+    documented scope -- it runs later regardless, and replicating `KeywordMatcher`'s
+    broader name-matching (item, parents, `extra_keyword_matches`) is not worth the
+    extra private-API surface for this one heuristic.
+
+    Parameters:
+        item: pytest.Item to test against the active `-m` expression.
+        config: pytest.Config containing the parsed `-m` option.
+
+    Returns:
+        bool reporting whether the item would likely survive `-m` deselection.
+    """
+
+    markexpr: str = config.option.markexpr
+    if not markexpr:
+        return True
+    try:
+        # Local import: deferred so a future pytest release relocating this private,
+        # version-coupled symbol can't break collection for every plugin user -- only a
+        # run that already passed `-m` ever reaches this branch.
+        from _pytest.mark.expression import Expression
+
+        mark_names = {mark.name for mark in item.iter_markers()}
+        expression = Expression.compile(markexpr)
+        return expression.evaluate(lambda name, /, **kwargs: name in mark_names and not kwargs)
+    except Exception:
+        return True
+
+
+def _colocate_smoke_catalog_with_full_dag_bag(
+    items: list[pytest.Item], smoke_items: list[pytest.Item], config: pytest.Config
+) -> None:
+    """Force the smoke catalog onto one `full_dag_bag` consumer's xdist worker.
+
+    Under `--dist loadgroup`, an ungrouped smoke item can land on a different worker
+    than a `full_dag_bag` consumer. Since the process-local live-DagBag cache
+    (`fixtures/dagbag.py::LIVE_DAG_BAG_KEY`) only helps when both share a worker, that
+    split causes the Dag folder to be parsed twice, in parallel. Grouping with a single
+    consumer is enough to fix that: it guarantees the catalog's worker already has a
+    cached `DagBag` to reuse, without forcing every other `full_dag_bag` consumer onto
+    that same worker too -- which, for a suite with many such consumers, would trade
+    one avoided parse for serializing all of their execution onto a single worker.
+
+    An item that already carries its own explicit `xdist_group` (documented for
+    seed-collision avoidance in `_compat/seed.py`) is never chosen or overwritten. Only
+    applied when `--dist=loadgroup` is actually in effect: an `xdist_group` marker is
+    inert under every other dist mode (including no xdist at all), and `xdist_group` is
+    registered as a known marker only when the `xdist` plugin is actually loaded
+    (`pytest_configure` in `xdist/plugin.py`), so adding it under `-p no:xdist` with
+    `--strict-markers` would abort the run with an unregistered-marker error instead of
+    a no-op.
+
+    Parameters:
+        items: list[pytest.Item] surviving collection, inspected for `full_dag_bag` use.
+        smoke_items: list[pytest.Item] containing the synthesized smoke catalog items.
+        config: pytest.Config used to detect `--dist=loadgroup` and predict `-m`.
+
+    Returns:
+        None. Mutates matching items in place by adding an `xdist_group` marker.
+    """
+
+    if not smoke_items or not _loadgroup_dist_active(config):
+        return
+    dag_bag_item = next(
+        (
+            item
+            for item in items
+            if _requires_full_dag_bag(item)
+            and item.get_closest_marker("xdist_group") is None
+            and _survives_markexpr(item, config)
+        ),
+        None,
+    )
+    if dag_bag_item is None:
+        return
+    for item in (*smoke_items, dag_bag_item):
+        item.add_marker(pytest.mark.xdist_group(name=FULL_DAG_BAG_XDIST_GROUP))
+
+
+def _loadgroup_dist_active(config: pytest.Config) -> bool:
+    """Report whether the effective run is distributing tests via `--dist=loadgroup`.
+
+    `config.getoption("dist")` alone is not reliable from inside this check: on a real
+    xdist worker, `xdist.remote.setup_config` resets `config.option.dist` back to
+    `"no"` (dist mode is a controller-only concept) after separately preserving the
+    original choice as the synthetic boolean `config.option.loadgroup`. The controller
+    (and a plain serial run) never gets that synthetic attribute, so its own
+    `dist` option is read directly instead.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+
+    Returns:
+        bool reporting whether `--dist=loadgroup` is in effect for this process.
+
+    References:
+        https://github.com/pytest-dev/pytest-xdist/blob/v3.8.0/src/xdist/remote.py#L391-L393
+    """
+
+    return config.getoption("dist", default="no") == "loadgroup" or bool(
+        config.getoption("loadgroup", default=False)
+    )
 
 
 def _requires_database(item: pytest.Item) -> bool:

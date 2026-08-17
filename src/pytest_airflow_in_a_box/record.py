@@ -208,6 +208,36 @@ def _read_gated(report: pytest.TestReport) -> bool:
     return False
 
 
+def _strip_xdist_group_suffix(nodeid: str) -> str:
+    """Undo the `@<group>` suffix `--dist loadgroup` appends to a grouped item's nodeid.
+
+    `xdist.remote.WorkerInteractor.pytest_collection_modifyitems` rewrites a worker's
+    own `item._nodeid` to `f"{nodeid}@{group}"` for every item carrying an
+    `xdist_group` mark, so `pytest_runtest_logreport` -- which fires later, against the
+    already-rewritten nodeid -- would otherwise key an accumulator on a value that
+    depends on `--dist loadgroup` having been in effect, corrupting nodeid-keyed
+    lookups against a `--airflow-record` artifact recorded under any other run mode.
+    Mirrors `xdist.scheduler.loadgroup.LoadGroupScheduling._split_scope`'s own '@'
+    detection so a parametrize ID that legitimately contains a literal '@' inside
+    `[...]` is not mistaken for the suffix.
+
+    Parameters:
+        nodeid: str containing one report's raw nodeid, possibly `--dist loadgroup`-
+            suffixed.
+
+    Returns:
+        str containing the nodeid with any xdist group suffix removed.
+
+    References:
+        https://github.com/pytest-dev/pytest-xdist/blob/v3.8.0/src/xdist/remote.py#L234-L254
+        https://github.com/pytest-dev/pytest-xdist/blob/v3.8.0/src/xdist/scheduler/loadgroup.py#L23-L47
+    """
+
+    if nodeid.rfind("@") > nodeid.rfind("]"):
+        return nodeid.rsplit("@", 1)[0]
+    return nodeid
+
+
 def _accumulate(accumulators: dict[str, _NodeAccumulator], report: pytest.TestReport) -> None:
     """Fold one phase report into its nodeid's accumulator.
 
@@ -216,7 +246,7 @@ def _accumulate(accumulators: dict[str, _NodeAccumulator], report: pytest.TestRe
         report: pytest.TestReport for one setup/call/teardown phase.
     """
 
-    node = accumulators.setdefault(report.nodeid, _NodeAccumulator())
+    node = accumulators.setdefault(_strip_xdist_group_suffix(report.nodeid), _NodeAccumulator())
     node.gated = node.gated or _read_gated(report)
     node.duration += report.duration
     if report.when == "setup":
@@ -303,8 +333,9 @@ def handle_logreport(report: pytest.TestReport) -> None:
     if report.when in ("setup", "call"):
         return
     # `teardown` normally, or the `_CRASH_WHEN` terminal sentinel; see `_accumulate`.
-    node = accumulators.pop(report.nodeid)
-    config.stash[_OUTCOMES_KEY][report.nodeid] = _finalize(node)
+    nodeid = _strip_xdist_group_suffix(report.nodeid)
+    node = accumulators.pop(nodeid)
+    config.stash[_OUTCOMES_KEY][nodeid] = _finalize(node)
 
 
 def live_outcomes(config: pytest.Config) -> dict[str, OutcomeEntry]:
