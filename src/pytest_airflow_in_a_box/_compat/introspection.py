@@ -17,7 +17,7 @@ References:
 from __future__ import annotations
 
 import logging
-import traceback
+import sys
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -143,41 +143,56 @@ def _lookup_key(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     return "<unknown>"
 
 
-def _caller_location(dag_folder: Path) -> tuple[str | None, int | None]:
+def _caller_location(folder: Path, cache: dict[str, str | None]) -> tuple[str | None, int | None]:
     """Attribute an intercepted call to the innermost stack frame under the Dag folder.
 
+    Walks the raw frame chain rather than ``traceback.extract_stack`` -- only file names
+    and line numbers are needed, so eagerly fetching source lines for every frame on
+    every intercepted call would be pure overhead during a large corpus parse.
+
     Parameters:
-        dag_folder: pathlib.Path containing the parsed Dag folder.
+        folder: pathlib.Path containing the parsed Dag folder, already resolved.
+        cache: dict[str, str | None] memoizing frame file names to their resolved path
+            under the folder, or ``None`` for files outside it.
 
     Returns:
         tuple[str | None, int | None] containing the resolved Dag file path and line, or
         ``(None, None)`` when no frame under the folder exists.
     """
 
-    folder = dag_folder.resolve()
-    for frame in reversed(traceback.extract_stack()):
-        try:
-            resolved = Path(frame.filename).resolve()
-            resolved.relative_to(folder)
-        except (OSError, ValueError):
-            continue
-        return str(resolved), frame.lineno
+    frame = sys._getframe(1)
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if filename not in cache:
+            try:
+                resolved = Path(filename).resolve()
+                resolved.relative_to(folder)
+            except (OSError, ValueError):
+                cache[filename] = None
+            else:
+                cache[filename] = str(resolved)
+        located = cache[filename]
+        if located is not None:
+            return located, frame.f_lineno
+        frame = frame.f_back
     return None, None
 
 
 def _recording_wrapper(
     kind: str,
     original: Callable[..., Any],
-    dag_folder: Path,
+    folder: Path,
     recorded: list[SecretsLookup],
+    cache: dict[str, str | None],
 ) -> Callable[..., Any]:
     """Build a pass-through wrapper that records each intercepted secrets call.
 
     Parameters:
         kind: str naming the lookup kind, ``variable`` or ``connection``.
         original: Callable[..., Any] containing the bound original entry point.
-        dag_folder: pathlib.Path containing the parsed Dag folder.
+        folder: pathlib.Path containing the parsed Dag folder, already resolved.
         recorded: list[SecretsLookup] mutated with one entry per intercepted call.
+        cache: dict[str, str | None] shared frame-file resolution memo.
 
     Returns:
         Callable[..., Any] recording the call, then delegating to the original.
@@ -194,7 +209,7 @@ def _recording_wrapper(
             Any containing the original entry point's result.
         """
 
-        file, line = _caller_location(dag_folder)
+        file, line = _caller_location(folder, cache)
         recorded.append(
             SecretsLookup(kind=kind, key=_lookup_key(args, kwargs), file=file, line=line)
         )
@@ -224,6 +239,8 @@ def record_secrets_lookups(dag_folder: Path) -> Iterator[list[SecretsLookup]]:
     recorded: list[SecretsLookup] = []
     patched: list[tuple[type, str, object]] = []
     seen: set[tuple[int, str]] = set()
+    folder = dag_folder.resolve()
+    cache: dict[str, str | None] = {}
     try:
         for kind, module_name, class_name, attribute in SECRETS_PATCH_TARGETS:
             target = _resolve_target(module_name, class_name, attribute)
@@ -233,7 +250,7 @@ def record_secrets_lookups(dag_folder: Path) -> Iterator[list[SecretsLookup]]:
             if (id(cls), attribute) in seen:
                 continue
             seen.add((id(cls), attribute))
-            wrapper = _recording_wrapper(kind, getattr(cls, attribute), dag_folder, recorded)
+            wrapper = _recording_wrapper(kind, getattr(cls, attribute), folder, recorded, cache)
             setattr(cls, attribute, staticmethod(wrapper))
             patched.append((cls, attribute, descriptor))
         yield recorded

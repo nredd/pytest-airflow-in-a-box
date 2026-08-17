@@ -65,10 +65,11 @@ default whenever the catalog is enabled, and each has its own ini to disable or 
   an AST scan over exactly the files Airflow parsed (direct calls like `Variable.get(...)`,
   `Connection.get(...)`, `BaseHook.get_connection(...)`, with exact file and line), and runtime
   interception that patches the secrets entry points while the shared corpus fills its `DagBag`,
-  which also catches lookups hidden behind helper functions. When the corpus reuses a `DagBag`
-  that `full_dag_bag` already parsed, the runtime pass is unavailable and the check degrades to
-  AST-only with a logged note -- runtime findings are best-effort, the AST pass is authoritative.
-  Disable with `airflow_forbid_top_level_variable_access = false`
+  which also catches lookups hidden behind helper functions. The `full_dag_bag` parse is
+  instrumented the same way whenever the catalog is enabled, so the runtime pass survives either
+  parse ordering; a `DagBag` that was somehow parsed without instrumentation degrades the check
+  to AST-only with a logged note. Disable with
+  `airflow_forbid_top_level_variable_access = false`
 - `test_no_top_level_io` -- no Dag file calls into a known network or database module at import
   time. AST-only, and deliberately conservative: a call is flagged only when its callee provably
   resolves through the file's own top-level imports to a listed module (`requests.get(...)`,

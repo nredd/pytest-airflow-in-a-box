@@ -13,12 +13,14 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
+from pytest_airflow_in_a_box._compat.introspection import SecretsLookup, record_secrets_lookups
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box._compat.dagbag import DagBag
 
 LIVE_DAG_BAG_KEY = pytest.StashKey["DagBag"]()
+LIVE_DAG_BAG_LOOKUPS_KEY = pytest.StashKey[tuple[SecretsLookup, ...]]()
 
 
 def _dag_folder(config: pytest.Config) -> Path:
@@ -60,7 +62,9 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
     parsing the Dag folder a second time, if `full_dag_bag` already ran in this process.
     When the catalog is enabled and in scope for this run, applies its configured per-file
     parse timeout before parsing, so the timeout is honored regardless of which of the two
-    parses first.
+    parses first -- and records runtime secrets lookups during the parse for the same
+    reason, so `test_no_top_level_variable_access`'s runtime findings do not depend on
+    which parse wins.
 
     Parameters:
         session: pytest.Session used to cache the parsed DagBag.
@@ -80,7 +84,11 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 
         if _smoke_enabled(config) and _smoke_in_scope(config):
             os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(_parse_timeout(config))
-        session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
+            with record_secrets_lookups(_dag_folder(config)) as recorded:
+                session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
+            session.stash[LIVE_DAG_BAG_LOOKUPS_KEY] = tuple(dict.fromkeys(recorded))
+        else:
+            session.stash[LIVE_DAG_BAG_KEY] = build_dag_bag(_dag_folder(config))
     return session.stash[LIVE_DAG_BAG_KEY]
 
 

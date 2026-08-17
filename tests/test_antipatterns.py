@@ -81,9 +81,35 @@ def test_secrets_scanner_flags_import_time_execution_contexts(source: str, line:
 
 
 @pytest.mark.parametrize(
+    ("source", "line"),
+    [
+        ('if __name__ == "__main__":\n    pass\nelse:\n    V = Variable.get("k")\n', 4),
+        ('if __name__ != "__main__":\n    V = Variable.get("k")\n', 2),
+    ],
+)
+def test_secrets_scanner_still_flags_around_debug_guards(source: str, line: int) -> None:
+    """Flag the `else` branch of a main guard and any non-equality `__name__` test."""
+
+    assert _scan_secrets(source) == [line]
+
+
+def test_secrets_scanner_reports_the_call_span() -> None:
+    """Report both the first and last line of a multi-line call."""
+
+    source = 'VALUE = Variable.get(\n    "k",\n)\n'
+    findings = antipatterns.find_secrets_lookups(ast.parse(source), source)
+
+    assert [(finding.line, finding.end_line) for finding in findings] == [(1, 3)]
+
+
+@pytest.mark.parametrize(
     "source",
     [
         'def f():\n    return Variable.get("k")\n',
+        'if __name__ == "__main__":\n    V = Variable.get("k")\n',
+        'if "__main__" == __name__:\n    V = Variable.get("k")\n',
+        'if TYPE_CHECKING:\n    V = Variable.get("k")\n',
+        'if typing.TYPE_CHECKING:\n    V = Variable.get("k")\n',
         'async def f():\n    return Variable.get("k")\n',
         'g = lambda: Variable.get("k")\n',
         '@decorator\ndef f():\n    return Variable.get("k")\n',

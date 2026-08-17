@@ -48,7 +48,11 @@ from pytest_airflow_in_a_box.antipatterns import (
     parse_dag_module,
 )
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
-from pytest_airflow_in_a_box.fixtures.dagbag import LIVE_DAG_BAG_KEY, _dag_folder
+from pytest_airflow_in_a_box.fixtures.dagbag import (
+    LIVE_DAG_BAG_KEY,
+    LIVE_DAG_BAG_LOOKUPS_KEY,
+    _dag_folder,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -544,6 +548,26 @@ def _pool_seeds(config: pytest.Config) -> tuple[PoolSeed, ...]:
     return tuple(pools)
 
 
+def _bool_ini(config: pytest.Config, name: str) -> bool:
+    """Read one boolean ini option shared by the on/off smoke policies.
+
+    Parameters:
+        config: pytest.Config containing the ini value.
+        name: str naming the registered boolean ini option.
+
+    Returns:
+        bool containing the configured value.
+
+    Raises:
+        pytest.UsageError: The ini value is not a boolean.
+    """
+
+    value: object = config.getini(name)
+    if not isinstance(value, bool):
+        raise pytest.UsageError(f"Ini option `{name}` must be a boolean")
+    return value
+
+
 def _forbid_default_owner(config: pytest.Config) -> bool:
     """Read whether tasks owned by Airflow's stock default owner should fail.
 
@@ -557,10 +581,7 @@ def _forbid_default_owner(config: pytest.Config) -> bool:
         pytest.UsageError: The ini value is not a boolean.
     """
 
-    value: object = config.getini("airflow_forbid_default_owner")
-    if not isinstance(value, bool):
-        raise pytest.UsageError("Ini option `airflow_forbid_default_owner` must be a boolean")
-    return value
+    return _bool_ini(config, "airflow_forbid_default_owner")
 
 
 def _forbid_top_level_variable_access(config: pytest.Config) -> bool:
@@ -577,12 +598,7 @@ def _forbid_top_level_variable_access(config: pytest.Config) -> bool:
         pytest.UsageError: The ini value is not a boolean.
     """
 
-    value: object = config.getini("airflow_forbid_top_level_variable_access")
-    if not isinstance(value, bool):
-        raise pytest.UsageError(
-            "Ini option `airflow_forbid_top_level_variable_access` must be a boolean"
-        )
-    return value
+    return _bool_ini(config, "airflow_forbid_top_level_variable_access")
 
 
 def _forbid_top_level_io(config: pytest.Config) -> bool:
@@ -598,10 +614,7 @@ def _forbid_top_level_io(config: pytest.Config) -> bool:
         pytest.UsageError: The ini value is not a boolean.
     """
 
-    value: object = config.getini("airflow_forbid_top_level_io")
-    if not isinstance(value, bool):
-        raise pytest.UsageError("Ini option `airflow_forbid_top_level_io` must be a boolean")
-    return value
+    return _bool_ini(config, "airflow_forbid_top_level_io")
 
 
 def _top_level_io_modules(config: pytest.Config) -> tuple[str, ...]:
@@ -676,10 +689,7 @@ def _forbid_catchup(config: pytest.Config) -> bool:
         pytest.UsageError: The ini value is not a boolean.
     """
 
-    value: object = config.getini("airflow_forbid_catchup")
-    if not isinstance(value, bool):
-        raise pytest.UsageError("Ini option `airflow_forbid_catchup` must be a boolean")
-    return value
+    return _bool_ini(config, "airflow_forbid_catchup")
 
 
 def _forbid_unbounded_expand(config: pytest.Config) -> bool:
@@ -695,10 +705,7 @@ def _forbid_unbounded_expand(config: pytest.Config) -> bool:
         pytest.UsageError: The ini value is not a boolean.
     """
 
-    value: object = config.getini("airflow_forbid_unbounded_expand")
-    if not isinstance(value, bool):
-        raise pytest.UsageError("Ini option `airflow_forbid_unbounded_expand` must be a boolean")
-    return value
+    return _bool_ini(config, "airflow_forbid_unbounded_expand")
 
 
 def _snapshot_dir(config: pytest.Config) -> Path | None:
@@ -777,6 +784,10 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
     runtime_lookups: tuple[SecretsLookup, ...] | None = None
     if LIVE_DAG_BAG_KEY in session.stash:
         dag_bag = session.stash[LIVE_DAG_BAG_KEY]
+        # `_cached_dag_bag` records lookups during its own parse whenever the catalog is
+        # enabled, so reuse normally preserves runtime findings; `None` (uninstrumented)
+        # survives only for a bag parsed outside that path.
+        runtime_lookups = session.stash.get(LIVE_DAG_BAG_LOOKUPS_KEY, None)
     else:
         with record_secrets_lookups(_dag_folder(config)) as recorded:
             dag_bag = build_dag_bag(_dag_folder(config))
@@ -1942,9 +1953,10 @@ class TopLevelVariableAccessItem(pytest.Item):
         """Merge AST and runtime secrets-lookup findings over the parsed corpus.
 
         The AST pass reports direct top-level calls with exact locations; the runtime pass
-        adds lookups hidden behind helpers, recorded while the corpus producer filled the
-        ``DagBag``. Runtime findings deduplicate against AST findings by file and line, and
-        degrade gracefully to AST-only when the producer reused a pre-built ``DagBag``.
+        adds lookups hidden behind helpers, recorded while the corpus producer (or the
+        `full_dag_bag` parse it reuses) filled the ``DagBag``. Runtime findings deduplicate
+        against AST findings by file and call span, and degrade gracefully to AST-only for
+        a ``DagBag`` parsed without instrumentation.
 
         Raises:
             SmokeCheckFailure: Any Dag file performs an import-time secrets lookup.
@@ -1953,13 +1965,13 @@ class TopLevelVariableAccessItem(pytest.Item):
         corpus = _smoke_corpus(self.session, self.config)
         folder = _dag_folder(self.config)
         failures: list[str] = []
-        seen: set[tuple[str, int | None]] = set()
+        spans: dict[str, list[tuple[int, int]]] = {}
         for display, path in _corpus_source_files(corpus, folder):
             parsed = parse_dag_module(path)
             if parsed is None:
                 continue
             for finding in find_secrets_lookups(*parsed):
-                seen.add((str(path.resolve()), finding.line))
+                spans.setdefault(str(path.resolve()), []).append((finding.line, finding.end_line))
                 failures.append(
                     f"Dag file '{display}' line {finding.line} calls `{finding.snippet}` at "
                     f"import time; secrets lookups in top-level code run on every scheduler "
@@ -1972,12 +1984,17 @@ class TopLevelVariableAccessItem(pytest.Item):
             )
         else:
             for lookup in corpus.runtime_lookups:
-                location = (
-                    None
-                    if lookup.file is None
-                    else (str(Path(lookup.file).resolve()), lookup.line)
-                )
-                if location is not None and location in seen:
+                # A frame's reported line for a multi-line call varies across CPython
+                # releases (pre-PEP 657 names the attribute's line, not the call's), so
+                # runtime findings deduplicate against the AST finding's whole line span.
+                if (
+                    lookup.file is not None
+                    and lookup.line is not None
+                    and any(
+                        start <= lookup.line <= end
+                        for start, end in spans.get(str(Path(lookup.file).resolve()), ())
+                    )
+                ):
                     continue
                 origin = "an unattributed location" if lookup.file is None else f"'{lookup.file}'"
                 failures.append(
@@ -2138,18 +2155,10 @@ class ForbidCatchupItem(pytest.Item):
         dag_bag = _smoke_corpus(self.session, self.config)
         failures: list[str] = []
         for dag_id, dag in sorted(dag_bag.dags.items()):
-            if not bool(getattr(dag, "catchup", False)):
+            if not dag.catchup or not dag.can_be_scheduled:
                 continue
-            can_be_scheduled = (
-                dag.can_be_scheduled
-                if isinstance(dag, SmokeDag)
-                else dag.timetable.can_be_scheduled
-            )
-            if not can_be_scheduled:
-                continue
-            fileloc = str(getattr(dag, "fileloc", ""))
             failures.append(
-                f"Dag `{dag_id}` ('{fileloc}') enables `catchup`; unpausing it "
+                f"Dag `{dag_id}` ('{dag.fileloc}') enables `catchup`; unpausing it "
                 f"backfills every missed interval -- set `catchup=False` or disable "
                 f"this check with `airflow_forbid_catchup = false`"
             )
@@ -2197,13 +2206,11 @@ class UnboundedExpandItem(pytest.Item):
         failures: list[str] = []
         for dag_id, dag in sorted(dag_bag.dags.items()):
             for task in dag.tasks:
-                if isinstance(task, SmokeTask):
-                    is_mapped = task.is_mapped
-                    over_runtime_data = task.mapped_over_runtime_data
-                    cap = task.max_active_tis_per_dag
-                else:
-                    is_mapped, over_runtime_data, cap = mapped_expansion(task)
-                if is_mapped and over_runtime_data and cap is None:
+                if (
+                    task.is_mapped
+                    and task.mapped_over_runtime_data
+                    and task.max_active_tis_per_dag is None
+                ):
                     failures.append(
                         f"Dag `{dag_id}` task `{task.task_id}` expands over runtime data "
                         f"without `max_active_tis_per_dag`; one oversized upstream result "

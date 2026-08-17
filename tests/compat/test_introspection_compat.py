@@ -100,6 +100,18 @@ def test_record_secrets_lookups_marks_unattributed_calls(
     ]
 
 
+def test_record_secrets_lookups_reuses_the_frame_resolution_cache(
+    fake_targets: type[FakeVariable], tmp_path: Path
+) -> None:
+    """Attribute repeated lookups correctly while memoizing frame-file resolution."""
+
+    with introspection.record_secrets_lookups(tmp_path) as recorded:
+        fake_targets.get("first")
+        fake_targets.get("second")
+
+    assert [lookup.key for lookup in recorded] == ["first", "second"]
+
+
 def test_record_secrets_lookups_restores_on_body_failure(
     fake_targets: type[FakeVariable], tmp_path: Path
 ) -> None:

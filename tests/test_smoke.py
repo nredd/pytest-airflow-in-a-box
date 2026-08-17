@@ -1710,6 +1710,27 @@ def test_parse_budget_item_floor_absorbs_near_zero_medians(
     item.runtest()
 
 
+def _corpus_dag(dag_id: str, *, catchup: bool, can_be_scheduled: bool) -> smoke.SmokeDag:
+    """Create one portable corpus Dag with the given catchup characteristics.
+
+    Parameters:
+        dag_id: str identifying the Dag.
+        catchup: bool containing the Dag's effective ``catchup`` flag.
+        can_be_scheduled: bool marking the Dag's timetable as run-producing.
+
+    Returns:
+        pytest_airflow_in_a_box.smoke.SmokeDag containing the described Dag.
+    """
+
+    return dataclasses.replace(
+        _sample_corpus().dags["sample"],
+        dag_id=dag_id,
+        fileloc=f"/dags/{dag_id}.py",
+        catchup=catchup,
+        can_be_scheduled=can_be_scheduled,
+    )
+
+
 def test_forbid_catchup_item_reports_each_scheduled_catchup_dag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1717,19 +1738,9 @@ def test_forbid_catchup_item_reports_each_scheduled_catchup_dag(
 
     dag_bag: Any = SimpleNamespace(
         dags={
-            "eager": SimpleNamespace(
-                catchup=True,
-                fileloc="/dags/eager.py",
-                tasks=[],
-                timetable=SimpleNamespace(can_be_scheduled=True),
-            ),
-            "calm": SimpleNamespace(catchup=False, fileloc="/dags/calm.py", tasks=[]),
-            "manual": SimpleNamespace(
-                catchup=True,
-                fileloc="/dags/manual.py",
-                tasks=[],
-                timetable=SimpleNamespace(can_be_scheduled=False),
-            ),
+            "eager": _corpus_dag("eager", catchup=True, can_be_scheduled=True),
+            "calm": _corpus_dag("calm", catchup=False, can_be_scheduled=True),
+            "manual": _corpus_dag("manual", catchup=True, can_be_scheduled=False),
         }
     )
     monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
@@ -1743,23 +1754,12 @@ def test_forbid_catchup_item_reports_each_scheduled_catchup_dag(
     assert "`manual`" not in str(caught.value)
 
 
-def test_forbid_catchup_item_reads_portable_dags(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Read `catchup` and `can_be_scheduled` straight off a portable corpus Dag."""
-
-    corpus = _sample_corpus()
-    eager = dataclasses.replace(corpus.dags["sample"], catchup=True, can_be_scheduled=True)
-    dag_bag: Any = SimpleNamespace(dags={"sample": eager})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.ForbidCatchupItem, session=None, config=None)
-
-    with pytest.raises(smoke.SmokeCheckFailure, match="Dag `sample`"):
-        item.runtest()
-
-
 def test_forbid_catchup_item_passes_without_catchup(monkeypatch: pytest.MonkeyPatch) -> None:
     """Raise nothing when no Dag enables catchup."""
 
-    dag_bag: Any = SimpleNamespace(dags={"calm": _dag("calm")})
+    dag_bag: Any = SimpleNamespace(
+        dags={"calm": _corpus_dag("calm", catchup=False, can_be_scheduled=True)}
+    )
     monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     item = _bare_item(smoke.ForbidCatchupItem, session=None, config=None)
 
@@ -1822,22 +1822,31 @@ def test_unbounded_expand_item_fails_only_uncapped_runtime_expansions(
     assert "task `plain`" not in message
 
 
-def test_unbounded_expand_item_inspects_live_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Classify a live (non-portable) mapped operator through `mapped_expansion`."""
+def test_variable_access_item_dedupes_by_call_span_across_frame_line_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Dedupe a runtime finding whose frame line lands inside a multi-line AST call.
 
-    live = SimpleNamespace(
-        task_id="live",
-        is_mapped=True,
-        expand_input=SimpleNamespace(value={"value": object()}),
-        max_active_tis_per_dag=None,
-        partial_kwargs={},
+    Pre-PEP 657 CPython (3.10, the supported floor) attributes a multi-line
+    `Variable\\n    .get(...)` frame to the attribute's line rather than the call's first
+    line, so exact-line dedup would double-report the same offense.
+    """
+
+    source = 'from airflow.sdk import Variable\n\nVALUE = Variable.get(\n    "k",\n)\n'
+    _scan_corpus(
+        monkeypatch,
+        tmp_path,
+        {"offender.py": source},
+        runtime_lookups=(
+            SecretsLookup(kind="variable", key="k", file=str(tmp_path / "offender.py"), line=4),
+        ),
     )
-    dag_bag: Any = SimpleNamespace(dags={"etl": _dag("etl", tasks=(live,))})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.UnboundedExpandItem, session=None, config=None)
+    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
 
-    with pytest.raises(smoke.SmokeCheckFailure, match="task `live` expands over runtime"):
+    with pytest.raises(smoke.SmokeCheckFailure) as caught:
         item.runtest()
+
+    assert "fetched variable" not in str(caught.value)
 
 
 def _snapshot_item(
@@ -2189,6 +2198,34 @@ def test_smoke_corpus_reuses_dag_bag_parsed_by_full_dag_bag(
 
     assert set(corpus.dags) == {"good"}
     assert corpus.runtime_lookups is None
+
+
+def test_smoke_corpus_reuse_adopts_lookups_recorded_by_full_dag_bag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adopt the lookups `_cached_dag_bag` recorded when reusing its DagBag."""
+
+    good = SimpleNamespace(
+        tags=set(),
+        tasks=[],
+        timetable=SimpleNamespace(can_be_scheduled=True),
+    )
+    dag_bag = SimpleNamespace(dags={"good": good}, import_errors={}, dagbag_stats=[])
+    lookup = SecretsLookup(kind="variable", key="k", file=None, line=None)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+    session.stash[dagbag.LIVE_DAG_BAG_KEY] = dag_bag
+    session.stash[dagbag.LIVE_DAG_BAG_LOOKUPS_KEY] = (lookup,)
+    monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "master")
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=lambda _dag: {}),
+    )
+
+    corpus = smoke._build_smoke_corpus(session, _config(parse_timeout="1"))
+
+    assert corpus.runtime_lookups == (lookup,)
 
 
 def test_smoke_corpus_does_not_pin_dag_bag_when_full_dag_bag_never_ran(

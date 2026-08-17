@@ -63,12 +63,34 @@ class AntipatternFinding:
     """One import-time anti-pattern call found in a Dag source file.
 
     Parameters:
-        line: int containing the 1-indexed source line of the call.
+        line: int containing the 1-indexed first source line of the call.
+        end_line: int containing the 1-indexed last source line of the call; runtime
+            findings deduplicate against the whole span because a frame's line for a
+            multi-line call varies across CPython releases.
         snippet: str containing the offending call expression's source text.
     """
 
     line: int
+    end_line: int
     snippet: str
+
+
+def _finding(call: ast.Call, source: str) -> AntipatternFinding:
+    """Build one finding from a flagged call.
+
+    Parameters:
+        call: ast.Call evaluated at import time.
+        source: str containing the full module source.
+
+    Returns:
+        AntipatternFinding locating and rendering the call.
+    """
+
+    return AntipatternFinding(
+        line=call.lineno,
+        end_line=call.end_lineno or call.lineno,
+        snippet=_call_snippet(call, source),
+    )
 
 
 def parse_dag_module(path: Path) -> tuple[ast.Module, str] | None:
@@ -147,6 +169,23 @@ class _ImportTimeVisitor(ast.NodeVisitor):
                 continue
             self.bindings[alias.asname or alias.name] = f"{node.module}.{alias.name}"
 
+    def visit_If(self, node: ast.If) -> None:
+        """Skip an ``if`` body whose test is false while the Dag parses.
+
+        ``if __name__ == "__main__":`` (Airflow's documented ``dag.test()`` debug harness)
+        and ``if TYPE_CHECKING:`` bodies never execute during a ``DagBag`` fill, so calls
+        inside them are not parse-loop anti-patterns; the ``else`` branch still is.
+
+        Parameters:
+            node: ast.If evaluated while the module loads.
+        """
+
+        if not _is_parse_time_false_guard(node.test):
+            self.generic_visit(node)
+            return
+        for statement in node.orelse:
+            self.visit(statement)
+
     def _visit_definition_time_parts(
         self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
     ) -> None:
@@ -189,6 +228,31 @@ class _ImportTimeVisitor(ast.NodeVisitor):
         """
 
         self._visit_definition_time_parts(node)
+
+
+def _is_parse_time_false_guard(test: ast.expr) -> bool:
+    """Report whether an ``if`` test is false for the whole life of a Dag parse.
+
+    Parameters:
+        test: ast.expr containing the ``if`` statement's test.
+
+    Returns:
+        bool indicating the test is the ``__name__ == "__main__"`` idiom or a
+        ``TYPE_CHECKING`` reference.
+    """
+
+    if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
+        return True
+    if isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING":
+        return True
+    if not (
+        isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+    ):
+        return False
+    sides = (test.left, test.comparators[0])
+    names = {side.id for side in sides if isinstance(side, ast.Name)}
+    constants = {side.value for side in sides if isinstance(side, ast.Constant)}
+    return "__name__" in names and "__main__" in constants
 
 
 def _import_time_visit(module: ast.Module) -> _ImportTimeVisitor:
@@ -262,7 +326,7 @@ def find_secrets_lookups(module: ast.Module, source: str) -> list[AntipatternFin
     """
 
     return [
-        AntipatternFinding(line=call.lineno, snippet=_call_snippet(call, source))
+        _finding(call, source)
         for call in _import_time_visit(module).calls
         if _is_secrets_lookup(call)
     ]
@@ -336,9 +400,7 @@ def find_io_calls(
             continue
         resolved = f"{base}.{rest}" if rest else base
         if _module_matches(resolved, io_modules):
-            findings.append(
-                AntipatternFinding(line=call.lineno, snippet=_call_snippet(call, source))
-            )
+            findings.append(_finding(call, source))
     return findings
 
 

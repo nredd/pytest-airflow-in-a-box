@@ -24,6 +24,10 @@ All notable changes to this project will be documented in this file. The format 
   `fileloc`, per-task mapping metadata, and recorded runtime secrets lookups; mixed-version
   workers reject stale artifacts loudly
   ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+- The generated test `airflow.cfg` now pins `[scheduler] catchup_by_default = False` on both
+  families, so an effective `dag.catchup` no longer flips with the installed family (2.x
+  defaults it to `True`) for a value the Dag never set
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
 
 ## [0.7.2] - 2026-08-15
 
