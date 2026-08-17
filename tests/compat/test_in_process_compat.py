@@ -296,15 +296,29 @@ def test_rejects_invalid_try_number() -> None:
         run_task_in_process(operator, try_number=0)
 
 
-def test_render_task_resolves_templated_fields_and_mutates_the_operator() -> None:
-    """Resolve template fields on the same operator object, without running it."""
+def test_render_task_resolves_templated_fields_without_mutating_the_original() -> None:
+    """Resolve template fields on a fresh copy, leaving the caller's operator untouched."""
 
     operator = _build(ReturnOperator, "in_process_render", expression="{{ 21 * 2 }}")
 
     rendered_operator = render_task_in_process(operator)
 
-    assert rendered_operator is operator
-    assert operator.expression == "42"
+    assert rendered_operator is not operator
+    assert rendered_operator.expression == "42"
+    assert operator.expression == "{{ 21 * 2 }}"
+
+
+def test_render_task_does_not_contaminate_a_shared_operator_across_calls() -> None:
+    """Render the same shared operator twice, each call independent of the other."""
+
+    operator = _build(ReturnOperator, "in_process_render_reuse", expression="{{ custom }}")
+
+    first = render_task_in_process(operator, context_overrides={"custom": "first-value"})
+    second = render_task_in_process(operator, context_overrides={"custom": "second-value"})
+
+    assert first.expression == "first-value"
+    assert second.expression == "second-value"
+    assert operator.expression == "{{ custom }}"
 
 
 def test_render_task_does_not_execute_the_operator() -> None:
@@ -312,8 +326,9 @@ def test_render_task_does_not_execute_the_operator() -> None:
 
     operator = _build(ExecutionTrackingOperator, "in_process_render_no_run", expression="x")
 
-    render_task_in_process(operator)
+    rendered_operator = render_task_in_process(operator)
 
+    assert rendered_operator.executed is False
     assert operator.executed is False
 
 
@@ -322,9 +337,11 @@ def test_render_task_merges_context_overrides() -> None:
 
     operator = _build(ReturnOperator, "in_process_render_overrides", expression="{{ custom }}")
 
-    render_task_in_process(operator, context_overrides={"custom": "override-value"})
+    rendered_operator = render_task_in_process(
+        operator, context_overrides={"custom": "override-value"}
+    )
 
-    assert operator.expression == "override-value"
+    assert rendered_operator.expression == "override-value"
 
 
 def test_render_task_params_render_like_run_task() -> None:
@@ -335,9 +352,9 @@ def test_render_task_params_render_like_run_task() -> None:
         ReturnOperator(task_id="probe", expression="{{ params.left }}")
     operator: Any = dag.get_task("probe")
 
-    render_task_in_process(operator, params={"left": "overridden"})
+    rendered_operator = render_task_in_process(operator, params={"left": "overridden"})
 
-    assert operator.expression == "overridden"
+    assert rendered_operator.expression == "overridden"
 
 
 def test_render_task_variables_and_connections_resolve_through_templates() -> None:
@@ -353,9 +370,22 @@ def test_render_task_variables_and_connections_resolve_through_templates() -> No
         connections={"db": {"conn_type": "postgres", "host": "example.com"}},
     )
 
-    render_task_in_process(operator, comms=comms)
+    rendered_operator = render_task_in_process(operator, comms=comms)
 
-    assert operator.expression == "42-example.com"
+    assert rendered_operator.expression == "42-example.com"
+
+
+def test_render_task_resolves_a_mapped_operator_to_its_concrete_instance() -> None:
+    """Render one mapped index onto the concrete unmapped instance Airflow produces."""
+
+    with DAG(dag_id="in_process_render_mapped", schedule=None) as dag:
+        ReturnOperator.partial(task_id="probe").expand(expression=["{{ 1 + 1 }}", "{{ 2 + 2 }}"])
+    mapped_operator = dag.get_task("probe")
+
+    rendered_operator = render_task_in_process(mapped_operator, map_index=1)
+
+    assert rendered_operator is not mapped_operator
+    assert rendered_operator.expression == "4"
 
 
 def test_render_task_supervisor_comms_deleted_when_previously_absent(

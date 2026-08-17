@@ -167,7 +167,7 @@ def test_render_task_resolves_template_fields_without_running(
         schedule=None,
         template_searchpath=[str(tmp_path)],
     ) as dag:
-        operator = TemplateOperator(
+        TemplateOperator(
             task_id="render",
             payload={"items": ["{{ params.value }}"]},
             query="query.sql",
@@ -176,7 +176,24 @@ def test_render_task_resolves_template_fields_without_running(
     rendered_operator = render_task(dag.get_task("render"), params={"value": "42"})
 
     assert rendered(payload={"items": ["42"]}, query="SELECT 42") == rendered_operator
-    assert rendered_operator is operator
+
+
+@pytest.mark.requires_airflow3
+def test_render_task_resolves_a_mapped_operator_to_its_concrete_instance(
+    render_task: RenderTask,
+) -> None:
+    """Render one mapped index onto the concrete unmapped instance Airflow produces."""
+
+    with DAG(dag_id="compat_render_task_mapped", schedule=None) as dag:
+        TemplateOperator.partial(task_id="render", query="SELECT 1").expand(
+            payload=[{"items": ["{{ 1 + 1 }}"]}, {"items": ["{{ 2 + 2 }}"]}]
+        )
+    mapped_operator = dag.get_task("render")
+
+    rendered_operator = render_task(mapped_operator, map_index=1)
+
+    assert rendered_operator is not mapped_operator
+    assert rendered(payload={"items": ["4"]}) == rendered_operator
 
 
 @pytest.mark.db_test

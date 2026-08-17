@@ -10,8 +10,11 @@ only on request, because callbacks are side effects most tests do not want.
 
 ``render_task_in_process`` reuses the same construction and shares the same fake
 supervisor, but stops after ``get_template_context()`` and calls the operator's own
-public ``render_template_fields`` instead of ``task_runner.run`` -- no execution, no
-``prepare_for_execution()`` copy, so the mutation lands on the caller's own operator.
+public ``render_template_fields`` instead of ``task_runner.run``. It mirrors
+``task_runner.run``'s own preparation step and renders onto a
+``prepare_for_execution()`` copy too, so a shared operator (a module-level Dag, a
+session-scoped fixture) never contaminates across repeated calls -- the caller's
+`task` is never mutated, and every result comes back through the return value.
 
 References:
     https://airflow.apache.org/docs/task-sdk/stable/
@@ -21,10 +24,12 @@ References:
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
 
@@ -209,6 +214,18 @@ def _fill_declared_nones(model: Any, payload: dict[str, Any]) -> dict[str, Any]:
     } | payload
 
 
+class _RuntimeTaskInstanceBuild(NamedTuple):
+    """Paired result of constructing one ``RuntimeTaskInstance``.
+
+    Parameters:
+        task_runner: Any containing the ``airflow.sdk.execution_time.task_runner`` module.
+        runtime_ti: Any containing the constructed ``RuntimeTaskInstance``.
+    """
+
+    task_runner: Any
+    runtime_ti: Any
+
+
 def _build_runtime_task_instance(
     task: Any,
     *,
@@ -218,7 +235,7 @@ def _build_runtime_task_instance(
     params: dict[str, Any] | None,
     map_index: int,
     try_number: int,
-) -> tuple[Any, Any]:
+) -> _RuntimeTaskInstanceBuild:
     """Validate arguments and construct one ``RuntimeTaskInstance`` bound to `task`.
 
     Shared by `run_task_in_process` and `render_task_in_process`, which diverge only
@@ -235,7 +252,7 @@ def _build_runtime_task_instance(
         try_number: int selecting the synthetic task attempt number.
 
     Returns:
-        tuple[Any, Any] containing the ``airflow.sdk.execution_time.task_runner``
+        _RuntimeTaskInstanceBuild containing the ``airflow.sdk.execution_time.task_runner``
         module and the constructed ``RuntimeTaskInstance``.
 
     Raises:
@@ -307,7 +324,34 @@ def _build_runtime_task_instance(
         max_tries=int(task.retries or 0),
         start_date=now,
     )
-    return task_runner, runtime_ti
+    return _RuntimeTaskInstanceBuild(task_runner, runtime_ti)
+
+
+@contextlib.contextmanager
+def _installed_supervisor_comms(
+    task_runner: Any, comms: FakeSupervisorComms | None
+) -> Iterator[FakeSupervisorComms]:
+    """Install a fake supervisor for one call, then restore whatever was there before.
+
+    Parameters:
+        task_runner: Any containing the ``airflow.sdk.execution_time.task_runner`` module.
+        comms: FakeSupervisorComms | None to install, or ``None`` for a fresh instance.
+
+    Yields:
+        FakeSupervisorComms installed as ``task_runner.SUPERVISOR_COMMS`` for the block.
+    """
+
+    active_comms = comms if comms is not None else FakeSupervisorComms()
+    absent = object()
+    previous_comms = getattr(task_runner, "SUPERVISOR_COMMS", absent)
+    task_runner.SUPERVISOR_COMMS = active_comms
+    try:
+        yield active_comms
+    finally:
+        if previous_comms is absent:
+            del task_runner.SUPERVISOR_COMMS
+        else:
+            task_runner.SUPERVISOR_COMMS = previous_comms
 
 
 def run_task_in_process(
@@ -345,7 +389,8 @@ def run_task_in_process(
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available or ``run_id`` is empty.
+        ValueError: No Dag identifier is available, ``run_id`` is empty, or
+            ``try_number`` is less than 1.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
@@ -362,21 +407,12 @@ def run_task_in_process(
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     import structlog
 
-    active_comms = comms if comms is not None else FakeSupervisorComms()
-    absent = object()
-    previous_comms = getattr(task_runner, "SUPERVISOR_COMMS", absent)
-    task_runner.SUPERVISOR_COMMS = active_comms
-    try:
+    with _installed_supervisor_comms(task_runner, comms) as active_comms:
         context = runtime_ti.get_template_context()
         log = structlog.get_logger("pytest_airflow_in_a_box.run_task")
         state, msg, error = task_runner.run(runtime_ti, context, log)
         if run_callbacks:
             task_runner.finalize(runtime_ti, state, context, log, error)
-    finally:
-        if previous_comms is absent:
-            del task_runner.SUPERVISOR_COMMS
-        else:
-            task_runner.SUPERVISOR_COMMS = previous_comms
 
     return InProcessRunResult(
         state=state,
@@ -401,11 +437,16 @@ def render_task_in_process(
 ) -> Any:
     """Render one operator's template fields in process with fake supervision.
 
-    Stops short of `run_task_in_process`'s execution: no `task_runner.run`, no
-    `prepare_for_execution()` copy, so the resolved values land on the caller's own
-    `task` object instead of a detached execution-time copy. This mirrors the
-    documented Task SDK replacement for the Airflow 2.x ``ti.render_templates()``
-    idiom -- see the module docstring.
+    Stops short of `run_task_in_process`'s execution: no `task_runner.run`, so the
+    operator body never runs. Rendering still happens on a
+    `task.prepare_for_execution()` copy, exactly like `task_runner.run`'s own
+    preparation step -- the caller's `task` is never mutated, so calling this twice
+    against the same shared operator (a module-level Dag, a session-scoped fixture)
+    renders each call independently instead of the second call silently rendering a
+    template that the first call already collapsed to a literal. Always use the
+    return value. For a mapped operator, that is the concrete unmapped instance
+    Airflow's own unmapping produces for `map_index`, not a copy of the mapped
+    operator itself.
 
     Parameters:
         task: Any containing the Airflow operator or bound TaskFlow task.
@@ -421,12 +462,14 @@ def render_task_in_process(
             template context before rendering.
 
     Returns:
-        Any containing the same operator passed as `task`, mutated in place
-        with resolved template-field values.
+        Any containing the rendered operator: a `prepare_for_execution()` copy of
+        `task` for a plain operator, or the concrete unmapped instance for a mapped
+        one. Never the exact `task` object passed in.
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available or ``run_id`` is empty.
+        ValueError: No Dag identifier is available, ``run_id`` is empty, or
+            ``try_number`` is less than 1.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
@@ -440,20 +483,18 @@ def render_task_in_process(
         try_number=try_number,
     )
 
-    active_comms = comms if comms is not None else FakeSupervisorComms()
-    absent = object()
-    previous_comms = getattr(task_runner, "SUPERVISOR_COMMS", absent)
-    task_runner.SUPERVISOR_COMMS = active_comms
-    try:
+    with _installed_supervisor_comms(task_runner, comms):
         context = runtime_ti.get_template_context()
+        # Mirrors `task_runner._prepare`'s own order: build the context bound to the
+        # original task, then swap in the execution-time copy before rendering, same
+        # as a real run. A mapped operator's `prepare_for_execution()` is a no-op --
+        # `render_template_fields` below is what swaps `runtime_ti.task` to the
+        # concrete unmapped instance, through Airflow's own `context["ti"]` mutation.
+        runtime_ti.task = runtime_ti.task.prepare_for_execution()
+        context["task"] = runtime_ti.task
         if context_overrides:
             context |= context_overrides
         runtime_ti.task.render_template_fields(context)
-    finally:
-        if previous_comms is absent:
-            del task_runner.SUPERVISOR_COMMS
-        else:
-            task_runner.SUPERVISOR_COMMS = previous_comms
 
     return runtime_ti.task
 

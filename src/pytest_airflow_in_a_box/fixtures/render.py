@@ -57,8 +57,10 @@ def _render_task(
             template context before rendering.
 
     Returns:
-        Any containing the same operator passed as `task`, mutated in place
-        with resolved template-field values.
+        Any containing the rendered operator: a `prepare_for_execution()` copy of
+        `task` for a plain operator, or the concrete unmapped instance for a mapped
+        one. Never the exact `task` object passed in -- the original is never
+        mutated, so always use the return value.
     """
 
     comms = FakeSupervisorComms(xcoms=xcoms, variables=variables, connections=connections)

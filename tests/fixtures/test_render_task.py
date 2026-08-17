@@ -62,15 +62,32 @@ def _build(operator_type: type[BaseOperator], dag_id: str, **kwargs: Any) -> Any
     return dag.get_task("probe")
 
 
-def test_render_task_returns_the_same_operator_mutated(render_task: RenderTask) -> None:
-    """Resolve the templated field on the caller's own operator object."""
+def test_render_task_returns_a_rendered_copy_without_mutating_the_original(
+    render_task: RenderTask,
+) -> None:
+    """Resolve the templated field on a fresh copy, leaving the original untouched."""
 
     operator = _build(TemplatedOperator, "render_task_basic", expression="{{ 21 * 2 }}")
 
     rendered_operator = render_task(operator)
 
-    assert rendered_operator is operator
-    assert operator.expression == "42"
+    assert rendered_operator is not operator
+    assert rendered_operator.expression == "42"
+    assert operator.expression == "{{ 21 * 2 }}"
+
+
+def test_render_task_does_not_contaminate_a_shared_operator_across_calls(
+    render_task: RenderTask,
+) -> None:
+    """Render the same shared operator twice, each call independent of the other."""
+
+    operator = _build(TemplatedOperator, "render_task_reuse", expression="{{ custom }}")
+
+    first = render_task(operator, context_overrides={"custom": "first-value"})
+    second = render_task(operator, context_overrides={"custom": "second-value"})
+
+    assert first.expression == "first-value"
+    assert second.expression == "second-value"
 
 
 def test_render_task_does_not_execute_the_operator(render_task: RenderTask) -> None:
@@ -78,8 +95,9 @@ def test_render_task_does_not_execute_the_operator(render_task: RenderTask) -> N
 
     operator = _build(TemplatedOperator, "render_task_no_run", expression="x")
 
-    render_task(operator)
+    rendered_operator = render_task(operator)
 
+    assert rendered_operator.executed is False
     assert operator.executed is False
 
 
@@ -92,13 +110,13 @@ def test_render_task_serves_seeded_variables_and_connections(render_task: Render
         expression="{{ var.value.answer }}-{{ conn.db.host }}",
     )
 
-    render_task(
+    rendered_operator = render_task(
         operator,
         variables={"answer": "42"},
         connections={"db": {"conn_type": "postgres", "host": "example.com"}},
     )
 
-    assert operator.expression == "42-example.com"
+    assert rendered_operator.expression == "42-example.com"
 
 
 def test_render_task_applies_context_overrides(render_task: RenderTask) -> None:
@@ -106,6 +124,6 @@ def test_render_task_applies_context_overrides(render_task: RenderTask) -> None:
 
     operator = _build(TemplatedOperator, "render_task_overrides", expression="{{ custom }}")
 
-    render_task(operator, context_overrides={"custom": "override-value"})
+    rendered_operator = render_task(operator, context_overrides={"custom": "override-value"})
 
-    assert operator.expression == "override-value"
+    assert rendered_operator.expression == "override-value"

@@ -157,3 +157,42 @@ def test_rendered_repr_renders_the_factory_call() -> None:
     """Rebuild the matcher as its originating factory call."""
 
     assert repr(rendered(query="SELECT 42")) == "rendered(query='SELECT 42')"
+
+
+class _HostileEquality:
+    """Mimic ``BaseOperator.__eq__``: ``False`` for a foreign type, never ``NotImplemented``."""
+
+    def __init__(self, query: str) -> None:
+        """Store the field the matcher checks.
+
+        Parameters:
+            query: str containing the resolved field value.
+        """
+
+        self.query = query
+
+    def __eq__(self, other: object) -> bool:
+        """Return ``False`` for any non-identical type, refusing reflection.
+
+        Parameters:
+            other: object compared against this instance.
+
+        Returns:
+            bool that is ``False`` for a foreign type, never ``NotImplemented``.
+        """
+
+        return type(self) is type(other) and self.query == other.query
+
+
+def test_rendered_must_be_the_left_operand_against_a_hostile_eq() -> None:
+    """Document the exact gotcha ``RenderedFields`` exists to work around.
+
+    Airflow's ``BaseOperator.__eq__`` returns ``False`` instead of ``NotImplemented``
+    for a foreign type, so ``operator == rendered(...)`` never reaches the matcher.
+    Putting the matcher on the left is the only order that works.
+    """
+
+    operand = _HostileEquality(query="SELECT 42")
+
+    assert (operand == rendered(query="SELECT 42")) is False
+    assert rendered(query="SELECT 42") == operand
