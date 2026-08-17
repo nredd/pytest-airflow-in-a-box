@@ -80,8 +80,9 @@ default whenever the catalog is enabled, and each has its own ini to disable or 
   Relative to the run's own median, so it is independent of absolute CI speed; the one-second
   floor keeps tiny fast corpora from failing on timing jitter, and fewer than three parsed files
   pass trivially. `airflow_dag_parse_budget_ratio = 0` disables the check
-- `test_forbid_catchup` -- no Dag enables `catchup`, which backfills every missed interval the
-  moment the Dag is unpaused. Disable with `airflow_forbid_catchup = false`
+- `test_forbid_catchup` -- no scheduled Dag enables `catchup`, which backfills every missed
+  interval the moment the Dag is unpaused; unscheduled Dags are skipped, since with no
+  timetable there is nothing to backfill. Disable with `airflow_forbid_catchup = false`
 - `test_no_unbounded_expand` -- no mapped task expands over runtime data (XCom or task output)
   without `max_active_tis_per_dag`; one oversized upstream result would otherwise fan out into
   an unbounded number of concurrent task instances. Literal expansions are bounded by

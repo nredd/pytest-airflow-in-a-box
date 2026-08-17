@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
@@ -32,18 +33,36 @@ LOGGER = logging.getLogger(__name__)
 # Every certified secrets entry point as `(kind, module, class, method)`. Targets that fail to
 # resolve on the installed release are skipped per probe: the ORM rows exist on both families,
 # the `airflow.sdk` rows only on 3.x, and upstream renames degrade recording rather than break
-# the corpus build.
+# the corpus build. The 3.x `BaseHook` home precedes the legacy `airflow.hooks.base` shim so a
+# 3.x run patches the canonical class; when both resolve to the same class the duplicate is
+# skipped.
 SECRETS_PATCH_TARGETS: tuple[tuple[str, str, str, str], ...] = (
     ("variable", "airflow.models.variable", "Variable", "get"),
     ("variable", "airflow.sdk", "Variable", "get"),
     ("connection", "airflow.models.connection", "Connection", "get_connection_from_secrets"),
     ("connection", "airflow.sdk", "Connection", "get"),
+    ("connection", "airflow.sdk.bases.hook", "BaseHook", "get_connection"),
     ("connection", "airflow.hooks.base", "BaseHook", "get_connection"),
 )
 # Keyword names the certified entry points spell their lookup key with.
 _LOOKUP_KEY_KEYWORDS = ("key", "conn_id")
-# Scalar types an already-parsed literal `expand()` argument can contain.
-_LITERAL_SCALARS = (str, bytes, int, float, bool, type(None))
+# Concrete types whose fan-out is already known when the Dag parses: scalars and containers
+# with a length. Expanding over them is bounded by construction regardless of element types
+# (a `date` or `Decimal` element does not make the expansion unbounded); anything else
+# (`XComArg`, `MappedArgument`) resolves at run time.
+_BOUNDED_EXPANSION_TYPES = (
+    str,
+    bytes,
+    int,
+    float,
+    bool,
+    type(None),
+    list,
+    tuple,
+    set,
+    frozenset,
+    dict,
+)
 # Where a mapped operator stores its expansion source: classic operators use
 # `expand_input`, TaskFlow's `DecoratedMappedOperator` moves the `.expand()` arguments to
 # `op_kwargs_expand_input` and leaves `expand_input` empty.
@@ -87,8 +106,13 @@ def _resolve_target(
     """
 
     try:
-        module = import_module(module_name)
-        cls = getattr(module, class_name)
+        with warnings.catch_warnings():
+            # The legacy `airflow.hooks.base.BaseHook` resolves through a deprecation shim
+            # on 3.x; a probe must neither surface that warning into every smoke run nor
+            # lose the target under a consumer's `filterwarnings = error`.
+            warnings.simplefilter("ignore")
+            module = import_module(module_name)
+            cls = getattr(module, class_name)
         descriptor = cls.__dict__[attribute]
     except Exception as error:
         LOGGER.debug(
@@ -218,26 +242,24 @@ def record_secrets_lookups(dag_folder: Path) -> Iterator[list[SecretsLookup]]:
             setattr(cls, attribute, descriptor)
 
 
-def _is_literal_value(value: Any) -> bool:
-    """Report whether one already-parsed ``expand()`` argument is plain literal data.
+def _expands_over_runtime_data(value: Any) -> bool:
+    """Report whether one expansion input resolves at run time rather than parse time.
+
+    A mapped operator's primary expansion input is a mapping of keyword name to source;
+    each source is judged on its own. A source that is a concrete container has a known
+    length already, so the fan-out is bounded by construction whatever its elements hold;
+    only a non-container source such as an ``XComArg`` is runtime data.
 
     Parameters:
-        value: Any containing one expansion source value.
+        value: Any containing one expansion input's ``value``.
 
     Returns:
-        bool indicating the value is a scalar or a container of literals; anything else
-        (``XComArg`` and friends) is runtime data.
+        bool indicating any expansion source resolves at run time.
     """
 
-    if isinstance(value, _LITERAL_SCALARS):
-        return True
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return all(_is_literal_value(item) for item in value)
     if isinstance(value, dict):
-        return all(
-            _is_literal_value(key) and _is_literal_value(item) for key, item in value.items()
-        )
-    return False
+        return any(not isinstance(item, _BOUNDED_EXPANSION_TYPES) for item in value.values())
+    return not isinstance(value, _BOUNDED_EXPANSION_TYPES)
 
 
 def mapped_expansion(task: Any) -> tuple[bool, bool, int | None]:
@@ -265,7 +287,7 @@ def mapped_expansion(task: Any) -> tuple[bool, bool, int | None]:
             expand_input = getattr(task, attribute, None)
             if expand_input is not None:
                 values.append(getattr(expand_input, "value", None))
-        over_runtime_data = any(not _is_literal_value(value) for value in values)
+        over_runtime_data = any(_expands_over_runtime_data(value) for value in values)
         cap = getattr(task, "max_active_tis_per_dag", None)
         if cap is None:
             partial_kwargs = getattr(task, "partial_kwargs", None)

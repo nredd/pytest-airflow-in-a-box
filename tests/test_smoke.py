@@ -1491,6 +1491,39 @@ def _scan_corpus(
     monkeypatch.setattr(smoke, "_dag_folder", lambda _config: folder)
 
 
+def test_corpus_source_files_resolves_relative_and_absolute_stat_paths(
+    tmp_path: Path,
+) -> None:
+    """Join folder-relative stat paths and fall back to absolute ones (Airflow 3.1/2.x).
+
+    Airflow 3.2+ records Dag-folder-relative statistics paths; 3.1 and 2.x leave the path
+    absolute whenever the parsed folder is not `settings.DAGS_FOLDER`, and 3.2+ does too
+    for files outside the folder. A path resolving under neither shape stays folder-joined
+    so the lenient parse reports it as missing.
+    """
+
+    (tmp_path / "relative.py").write_text("X = 1\n", encoding="utf-8")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "absolute.py").write_text("X = 1\n", encoding="utf-8")
+    folder = tmp_path / "dags"
+    folder.mkdir()
+    (folder / "relative.py").write_text("X = 1\n", encoding="utf-8")
+    corpus: Any = SimpleNamespace(
+        dagbag_stats=[
+            _stat("/relative.py", 0.1),
+            _stat(str(outside / "absolute.py"), 0.1),
+            _stat("/missing.py", 0.1),
+        ]
+    )
+
+    resolved = dict(smoke._corpus_source_files(corpus, folder))
+
+    assert resolved["/relative.py"] == folder / "relative.py"
+    assert resolved[str(outside / "absolute.py")] == outside / "absolute.py"
+    assert resolved["/missing.py"] == folder / "missing.py"
+
+
 def test_variable_access_item_reports_ast_findings_with_locations(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1677,15 +1710,26 @@ def test_parse_budget_item_floor_absorbs_near_zero_medians(
     item.runtest()
 
 
-def test_forbid_catchup_item_reports_each_catchup_dag(
+def test_forbid_catchup_item_reports_each_scheduled_catchup_dag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Report a catchup Dag with its fileloc and pass Dags without the flag."""
+    """Report a scheduled catchup Dag; pass unflagged and unschedulable Dags."""
 
     dag_bag: Any = SimpleNamespace(
         dags={
-            "eager": SimpleNamespace(catchup=True, fileloc="/dags/eager.py", tasks=[]),
+            "eager": SimpleNamespace(
+                catchup=True,
+                fileloc="/dags/eager.py",
+                tasks=[],
+                timetable=SimpleNamespace(can_be_scheduled=True),
+            ),
             "calm": SimpleNamespace(catchup=False, fileloc="/dags/calm.py", tasks=[]),
+            "manual": SimpleNamespace(
+                catchup=True,
+                fileloc="/dags/manual.py",
+                tasks=[],
+                timetable=SimpleNamespace(can_be_scheduled=False),
+            ),
         }
     )
     monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
@@ -1696,6 +1740,20 @@ def test_forbid_catchup_item_reports_each_catchup_dag(
 
     assert "Dag `eager` ('/dags/eager.py')" in str(caught.value)
     assert "`calm`" not in str(caught.value)
+    assert "`manual`" not in str(caught.value)
+
+
+def test_forbid_catchup_item_reads_portable_dags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read `catchup` and `can_be_scheduled` straight off a portable corpus Dag."""
+
+    corpus = _sample_corpus()
+    eager = dataclasses.replace(corpus.dags["sample"], catchup=True, can_be_scheduled=True)
+    dag_bag: Any = SimpleNamespace(dags={"sample": eager})
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    item = _bare_item(smoke.ForbidCatchupItem, session=None, config=None)
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="Dag `sample`"):
+        item.runtest()
 
 
 def test_forbid_catchup_item_passes_without_catchup(monkeypatch: pytest.MonkeyPatch) -> None:

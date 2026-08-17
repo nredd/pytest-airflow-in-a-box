@@ -1896,9 +1896,13 @@ class SerializedDagSnapshotItem(pytest.Item):
 def _corpus_source_files(corpus: SmokeCorpus, folder: Path) -> list[tuple[str, Path]]:
     """Resolve each parsed Dag file's display name and absolute path.
 
-    Airflow's per-file parse statistics record paths relative to the Dag folder with a
-    leading separator; joining them back onto the folder scans exactly the files Airflow
-    parsed, inheriting ``.airflowignore`` and underscore-prefix handling for free.
+    Scanning the statistics paths covers exactly the files Airflow parsed, inheriting
+    ``.airflowignore`` and underscore-prefix handling for free -- but releases differ in
+    what the path holds. Airflow 3.2+ records a Dag-folder-relative path, while 3.1 and
+    2.x strip ``settings.DAGS_FOLDER`` (the bootstrap folder) from the front, which is a
+    no-op leaving the path absolute whenever the parsed folder is a configured
+    ``--dag-folder``; 3.2+ also falls back to the absolute path for files outside the
+    folder. Both shapes are resolved here rather than trusted.
 
     Parameters:
         corpus: SmokeCorpus containing the parsed Dag folder's file statistics.
@@ -1908,7 +1912,15 @@ def _corpus_source_files(corpus: SmokeCorpus, folder: Path) -> list[tuple[str, P
         list[tuple[str, pathlib.Path]] pairing each display name with its absolute path.
     """
 
-    return [(stat.file, folder / stat.file.lstrip("/")) for stat in corpus.dagbag_stats]
+    pairs: list[tuple[str, Path]] = []
+    for stat in corpus.dagbag_stats:
+        candidate = folder / stat.file.lstrip("/")
+        if not candidate.is_file():
+            absolute = Path(stat.file)
+            if absolute.is_file():
+                candidate = absolute
+        pairs.append((stat.file, candidate))
+    return pairs
 
 
 class TopLevelVariableAccessItem(pytest.Item):
@@ -2114,22 +2126,33 @@ class ForbidCatchupItem(pytest.Item):
         self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
 
     def runtest(self) -> None:
-        """Check every Dag's ``catchup`` flag.
+        """Check every scheduled Dag's ``catchup`` flag.
+
+        Unscheduled Dags are skipped: with no timetable producing runs there is nothing
+        to backfill, so ``catchup=True`` is inert there rather than a production hazard.
 
         Raises:
-            SmokeCheckFailure: A Dag enables ``catchup``.
+            SmokeCheckFailure: A scheduled Dag enables ``catchup``.
         """
 
         dag_bag = _smoke_corpus(self.session, self.config)
         failures: list[str] = []
         for dag_id, dag in sorted(dag_bag.dags.items()):
-            if bool(getattr(dag, "catchup", False)):
-                fileloc = str(getattr(dag, "fileloc", ""))
-                failures.append(
-                    f"Dag `{dag_id}` ('{fileloc}') enables `catchup`; unpausing it "
-                    f"backfills every missed interval -- set `catchup=False` or disable "
-                    f"this check with `airflow_forbid_catchup = false`"
-                )
+            if not bool(getattr(dag, "catchup", False)):
+                continue
+            can_be_scheduled = (
+                dag.can_be_scheduled
+                if isinstance(dag, SmokeDag)
+                else dag.timetable.can_be_scheduled
+            )
+            if not can_be_scheduled:
+                continue
+            fileloc = str(getattr(dag, "fileloc", ""))
+            failures.append(
+                f"Dag `{dag_id}` ('{fileloc}') enables `catchup`; unpausing it "
+                f"backfills every missed interval -- set `catchup=False` or disable "
+                f"this check with `airflow_forbid_catchup = false`"
+            )
         if failures:
             raise SmokeCheckFailure("\n\n".join(failures))
 

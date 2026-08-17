@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -186,13 +187,22 @@ def test_mapped_expansion_reports_unmapped_tasks() -> None:
     assert introspection.mapped_expansion(SimpleNamespace(task_id="t")) == (False, False, None)
 
 
-def test_mapped_expansion_classifies_literal_and_runtime_sources() -> None:
-    """Distinguish literal expansion values from runtime data in either input slot."""
+def test_mapped_expansion_classifies_bounded_and_runtime_sources() -> None:
+    """Distinguish concrete expansion containers from runtime data in either input slot."""
 
     literal = SimpleNamespace(
         task_id="literal",
         is_mapped=True,
         expand_input=SimpleNamespace(value={"x": [1, "a", (True, None)], "y": {b"k": 1.5}}),
+        max_active_tis_per_dag=None,
+        partial_kwargs={},
+    )
+    rich_elements = SimpleNamespace(
+        task_id="rich_elements",
+        is_mapped=True,
+        expand_input=SimpleNamespace(
+            value={"x": [datetime.date(2024, 1, 1), datetime.date(2024, 1, 2)]}
+        ),
         max_active_tis_per_dag=None,
         partial_kwargs={},
     )
@@ -204,9 +214,18 @@ def test_mapped_expansion_classifies_literal_and_runtime_sources() -> None:
         max_active_tis_per_dag=None,
         partial_kwargs={},
     )
+    expand_kwargs_runtime = SimpleNamespace(
+        task_id="expand_kwargs_runtime",
+        is_mapped=True,
+        expand_input=SimpleNamespace(value=object()),
+        max_active_tis_per_dag=None,
+        partial_kwargs={},
+    )
 
     assert introspection.mapped_expansion(literal) == (True, False, None)
+    assert introspection.mapped_expansion(rich_elements) == (True, False, None)
     assert introspection.mapped_expansion(runtime) == (True, True, None)
+    assert introspection.mapped_expansion(expand_kwargs_runtime) == (True, True, None)
 
 
 def test_mapped_expansion_reads_the_cap_from_either_home() -> None:

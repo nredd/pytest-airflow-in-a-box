@@ -116,6 +116,14 @@ def test_io_scanner_flags_calls_resolving_to_configured_modules(source: str, lin
     assert _scan_io(source, antipatterns.DEFAULT_TOP_LEVEL_IO_MODULES) == [line]
 
 
+def test_io_scanner_ignores_non_io_sqlalchemy_calls_by_default() -> None:
+    """Leave `sqlalchemy.text` and friends alone -- the default list names the engine only."""
+
+    source = "from sqlalchemy import text\nQUERY = text('SELECT 1')\n"
+
+    assert _scan_io(source, antipatterns.DEFAULT_TOP_LEVEL_IO_MODULES) == []
+
+
 def test_io_scanner_matches_an_exact_configured_callable() -> None:
     """Honor a configured entry naming one function rather than a whole module."""
 

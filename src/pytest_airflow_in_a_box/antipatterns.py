@@ -42,7 +42,10 @@ DEFAULT_TOP_LEVEL_IO_MODULES: tuple[str, ...] = (
     "smtplib",
     "snowflake.connector",
     "socket",
-    "sqlalchemy",
+    # Deliberately the engine entry points, not the whole package: `text`, `Column`,
+    # `Table`, and `select` do no I/O and are normal at module scope in Dag repos.
+    "sqlalchemy.create_engine",
+    "sqlalchemy.engine.create_engine",
     "urllib.request",
     "urllib3",
 )
