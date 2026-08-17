@@ -12,6 +12,12 @@ All notable changes to this project will be documented in this file. The format 
   catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
   entirely while building the corpus
   ([#162](https://github.com/nredd/pytest-airflow-in-a-box/issues/162)).
+- A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
+  garbage-collector race that can exit a session non-zero despite an all-passed summary, why this
+  plugin's `tmp_path_retention_policy = "failed"` default makes it likelier than a bare pytest
+  install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
+  workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
+  ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
 
 ## [0.7.2] - 2026-08-15
 
