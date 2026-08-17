@@ -213,6 +213,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=[],
     )
     parser.addini(
+        "airflow_smoke_disable",
+        "Bundled smoke item names to drop from the catalog (e.g. `test_schedule_sanity`).",
+        type="linelist",
+        default=[],
+    )
+    parser.addini(
         "airflow_forbid_default_owner",
         "Fail Dags whose tasks are owned by the stock `airflow` owner.",
         type="bool",
