@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
+  garbage-collector race that can exit a session non-zero despite an all-passed summary, and the
+  `TMPDIR`-per-checkout workaround (and its `AIRFLOW_HOME` storage-ladder tradeoff)
+  ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+
 ## [0.7.2] - 2026-08-15
 
 ### Changed
