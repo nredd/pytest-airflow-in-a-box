@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Five Dag anti-pattern smoke checks, on by default whenever the catalog is enabled, each
+  with an ini to disable or tune it: `test_no_top_level_variable_access` (AST scan plus
+  runtime interception of `Variable`/`Connection` lookups during the corpus `DagBag` fill),
+  `test_no_top_level_io` (import-resolved calls into known I/O modules, list configurable
+  via `airflow_top_level_io_modules`), `test_dag_parse_budget` (relative-to-median parse
+  budget, `airflow_dag_parse_budget_ratio`, floored at one second), `test_forbid_catchup`,
+  and `test_no_unbounded_expand` (mapped tasks expanding over runtime data without
+  `max_active_tis_per_dag`)
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+
+### Changed
+
+- The shared smoke corpus artifact schema is now version 2, carrying per-Dag `catchup` and
+  `fileloc`, per-task mapping metadata, and recorded runtime secrets lookups; mixed-version
+  workers reject stale artifacts loudly
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+
 ## [0.7.2] - 2026-08-15
 
 ### Changed

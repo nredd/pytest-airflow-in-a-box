@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import statistics
 import time
 import warnings
 from dataclasses import dataclass
@@ -35,6 +36,17 @@ import pytest
 
 from pytest_airflow_in_a_box._compat import build_dag_bag
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
+from pytest_airflow_in_a_box._compat.introspection import (
+    SecretsLookup,
+    mapped_expansion,
+    record_secrets_lookups,
+)
+from pytest_airflow_in_a_box.antipatterns import (
+    DEFAULT_TOP_LEVEL_IO_MODULES,
+    find_io_calls,
+    find_secrets_lookups,
+    parse_dag_module,
+)
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.fixtures.dagbag import LIVE_DAG_BAG_KEY, _dag_folder
 
@@ -47,7 +59,7 @@ LOGGER = logging.getLogger(__name__)
 
 SMOKE_ENABLED_KEY = pytest.StashKey[bool]()
 SMOKE_CORPUS_KEY = pytest.StashKey["SmokeCorpus"]()
-SMOKE_CORPUS_VERSION = 1
+SMOKE_CORPUS_VERSION = 2
 SMOKE_CORPUS_ARTIFACT_NAME = ".airflow-smoke-corpus.json"
 SMOKE_CORPUS_LOCK_NAME = ".airflow-smoke-corpus.lock"
 SERIALIZED_DAG_CACHE_KEY = pytest.StashKey[dict[str, "SerializedDagEntry"]]()
@@ -57,15 +69,33 @@ RUN_DEPENDENT_SERIALIZED_DAG_KEYS = frozenset(
     {"_processor_dags_folder", "fileloc", "relative_fileloc"}
 )
 SERIALIZATION_TIMEOUT_FLOOR_SECONDS = 30.0
+# Absolute floor under the relative parse-budget threshold, so tiny fast corpora with a
+# near-zero median do not fail on CI timing jitter.
+PARSE_BUDGET_FLOOR_SECONDS = 1.0
+# Below this many parsed files a relative-to-median budget is statistical noise.
+PARSE_BUDGET_MINIMUM_FILES = 3
 
 
 @dataclass(frozen=True)
 class SmokeTask:
-    """Task metadata needed by the corpus-wide policy checks."""
+    """Task metadata needed by the corpus-wide policy checks.
+
+    Parameters:
+        task_id: str containing the task identifier.
+        owner: str containing the task owner.
+        pool: str containing the task's pool name.
+        is_mapped: bool indicating the task is dynamically mapped.
+        mapped_over_runtime_data: bool indicating a mapped task expands over runtime data
+            (XCom or task output) rather than literals.
+        max_active_tis_per_dag: int | None containing the mapped concurrency cap when set.
+    """
 
     task_id: str
     owner: str
     pool: str
+    is_mapped: bool
+    mapped_over_runtime_data: bool
+    max_active_tis_per_dag: int | None
 
 
 @dataclass(frozen=True)
@@ -89,6 +119,8 @@ class SmokeDag:
     tags: frozenset[str]
     tasks: tuple[SmokeTask, ...]
     can_be_scheduled: bool
+    catchup: bool
+    fileloc: str
     serialized: dict[str, Any] | None
     serialization_error: str | None
     serialization_seconds: float
@@ -106,11 +138,18 @@ class SmokeDagFileStat:
 
 @dataclass(frozen=True)
 class SmokeCorpus:
-    """Cross-process representation of one parsed Dag folder."""
+    """Cross-process representation of one parsed Dag folder.
+
+    ``runtime_lookups`` is deliberately tri-state: ``None`` means the producer reused a
+    ``DagBag`` that `full_dag_bag` had already parsed without interception, so runtime
+    secrets findings are unavailable; an empty tuple means the parse was observed and no
+    lookup happened.
+    """
 
     dags: dict[str, SmokeDag]
     import_errors: dict[str, str]
     dagbag_stats: tuple[SmokeDagFileStat, ...]
+    runtime_lookups: tuple[SecretsLookup, ...] | None
     producer_pid: int
     producer_worker: str
 
@@ -236,8 +275,8 @@ def _markexpr_wants_smoke(config: pytest.Config) -> bool:
     expression a real smoke item's marks would satisfy, e.g. ``-m "smoke and timeout"``)
     combined with an explicit positional silently selects nothing. A single flat matcher
     over the union of known marker names is not enough to resolve the expression once it
-    does mention ``smoke``: e.g. ``-m "smoke and not db_test"`` genuinely selects the seven
-    smoke items that lack ``db_test``, but a union matcher sees ``db_test`` as present
+    does mention ``smoke``: e.g. ``-m "smoke and not db_test"`` genuinely selects every
+    smoke item that lacks ``db_test``, but a union matcher sees ``db_test`` as present
     (some other item carries it) and wrongly evaluates the expression to ``False``.
     Evaluating against each concrete mark set in `_SMOKE_ITEM_MARK_SETS` in turn avoids that.
 
@@ -524,6 +563,144 @@ def _forbid_default_owner(config: pytest.Config) -> bool:
     return value
 
 
+def _forbid_top_level_variable_access(config: pytest.Config) -> bool:
+    """Read whether import-time Variable and Connection lookups should fail.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_forbid_top_level_variable_access``
+            ini value.
+
+    Returns:
+        bool indicating whether the check is active.
+
+    Raises:
+        pytest.UsageError: The ini value is not a boolean.
+    """
+
+    value: object = config.getini("airflow_forbid_top_level_variable_access")
+    if not isinstance(value, bool):
+        raise pytest.UsageError(
+            "Ini option `airflow_forbid_top_level_variable_access` must be a boolean"
+        )
+    return value
+
+
+def _forbid_top_level_io(config: pytest.Config) -> bool:
+    """Read whether import-time calls into known I/O modules should fail.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_forbid_top_level_io`` ini value.
+
+    Returns:
+        bool indicating whether the check is active.
+
+    Raises:
+        pytest.UsageError: The ini value is not a boolean.
+    """
+
+    value: object = config.getini("airflow_forbid_top_level_io")
+    if not isinstance(value, bool):
+        raise pytest.UsageError("Ini option `airflow_forbid_top_level_io` must be a boolean")
+    return value
+
+
+def _top_level_io_modules(config: pytest.Config) -> tuple[str, ...]:
+    """Read the module prefixes the top-level I/O check flags.
+
+    A non-empty ``airflow_top_level_io_modules`` list replaces the built-in default list
+    rather than extending it, so a consumer who wants "defaults plus one" copies the list.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_top_level_io_modules`` ini value.
+
+    Returns:
+        tuple[str, ...] containing the configured prefixes, or the built-in defaults.
+
+    Raises:
+        pytest.UsageError: The ini value is not a list of non-empty module names.
+    """
+
+    lines: object = config.getini("airflow_top_level_io_modules")
+    if not isinstance(lines, list) or any(not isinstance(line, str) for line in lines):
+        raise pytest.UsageError(
+            "Ini option `airflow_top_level_io_modules` must be a list of module names"
+        )
+    modules = tuple(line.strip() for line in lines)
+    if any(not module for module in modules):
+        raise pytest.UsageError(
+            "Ini option `airflow_top_level_io_modules` must not contain empty module names"
+        )
+    return modules or DEFAULT_TOP_LEVEL_IO_MODULES
+
+
+def _dag_parse_budget_ratio(config: pytest.Config) -> float | None:
+    """Read the relative parse-budget multiple of the corpus median parse duration.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_dag_parse_budget_ratio`` ini value.
+
+    Returns:
+        float | None containing the positive multiplier, or ``None`` when ``0`` disables
+        the check.
+
+    Raises:
+        pytest.UsageError: The ini value is not a non-negative number.
+    """
+
+    value: object = config.getini("airflow_dag_parse_budget_ratio")
+    if not isinstance(value, str):
+        raise pytest.UsageError("Ini option `airflow_dag_parse_budget_ratio` must be a number")
+    try:
+        ratio = float(value)
+    except ValueError as error:
+        raise pytest.UsageError(
+            f"Ini option `airflow_dag_parse_budget_ratio` must be a number: '{value}'"
+        ) from error
+    if ratio < 0:
+        raise pytest.UsageError(
+            f"Ini option `airflow_dag_parse_budget_ratio` must be non-negative: '{value}'"
+        )
+    return ratio if ratio > 0 else None
+
+
+def _forbid_catchup(config: pytest.Config) -> bool:
+    """Read whether Dags that enable ``catchup`` should fail.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_forbid_catchup`` ini value.
+
+    Returns:
+        bool indicating whether the check is active.
+
+    Raises:
+        pytest.UsageError: The ini value is not a boolean.
+    """
+
+    value: object = config.getini("airflow_forbid_catchup")
+    if not isinstance(value, bool):
+        raise pytest.UsageError("Ini option `airflow_forbid_catchup` must be a boolean")
+    return value
+
+
+def _forbid_unbounded_expand(config: pytest.Config) -> bool:
+    """Read whether uncapped runtime-data ``expand()`` tasks should fail.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_forbid_unbounded_expand`` ini value.
+
+    Returns:
+        bool indicating whether the check is active.
+
+    Raises:
+        pytest.UsageError: The ini value is not a boolean.
+    """
+
+    value: object = config.getini("airflow_forbid_unbounded_expand")
+    if not isinstance(value, bool):
+        raise pytest.UsageError("Ini option `airflow_forbid_unbounded_expand` must be a boolean")
+    return value
+
+
 def _snapshot_dir(config: pytest.Config) -> Path | None:
     """Resolve the committed Dag serialization snapshot directory.
 
@@ -597,11 +774,13 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
 
     timeout = _parse_timeout(config)
     os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(timeout)
-    dag_bag = (
-        session.stash[LIVE_DAG_BAG_KEY]
-        if LIVE_DAG_BAG_KEY in session.stash
-        else build_dag_bag(_dag_folder(config))
-    )
+    runtime_lookups: tuple[SecretsLookup, ...] | None = None
+    if LIVE_DAG_BAG_KEY in session.stash:
+        dag_bag = session.stash[LIVE_DAG_BAG_KEY]
+    else:
+        with record_secrets_lookups(_dag_folder(config)) as recorded:
+            dag_bag = build_dag_bag(_dag_folder(config))
+        runtime_lookups = tuple(dict.fromkeys(recorded))
     serializer = _get_dag_serializer()
     sample_size = _serialization_sample_size(config)
     seed = _serialization_sample_seed(config)
@@ -641,11 +820,10 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         dags[dag_id] = SmokeDag(
             dag_id=dag_id,
             tags=frozenset(dag.tags),
-            tasks=tuple(
-                SmokeTask(task_id=task.task_id, owner=task.owner, pool=task.pool)
-                for task in dag.tasks
-            ),
+            tasks=tuple(_smoke_task(task) for task in dag.tasks),
             can_be_scheduled=dag.timetable.can_be_scheduled,
+            catchup=bool(getattr(dag, "catchup", False)),
+            fileloc=str(getattr(dag, "fileloc", "")),
             serialized=serialized,
             serialization_error=serialization_error,
             serialization_seconds=serialization_seconds,
@@ -663,8 +841,30 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         dags=dags,
         import_errors=dict(dag_bag.import_errors),
         dagbag_stats=stats,
+        runtime_lookups=runtime_lookups,
         producer_pid=os.getpid(),
         producer_worker=os.environ.get("PYTEST_XDIST_WORKER", "master"),
+    )
+
+
+def _smoke_task(task: Any) -> SmokeTask:
+    """Capture one live operator's portable smoke-check metadata.
+
+    Parameters:
+        task: Any containing a live Airflow operator.
+
+    Returns:
+        SmokeTask containing the captured task metadata.
+    """
+
+    is_mapped, over_runtime_data, cap = mapped_expansion(task)
+    return SmokeTask(
+        task_id=task.task_id,
+        owner=task.owner,
+        pool=task.pool,
+        is_mapped=is_mapped,
+        mapped_over_runtime_data=over_runtime_data,
+        max_active_tis_per_dag=cap,
     )
 
 
@@ -692,14 +892,34 @@ def _smoke_corpus_payload(corpus: SmokeCorpus) -> dict[str, Any]:
             }
             for stat in corpus.dagbag_stats
         ],
+        "runtime_lookups": None
+        if corpus.runtime_lookups is None
+        else [
+            {
+                "kind": lookup.kind,
+                "key": lookup.key,
+                "file": lookup.file,
+                "line": lookup.line,
+            }
+            for lookup in corpus.runtime_lookups
+        ],
         "dags": {
             dag_id: {
                 "tags": sorted(dag.tags),
                 "tasks": [
-                    {"task_id": task.task_id, "owner": task.owner, "pool": task.pool}
+                    {
+                        "task_id": task.task_id,
+                        "owner": task.owner,
+                        "pool": task.pool,
+                        "is_mapped": task.is_mapped,
+                        "mapped_over_runtime_data": task.mapped_over_runtime_data,
+                        "max_active_tis_per_dag": task.max_active_tis_per_dag,
+                    }
                     for task in dag.tasks
                 ],
                 "can_be_scheduled": dag.can_be_scheduled,
+                "catchup": dag.catchup,
+                "fileloc": dag.fileloc,
                 "serialized": dag.serialized,
                 "serialization_error": dag.serialization_error,
                 "serialization_seconds": dag.serialization_seconds,
@@ -725,6 +945,7 @@ def _smoke_corpus_from_payload(payload: dict[str, Any]) -> SmokeCorpus:
     version = payload.get("version")
     if version != SMOKE_CORPUS_VERSION:
         raise ValueError(f"Unsupported smoke corpus version: '{version}'")
+    runtime_lookups = payload["runtime_lookups"]
     return SmokeCorpus(
         dags={
             dag_id: SmokeDag(
@@ -732,6 +953,8 @@ def _smoke_corpus_from_payload(payload: dict[str, Any]) -> SmokeCorpus:
                 tags=frozenset(value["tags"]),
                 tasks=tuple(SmokeTask(**task) for task in value["tasks"]),
                 can_be_scheduled=value["can_be_scheduled"],
+                catchup=value["catchup"],
+                fileloc=value["fileloc"],
                 serialized=value["serialized"],
                 serialization_error=value["serialization_error"],
                 serialization_seconds=value["serialization_seconds"],
@@ -748,6 +971,9 @@ def _smoke_corpus_from_payload(payload: dict[str, Any]) -> SmokeCorpus:
             )
             for stat in payload["dagbag_stats"]
         ),
+        runtime_lookups=None
+        if runtime_lookups is None
+        else tuple(SecretsLookup(**lookup) for lookup in runtime_lookups),
         producer_pid=payload["producer_pid"],
         producer_worker=payload["producer_worker"],
     )
@@ -1667,6 +1893,312 @@ class SerializedDagSnapshotItem(pytest.Item):
         return self.nodeid, 0, self.name
 
 
+def _corpus_source_files(corpus: SmokeCorpus, folder: Path) -> list[tuple[str, Path]]:
+    """Resolve each parsed Dag file's display name and absolute path.
+
+    Airflow's per-file parse statistics record paths relative to the Dag folder with a
+    leading separator; joining them back onto the folder scans exactly the files Airflow
+    parsed, inheriting ``.airflowignore`` and underscore-prefix handling for free.
+
+    Parameters:
+        corpus: SmokeCorpus containing the parsed Dag folder's file statistics.
+        folder: pathlib.Path containing the configured Dag folder.
+
+    Returns:
+        list[tuple[str, pathlib.Path]] pairing each display name with its absolute path.
+    """
+
+    return [(stat.file, folder / stat.file.lstrip("/")) for stat in corpus.dagbag_stats]
+
+
+class TopLevelVariableAccessItem(pytest.Item):
+    """Fail on Variable and Connection lookups that run while a Dag file imports."""
+
+    def __init__(self, *, name: str, parent: SmokeCollector) -> None:
+        """Create the item and mark it as a bundled smoke test.
+
+        Parameters:
+            name: str containing the pytest item name.
+            parent: SmokeCollector that collected this item.
+        """
+
+        super().__init__(name=name, parent=parent)
+        self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
+
+    def runtest(self) -> None:
+        """Merge AST and runtime secrets-lookup findings over the parsed corpus.
+
+        The AST pass reports direct top-level calls with exact locations; the runtime pass
+        adds lookups hidden behind helpers, recorded while the corpus producer filled the
+        ``DagBag``. Runtime findings deduplicate against AST findings by file and line, and
+        degrade gracefully to AST-only when the producer reused a pre-built ``DagBag``.
+
+        Raises:
+            SmokeCheckFailure: Any Dag file performs an import-time secrets lookup.
+        """
+
+        corpus = _smoke_corpus(self.session, self.config)
+        folder = _dag_folder(self.config)
+        failures: list[str] = []
+        seen: set[tuple[str, int | None]] = set()
+        for display, path in _corpus_source_files(corpus, folder):
+            parsed = parse_dag_module(path)
+            if parsed is None:
+                continue
+            for finding in find_secrets_lookups(*parsed):
+                seen.add((str(path.resolve()), finding.line))
+                failures.append(
+                    f"Dag file '{display}' line {finding.line} calls `{finding.snippet}` at "
+                    f"import time; secrets lookups in top-level code run on every scheduler "
+                    f"parse loop -- move them into task scope"
+                )
+        if corpus.runtime_lookups is None:
+            LOGGER.info(
+                "Runtime secrets interception unavailable: the shared corpus reused a "
+                "DagBag parsed without instrumentation; AST findings still apply"
+            )
+        else:
+            for lookup in corpus.runtime_lookups:
+                location = (
+                    None
+                    if lookup.file is None
+                    else (str(Path(lookup.file).resolve()), lookup.line)
+                )
+                if location is not None and location in seen:
+                    continue
+                origin = "an unattributed location" if lookup.file is None else f"'{lookup.file}'"
+                failures.append(
+                    f"Parsing the Dag folder fetched {lookup.kind} '{lookup.key}' from "
+                    f"{origin}; secrets lookups in top-level code run on every scheduler "
+                    f"parse loop -- move them into task scope"
+                )
+        if failures:
+            raise SmokeCheckFailure("\n\n".join(failures))
+
+    def reportinfo(self) -> tuple[str, int, str]:
+        """Locate this item for terminal and junit reporting.
+
+        Returns:
+            tuple[str, int, str] containing path, line, and title.
+        """
+
+        return self.nodeid, 0, self.name
+
+
+class TopLevelIOItem(pytest.Item):
+    """Fail on calls into known I/O modules that run while a Dag file imports."""
+
+    def __init__(self, *, name: str, parent: SmokeCollector, io_modules: tuple[str, ...]) -> None:
+        """Create the item and mark it as a bundled smoke test.
+
+        Parameters:
+            name: str containing the pytest item name.
+            parent: SmokeCollector that collected this item.
+            io_modules: tuple[str, ...] containing the module prefixes to flag.
+        """
+
+        super().__init__(name=name, parent=parent)
+        self.io_modules = io_modules
+        self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
+
+    def runtest(self) -> None:
+        """Scan every parsed Dag file for import-time calls into configured I/O modules.
+
+        Raises:
+            SmokeCheckFailure: Any Dag file performs import-time network or database I/O.
+        """
+
+        corpus = _smoke_corpus(self.session, self.config)
+        folder = _dag_folder(self.config)
+        failures: list[str] = []
+        for display, path in _corpus_source_files(corpus, folder):
+            parsed = parse_dag_module(path)
+            if parsed is None:
+                continue
+            for finding in find_io_calls(*parsed, self.io_modules):
+                failures.append(
+                    f"Dag file '{display}' line {finding.line} calls `{finding.snippet}` at "
+                    f"import time; network or database I/O in top-level code runs on every "
+                    f"scheduler parse loop -- move it into task scope"
+                )
+        if failures:
+            raise SmokeCheckFailure("\n\n".join(failures))
+
+    def reportinfo(self) -> tuple[str, int, str]:
+        """Locate this item for terminal and junit reporting.
+
+        Returns:
+            tuple[str, int, str] containing path, line, and title.
+        """
+
+        return self.nodeid, 0, self.name
+
+
+class DagParseBudgetItem(pytest.Item):
+    """Fail Dag files whose parse duration is an outlier against the corpus median."""
+
+    def __init__(self, *, name: str, parent: SmokeCollector, ratio: float) -> None:
+        """Create the item and mark it as a bundled smoke test.
+
+        Parameters:
+            name: str containing the pytest item name.
+            parent: SmokeCollector that collected this item.
+            ratio: float containing the budget multiple of the corpus median.
+        """
+
+        super().__init__(name=name, parent=parent)
+        self.ratio = ratio
+        self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
+
+    def runtest(self) -> None:
+        """Compare every file's parse duration against the relative budget threshold.
+
+        The threshold is ``max(ratio * median, PARSE_BUDGET_FLOOR_SECONDS)``, so the check
+        is independent of absolute CI speed and a near-zero median on a small fast corpus
+        cannot fail on timing jitter. Below `PARSE_BUDGET_MINIMUM_FILES` parsed files the
+        median is statistical noise and the check passes trivially.
+
+        Raises:
+            SmokeCheckFailure: Any file's parse duration exceeds the budget threshold.
+        """
+
+        corpus = _smoke_corpus(self.session, self.config)
+        durations = [stat.duration.total_seconds() for stat in corpus.dagbag_stats]
+        if len(durations) < PARSE_BUDGET_MINIMUM_FILES:
+            LOGGER.info(
+                f"Skipping the parse budget over {len(durations)} file(s); a relative "
+                f"budget needs at least {PARSE_BUDGET_MINIMUM_FILES}"
+            )
+            return
+        median = statistics.median(durations)
+        threshold = max(self.ratio * median, PARSE_BUDGET_FLOOR_SECONDS)
+        failures: list[str] = []
+        for stat in corpus.dagbag_stats:
+            seconds = stat.duration.total_seconds()
+            if seconds > threshold:
+                failures.append(
+                    f"Dag file '{stat.file}' took {seconds:.3f}s to parse, exceeding the "
+                    f"{threshold:.3f}s budget ({self.ratio:g} x the {median:.3f}s corpus "
+                    f"median, floored at {PARSE_BUDGET_FLOOR_SECONDS:.1f}s); tune "
+                    f"`airflow_dag_parse_budget_ratio` or move slow work out of module scope"
+                )
+        if failures:
+            raise SmokeCheckFailure("\n\n".join(failures))
+
+    def reportinfo(self) -> tuple[str, int, str]:
+        """Locate this item for terminal and junit reporting.
+
+        Returns:
+            tuple[str, int, str] containing path, line, and title.
+        """
+
+        return self.nodeid, 0, self.name
+
+
+class ForbidCatchupItem(pytest.Item):
+    """Fail Dags that enable ``catchup`` and would backfill on unpause."""
+
+    def __init__(self, *, name: str, parent: SmokeCollector) -> None:
+        """Create the item and mark it as a bundled smoke test.
+
+        Parameters:
+            name: str containing the pytest item name.
+            parent: SmokeCollector that collected this item.
+        """
+
+        super().__init__(name=name, parent=parent)
+        self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
+
+    def runtest(self) -> None:
+        """Check every Dag's ``catchup`` flag.
+
+        Raises:
+            SmokeCheckFailure: A Dag enables ``catchup``.
+        """
+
+        dag_bag = _smoke_corpus(self.session, self.config)
+        failures: list[str] = []
+        for dag_id, dag in sorted(dag_bag.dags.items()):
+            if bool(getattr(dag, "catchup", False)):
+                fileloc = str(getattr(dag, "fileloc", ""))
+                failures.append(
+                    f"Dag `{dag_id}` ('{fileloc}') enables `catchup`; unpausing it "
+                    f"backfills every missed interval -- set `catchup=False` or disable "
+                    f"this check with `airflow_forbid_catchup = false`"
+                )
+        if failures:
+            raise SmokeCheckFailure("\n\n".join(failures))
+
+    def reportinfo(self) -> tuple[str, int, str]:
+        """Locate this item for terminal and junit reporting.
+
+        Returns:
+            tuple[str, int, str] containing path, line, and title.
+        """
+
+        return self.nodeid, 0, self.name
+
+
+class UnboundedExpandItem(pytest.Item):
+    """Fail mapped tasks that expand over runtime data without a concurrency cap."""
+
+    def __init__(self, *, name: str, parent: SmokeCollector) -> None:
+        """Create the item and mark it as a bundled smoke test.
+
+        Parameters:
+            name: str containing the pytest item name.
+            parent: SmokeCollector that collected this item.
+        """
+
+        super().__init__(name=name, parent=parent)
+        self.add_marker(pytest.mark.smoke)
+        self.add_marker(pytest.mark.timeout(_smoke_item_timeout(self.config)))
+
+    def runtest(self) -> None:
+        """Check every mapped task's expansion source and concurrency cap.
+
+        Literal expansions are bounded by construction and pass; a task expanding over
+        runtime data (XCom or task output) must carry ``max_active_tis_per_dag``, or one
+        oversized upstream result fans out into an unbounded number of concurrent task
+        instances.
+
+        Raises:
+            SmokeCheckFailure: A mapped task expands over runtime data without a cap.
+        """
+
+        dag_bag = _smoke_corpus(self.session, self.config)
+        failures: list[str] = []
+        for dag_id, dag in sorted(dag_bag.dags.items()):
+            for task in dag.tasks:
+                if isinstance(task, SmokeTask):
+                    is_mapped = task.is_mapped
+                    over_runtime_data = task.mapped_over_runtime_data
+                    cap = task.max_active_tis_per_dag
+                else:
+                    is_mapped, over_runtime_data, cap = mapped_expansion(task)
+                if is_mapped and over_runtime_data and cap is None:
+                    failures.append(
+                        f"Dag `{dag_id}` task `{task.task_id}` expands over runtime data "
+                        f"without `max_active_tis_per_dag`; one oversized upstream result "
+                        f"fans out unbounded -- set a cap on the mapped task"
+                    )
+        if failures:
+            raise SmokeCheckFailure("\n\n".join(failures))
+
+    def reportinfo(self) -> tuple[str, int, str]:
+        """Locate this item for terminal and junit reporting.
+
+        Returns:
+            tuple[str, int, str] containing path, line, and title.
+        """
+
+        return self.nodeid, 0, self.name
+
+
 class SmokeCollector(pytest.Collector):
     """Collect the bundled smoke catalog directly on the pytest session."""
 
@@ -1688,6 +2220,28 @@ class SmokeCollector(pytest.Collector):
             name="test_pool_references_exist",
             pools=_pool_seeds(self.config),
         )
+
+        if _forbid_top_level_variable_access(self.config):
+            yield TopLevelVariableAccessItem.from_parent(
+                self, name="test_no_top_level_variable_access"
+            )
+        if _forbid_top_level_io(self.config):
+            yield TopLevelIOItem.from_parent(
+                self,
+                name="test_no_top_level_io",
+                io_modules=_top_level_io_modules(self.config),
+            )
+        budget_ratio = _dag_parse_budget_ratio(self.config)
+        if budget_ratio is not None:
+            yield DagParseBudgetItem.from_parent(
+                self,
+                name="test_dag_parse_budget",
+                ratio=budget_ratio,
+            )
+        if _forbid_catchup(self.config):
+            yield ForbidCatchupItem.from_parent(self, name="test_forbid_catchup")
+        if _forbid_unbounded_expand(self.config):
+            yield UnboundedExpandItem.from_parent(self, name="test_no_unbounded_expand")
 
         pattern = _dag_id_pattern(self.config)
         if pattern is not None:
@@ -1742,7 +2296,9 @@ def collect_smoke_items(
 __all__ = (
     "DagBagIntegrityItem",
     "DagIdPatternItem",
+    "DagParseBudgetItem",
     "DagSerializationRoundtripItem",
+    "ForbidCatchupItem",
     "ForbidDefaultOwnerItem",
     "NoDuplicateDagIdsItem",
     "PoolReferencesExistItem",
@@ -1754,5 +2310,8 @@ __all__ = (
     "SlowDagParseWarning",
     "SmokeCheckFailure",
     "SmokeCollector",
+    "TopLevelIOItem",
+    "TopLevelVariableAccessItem",
+    "UnboundedExpandItem",
     "collect_smoke_items",
 )
