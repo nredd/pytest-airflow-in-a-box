@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pytest
 
@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from pytest_airflow_in_a_box._compat.dagbag import DagBag
 
 LIVE_DAG_BAG_KEY = pytest.StashKey["DagBag"]()
+FULL_DAG_BAG_FIXTURE_NAME: Final[str] = "full_dag_bag"
+FULL_DAG_BAG_XDIST_GROUP: Final[str] = "pytest-airflow-in-a-box::full-dag-bag"
 
 
 def _dag_folder(config: pytest.Config) -> Path:
@@ -93,6 +95,15 @@ def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) ->
     reuses the same live DagBag instead of parsing again (the catalog is always collected
     last, so this is the common case). Treat the returned object as read-only when that
     applies -- mutating it is visible to the smoke catalog's checks too.
+
+    Under `--dist loadgroup`, `plugin.py` puts the smoke catalog and one surviving
+    `full_dag_bag` consumer into the same xdist group (`FULL_DAG_BAG_XDIST_GROUP`),
+    which gives the reuse above a worker to actually happen on instead of the catalog
+    and every `full_dag_bag` consumer independently landing on separate workers and
+    each paying their own parse. That reuse still depends on collection order placing a
+    `full_dag_bag` consumer before the catalog within the shared worker -- true today
+    because the catalog is always collected last -- not on a contract `xdist_group`
+    itself makes.
 
     Parameters:
         request: pytest.FixtureRequest used to reach the session-scoped DagBag cache.
