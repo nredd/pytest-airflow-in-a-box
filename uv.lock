@@ -3635,7 +3635,7 @@ wheels = [
 
 [[package]]
 name = "pytest-airflow-in-a-box"
-version = "0.8.0"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },

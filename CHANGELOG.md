@@ -6,10 +6,33 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-08-17
-
 ### Added
 
+- A DB-free `render_task` fixture (and matching `_compat.render_task_in_process`) rendering
+  one operator's `template_fields` through the Task SDK's public `render_template_fields`,
+  plus a `rendered(...)` matcher for one-expression assertions -- the documented replacement
+  for `TaskInstance.render_templates()`, which Airflow 3.2+ removed
+  ([#118](https://github.com/nredd/pytest-airflow-in-a-box/issues/118)).
+- `airflow_smoke_disable` ini option to persistently drop any bundled smoke item from the
+  catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
+  entirely while building the corpus
+  ([#162](https://github.com/nredd/pytest-airflow-in-a-box/issues/162)).
+- A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
+  garbage-collector race that can exit a session non-zero despite an all-passed summary, why this
+  plugin's `tmp_path_retention_policy = "failed"` default makes it likelier than a bare pytest
+  install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
+  workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
+  ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+- A "Retry behavior" recipe in `docs/guide/cookbook.md` covering `fail -> up_for_retry ->
+  succeed` state-math progression: asserting `try_number` and `retry_delay` at the
+  `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
+  ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
+- A "What a dagbag + callable test misses" section in `docs/guide/cookbook.md`, running one
+  realistic multi-task `ingest` Dag through `dag_maker` to show task relations (trigger rules,
+  branching, cross-task xcom), asset-triggered cross-Dag relations, depends-on-past/backfill
+  DagRun sequences, and retry behavior (`up_for_retry`, `try_number`) that a dagbag-import-plus
+  callable test cannot reach. Linked from README's `Why not...` section
+  ([#165](https://github.com/nredd/pytest-airflow-in-a-box/issues/165)).
 - `Variable.get()` and `BaseHook.get_connection()` written at Dag *top level* now resolve
   from the rows `airflow_variables` / `airflow_connections` commit, instead of failing with
   `ImportError: cannot import name 'SUPERVISOR_COMMS'` on Airflow 3.1 or missing silently
@@ -32,6 +55,20 @@ All notable changes to this project will be documented in this file. The format 
   resolution policy, `metastore` (default) or `off`; `off` leaves Airflow's own resolution
   in place for tests that assert the un-shimmed behavior
   ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+
+### Fixed
+
+- The bundled smoke catalog no longer parses the Dag folder a second time, in parallel,
+  when a `full_dag_bag` consumer lands on a different `pytest-xdist` worker under
+  `--dist loadgroup`. When both are present in the run and would survive an active `-m`
+  expression, the plugin now puts the catalog and one `full_dag_bag` consumer into a
+  shared `xdist_group`, forcing `--dist loadgroup` to schedule them onto the same worker
+  so the existing process-local `DagBag` cache has a chance to be reused instead of two
+  workers each paying a full parse concurrently. An item that already carries its own
+  explicit `xdist_group` is left untouched, and only one consumer is ever grouped, so a
+  suite with many `full_dag_bag` consumers does not have all of their execution
+  serialized onto a single worker just to save one parse
+  ([#163](https://github.com/nredd/pytest-airflow-in-a-box/issues/163)).
 
 ## [0.7.2] - 2026-08-15
 
@@ -516,8 +553,7 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.8.0
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.7.2...HEAD
 [0.7.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.2
 [0.7.1]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.1
 [0.7.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.0

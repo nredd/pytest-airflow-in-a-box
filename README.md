@@ -86,6 +86,11 @@ operators, the REST API fixture, and bundled smoke checks.
   rather than testing DAGs under pytest) and unmaintained
 - **`airflow-pytest-plugin`** -- generates JUnit-XML dashboards from DAG runs; not aimed at
   isolated, fixture-driven unit testing
+- **a dagbag import test plus calling `task.function` directly** -- covers "the Dag parses"
+  and "the callable works" and nothing in between: task relations, cross-Dag asset triggering,
+  DagRun-to-DagRun relations, and retry behavior. See the
+  [cookbook](https://nredd.github.io/pytest-airflow-in-a-box/guide/cookbook/#what-a-dagbag-callable-test-misses)
+  for what it misses
 
 ## Requirements
 
@@ -104,8 +109,9 @@ Airflow's published constraints files:
 | 3.x (primary)           | 3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, 3.3.1 | 3.10 - 3.14        | Linux (glibc, musl, arm64), macOS          | SQLite (WAL), Postgres (testcontainers) |
 | 2.x (certified, [#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)) | 2.7.3, 2.8.4, 2.9.3, 2.10.5, 2.11.2                                               | 3.10 - 3.12 on 2.9+, 3.10 - 3.11 on 2.7/2.8 (Airflow 2.x never supported 3.13+) | Linux                                     | SQLite (WAL)                     |
 
-On the 2.x family, `run_task`, `cap_structlog`, and the REST API fixtures fail with actionable
-errors naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3` markers auto-skip
+On the 2.x family, `run_task`, `render_task`, `cap_structlog`, and the REST API fixtures fail
+with actionable errors naming the 2.x alternative; the `requires_airflow2`/`requires_airflow3`
+markers auto-skip
 on the other family so one suite runs green on both sides of a migration. The 2.x tier is
 exercised through the end-user consumer contract (`tests/enduser`, marked `compat`) rather than
 the full internal suite.

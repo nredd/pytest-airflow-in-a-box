@@ -77,6 +77,7 @@ def test_public_surface_is_explicit() -> None:
         "cap_structlog",
         "dag_maker",
         "full_dag_bag",
+        "render_task",
         "run_task",
         "session",
     )
@@ -130,6 +131,7 @@ def test_public_surface_is_explicit() -> None:
         "dag_maker",
         "full_dag_bag",
         "get_bootstrap_state",
+        "render_task",
         "run_task",
         "session",
     )
@@ -156,10 +158,12 @@ def test_public_surface_is_explicit() -> None:
     )
     assert matchers.__all__ == (
         "ANY",
+        "RenderedFields",
         "TaskOutcome",
         "deferred",
         "failed",
         "not_run",
+        "rendered",
         "skipped",
         "succeeded",
         "upstream_failed",
@@ -168,6 +172,7 @@ def test_public_surface_is_explicit() -> None:
         "AirflowConnections",
         "AirflowVariables",
         "DagMaker",
+        "RenderTask",
         "RunTask",
         "SerializedDag",
         "TaskRunResult",
@@ -195,6 +200,7 @@ def test_public_surface_is_explicit() -> None:
         "initialize_database",
         "open_seed_session",
         "parse_time_supervision",
+        "render_task_in_process",
         "resolve_capabilities",
         "run_task_in_process",
         "seed_connections",

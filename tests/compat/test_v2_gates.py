@@ -13,6 +13,7 @@ from pytest_airflow_in_a_box._compat import capabilities as capability_module
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.fixtures import api as api_module
 from pytest_airflow_in_a_box.fixtures import logging as logging_module
+from pytest_airflow_in_a_box.fixtures import render as render_module
 from pytest_airflow_in_a_box.fixtures import taskrun as taskrun_module
 
 
@@ -49,6 +50,7 @@ def _drive_fixture(raw: Any, arguments: tuple[Any, ...]) -> None:
     ("module", "fixture_name"),
     [
         (taskrun_module, "run_task"),
+        (render_module, "render_task"),
         (logging_module, "cap_structlog"),
         (api_module, "api_server_url"),
     ],
