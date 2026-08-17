@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -397,6 +398,59 @@ def test_run_strands_a_retrying_task_visibly(dag_maker: DagMaker) -> None:
     assert result.states == {"boom": TaskInstanceState.UP_FOR_RETRY}
     assert isinstance(result.errors["boom"], ValueError)
     assert result.order == ["boom"]
+
+
+def test_run_ti_retries_a_failed_task_instance_to_success(
+    dag_maker: DagMaker, tmp_path: Path
+) -> None:
+    """Drive `fail -> up_for_retry -> succeed` and assert `try_number`/state math.
+
+    `retries` are never re-attempted by `dag_maker.run()` (see the neighboring
+    `test_run_strands_a_retrying_task_visibly`) -- a second, explicit
+    `dag_maker.run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against
+    the same persisted `TaskInstance` is what advances it past `up_for_retry`.
+    `ignore_task_deps` bypasses Airflow's own "Not In Retry Period" dependency, which
+    would otherwise hold the instance for the real `retry_delay` -- state math, not a
+    wall-clock wait. Bumping `try_number` between the two calls mirrors the same
+    scheduler-shaped step Airflow's own `Dag.test()` takes when it requeues a retrying
+    instance (`airflow.sdk.definitions.dag`), since a direct `run_ti` call does not.
+    """
+
+    retried_marker = tmp_path / "retried"
+
+    def _mark_retried(context: Any) -> None:
+        del context
+        retried_marker.write_text("retried", encoding="utf-8")
+
+    with dag_maker(dag_id="result_retry_progression"):
+
+        @task(retries=1, retry_delay=timedelta(minutes=5), on_retry_callback=_mark_retried)
+        def flaky() -> str:
+            if not retried_marker.exists():
+                raise ValueError("nope")
+            return "done"
+
+        flaky()
+
+    dag_run = dag_maker.create_dagrun()
+
+    with pytest.raises(ValueError, match="nope"):
+        dag_maker.run_ti("flaky", dag_run)
+
+    ti = dag_maker.create_ti("flaky", dag_run)
+    assert ti.try_number == 0
+    assert ti.state == TaskInstanceState.UP_FOR_RETRY
+    assert ti.next_retry_datetime() == ti.end_date + timedelta(minutes=5)
+    assert retried_marker.exists()
+
+    ti.try_number += 1
+    dag_maker.session.commit()
+    ti = dag_maker.run_ti("flaky", dag_run, ignore_ti_state=True, ignore_task_deps=True)
+
+    assert ti.try_number == 1
+    assert ti.state == TaskInstanceState.SUCCESS
+    assert ti.xcom_pull(task_ids="flaky", session=dag_maker.session) == "done"
+    assert ti.xcom_pull(task_ids="flaky", session=dag_maker.session) == "done"
 
 
 def test_run_accepts_an_explicit_dag_run(dag_maker: DagMaker) -> None:
