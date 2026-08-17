@@ -55,22 +55,33 @@ The plugin answers those lookups itself, from the same metastore rows `airflow_v
 database until a Dag actually issues a lookup, so a Dag folder that never touches Variables or
 Connections costs nothing.
 
-**Seed before the parse.** `full_dag_bag` is session-scoped and parses on first use, while the
-seeding fixtures are function-scoped, so pytest would instantiate the parse first if you list
-both in the signature. Ask for the bag after seeding instead:
+**Seed at session scope, before anything parses.** `full_dag_bag` parses once per worker and
+stashes the result for the whole session, and collected Dag items are plain `pytest.Item`s with
+no fixture support at all. Both are settled before any function-scoped fixture gets a turn, so
+parse-time values belong in `pytest_sessionstart`:
 
 ```python
-def test_top_level_variable(request, airflow_variables):
-    airflow_variables({"region": "us-east-1"})
+# conftest.py
+def pytest_sessionstart(session):
+    from airflow.models.variable import Variable
+    from airflow.utils.session import create_session
 
-    dag_bag = request.getfixturevalue("full_dag_bag")
+    from pytest_airflow_in_a_box._compat import ensure_database
+    from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 
-    assert dag_bag.import_errors == {}
+    ensure_database(get_bootstrap_state(session.config).root)
+    with create_session() as db_session:
+        db_session.add(Variable(key="region", val="us-east-1"))
 ```
 
-Collected Dag items are plain `pytest.Item`s with no fixture support at all, so seed those from
-`pytest_sessionstart` in your `conftest.py`, or through `AIRFLOW_VAR_*`/`AIRFLOW_CONN_*` -- the
-environment backend still outranks the metastore here, exactly as it does at task time.
+`AIRFLOW_VAR_*`/`AIRFLOW_CONN_*` work here too -- the environment backend still outranks the
+metastore, exactly as it does at task time.
+
+Seeding from `airflow_variables` and then asking for the bag with
+`request.getfixturevalue("full_dag_bag")` does work, but only for whichever test materializes
+the bag first. Any earlier test or smoke item that touches `full_dag_bag` unseeded pins a bag
+full of import errors for the rest of the session, so that form goes flaky the moment file
+order, `-k`, or `-p randomly` changes. Prefer the session-scoped seed above.
 
 For a lookup that runs in the test body or inside a `with dag_maker(...)` block rather than
 during a file parse, request the `airflow_parse_secrets` fixture:

@@ -55,6 +55,51 @@ LOGGER = logging.getLogger(__name__)
 SUPERVISOR_COMMS_ATTRIBUTE = "SUPERVISOR_COMMS"
 
 
+@contextmanager
+def _reported_lookup_failure(subject: str) -> Iterator[None]:
+    """Log any failure raised while resolving one lookup, then re-raise it.
+
+    Airflow's own worker secrets backend wraps every supervisor call in a bare
+    ``except Exception: return None``, so a metadata database that is down, or a bug in
+    this shim, would otherwise reach the consumer as an ordinary "not found" and be
+    indistinguishable from an unseeded row. Logging here is the only place the real
+    cause survives.
+
+    Parameters:
+        subject: str naming the Variable or Connection being resolved.
+
+    Yields:
+        None, with lookup failures reported before they propagate.
+
+    Raises:
+        Exception: Whatever the enclosed lookup raised, unchanged.
+    """
+
+    try:
+        yield
+    except Exception as error:
+        LOGGER.error(
+            f"Could not resolve {subject} from Airflow metadata during a Dag parse: "
+            f"{type(error).__name__}: {error}. Airflow reports this to the Dag as a "
+            f"plain not-found, so this message is the only record of the real cause."
+        )
+        raise
+
+
+def _connection_result_fields() -> frozenset[str]:
+    """Report the field names the release's generated `ConnectionResult` accepts.
+
+    Returns:
+        frozenset[str] containing each declared field name, keyed by its validation
+        alias where one exists (the generated models alias e.g. `schema_` to `schema`).
+    """
+
+    # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
+    from airflow.sdk.execution_time.comms import ConnectionResult
+
+    return frozenset(field.alias or name for name, field in ConnectionResult.model_fields.items())
+
+
 class ParseTimeComms(FakeSupervisorComms):
     """Answer parse-time Variable and Connection lookups from the metadata database.
 
@@ -102,10 +147,17 @@ class ParseTimeComms(FakeSupervisorComms):
         return self._session
 
     def close(self) -> None:
-        """Close the metadata session, if one was ever opened."""
+        """Close the metadata session, if one was ever opened.
 
-        if self._session is not None:
+        The reference is dropped even when the close itself fails, so a broken session
+        is never reused by a later lookup on the same instance.
+        """
+
+        if self._session is None:
+            return
+        try:
             self._session.close()
+        finally:
             self._session = None
 
     def _lookup_variable(self, key: str) -> str | None:
@@ -116,6 +168,10 @@ class ParseTimeComms(FakeSupervisorComms):
 
         Returns:
             str | None containing the resolved value, or None when no row exists.
+
+        Raises:
+            DatabaseInitializationError: The metadata database cannot be initialized.
+            SeedPersistenceError: Airflow cannot provide a metadata session.
         """
 
         override = super()._lookup_variable(key)
@@ -126,11 +182,18 @@ class ParseTimeComms(FakeSupervisorComms):
         from airflow.models.variable import Variable
         from sqlalchemy import select
 
-        session = self._metadata_session()
-        # Read through the ORM rather than the column so Airflow's Fernet decryption
-        # runs, matching how `_compat.seed` writes the row.
-        row = session.scalars(select(Variable).where(Variable.key == key)).first()
+        with _reported_lookup_failure(f"Variable `{key}`"):
+            session = self._metadata_session()
+            # Read through the ORM rather than the column so Airflow's Fernet decryption
+            # runs, matching how `_compat.seed` writes the row.
+            row = session.scalars(select(Variable).where(Variable.key == key)).first()
         if row is None:
+            # `debug`, not `warning`: `Variable.get(key, default=...)` is a normal
+            # optional-config pattern and Airflow applies the default above this call,
+            # so a miss is not by itself a problem. The hint is logged rather than only
+            # carried in the response because Airflow's worker backend discards the
+            # `ErrorResponse` detail before the Dag ever sees it.
+            LOGGER.debug(f"No Variable `{key}` is seeded. {self._variable_hint(key)}")
             return None
         # `Variable.val` is a decrypting synonym, so its declared type is the SQLAlchemy
         # descriptor rather than the string it yields on an instance.
@@ -146,6 +209,10 @@ class ParseTimeComms(FakeSupervisorComms):
         Returns:
             dict[str, Any] | None containing the resolved fields, or None when no row
             exists.
+
+        Raises:
+            DatabaseInitializationError: The metadata database cannot be initialized.
+            SeedPersistenceError: Airflow cannot provide a metadata session.
         """
 
         override = super()._lookup_connection(conn_id)
@@ -156,11 +223,19 @@ class ParseTimeComms(FakeSupervisorComms):
         from airflow.models.connection import Connection
         from sqlalchemy import select
 
-        session = self._metadata_session()
-        row = session.scalars(select(Connection).where(Connection.conn_id == conn_id)).first()
+        with _reported_lookup_failure(f"Connection `{conn_id}`"):
+            session = self._metadata_session()
+            row = session.scalars(select(Connection).where(Connection.conn_id == conn_id)).first()
         if row is None:
+            # `debug` for the same reason as the Variable miss above.
+            LOGGER.debug(f"No Connection `{conn_id}` is seeded. {self._connection_hint(conn_id)}")
             return None
-        fields = {name: getattr(row, name, None) for name in sorted(CONNECTION_FIELDS)}
+        # Only the fields the release's own `ConnectionResult` declares: the generated
+        # comms models forbid extras before 3.3.0, and `description` is not among them,
+        # so an unfiltered payload would fail validation inside `send` and reach the Dag
+        # as a plain not-found. Keyed by validation alias, matching `_fill_declared_nones`.
+        accepted = _connection_result_fields()
+        fields = {name: getattr(row, name, None) for name in sorted(CONNECTION_FIELDS & accepted)}
         return {name: value for name, value in fields.items() if value is not None}
 
     def _variable_hint(self, key: str) -> str:
@@ -212,17 +287,21 @@ def _task_runner_module() -> Any:
 
 
 def _reset_secret_cache() -> None:
-    """Drop Airflow's process-wide secrets cache.
+    """Empty Airflow's process-wide secrets cache, leaving it configured as before.
 
     The cache is inert unless ``[secrets] use_cache`` is enabled, but a consumer who
     enables it would otherwise carry one parse's resolved values into the next, which
-    is precisely the cross-test leak the seeding fixtures exist to prevent.
+    is precisely the cross-test leak the seeding fixtures exist to prevent. ``reset``
+    alone sets the cache to None permanently, which would silently disable it for the
+    rest of the process -- including later task runs -- so ``init`` restores whatever
+    the configuration asks for. It is a no-op when the cache is off.
     """
 
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     from airflow.sdk.execution_time.cache import SecretCache
 
     SecretCache.reset()
+    SecretCache.init()
 
 
 @contextmanager
@@ -273,7 +352,15 @@ def parse_time_supervision(comms: ParseTimeComms | None) -> Iterator[None]:
         else:
             task_runner.SUPERVISOR_COMMS = previous_comms
         _reset_secret_cache()
-        comms.close()
+        # A read-only session failing to close is not worth losing a correctly parsed
+        # DagBag over, and the caller wraps this whole block in its own construction
+        # error, which would misreport a teardown failure as a parse failure.
+        try:
+            comms.close()
+        except Exception as error:
+            LOGGER.warning(
+                f"Could not close the parse-time metadata session: {type(error).__name__}: {error}"
+            )
 
 
 __all__ = ("ParseTimeComms", "parse_time_supervision")

@@ -516,7 +516,8 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.8.0
 [0.7.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.2
 [0.7.1]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.1
 [0.7.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.0

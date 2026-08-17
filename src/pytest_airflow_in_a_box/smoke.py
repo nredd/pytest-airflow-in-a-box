@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import build_dag_bag
+from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.fixtures.dagbag import LIVE_DAG_BAG_KEY, _dag_folder
@@ -598,11 +598,19 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
 
     timeout = _parse_timeout(config)
     os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(timeout)
-    dag_bag = (
-        session.stash[LIVE_DAG_BAG_KEY]
-        if LIVE_DAG_BAG_KEY in session.stash
-        else build_dag_bag(_dag_folder(config), comms=parse_time_comms(config))
-    )
+    if LIVE_DAG_BAG_KEY in session.stash:
+        dag_bag = session.stash[LIVE_DAG_BAG_KEY]
+    else:
+        comms = parse_time_comms(config)
+        if comms is not None:
+            # Several smoke items are deliberately not `db_test`, so nothing has
+            # initialized the database by the time they run. A Dag with a top-level
+            # Variable or Connection lookup would otherwise charge the whole one-time
+            # migration to this item's parse timeout, which budgets for parsing and
+            # serialization alone. `--airflow-parse-secrets=off` keeps the build
+            # database-free.
+            ensure_database(get_bootstrap_state(config).root)
+        dag_bag = build_dag_bag(_dag_folder(config), comms=comms)
     serializer = _get_dag_serializer()
     sample_size = _serialization_sample_size(config)
     seed = _serialization_sample_seed(config)

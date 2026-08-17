@@ -27,6 +27,30 @@ from pytest_airflow_in_a_box.types import AirflowConnections, AirflowVariables
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
 
 
+class _BrokenSession:
+    """Stand in for a metadata session whose close fails."""
+
+    def close(self) -> None:
+        """Fail the way a session on a dropped connection fails.
+
+        Raises:
+            RuntimeError: Always, standing in for a dropped connection.
+        """
+
+        raise RuntimeError("session close failed")
+
+
+def _broken_session() -> Any:
+    """Build a metadata session double whose close fails.
+
+    Returns:
+        Any standing in for a session on a dropped connection.
+    """
+
+    broken: Any = _BrokenSession()
+    return broken
+
+
 @pytest.fixture
 def run_root(pytestconfig: pytest.Config) -> Path:
     """Locate the session's disposable run root.
@@ -91,6 +115,43 @@ def test_lookups_report_absent_rows_with_a_seeding_hint(run_root: Path) -> None:
     assert "airflow_connections" in connection.detail["hint"]
 
 
+def test_connection_fields_the_release_does_not_declare_are_dropped(
+    run_root: Path,
+    airflow_connections: AirflowConnections,
+) -> None:
+    """Answer with only the fields the release's own `ConnectionResult` accepts.
+
+    `description` is a legal seeding field but is absent from the generated comms
+    model, which forbids extras before 3.3.0 -- an unfiltered payload would fail
+    validation inside `send` and reach the Dag as a plain not-found.
+
+    Parameters:
+        run_root: pathlib.Path of the session's disposable run root directory.
+        airflow_connections: AirflowConnections committing the seeded Connection.
+    """
+
+    airflow_connections(
+        {
+            "parse_time_described_conn": {
+                "conn_type": "http",
+                "host": "described-host",
+                "description": "a field the comms model does not declare",
+            }
+        }
+    )
+
+    comms = ParseTimeComms(run_root=run_root)
+    try:
+        fields = comms._lookup_connection("parse_time_described_conn")
+        connection = comms.send(GetConnection(conn_id="parse_time_described_conn"))
+    finally:
+        comms.close()
+
+    assert fields is not None
+    assert "description" not in fields
+    assert connection.host == "described-host"
+
+
 def test_explicit_overrides_answer_without_opening_a_session(run_root: Path) -> None:
     """Answer from the constructor overrides without touching the database at all.
 
@@ -126,6 +187,111 @@ def test_close_is_idempotent_before_any_lookup(run_root: Path) -> None:
     comms.close()
     comms.close()
 
+    assert comms._session is None
+
+
+def test_lookup_failures_are_logged_before_they_propagate(
+    run_root: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Report the real cause of a lookup failure Airflow would flatten to not-found.
+
+    Airflow's worker secrets backend swallows every exception a supervisor call raises
+    and answers not-found instead, so a metadata database that is down looks exactly
+    like an unseeded row unless the shim logs it here.
+
+    Parameters:
+        run_root: pathlib.Path of the session's disposable run root directory.
+        monkeypatch: pytest.MonkeyPatch breaking the metadata session.
+        caplog: pytest.LogCaptureFixture capturing the emitted report.
+    """
+
+    def _explode() -> object:
+        """Fail the way an unreachable metadata database fails.
+
+        Raises:
+            RuntimeError: Always, standing in for an unreachable database.
+        """
+
+        raise RuntimeError("metadata database is unreachable")
+
+    monkeypatch.setattr(ParseTimeComms, "_metadata_session", lambda _self: _explode())
+
+    comms = ParseTimeComms(run_root=run_root)
+    with caplog.at_level("ERROR", logger=parse_time.LOGGER.name):
+        with pytest.raises(RuntimeError, match="metadata database is unreachable"):
+            comms._lookup_variable("parse_time_var")
+        with pytest.raises(RuntimeError, match="metadata database is unreachable"):
+            comms._lookup_connection("parse_time_conn")
+
+    assert "Variable `parse_time_var`" in caplog.text
+    assert "Connection `parse_time_conn`" in caplog.text
+    assert caplog.text.count("metadata database is unreachable") == 2
+
+
+def test_absent_rows_are_logged_with_the_seeding_hint(
+    run_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Log the hint Airflow discards before it reaches the failing Dag.
+
+    Airflow's backend drops the `ErrorResponse` detail and raises its own generic
+    not-found, so the log is where the seeding hint actually reaches the consumer. It
+    is `debug` rather than `warning` because `Variable.get(key, default=...)` makes a
+    miss an ordinary, intentional outcome.
+
+    Parameters:
+        run_root: pathlib.Path of the session's disposable run root directory.
+        caplog: pytest.LogCaptureFixture capturing the emitted hints.
+    """
+
+    comms = ParseTimeComms(run_root=run_root)
+    try:
+        with caplog.at_level("DEBUG", logger=parse_time.LOGGER.name):
+            comms.send(GetVariable(key="parse_time_absent_var"))
+            comms.send(GetConnection(conn_id="parse_time_absent_conn"))
+    finally:
+        comms.close()
+
+    assert "airflow_variables({'parse_time_absent_var': ...})" in caplog.text
+    assert "airflow_connections({'parse_time_absent_conn': {'conn_type': ...}})" in caplog.text
+
+
+def test_close_drops_a_session_that_fails_to_close(run_root: Path) -> None:
+    """Never keep a half-torn-down session referenced for a later lookup.
+
+    Parameters:
+        run_root: pathlib.Path of the session's disposable run root directory.
+    """
+
+    comms = ParseTimeComms(run_root=run_root)
+    comms._session = _broken_session()
+
+    with pytest.raises(RuntimeError, match="session close failed"):
+        comms.close()
+
+    assert comms._session is None
+
+
+def test_supervision_survives_a_failing_session_close(
+    run_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Keep a correctly parsed result when only the teardown close fails.
+
+    The caller wraps this block in its own construction error, so letting a teardown
+    failure escape would relabel a successful parse as a parse failure.
+
+    Parameters:
+        run_root: pathlib.Path of the session's disposable run root directory.
+        caplog: pytest.LogCaptureFixture capturing the teardown report.
+    """
+
+    comms = ParseTimeComms(run_root=run_root)
+    with (
+        caplog.at_level("WARNING", logger=parse_time.LOGGER.name),
+        parse_time_supervision(comms),
+    ):
+        comms._session = _broken_session()
+
+    assert "Could not close the parse-time metadata session" in caplog.text
     assert comms._session is None
 
 
