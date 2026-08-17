@@ -51,6 +51,7 @@ from pytest_airflow_in_a_box.fixtures import (
     dag_maker,
     full_dag_bag,
     render_task,
+    run_dag,
     run_task,
     session,
 )
@@ -91,6 +92,7 @@ __all__ = (
     "full_dag_bag",
     "get_bootstrap_state",
     "render_task",
+    "run_dag",
     "run_task",
     "session",
 )

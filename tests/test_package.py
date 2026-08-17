@@ -78,6 +78,7 @@ def test_public_surface_is_explicit() -> None:
         "dag_maker",
         "full_dag_bag",
         "render_task",
+        "run_dag",
         "run_task",
         "session",
     )
@@ -132,6 +133,7 @@ def test_public_surface_is_explicit() -> None:
         "full_dag_bag",
         "get_bootstrap_state",
         "render_task",
+        "run_dag",
         "run_task",
         "session",
     )
@@ -173,6 +175,7 @@ def test_public_surface_is_explicit() -> None:
         "AirflowVariables",
         "DagMaker",
         "RenderTask",
+        "RunDag",
         "RunTask",
         "SerializedDag",
         "TaskRunResult",

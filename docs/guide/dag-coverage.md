@@ -32,7 +32,8 @@ to, which is why none of `coverage.py`'s subprocess settings (`concurrency`,
   the report with no warning and the total looks fine. Pass one `--cov` per measured
   folder: `--cov=dags --cov=src`
 - There are TWO Dag folder options: `--dag-folder` / `airflow_dags_folder` feeds
-  `full_dag_bag` and the [smoke catalog](smoke-tests.md), while `--collect-dag-folder` /
+  `full_dag_bag` (and, through it, [`run_dag`](task-execution.md#testing-a-dag-defined-elsewhere))
+  and the [smoke catalog](smoke-tests.md), while `--collect-dag-folder` /
   `airflow_collect_dags_folder` feeds [Dag-file collection](dag-collection.md). They are
   usually the same directory, but coverage sees only what `--cov` names -- cover every
   folder your tests actually parse
