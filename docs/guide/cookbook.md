@@ -139,9 +139,12 @@ retry-configured failure settles `up_for_retry` rather than being re-attempted (
 [Task execution](task-execution.md)). Drive it the rest of the way with a second, explicit
 `run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against the same persisted
 instance -- `ignore_task_deps` bypasses Airflow's "Not In Retry Period" dependency instead of
-waiting out `retry_delay` for real, and bumping `try_number` beforehand mirrors the same
-scheduler-shaped step Airflow's own `Dag.test()` takes when it requeues a retrying instance,
-since a direct `run_ti` call does not (`tests/enduser/test_dag_run_result.py`):
+waiting out `retry_delay` for real. Bump `try_number` before each `run_ti` call, including
+the first: that mirrors the same scheduler-shaped step Airflow's own `Dag.test()` takes
+before every attempt, which a direct `run_ti` call does not, and skipping the first bump
+would understate how close a retry is to exhausting `max_tries`. Airflow 2.x's pre-2.10
+`try_number` is a read-only derived property rather than a plain column, so this recipe is
+3.x-only (`tests/enduser/test_dag_run_result.py`):
 
 ```python
 from datetime import timedelta
@@ -168,12 +171,15 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
         flaky()
 
     dag_run = dag_maker.create_dagrun()
+    ti = dag_maker.create_ti("flaky", dag_run)
+    ti.try_number += 1
+    dag_maker.session.commit()
 
     with pytest.raises(ValueError, match="nope"):
         dag_maker.run_ti("flaky", dag_run)
 
     ti = dag_maker.create_ti("flaky", dag_run)
-    assert ti.try_number == 0
+    assert ti.try_number == 1
     assert ti.state == TaskInstanceState.UP_FOR_RETRY
     assert ti.next_retry_datetime() == ti.end_date + timedelta(minutes=5)
     assert retried_marker.exists()  # the user's `on_retry_callback` ran
@@ -182,6 +188,6 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
     dag_maker.session.commit()
     ti = dag_maker.run_ti("flaky", dag_run, ignore_ti_state=True, ignore_task_deps=True)
 
-    assert ti.try_number == 1
+    assert ti.try_number == 2
     assert ti.state == TaskInstanceState.SUCCESS
 ```
