@@ -60,6 +60,15 @@ All notable changes to this project will be documented in this file. The format 
   resolution policy, `metastore` (default) or `off`; `off` leaves Airflow's own resolution
   in place for tests that assert the un-shimmed behavior
   ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+- Five Dag anti-pattern smoke checks, on by default whenever the catalog is enabled, each
+  with an ini to disable or tune it: `test_no_top_level_variable_access` (AST scan plus
+  runtime interception of `Variable`/`Connection` lookups during the corpus `DagBag` fill),
+  `test_no_top_level_io` (import-resolved calls into known I/O modules, list configurable
+  via `airflow_top_level_io_modules`), `test_dag_parse_budget` (relative-to-median parse
+  budget, `airflow_dag_parse_budget_ratio`, floored at one second), `test_forbid_catchup`,
+  and `test_no_unbounded_expand` (mapped tasks expanding over runtime data without
+  `max_active_tis_per_dag`)
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
 
 ### Changed
 
@@ -67,6 +76,14 @@ All notable changes to this project will be documented in this file. The format 
   loading an existing Dag via `full_dag_bag` + `run_dag`; the inline `dag_maker` example moves
   to a clearly labeled secondary "adhoc Dag" path
   ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
+- The shared smoke corpus artifact schema is now version 2, carrying per-Dag `catchup` and
+  `fileloc`, per-task mapping metadata, and recorded runtime secrets lookups; mixed-version
+  workers reject stale artifacts loudly
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+- The generated test `airflow.cfg` now pins `[scheduler] catchup_by_default = False` on both
+  families, so an effective `dag.catchup` no longer flips with the installed family (2.x
+  defaults it to `True`) for a value the Dag never set
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
 
 ### Fixed
 

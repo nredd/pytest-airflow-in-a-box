@@ -266,6 +266,41 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "Seed for deterministic selection of the serialization smoke sample.",
         default="0",
     )
+    parser.addini(
+        "airflow_forbid_top_level_variable_access",
+        "Fail Dag files that fetch Variables or Connections at import time.",
+        type="bool",
+        default=True,
+    )
+    parser.addini(
+        "airflow_forbid_top_level_io",
+        "Fail Dag files that call into known I/O modules at import time.",
+        type="bool",
+        default=True,
+    )
+    parser.addini(
+        "airflow_top_level_io_modules",
+        "Module prefixes the top-level I/O smoke check flags; replaces the built-in list.",
+        type="linelist",
+        default=[],
+    )
+    parser.addini(
+        "airflow_dag_parse_budget_ratio",
+        "Fail Dag files parsing slower than this multiple of the corpus median; 0 disables.",
+        default="10",
+    )
+    parser.addini(
+        "airflow_forbid_catchup",
+        "Fail Dags that enable catchup.",
+        type="bool",
+        default=True,
+    )
+    parser.addini(
+        "airflow_forbid_unbounded_expand",
+        "Fail mapped tasks expanding over runtime data without max_active_tis_per_dag.",
+        type="bool",
+        default=True,
+    )
     group.addoption(
         "--airflow-doctor",
         action="store_true",

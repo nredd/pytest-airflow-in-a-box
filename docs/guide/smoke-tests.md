@@ -84,6 +84,38 @@ is unaffected and keeps distributing the catalog across workers as described abo
   `pytest-xdist --dist each`, or a rerun after failure). A name that already exists with a
   *different* slot count (including Airflow's own `default_pool`) fails the item
 
+Five anti-pattern checks target the Dag habits that only bite in production. They are on by
+default whenever the catalog is enabled, and each has its own ini to disable or tune it:
+
+- `test_no_top_level_variable_access` -- no Dag file fetches a Variable or Connection at import
+  time, where it would run on every scheduler parse loop. Two mechanisms merge into one report:
+  an AST scan over exactly the files Airflow parsed (direct calls like `Variable.get(...)`,
+  `Connection.get(...)`, `BaseHook.get_connection(...)`, with exact file and line), and runtime
+  interception that patches the secrets entry points while the shared corpus fills its `DagBag`,
+  which also catches lookups hidden behind helper functions. The `full_dag_bag` parse is
+  instrumented the same way whenever the catalog is enabled, so the runtime pass survives either
+  parse ordering; a `DagBag` that was somehow parsed without instrumentation degrades the check
+  to AST-only with a logged note. Disable with
+  `airflow_forbid_top_level_variable_access = false`
+- `test_no_top_level_io` -- no Dag file calls into a known network or database module at import
+  time. AST-only, and deliberately conservative: a call is flagged only when its callee provably
+  resolves through the file's own top-level imports to a listed module (`requests.get(...)`,
+  `boto3.client(...)`, `create_engine(...)`), so aliased indirection escapes by design rather
+  than risking false positives. `airflow_top_level_io_modules` *replaces* the built-in module
+  list (copy it to extend it); disable with `airflow_forbid_top_level_io = false`
+- `test_dag_parse_budget` -- no Dag file's parse duration exceeds
+  `max(ratio x corpus median, 1.0s)`, with `airflow_dag_parse_budget_ratio` defaulting to `10`.
+  Relative to the run's own median, so it is independent of absolute CI speed; the one-second
+  floor keeps tiny fast corpora from failing on timing jitter, and fewer than three parsed files
+  pass trivially. `airflow_dag_parse_budget_ratio = 0` disables the check
+- `test_forbid_catchup` -- no scheduled Dag enables `catchup`, which backfills every missed
+  interval the moment the Dag is unpaused; unscheduled Dags are skipped, since with no
+  timetable there is nothing to backfill. Disable with `airflow_forbid_catchup = false`
+- `test_no_unbounded_expand` -- no mapped task expands over runtime data (XCom or task output)
+  without `max_active_tis_per_dag`; one oversized upstream result would otherwise fan out into
+  an unbounded number of concurrent task instances. Literal expansions are bounded by
+  construction and pass. Disable with `airflow_forbid_unbounded_expand = false`
+
 The serialization-backed checks (`test_dag_serialization_roundtrip`, `test_schedule_sanity`,
 `test_dag_serialization_snapshot`) share the producer's serialized-Dag cache across workers, so
 the corpus is parsed and the selected Dags are serialized once per run. Two ini options bound the

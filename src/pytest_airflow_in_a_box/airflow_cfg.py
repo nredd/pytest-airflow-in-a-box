@@ -109,6 +109,10 @@ def write_airflow_config(
     cfg["core"] = core
     cfg["database"] = {"sql_alchemy_conn": sql_alchemy_conn}
     cfg["logging"] = {"base_log_folder": str(logs_folder)}
+    # Pinned on both families: 2.x defaults `catchup_by_default` to True, so without the
+    # pin an effective `dag.catchup` -- and the smoke catalog's `test_forbid_catchup`
+    # verdict -- would flip with the installed family for a value the Dag never set.
+    cfg["scheduler"] = {"catchup_by_default": "False"}
     if family is AirflowFamily.V3:
         cfg["api_auth"] = {"jwt_secret": jwt_secret}
     else:

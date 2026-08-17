@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +16,37 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import build_dag_bag
+from pytest_airflow_in_a_box._compat.introspection import SecretsLookup
 from pytest_airflow_in_a_box.fixtures import dagbag as fixtures_dagbag
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box._compat.dagbag import DagBag
+
+
+def _fake_recorder(lookups: list[SecretsLookup]) -> Any:
+    """Create a `record_secrets_lookups` double yielding the given lookups.
+
+    Parameters:
+        lookups: list[SecretsLookup] the double reports as recorded.
+
+    Returns:
+        Any shaped like the `record_secrets_lookups` context manager factory.
+    """
+
+    @contextlib.contextmanager
+    def recorder(_folder: Path) -> Any:
+        """Yield the canned lookup list without patching anything.
+
+        Parameters:
+            _folder: pathlib.Path containing the unused Dag folder.
+
+        Returns:
+            Any yielding the canned lookup list.
+        """
+
+        yield lookups
+
+    return recorder
 
 
 def _write_dag_file(path: Path, *dag_ids: str) -> None:
@@ -331,6 +359,7 @@ def test_cached_dag_bag_applies_parse_timeout_when_smoke_enabled(
 
     sentinel: Any = SimpleNamespace(dags={}, import_errors={})
     config = _fake_config(tmp_path=tmp_path, airflow_smoke=True, parse_timeout="5")
+    lookup = SecretsLookup(kind="variable", key="k", file=None, line=None)
     monkeypatch.setenv("AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT", "999")
     monkeypatch.setattr(
         fixtures_dagbag,
@@ -338,12 +367,16 @@ def test_cached_dag_bag_applies_parse_timeout_when_smoke_enabled(
         lambda _config: SimpleNamespace(root=tmp_path, dags_folder=tmp_path),
     )
     monkeypatch.setattr(fixtures_dagbag, "build_dag_bag", lambda _folder, **_kwargs: sentinel)
+    monkeypatch.setattr(
+        fixtures_dagbag, "record_secrets_lookups", _fake_recorder([lookup, lookup])
+    )
     session: Any = SimpleNamespace(stash=pytest.Stash())
 
     result = fixtures_dagbag._cached_dag_bag(session, config)
 
     assert result is sentinel
     assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "5.0"
+    assert session.stash[fixtures_dagbag.LIVE_DAG_BAG_LOOKUPS_KEY] == (lookup,)
 
 
 def test_cached_dag_bag_ignores_parse_timeout_when_smoke_out_of_scope(

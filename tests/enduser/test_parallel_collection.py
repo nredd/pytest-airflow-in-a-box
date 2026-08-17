@@ -172,7 +172,7 @@ def test_smoke_items_share_one_parse_while_remaining_distributed(
         "smoke",
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=11)
     import_records = [
         json.loads(path.read_text(encoding="utf-8")) for path in record_dir.glob("import-*.json")
     ]
@@ -180,7 +180,7 @@ def test_smoke_items_share_one_parse_while_remaining_distributed(
         json.loads(path.read_text(encoding="utf-8")) for path in record_dir.glob("item-*.json")
     ]
     assert len(import_records) == 1
-    assert len(item_records) == 5
+    assert len(item_records) == 10
     assert len({record["worker"] for record in item_records}) > 1
 
 
@@ -261,10 +261,10 @@ def test_smoke_catalog_and_full_dag_bag_consumer_share_one_worker_and_parse(
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=11)
     assert counter.read_text(encoding="utf-8").count("x") == 1
     records = [json.loads(path.read_text(encoding="utf-8")) for path in record_dir.iterdir()]
-    assert len(records) == 6
+    assert len(records) == 11
     assert len({record["worker"] for record in records}) == 1
 
 
@@ -289,7 +289,7 @@ def test_smoke_and_dag_folder_collection_are_xdist_consistent(
         str(CORPUS),
     )
 
-    result.assert_outcomes(passed=12, failed=2)
+    result.assert_outcomes(passed=17, failed=2)
     assert "Different tests were collected" not in result.stdout.str()
     result.stdout.fnmatch_lines(["*dag-import*"])
 
