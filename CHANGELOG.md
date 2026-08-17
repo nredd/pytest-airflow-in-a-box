@@ -69,6 +69,13 @@ All notable changes to this project will be documented in this file. The format 
   and `test_no_unbounded_expand` (mapped tasks expanding over runtime data without
   `max_active_tis_per_dag`)
   ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+- Added `pytest_airflow_in_a_box.assets.evaluate_asset_schedules`, evaluating a consumer Dag's
+  `AssetTriggeredTimetable`/`DatasetTriggeredTimetable` condition against queued asset/dataset
+  events in the isolated metadata database and creating its `QUEUED` `DagRun` with
+  `consumed_asset_events`/`consumed_dataset_events` attached. Closes the cross-Dag asset-triggering
+  gap `dag_maker`/`full_dag_bag` left as static-only wiring assertions, on both the Airflow 3
+  `Asset` and certified 2.x `Dataset` spellings
+  ([#166](https://github.com/nredd/pytest-airflow-in-a-box/issues/166)).
 
 ### Changed
 

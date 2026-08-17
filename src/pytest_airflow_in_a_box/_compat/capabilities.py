@@ -124,6 +124,20 @@ class _SerializedDagLocation(str, Enum):
     DEFINITIONS = "airflow.serialization.definitions.dag"
 
 
+class AssetUniqueKeyLocation(str, Enum):
+    """Closed set of certified asset-condition unique-key module locations.
+
+    3.1.x evaluates asset conditions against the SDK's own ``AssetUniqueKey``; 3.2
+    split asset serialization out of ``airflow.serialization.serialized_objects`` the
+    same way it split ``SerializedDAG``, and condition evaluation moved onto the
+    resulting ``SerializedAssetUniqueKey``. 2.x has no unique-key type at all --
+    ``BaseDataset.evaluate`` keys its status dict by dataset URI string directly.
+    """
+
+    SDK = "airflow.sdk.definitions.asset"
+    SERIALIZATION = "airflow.serialization.definitions.assets"
+
+
 class DagRunInterface(str, Enum):
     """Closed set of certified ``create_dagrun`` date-keyword interfaces."""
 
@@ -194,6 +208,9 @@ class AirflowCapabilities:
             the installer actually enforces.
         dag_requires_start_date: bool indicating that constructing a Dag without a
             `start_date` fails even when the Dag declares no schedule.
+        asset_unique_key_location: AssetUniqueKeyLocation | None naming the module
+            asset-condition evaluation imports its unique-key type from; None on 2.x,
+            which evaluates dataset conditions by URI string with no unique-key type.
     """
 
     release: Release
@@ -214,6 +231,7 @@ class AirflowCapabilities:
     secrets_resolution: SecretsResolution
     max_python: tuple[int, int] | None
     dag_requires_start_date: bool
+    asset_unique_key_location: AssetUniqueKeyLocation | None
 
 
 # Airflow below 2.8 raises `DAG is missing the start_date parameter` from
@@ -251,6 +269,7 @@ def _certify_v3(
     refresh_from_task_supports_dag_run: bool,
     startup_details_supports_sentry: bool,
     runtime_task_instance_supports_queue: bool,
+    asset_unique_key_location: AssetUniqueKeyLocation,
 ) -> AirflowCapabilities:
     """Build one certified 3.x contract row with the family-static fields filled.
 
@@ -262,6 +281,8 @@ def _certify_v3(
         refresh_from_task_supports_dag_run: bool indicating ``dag_run`` keyword support.
         startup_details_supports_sentry: bool indicating the sentry model field.
         runtime_task_instance_supports_queue: bool indicating the runtime DTO queue field.
+        asset_unique_key_location: AssetUniqueKeyLocation naming the canonical import
+            location for asset-condition evaluation's unique-key type.
 
     Returns:
         AirflowCapabilities containing the complete certified contract.
@@ -286,6 +307,7 @@ def _certify_v3(
         secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
         max_python=None,
         dag_requires_start_date=False,
+        asset_unique_key_location=asset_unique_key_location,
     )
 
 
@@ -326,6 +348,7 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         secrets_resolution=SecretsResolution.METASTORE,
         max_python=V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(AirflowFamily.V2, release),
+        asset_unique_key_location=None,
     )
 
 
@@ -340,6 +363,7 @@ _CERTIFIED_CAPABILITIES = (
             refresh_from_task_supports_dag_run=False,
             startup_details_supports_sentry=False,
             runtime_task_instance_supports_queue=False,
+            asset_unique_key_location=AssetUniqueKeyLocation.SDK,
         )
         for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
         if release < (3, 2, 0)
@@ -353,6 +377,7 @@ _CERTIFIED_CAPABILITIES = (
             refresh_from_task_supports_dag_run=False,
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
+            asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
         ),
         (3, 2, 1): _certify_v3(
             (3, 2, 1),
@@ -362,6 +387,7 @@ _CERTIFIED_CAPABILITIES = (
             refresh_from_task_supports_dag_run=False,
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
+            asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
         ),
         (3, 2, 2): _certify_v3(
             (3, 2, 2),
@@ -371,6 +397,7 @@ _CERTIFIED_CAPABILITIES = (
             refresh_from_task_supports_dag_run=False,
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
+            asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
         ),
         (3, 3, 0): _certify_v3(
             (3, 3, 0),
@@ -380,6 +407,7 @@ _CERTIFIED_CAPABILITIES = (
             refresh_from_task_supports_dag_run=True,
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
+            asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
         ),
         (3, 3, 1): _certify_v3(
             (3, 3, 1),
@@ -389,6 +417,7 @@ _CERTIFIED_CAPABILITIES = (
             refresh_from_task_supports_dag_run=True,
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
+            asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
         ),
     }
 )
@@ -445,6 +474,9 @@ _V3_REQUIRED_SYMBOLS = (
     ("airflow.sdk.api.datamodels._generated", "DagRunState"),
     ("airflow.sdk.api.datamodels._generated", "TaskInstanceState"),
     ("airflow.sdk.api.datamodels._generated", "TIRunContext"),
+    ("airflow.assets.evaluation", "AssetEvaluator"),
+    ("airflow.models.asset", "AssetDagRunQueue"),
+    ("airflow.timetables.simple", "AssetTriggeredTimetable"),
 )
 # Spike-verified present on 2.9.3/2.10.5/2.11.2 (2026-08-11) and on 2.7.3/2.8.4
 # (2026-08-14, #139); the surface Phase 2's fixture branches consume.
@@ -458,6 +490,9 @@ _V2_REQUIRED_SYMBOLS = (
     ("airflow.utils.timezone", "coerce_datetime"),
     ("airflow.utils.timezone", "convert_to_utc"),
     ("airflow.models.dataset", "DatasetModel"),
+    ("airflow.models.dataset", "DatasetDagRunQueue"),
+    ("airflow.models.dataset", "DagScheduleDatasetReference"),
+    ("airflow.timetables.simple", "DatasetTriggeredTimetable"),
 )
 _REQUIRED_SYMBOLS_BY_FAMILY = {
     AirflowFamily.V2: _COMMON_REQUIRED_SYMBOLS + _V2_REQUIRED_SYMBOLS,
@@ -936,6 +971,36 @@ def _probe_serialized_dag(version: str) -> _SerializedDagLocation:
     return _SerializedDagLocation.DEFINITIONS
 
 
+def _probe_asset_unique_key_location(version: str) -> AssetUniqueKeyLocation:
+    """Resolve the canonical asset-condition unique-key location by capability.
+
+    Parameters:
+        version: str reported by package metadata.
+
+    Returns:
+        AssetUniqueKeyLocation naming the resolved module.
+
+    Raises:
+        AirflowCompatibilityError: Neither certified location resolves.
+    """
+
+    module_name = AssetUniqueKeyLocation.SERIALIZATION.value
+    try:
+        module = import_module(module_name)
+        _ = module.SerializedAssetUniqueKey
+    except (ImportError, AttributeError):
+        _resolve_symbol(AssetUniqueKeyLocation.SDK.value, "AssetUniqueKey", version)
+        return AssetUniqueKeyLocation.SDK
+    except Exception as error:
+        _raise_compatibility_error(
+            version,
+            "probing canonical Airflow symbol",
+            f"{module_name}.SerializedAssetUniqueKey",
+            error,
+        )
+    return AssetUniqueKeyLocation.SERIALIZATION
+
+
 def _probe_task_instance_runner(task_instance: object, version: str) -> TaskInstanceRunner:
     """Resolve legacy or Task SDK task execution behavior.
 
@@ -1000,6 +1065,7 @@ _PROBED_FIELD_LABELS: dict[str, str] = {
     "refresh_from_task_supports_dag_run": "TaskInstance.refresh_from_task.dag_run",
     "startup_details_supports_sentry": "StartupDetails.sentry_integration",
     "runtime_task_instance_supports_queue": "TaskInstance DTO queue",
+    "asset_unique_key_location": "Asset unique-key canonical location",
 }
 
 
@@ -1081,7 +1147,9 @@ def _resolve_uncached(
     )
     startup_details_supports_sentry: bool | None = None
     runtime_task_instance_supports_queue: bool | None = None
+    asset_unique_key_location: AssetUniqueKeyLocation | None = None
     if is_v3:
+        asset_unique_key_location = _probe_asset_unique_key_location(installed_version)
         startup_details = _resolve_symbol(
             "airflow.sdk.execution_time.comms", "StartupDetails", installed_version
         )
@@ -1132,6 +1200,7 @@ def _resolve_uncached(
         ),
         max_python=None if is_v3 else V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(family, release),
+        asset_unique_key_location=asset_unique_key_location,
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:
@@ -1173,6 +1242,7 @@ __all__ = (
     "AirflowCompatibilityError",
     "AirflowFamily",
     "ApiSurface",
+    "AssetUniqueKeyLocation",
     "DagBagLocation",
     "DagRunInterface",
     "ParamsLocation",
