@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- `airflow_smoke_disable` ini option to persistently drop any bundled smoke item from the
+  catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
+  entirely while building the corpus
+  ([#162](https://github.com/nredd/pytest-airflow-in-a-box/issues/162)).
+
 ## [0.7.2] - 2026-08-15
 
 ### Changed

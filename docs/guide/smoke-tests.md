@@ -20,6 +20,21 @@ it happens to match some smoke item's other marks -- otherwise an unrelated filt
 explicitly scoped run could silently pull in the whole catalog. `-k` and `--deselect
 ::smoke::<name>` apply to the items as usual:
 
+Persistently drop any bundled item from the catalog with `airflow_smoke_disable`, a list of
+item names (e.g. `test_schedule_sanity`, `test_dag_serialization_snapshot`). Unlike `--deselect`,
+which filters after collection, a disabled item is never synthesized at all -- if every
+serialization-backed item (`test_dag_serialization_roundtrip`, `test_schedule_sanity`, and, when
+configured, `test_dag_serialization_snapshot`) is disabled, the corpus builder skips calling the
+Airflow DAG serializer entirely, which `airflow_serialization_sample_size` alone cannot do (`0`
+means every Dag, not none):
+
+```ini
+[pytest]
+airflow_smoke_disable =
+    test_dag_serialization_roundtrip
+    test_schedule_sanity
+```
+
 Under `pytest-xdist`, bundled items remain independently schedulable across workers. The first item
 to need the corpus parses it once and publishes a serialized artifact below the isolated run root;
 the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
@@ -66,7 +81,8 @@ cost on large generated corpora:
   deterministic sample of N Dags, selected by hashing each `dag_id` with
   `airflow_serialization_sample_seed` (default `0`); the same corpus and seed always select the
   same sample, and `test_schedule_sanity` skips Dags outside it. Incompatible with
-  `--airflow-smoke-update`, which must regenerate every snapshot
+  `--airflow-smoke-update`, which must regenerate every snapshot. Bounds the cost, but `0`
+  still means every Dag -- use `airflow_smoke_disable` above to eliminate it entirely
 - run with `--log-cli-level=INFO` to stream per-Dag serialization progress live; captured-only
   logs do not survive a hard outer kill
 

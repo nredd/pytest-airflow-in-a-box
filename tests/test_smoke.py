@@ -30,6 +30,7 @@ def _config(
     sample_size: object = "0",
     sample_seed: object = "0",
     pools: object = (),
+    disable: object = (),
     rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for smoke config-reader tests.
@@ -47,6 +48,7 @@ def _config(
         sample_size: object containing the ``airflow_serialization_sample_size`` ini value.
         sample_seed: object containing the ``airflow_serialization_sample_seed`` ini value.
         pools: object containing the ``airflow_pools`` ini value.
+        disable: object containing the ``airflow_smoke_disable`` ini value.
         rootpath: pathlib.Path used to resolve a relative snapshot directory.
 
     Returns:
@@ -66,6 +68,7 @@ def _config(
         "airflow_serialization_sample_size": sample_size,
         "airflow_serialization_sample_seed": sample_seed,
         "airflow_pools": list(pools) if isinstance(pools, (list, tuple)) else pools,
+        "airflow_smoke_disable": list(disable) if isinstance(disable, (list, tuple)) else disable,
     }
     option_values = {
         "airflow_smoke": airflow_smoke,
@@ -400,6 +403,78 @@ def test_pool_seeds_rejects_malformed_values(value: object, match: str) -> None:
 
     with pytest.raises(pytest.UsageError, match=match):
         smoke._pool_seeds(_config(pools=value))
+
+
+def test_disabled_smoke_items_returns_empty_when_unset() -> None:
+    """Return no disabled items when the ini value is unset."""
+
+    assert smoke._disabled_smoke_items(_config()) == frozenset()
+
+
+def test_disabled_smoke_items_returns_configured_subset() -> None:
+    """Return every configured name as a frozenset."""
+
+    disabled = smoke._disabled_smoke_items(
+        _config(disable=["test_schedule_sanity", "test_dag_serialization_roundtrip"])
+    )
+
+    assert disabled == frozenset({"test_schedule_sanity", "test_dag_serialization_roundtrip"})
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (7, "must be a list of names"),
+        ([7], "must be a list of names"),
+        (["test_bogus_item"], "unknown smoke item"),
+    ],
+)
+def test_disabled_smoke_items_rejects_malformed_values(value: object, match: str) -> None:
+    """Reject a non-list value, a list of non-strings, and an unrecognized item name."""
+
+    with pytest.raises(pytest.UsageError, match=match):
+        smoke._disabled_smoke_items(_config(disable=value))
+
+
+def test_smoke_serialization_needed_defaults_to_true() -> None:
+    """Return enabled when nothing is disabled."""
+
+    assert smoke._smoke_serialization_needed(_config()) is True
+
+
+def test_smoke_serialization_needed_true_when_only_schedule_sanity_remains() -> None:
+    """Return enabled when the roundtrip item is disabled but schedule sanity is not."""
+
+    needed = smoke._smoke_serialization_needed(
+        _config(disable=["test_dag_serialization_roundtrip"])
+    )
+
+    assert needed is True
+
+
+def test_smoke_serialization_needed_false_once_every_consumer_is_disabled() -> None:
+    """Return disabled once both unconditional serialization items are disabled."""
+
+    disabled = smoke._smoke_serialization_needed(
+        _config(disable=["test_dag_serialization_roundtrip", "test_schedule_sanity"])
+    )
+
+    assert disabled is False
+
+
+def test_smoke_serialization_needed_true_when_snapshot_item_still_enabled(
+    tmp_path: Path,
+) -> None:
+    """Return enabled when the snapshot item is configured and not disabled."""
+
+    needed = smoke._smoke_serialization_needed(
+        _config(
+            disable=["test_dag_serialization_roundtrip", "test_schedule_sanity"],
+            snapshot_dir=str(tmp_path),
+        )
+    )
+
+    assert needed is True
 
 
 def test_forbid_default_owner_defaults_to_false() -> None:
@@ -822,6 +897,20 @@ def test_serialized_dag_cache_applies_sampling(
         smoke._sampled_dag_ids(("alpha", "bravo", "charlie"), sample_size=1, seed="0")
     )
     assert "deterministic sample of 1 of 3 Dags (seed '0')" in caplog.text
+
+
+def test_serialized_dag_cache_skips_selection_when_serialization_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Select and serialize nothing once every consumer of the cache is disabled."""
+
+    dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    config = _config(disable=["test_dag_serialization_roundtrip", "test_schedule_sanity"])
+
+    entries = smoke._serialized_dag_cache(_session(), config)
+
+    assert entries == {}
 
 
 def test_corpus_timeout_scales_with_file_count(
@@ -1924,6 +2013,78 @@ def test_smoke_update_rejects_sampling_at_startup(pytester: pytest.Pytester) -> 
 
     assert result.ret != 0
     result.stderr.fnmatch_lines(["*`--airflow-smoke-update` cannot be combined*"])
+
+
+def test_smoke_disable_drops_one_item_but_keeps_serializing(pytester: pytest.Pytester) -> None:
+    """Drop only the named item while another serialization consumer still runs."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini(
+        "[pytest]\nairflow_smoke = true\nairflow_smoke_disable = test_schedule_sanity\n"
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
+    )
+
+    result.assert_outcomes(passed=4)
+    assert "::smoke::test_schedule_sanity" not in result.stdout.str()
+    result.stdout.fnmatch_lines(["*Serialized Dag*"])
+
+
+def test_smoke_disable_every_serialization_item_skips_the_serializer(
+    pytester: pytest.Pytester,
+) -> None:
+    """Skip calling the Airflow DAG serializer once no collected item needs it."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_smoke_disable =\n"
+        "    test_dag_serialization_roundtrip\n"
+        "    test_schedule_sanity\n"
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
+    )
+
+    result.assert_outcomes(passed=3)
+    assert "::smoke::test_dag_serialization_roundtrip" not in result.stdout.str()
+    assert "::smoke::test_schedule_sanity" not in result.stdout.str()
+    assert "Serialized Dag" not in result.stdout.str()
+    assert "Serializing a deterministic sample" not in result.stdout.str()
+
+
+def test_smoke_disable_drops_every_non_serialization_item(pytester: pytest.Pytester) -> None:
+    """Drop the three non-serialization core items, keeping only the serialization pair."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_smoke_disable =\n"
+        "    test_dag_bag_integrity\n"
+        "    test_no_duplicate_dag_ids\n"
+        "    test_pool_references_exist\n"
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_smoke_disable_rejects_unknown_item_name_at_startup(pytester: pytest.Pytester) -> None:
+    """Refuse an `airflow_smoke_disable` entry that names no bundled item."""
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_smoke_disable = test_bogus_item\n")
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*`airflow_smoke_disable` names unknown smoke item(s)*"])
 
 
 def test_broken_dag_fails_integrity_with_traceback(pytester: pytest.Pytester) -> None:
