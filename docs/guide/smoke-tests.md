@@ -20,6 +20,21 @@ it happens to match some smoke item's other marks -- otherwise an unrelated filt
 explicitly scoped run could silently pull in the whole catalog. `-k` and `--deselect
 ::smoke::<name>` apply to the items as usual:
 
+Persistently drop any bundled item from the catalog with `airflow_smoke_disable`, a list of
+item names (e.g. `test_schedule_sanity`, `test_dag_serialization_snapshot`). Unlike `--deselect`,
+which filters after collection, a disabled item is never synthesized at all -- if every
+serialization-backed item (`test_dag_serialization_roundtrip`, `test_schedule_sanity`, and, when
+configured, `test_dag_serialization_snapshot`) is disabled, the corpus builder skips calling the
+Airflow DAG serializer entirely, which `airflow_serialization_sample_size` alone cannot do (`0`
+means every Dag, not none):
+
+```ini
+[pytest]
+airflow_smoke_disable =
+    test_dag_serialization_roundtrip
+    test_schedule_sanity
+```
+
 Under `pytest-xdist`, bundled items remain independently schedulable across workers. The first item
 to need the corpus parses it once and publishes a serialized artifact below the isolated run root;
 the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
@@ -31,6 +46,18 @@ of parsing again (the catalog is always collected last, so this is the common ca
 catalog is enabled this way, `airflow_dag_parse_timeout` also governs `full_dag_bag`'s own parse, so
 a Dag file that exceeds it lands in `full_dag_bag.import_errors` instead of `full_dag_bag.dags`.
 Treat a shared `DagBag` as read-only: a consumer's mutation is visible to the catalog's checks too.
+
+That same-process reuse depends on the corpus builder and a `full_dag_bag` consumer landing on the
+same worker, which plain load-balanced scheduling does not guarantee. Under `--dist loadgroup`, if
+this run also has a test that uses `full_dag_bag` and would survive an active `-m` expression, the
+plugin puts the whole catalog and one such consumer into a shared `xdist_group`, forcing them onto
+the same worker -- instead of the corpus builder and `full_dag_bag` independently parsing the same
+folder in parallel on two workers. Only one consumer joins the group, not every one in the run, so a
+suite with many `full_dag_bag` tests does not have all of their execution serialized onto a single
+worker just to save one parse. An item that already carries its own explicit `xdist_group` is never
+chosen or overwritten. `-k` deselection is not predicted the way `-m` is, so a `full_dag_bag`
+consumer dropped only by `-k` may still be chosen. A smoke-only run with no `full_dag_bag` consumer
+is unaffected and keeps distributing the catalog across workers as described above.
 
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
@@ -98,7 +125,8 @@ cost on large generated corpora:
   deterministic sample of N Dags, selected by hashing each `dag_id` with
   `airflow_serialization_sample_seed` (default `0`); the same corpus and seed always select the
   same sample, and `test_schedule_sanity` skips Dags outside it. Incompatible with
-  `--airflow-smoke-update`, which must regenerate every snapshot
+  `--airflow-smoke-update`, which must regenerate every snapshot. Bounds the cost, but `0`
+  still means every Dag -- use `airflow_smoke_disable` above to eliminate it entirely
 - run with `--log-cli-level=INFO` to stream per-Dag serialization progress live; captured-only
   logs do not survive a hard outer kill
 

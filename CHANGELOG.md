@@ -8,6 +8,36 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- A DB-free `render_task` fixture (and matching `_compat.render_task_in_process`) rendering
+  one operator's `template_fields` through the Task SDK's public `render_template_fields`,
+  plus a `rendered(...)` matcher for one-expression assertions -- the documented replacement
+  for `TaskInstance.render_templates()`, which Airflow 3.2+ removed
+  ([#118](https://github.com/nredd/pytest-airflow-in-a-box/issues/118)).
+- `airflow_smoke_disable` ini option to persistently drop any bundled smoke item from the
+  catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
+  entirely while building the corpus
+  ([#162](https://github.com/nredd/pytest-airflow-in-a-box/issues/162)).
+- A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
+  garbage-collector race that can exit a session non-zero despite an all-passed summary, why this
+  plugin's `tmp_path_retention_policy = "failed"` default makes it likelier than a bare pytest
+  install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
+  workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
+  ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+- A "Retry behavior" recipe in `docs/guide/cookbook.md` covering `fail -> up_for_retry ->
+  succeed` state-math progression: asserting `try_number` and `retry_delay` at the
+  `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
+  ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
+- A `run_dag` fixture drives a Dag pulled from `full_dag_bag` (or otherwise authored outside
+  `dag_maker`) through a full DagRun and returns the same `DagRunResult` snapshot
+  `dag_maker.run()` does, so a Dag already living in your `dags/` folder can be executed
+  without adopting `dag_maker`'s inline-authoring shape
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
+- A "What a dagbag + callable test misses" section in `docs/guide/cookbook.md`, running one
+  realistic multi-task `ingest` Dag through `dag_maker` to show task relations (trigger rules,
+  branching, cross-task xcom), asset-triggered cross-Dag relations, depends-on-past/backfill
+  DagRun sequences, and retry behavior (`up_for_retry`, `try_number`) that a dagbag-import-plus
+  callable test cannot reach. Linked from README's `Why not...` section
+  ([#165](https://github.com/nredd/pytest-airflow-in-a-box/issues/165)).
 - Five Dag anti-pattern smoke checks, on by default whenever the catalog is enabled, each
   with an ini to disable or tune it: `test_no_top_level_variable_access` (AST scan plus
   runtime interception of `Variable`/`Connection` lookups during the corpus `DagBag` fill),
@@ -20,6 +50,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- The README quickstart, `docs/index.md`, and `docs/guide/task-execution.md` now lead with
+  loading an existing Dag via `full_dag_bag` + `run_dag`; the inline `dag_maker` example moves
+  to a clearly labeled secondary "adhoc Dag" path
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
 - The shared smoke corpus artifact schema is now version 2, carrying per-Dag `catchup` and
   `fileloc`, per-task mapping metadata, and recorded runtime secrets lookups; mixed-version
   workers reject stale artifacts loudly
@@ -28,6 +62,20 @@ All notable changes to this project will be documented in this file. The format 
   families, so an effective `dag.catchup` no longer flips with the installed family (2.x
   defaults it to `True`) for a value the Dag never set
   ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+
+### Fixed
+
+- The bundled smoke catalog no longer parses the Dag folder a second time, in parallel,
+  when a `full_dag_bag` consumer lands on a different `pytest-xdist` worker under
+  `--dist loadgroup`. When both are present in the run and would survive an active `-m`
+  expression, the plugin now puts the catalog and one `full_dag_bag` consumer into a
+  shared `xdist_group`, forcing `--dist loadgroup` to schedule them onto the same worker
+  so the existing process-local `DagBag` cache has a chance to be reused instead of two
+  workers each paying a full parse concurrently. An item that already carries its own
+  explicit `xdist_group` is left untouched, and only one consumer is ever grouped, so a
+  suite with many `full_dag_bag` consumers does not have all of their execution
+  serialized onto a single worker just to save one parse
+  ([#163](https://github.com/nredd/pytest-airflow-in-a-box/issues/163)).
 
 ## [0.7.2] - 2026-08-15
 

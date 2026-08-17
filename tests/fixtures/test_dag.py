@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -26,9 +27,10 @@ from pytest_airflow_in_a_box.fixtures.dag import (
     DAG_ID_MAX_LENGTH,
     _bundle_name,
     _DagFactory,
+    _DagRunner,
     _default_dag_id,
 )
-from pytest_airflow_in_a_box.types import DagMaker
+from pytest_airflow_in_a_box.types import DagMaker, RunDag
 
 pytestmark = pytest.mark.db_test
 
@@ -427,3 +429,154 @@ def test_function_scope_cleanup_and_shared_bundle_preservation(
     result = pytester.runpytest_subprocess("-p", "pytest_airflow_in_a_box.plugin", "-q")
 
     result.assert_outcomes(passed=2)
+
+
+def test_run_dag_persists_executes_and_cleans_an_external_dag(run_dag: RunDag) -> None:
+    """Adopt an externally-authored Dag and return its executed `DagRunResult`."""
+
+    dag = dag_compat.build_dag("run_dag_basic", __file__, {})
+    with dag:
+        first = EmptyOperator(task_id="first")
+        second = EmptyOperator(task_id="second")
+        first >> second
+
+    result = run_dag(dag)
+
+    assert result.success
+    assert result.dag_id == "run_dag_basic"
+    assert result.order == ["first", "second"]
+    assert _row_counts("run_dag_basic") == (1, 1, 1, 1)
+
+
+def test_run_dag_rejects_a_colliding_dag_id(dag_maker: DagMaker, run_dag: RunDag) -> None:
+    """Refuse to adopt a Dag whose id already has persisted metadata."""
+
+    with dag_maker(dag_id="run_dag_duplicate"):
+        EmptyOperator(task_id="owned_by_dag_maker")
+
+    colliding = dag_compat.build_dag("run_dag_duplicate", __file__, {})
+    with colliding:
+        EmptyOperator(task_id="owned_by_run_dag")
+
+    with pytest.raises(ValueError, match="already exists"):
+        run_dag(colliding)
+
+    assert _row_counts("run_dag_duplicate") == (1, 1, 1, 1)
+
+
+def test_run_dag_closes_the_session_when_persist_dag_fails(
+    run_dag: RunDag,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close the metadata session even when persistence fails after commit."""
+
+    failure = OSError("serialized read failed")
+
+    def fail_load(record: dag_compat.DagPersistenceRecord) -> None:
+        """Fail after the persistence transaction has committed."""
+
+        del record
+        raise failure
+
+    monkeypatch.setattr(dag_compat, "_load_serialized_dag", fail_load)
+
+    real_open_dag_session = dag_fixture.open_dag_session
+    closed = {"value": False}
+
+    def spying_open_dag_session(dag_id: str) -> Any:
+        """Wrap the opened session to record whether it was closed."""
+
+        session = real_open_dag_session(dag_id)
+        original_close = session.close
+
+        def spy_close() -> None:
+            closed["value"] = True
+            original_close()
+
+        monkeypatch.setattr(session, "close", spy_close)
+        return session
+
+    monkeypatch.setattr(dag_fixture, "open_dag_session", spying_open_dag_session)
+
+    dag = dag_compat.build_dag("run_dag_persist_failure", __file__, {})
+    with dag:
+        EmptyOperator(task_id="empty")
+
+    with pytest.raises(
+        DagPersistenceError, match="loading persisted serialized Dag metadata"
+    ) as caught:
+        run_dag(dag)
+
+    assert caught.value.__cause__ is failure
+    assert closed["value"]
+    assert _row_counts("run_dag_persist_failure") == (0, 0, 0, 0)
+
+
+def test_run_dag_supports_multiple_independent_dags_in_one_test(run_dag: RunDag) -> None:
+    """Persist, execute, and independently own metadata across repeated calls."""
+
+    first_dag = dag_compat.build_dag("run_dag_first", __file__, {})
+    with first_dag:
+        EmptyOperator(task_id="only")
+    second_dag = dag_compat.build_dag("run_dag_second", __file__, {})
+    with second_dag:
+        EmptyOperator(task_id="only")
+
+    first_result = run_dag(first_dag)
+    second_result = run_dag(second_dag)
+
+    assert first_result.dag_id != second_result.dag_id
+    assert first_result.success
+    assert second_result.success
+    assert _row_counts("run_dag_first") == (1, 1, 1, 1)
+    assert _row_counts("run_dag_second") == (1, 1, 1, 1)
+
+
+def test_run_dag_passes_through_run_id_logical_date_and_dag_run_kwargs(
+    run_dag: RunDag,
+) -> None:
+    """Forward explicit run identity and scheduler-Dag creation kwargs."""
+
+    dag = dag_compat.build_dag("run_dag_passthrough", __file__, {})
+    with dag:
+        EmptyOperator(task_id="only")
+    pinned_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    result = run_dag(
+        dag,
+        run_id="pinned-run-dag",
+        logical_date=pinned_date,
+        dag_run_kwargs={"conf": {"probe": 1}},
+    )
+
+    assert result.run_id == "pinned-run-dag"
+    assert result.dag_run.logical_date == pinned_date
+    assert result.dag_run.conf == {"probe": 1}
+
+
+def test_run_dag_cleanup_continues_after_one_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attempt every owned cleanup before reporting aggregated finalizer failures."""
+
+    session: Any = object()
+    first = dag_compat.DagPersistenceRecord("first", "first_bundle", session)
+    second = dag_compat.DagPersistenceRecord("second", "second_bundle", session)
+    runner = _DagRunner()
+    runner._records.extend([first, second])
+    attempted: list[str] = []
+
+    def cleanup(record: dag_compat.DagPersistenceRecord) -> None:
+        """Record every cleanup and fail the first reverse-order attempt."""
+
+        attempted.append(record.dag_id)
+        if record.dag_id == "second":
+            raise OSError("second failed")
+
+    monkeypatch.setattr(dag_fixture, "cleanup_dag", cleanup)
+
+    with pytest.raises(
+        DagCleanupError, match="Could not clean 1 fixture-owned Airflow Dags"
+    ) as caught:
+        runner.close()
+
+    assert attempted == ["second", "first"]
+    assert isinstance(caught.value.__cause__, OSError)

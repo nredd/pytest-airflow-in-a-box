@@ -184,6 +184,90 @@ def test_smoke_items_share_one_parse_while_remaining_distributed(
     assert len({record["worker"] for record in item_records}) > 1
 
 
+_COLOCATION_DAG = """
+    from pathlib import Path
+    from airflow.sdk import DAG, task
+
+    with Path({counter!r}).open("a", encoding="utf-8") as handle:
+        handle.write("x")
+
+    with DAG(dag_id="colocate_dag", schedule=None, tags=["team-a"]) as dag:
+        @task
+        def work():
+            pass
+
+        work()
+"""
+
+_WORKER_REPORTING_CONFTEST = """
+    import json
+    import os
+    from pathlib import Path
+
+    RECORD_DIR = Path({record_dir!r})
+
+
+    def pytest_runtest_logreport(report):
+        # The controller re-fires this hook for reports relayed up from workers for
+        # terminal output; only the worker's own firing has PYTEST_XDIST_WORKER set.
+        worker = os.environ.get("PYTEST_XDIST_WORKER")
+        if report.when != "call" or worker is None:
+            return
+        name = report.nodeid.replace("/", "_").replace("::", "-")
+        record = {{"worker": worker, "nodeid": report.nodeid}}
+        (RECORD_DIR / f"{{worker}}-{{name}}.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+"""
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_smoke_catalog_and_full_dag_bag_consumer_share_one_worker_and_parse(
+    pytester: pytest.Pytester,
+) -> None:
+    """Parse the Dag folder once when the catalog and a `full_dag_bag` consumer coexist.
+
+    Regression test for issue #163: an ungrouped smoke catalog could land on a
+    different worker than a `full_dag_bag` consumer under `--dist loadgroup`, so the
+    corpus was parsed twice, concurrently, on separate workers. Both now share
+    `FULL_DAG_BAG_XDIST_GROUP`, which forces `--dist loadgroup` to schedule them onto
+    the same worker, so the process-local live-`DagBag` reuse (`fixtures/dagbag.py`)
+    actually triggers.
+    """
+
+    counter = pytester.path / "parses.txt"
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(
+        dedent(_COLOCATION_DAG.format(counter=str(counter))), encoding="utf-8"
+    )
+    pytester.makeconftest(_WORKER_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        def test_consumer(full_dag_bag):
+            assert set(full_dag_bag.dags) == {"colocate_dag"}
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "-n",
+        "2",
+        "--dist=loadgroup",
+        "--airflow-smoke",
+        "--dag-folder",
+        str(dag_folder),
+    )
+
+    result.assert_outcomes(passed=11)
+    assert counter.read_text(encoding="utf-8").count("x") == 1
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in record_dir.iterdir()]
+    assert len(records) == 11
+    assert len({record["worker"] for record in records}) == 1
+
+
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
 def test_smoke_and_dag_folder_collection_are_xdist_consistent(
     pytester: pytest.Pytester,

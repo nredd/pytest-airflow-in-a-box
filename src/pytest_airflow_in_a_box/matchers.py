@@ -1,9 +1,14 @@
-"""Rich-equality matchers for bulk ``DagRunResult`` assertions.
+"""Rich-equality matchers for bulk ``DagRunResult`` and rendered-operator assertions.
 
-Each factory returns a ``TaskOutcome`` whose ``__eq__`` compares one expected
-outcome against a ``TaskResult``, so a whole DagRun asserts in one expression:
-``assert result == {"answer": succeeded(42)}``. The pattern follows
-``pytest.approx`` and dirty-equals: the right-hand side carries the comparison.
+Each factory returns an object whose ``__eq__`` compares expectations against the
+outcome under test, so an assertion reads as one expression:
+``assert result == {"answer": succeeded(42)}`` or
+``assert rendered(query="SELECT 42") == render_task(op)``. ``TaskOutcome`` follows
+``pytest.approx`` and dirty-equals -- the right-hand side carries the comparison --
+because it is always nested inside a plain ``dict``. ``RenderedFields`` instead goes
+on the LEFT: Airflow's ``BaseOperator.__eq__`` returns ``False`` outright for a
+foreign type instead of ``NotImplemented``, so Python never falls back to the
+matcher's ``__eq__`` when the operator is the left operand.
 
 References:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.approx
@@ -120,6 +125,76 @@ class TaskOutcome:
         return f"{factory}({rendered})"
 
 
+class RenderedFields:
+    """One expected set of rendered template-field values, checked against an operator.
+
+    Must be the LEFT operand: ``assert rendered(...) == op``, not ``op == rendered(...)``.
+    Airflow's ``BaseOperator.__eq__`` returns ``False`` for a foreign type instead of
+    ``NotImplemented``, so putting the operator first never gives this class a chance to
+    compare -- see the module docstring.
+    """
+
+    def __init__(self, **fields: Any) -> None:
+        """Store expected field values.
+
+        Parameters:
+            fields: Any containing expected attribute values by field name.
+                Pass ``ANY`` for a field whose value should not be checked.
+
+        Raises:
+            ValueError: No fields were supplied.
+        """
+
+        if not fields:
+            raise ValueError("`rendered(...)` requires at least one field")
+        self._fields = fields
+
+    def __eq__(self, other: object) -> bool:
+        """Compare expected field values against one rendered operator.
+
+        Parameters:
+            other: object exposing each expected field as an attribute.
+
+        Returns:
+            bool reporting whether every expected field value matches, or
+            ``NotImplemented`` when `other` is missing an expected attribute.
+        """
+
+        values = {name: getattr(other, name, _MISSING) for name in self._fields}
+        if _MISSING in values.values():
+            return NotImplemented
+        return all(
+            isinstance(expected, _AnyValue) or values[name] == expected
+            for name, expected in self._fields.items()
+        )
+
+    def __repr__(self) -> str:
+        """Render the factory call that would rebuild this expectation.
+
+        Returns:
+            str containing a factory-style call.
+        """
+
+        rendered_args = ", ".join(f"{name}={value!r}" for name, value in self._fields.items())
+        return f"rendered({rendered_args})"
+
+
+def rendered(**fields: Any) -> RenderedFields:
+    """Expect one operator whose template fields resolved to given values.
+
+    Parameters:
+        fields: Any containing expected attribute values by field name.
+
+    Returns:
+        RenderedFields comparing expected field values against a rendered operator.
+
+    Raises:
+        ValueError: No fields were supplied.
+    """
+
+    return RenderedFields(**fields)
+
+
 def succeeded(xcom: Any = ANY) -> TaskOutcome:
     """Expect one task instance that settled ``success``.
 
@@ -190,10 +265,12 @@ def not_run() -> TaskOutcome:
 
 __all__ = (
     "ANY",
+    "RenderedFields",
     "TaskOutcome",
     "deferred",
     "failed",
     "not_run",
+    "rendered",
     "skipped",
     "succeeded",
     "upstream_failed",

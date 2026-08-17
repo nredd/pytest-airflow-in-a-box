@@ -1,4 +1,8 @@
-"""Provide a function-scoped factory for isolated persisted Airflow Dags.
+"""Provide function-scoped factories for isolated persisted Airflow Dags.
+
+``dag_maker`` builds and owns its own Dag; ``run_dag`` adopts one already authored
+elsewhere (typically pulled from ``full_dag_bag``) and drives it through the same
+persist/create/execute pipeline.
 
 References:
     https://docs.pytest.org/en/stable/how-to/fixtures.html
@@ -36,7 +40,7 @@ from pytest_airflow_in_a_box._compat.taskrun import (
 )
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.markers import read_bool_marker
-from pytest_airflow_in_a_box.types import DagMaker, SerializedDag
+from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -131,6 +135,31 @@ def _default_run_id(dag_id: str, invocation: int) -> str:
     prefix = "manual__pytest-airflow-in-a-box"
     available = RUN_ID_MAX_LENGTH - len(prefix) - len(digest) - 2
     return f"{prefix}-{dag_id[:available]}-{digest}"
+
+
+def _close_records(records: list[DagPersistenceRecord]) -> None:
+    """Clean every owned Dag in reverse creation order, aggregating failures.
+
+    Shared teardown for both `_DagFactory.close` and `_DagRunner.close`.
+
+    Parameters:
+        records: list[DagPersistenceRecord] owned by the caller, drained in place.
+
+    Raises:
+        DagCleanupError: One or more owned Dags could not be cleaned.
+    """
+
+    failures: list[Exception] = []
+    while records:
+        try:
+            cleanup_dag(records.pop())
+        except Exception as error:
+            failures.append(error)
+    if failures:
+        details = "; ".join(str(error) for error in failures)
+        raise DagCleanupError(
+            f"Could not clean {len(failures)} fixture-owned Airflow Dags: {details}"
+        ) from failures[0]
 
 
 class _DagContext(AbstractContextManager["DAG"]):
@@ -555,17 +584,98 @@ class _DagFactory:
             DagCleanupError: One or more owned Dags could not be cleaned.
         """
 
-        failures: list[Exception] = []
-        while self._records:
-            try:
-                cleanup_dag(self._records.pop())
-            except Exception as error:
-                failures.append(error)
-        if failures:
-            details = "; ".join(str(error) for error in failures)
-            raise DagCleanupError(
-                f"Could not clean {len(failures)} fixture-owned Airflow Dags: {details}"
-            ) from failures[0]
+        _close_records(self._records)
+
+
+class _DagRunner:
+    """Implement the public ``RunDag`` protocol for externally-authored Dags."""
+
+    def __init__(self) -> None:
+        """Initialize empty invocation and ownership tracking."""
+
+        self._invocations = 0
+        self._records: list[DagPersistenceRecord] = []
+
+    def __call__(
+        self,
+        dag: DAG,
+        *,
+        run_id: str | None = None,
+        logical_date: datetime | None = None,
+        run_after: datetime | None = None,
+        start_date: datetime | None = None,
+        dag_run_kwargs: dict[str, Any] | None = None,
+        run_triggerer: bool = False,
+        trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+    ) -> DagRunResult:
+        """Persist ``dag``, create a manual DagRun, and execute every task instance.
+
+        Parameters:
+            dag: airflow.sdk.DAG containing the completed, externally-authored task graph.
+            run_id: str | None containing an explicit identifier, or ``None`` for a
+                derived one.
+            logical_date: datetime.datetime | None overriding the current UTC logical date.
+            run_after: datetime.datetime | None overriding the current UTC run-after date;
+                rejected on the 2.x family, which has no run-after concept.
+            start_date: datetime.datetime | None overriding the current UTC start date.
+            dag_run_kwargs: dict[str, Any] | None forwarded to Airflow's scheduler Dag
+                creation method.
+            run_triggerer: bool running persisted trigger events and resuming deferrals.
+            trigger_timeout: float seconds allowed for each trigger's first event.
+
+        Returns:
+            pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+
+        Raises:
+            ValueError: ``dag.dag_id`` already has persisted Dag metadata.
+        """
+
+        dag_id = dag.dag_id
+        session = open_dag_session(dag_id)
+        try:
+            ensure_dag_absent(dag_id, session)
+        except Exception:
+            session.close()
+            raise
+        record = DagPersistenceRecord(
+            dag_id=dag_id,
+            bundle_name=_bundle_name(dag_id),
+            session=session,
+        )
+        try:
+            scheduler_dag = persist_dag(dag, record)
+        except Exception:
+            session.close()
+            raise
+        self._records.append(record)
+        self._invocations += 1
+        resolved_run_id = _default_run_id(dag_id, self._invocations) if run_id is None else run_id
+        dag_run = create_dag_run(
+            scheduler_dag,
+            dag,
+            record,
+            run_id=resolved_run_id,
+            logical_date=logical_date,
+            run_after=run_after,
+            start_date=start_date,
+            dag_run_kwargs=dag_run_kwargs or {},
+        )
+        return execute_dag_run(
+            dag_run,
+            dag,
+            session=session,
+            run_triggerer=run_triggerer,
+            trigger_timeout=trigger_timeout,
+        )
+
+    def close(self) -> None:
+        """Clean every successfully persisted Dag in reverse creation order.
+
+        Raises:
+            DagCleanupError: One or more owned Dags could not be cleaned.
+        """
+
+        _close_records(self._records)
 
 
 @pytest.fixture
@@ -590,4 +700,23 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
         factory.close()
 
 
-__all__ = ("dag_maker",)
+@pytest.fixture
+def run_dag(request: pytest.FixtureRequest) -> Iterator[RunDag]:
+    """Yield a function-scoped runner for externally-authored Airflow Dags.
+
+    Parameters:
+        request: pytest.FixtureRequest containing bootstrap state.
+
+    Yields:
+        pytest_airflow_in_a_box.types.RunDag executing adopted Dag objects.
+    """
+
+    ensure_database(get_bootstrap_state(request.config).root)
+    runner = _DagRunner()
+    try:
+        yield runner
+    finally:
+        runner.close()
+
+
+__all__ = ("dag_maker", "run_dag")

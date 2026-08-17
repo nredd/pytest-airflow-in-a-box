@@ -37,9 +37,9 @@ Airflow's published constraints files) can install the plugin bare. The `airflow
 (`apache-airflow>=2.7,<3`) installs the certified Airflow 2.x compatibility tier
 ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`
 (including whole-DagRun execution through `dag_maker.run()`), `run_ti`, `full_dag_bag`,
-`clear_db`, seeding, and the bundled smoke checks run on both families, while `run_task`,
-`cap_structlog`, and the REST API fixtures fail on 2.x with actionable errors naming the
-2.x alternative.
+`run_dag`, `clear_db`, seeding, and the bundled smoke checks run on both families, while
+`run_task`, `render_task`, `cap_structlog`, and the REST API fixtures fail on 2.x with
+actionable errors naming the 2.x alternative.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
@@ -64,9 +64,31 @@ To disable the plugin entirely for a run:
 pytest -p no:pytest_airflow_in_a_box
 ```
 
+## Quickstart
+
+Point the plugin at your repo's `dags/` folder and run a real Dag end to end:
+
+```python
+def test_my_dag(full_dag_bag, run_dag):
+    dag = full_dag_bag.dags["my_dag_id"]
+
+    result = run_dag(dag)
+
+    assert result.success
+    assert result.order == ["extract", "load"]
+```
+
+```console
+pytest --dag-folder=dags
+```
+
+`run_dag()` returns the same inert `DagRunResult` snapshot as `dag_maker.run()` does for a Dag
+authored directly in the test -- see [Task execution](guide/task-execution.md) for both paths,
+including the "testing a Dag defined elsewhere" walkthrough.
+
 ## Where to go next
 
-- [Task execution](guide/task-execution.md) and the `dag_maker` fixture
+- [Task execution](guide/task-execution.md), including the `dag_maker` and `run_dag` fixtures
 - [Database backends](guide/database.md) -- SQLite by default, Postgres on request
 - [The isolated `AIRFLOW_HOME`](guide/airflow-home.md) -- where it lands, and how to keep it
 - [Markers](reference/markers.md) for a quick index of everything the plugin registers

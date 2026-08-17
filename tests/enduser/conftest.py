@@ -1,6 +1,6 @@
 """Scope the end-user consumer contract to the installed Airflow family.
 
-The three modules listed below exercise genuinely 3.x-only surfaces at module
+The four modules listed below exercise genuinely 3.x-only surfaces at module
 scope -- Asset ORM persistence (`airflow.models.asset`), the FastAPI `/api/v2`
 server, and structlog task-log capture -- with no 2.x equivalent, so on the 2.x
 family they cannot even be collected; `collect_ignore` keeps the shared
@@ -24,6 +24,7 @@ from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installe
 if installed_family() is AirflowFamily.V2:
     collect_ignore = [
         "test_assets.py",
+        "test_cookbook_digest.py",
         "test_rest_api_compat.py",
         "test_structlog_events.py",
     ]
