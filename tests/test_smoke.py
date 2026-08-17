@@ -603,6 +603,19 @@ def test_validate_smoke_options_passes_partial_combinations(
     smoke._validate_smoke_options(config)
 
 
+def test_validate_smoke_options_passes_when_snapshot_item_is_disabled() -> None:
+    """Raise nothing when the snapshot item itself is disabled, despite sampling."""
+
+    config = _config(
+        airflow_smoke_update=True,
+        snapshot_dir="snapshots",
+        sample_size="1",
+        disable=["test_dag_serialization_snapshot"],
+    )
+
+    smoke._validate_smoke_options(config)
+
+
 def test_normalize_serialized_dag_strips_run_dependent_keys() -> None:
     """Drop every run-dependent key while leaving other keys untouched."""
 
@@ -1248,6 +1261,34 @@ def test_schedule_sanity_skips_serialization_failures_and_unsampled_dags(
     item = _bare_item(smoke.ScheduleSanityItem, session=session, config=_config())
 
     item.runtest()
+
+
+def test_schedule_sanity_reports_serialization_failures_when_roundtrip_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report a Dag's own serialization failure once its usual reporter is disabled.
+
+    `test_dag_serialization_roundtrip` normally owns reporting serialization failures;
+    `airflow_smoke_disable` naming it must not let a Dag the scheduler cannot serialize pass
+    silently just because that item is gone.
+    """
+
+    dag_bag: Any = SimpleNamespace(dags={"broken": _scheduled_dag(can_be_scheduled=True)})
+    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(
+        smoke,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(deserialize_dag=lambda _dag: pytest.fail("must not deserialize")),
+    )
+    session = _session()
+    session.stash[smoke.SERIALIZED_DAG_CACHE_KEY] = {
+        "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1),
+    }
+    config = _config(disable=["test_dag_serialization_roundtrip"])
+    item = _bare_item(smoke.ScheduleSanityItem, session=session, config=config)
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="Dag `broken` failed to serialize: boom"):
+        item.runtest()
 
 
 def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2085,6 +2126,67 @@ def test_smoke_disable_rejects_unknown_item_name_at_startup(pytester: pytest.Pyt
 
     assert result.ret != 0
     result.stderr.fnmatch_lines(["*`airflow_smoke_disable` names unknown smoke item(s)*"])
+
+
+def test_smoke_disable_rejects_unknown_item_name_even_when_out_of_scope(
+    pytester: pytest.Pytester,
+) -> None:
+    """Refuse a malformed `airflow_smoke_disable` even on a run that excludes the catalog.
+
+    `_validate_smoke_options` must run before `_smoke_in_scope` decides whether
+    `SmokeCollector.collect()` (the only other caller of `_disabled_smoke_items`) even runs --
+    otherwise a file-scoped positional would let a typo'd item name pass through silently.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_smoke_disable = test_bogus_item\n")
+    pytester.makepyfile(
+        test_regular="""
+        def test_regular():
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "test_regular.py")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*`airflow_smoke_disable` names unknown smoke item(s)*"])
+
+
+def test_smoke_disable_every_known_item_empties_the_catalog(pytester: pytest.Pytester) -> None:
+    """Recognize and drop every name in `_SMOKE_ITEM_NAMES`, leaving nothing collected.
+
+    Regression test for `_SMOKE_ITEM_NAMES` drifting out of sync with the real `name=`
+    values `SmokeCollector.collect()` yields: a future item added to `collect()` but missing
+    from `_SMOKE_ITEM_NAMES` would still be collected here (not listed below, so never
+    disabled), and a name present in `_SMOKE_ITEM_NAMES` whose `collect()` yield forgets the
+    `not in disabled` guard would also still be collected despite being listed below. Either
+    drift leaves a nonzero outcome and fails this test.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG_WITH_OWNER)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_dag_id_pattern = ^valid_\n"
+        "airflow_required_dag_tags =\n    team-a\n"
+        "airflow_forbid_default_owner = true\n"
+        "airflow_dag_snapshot_dir = snapshots\n"
+        "airflow_smoke_disable =\n"
+        "    test_dag_bag_integrity\n"
+        "    test_dag_serialization_roundtrip\n"
+        "    test_no_duplicate_dag_ids\n"
+        "    test_schedule_sanity\n"
+        "    test_pool_references_exist\n"
+        "    test_dag_id_pattern\n"
+        "    test_required_dag_tags\n"
+        "    test_forbid_default_owner\n"
+        "    test_dag_serialization_snapshot\n"
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
+
+    result.assert_outcomes()
 
 
 def test_broken_dag_fails_integrity_with_traceback(pytester: pytest.Pytester) -> None:
