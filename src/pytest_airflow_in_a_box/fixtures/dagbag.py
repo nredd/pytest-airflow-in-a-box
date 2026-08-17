@@ -96,10 +96,14 @@ def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) ->
     last, so this is the common case). Treat the returned object as read-only when that
     applies -- mutating it is visible to the smoke catalog's checks too.
 
-    Under `--dist loadgroup`, `plugin.py` forces this fixture's consumers onto the same
-    xdist worker as the smoke catalog (`FULL_DAG_BAG_XDIST_GROUP`) whenever both are
-    present in the run, so the reuse above actually has a chance to trigger instead of
-    each landing on a different worker and parsing independently.
+    Under `--dist loadgroup`, `plugin.py` puts the smoke catalog and one surviving
+    `full_dag_bag` consumer into the same xdist group (`FULL_DAG_BAG_XDIST_GROUP`),
+    which gives the reuse above a worker to actually happen on instead of the catalog
+    and every `full_dag_bag` consumer independently landing on separate workers and
+    each paying their own parse. That reuse still depends on collection order placing a
+    `full_dag_bag` consumer before the catalog within the shared worker -- true today
+    because the catalog is always collected last -- not on a contract `xdist_group`
+    itself makes.
 
     Parameters:
         request: pytest.FixtureRequest used to reach the session-scoped DagBag cache.
