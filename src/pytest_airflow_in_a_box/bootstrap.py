@@ -27,7 +27,13 @@ from pytest_airflow_in_a_box.airflow_cfg import (
     write_airflow_config,
 )
 from pytest_airflow_in_a_box.airflow_home import announce_retained_root, retain_airflow_home
-from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
+from pytest_airflow_in_a_box.storage import (
+    check_local_settings_collision,
+    local_settings_path,
+    locate_storage,
+    validate_local_settings_module,
+    write_local_settings,
+)
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
 STATE_VERSION = 4
@@ -289,14 +295,13 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         family=family_value,
     )
     if validate_files:
-        local_settings_path = state.root / "config" / "airflow_local_settings.py"
         stale = (
             not state.root.is_dir()
             or not state.dags_folder.is_dir()
             or not state.logs_folder.is_dir()
             or not state.password_file.is_file()
             or not state.config_path.is_file()
-            or not local_settings_path.is_file()
+            or not local_settings_path(state.root).is_file()
         )
         if stale:
             raise ValueError(
@@ -503,6 +508,26 @@ def _db_backend(config: pytest.Config, args: list[str]) -> DbBackend:
         ) from error
 
 
+def _local_settings_module(config: pytest.Config) -> str | None:
+    """Resolve the ini-configured cluster-policy module, if any.
+
+    Parameters:
+        config: pytest.Config containing parsed startup options.
+
+    Returns:
+        str | None containing a validated dotted module path.
+
+    Raises:
+        pytest.UsageError: The configured value is not a resolvable dotted module path.
+    """
+
+    value: object = config.getini("airflow_local_settings")
+    if not isinstance(value, str) or not value:
+        return None
+    validate_local_settings_module(value)
+    return value
+
+
 def _candidate_path(args: list[str]) -> Path | None:
     """Resolve pytest's temporary-storage candidate without constructing fixtures.
 
@@ -535,6 +560,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
     """
 
     backend = _db_backend(config, args)
+    user_module = _local_settings_module(config)
     provisioner = select_provisioner(backend)
     try:
         location = locate_storage(
@@ -598,12 +624,13 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         database_path = root / "airflow.db"
         password_file = root / "simple_auth_manager_passwords.json"
         config_path = root / "airflow.cfg"
-        local_settings_path = root / "config" / "airflow_local_settings.py"
+        settings_path = local_settings_path(root)
         dags_folder.mkdir()
         logs_folder.mkdir()
         password_file.write_text(PASSWORDS, encoding="utf-8")
         password_file.chmod(0o600)
-        write_local_settings(local_settings_path)
+        write_local_settings(settings_path, user_module=user_module)
+        check_local_settings_collision(settings_path)
         database_name = f"airflow_test_{secrets.token_hex(8)}"
         sql_alchemy_conn = provisioner.start(
             database_path=database_path, database_name=database_name

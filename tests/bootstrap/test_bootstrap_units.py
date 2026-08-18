@@ -257,6 +257,7 @@ def test_owner_state_wraps_storage_selection_failures(
         "airflow_home": "",
         "allow_network_airflow_home": False,
         "airflow_db_backend": "sqlite",
+        "airflow_local_settings": "",
     }
     config: Any = SimpleNamespace(
         getini=lambda name: ini_values[name], add_cleanup=lambda _callback: None
@@ -280,12 +281,20 @@ def test_owner_state_cleans_up_after_provisioning_failure(
         raise ValueError("config write failed")
 
     monkeypatch.setattr(bootstrap, "write_airflow_config", fail_write)
+    # This test calls `_owner_state` directly, in-process, nested inside the outer test
+    # suite's own already-bootstrapped session -- so the outer session's generated
+    # `airflow_local_settings.py` is already on `sys.path` and would otherwise look like
+    # a foreign collision against this test's own nested root. Real bootstrap never
+    # nests like this (`load_initial_state` runs it exactly once per process), so this
+    # stub isolates the config-write failure this test actually targets.
+    monkeypatch.setattr(bootstrap, "check_local_settings_collision", lambda _path: None)
     monkeypatch.setenv("AIRFLOW_HOME", "pre-existing-value")
     config: Any = SimpleNamespace(
         getini=lambda name: {
             "airflow_home": str(base),
             "allow_network_airflow_home": False,
             "airflow_db_backend": "sqlite",
+            "airflow_local_settings": "",
         }[name],
         add_cleanup=cleanups.append,
     )
@@ -344,11 +353,16 @@ def test_owner_state_cleans_up_after_a_provisioner_usage_error(
             """Release nothing; this provisioner never started anything."""
 
     monkeypatch.setattr(bootstrap, "select_provisioner", lambda _backend: ExplodingProvisioner())
+    # See the matching comment in `test_owner_state_cleans_up_after_provisioning_failure`:
+    # this test also calls `_owner_state` directly, nested inside the outer suite's own
+    # already-bootstrapped session.
+    monkeypatch.setattr(bootstrap, "check_local_settings_collision", lambda _path: None)
     config: Any = SimpleNamespace(
         getini=lambda name: {
             "airflow_home": str(base),
             "allow_network_airflow_home": False,
             "airflow_db_backend": "sqlite",
+            "airflow_local_settings": "",
         }[name],
         add_cleanup=cleanups.append,
     )

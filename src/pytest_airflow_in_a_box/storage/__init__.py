@@ -27,8 +27,11 @@ from pytest_airflow_in_a_box.storage.provision import (
 from pytest_airflow_in_a_box.storage.sqlite import (
     PragmaProfile,
     calculate_profile,
+    check_local_settings_collision,
     create_metadata_engine,
     install_legacy_sqlite_listener,
+    local_settings_path,
+    validate_local_settings_module,
     write_local_settings,
 )
 
@@ -44,11 +47,14 @@ __all__ = (
     "StorageLocation",
     "StorageReason",
     "calculate_profile",
+    "check_local_settings_collision",
     "create_metadata_engine",
     "install_legacy_sqlite_listener",
     "is_network_filesystem",
+    "local_settings_path",
     "locate_storage",
     "parse_proc_mounts",
     "select_provisioner",
+    "validate_local_settings_module",
     "write_local_settings",
 )

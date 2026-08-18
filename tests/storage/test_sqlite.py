@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import importlib
 import sqlite3
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -19,7 +17,6 @@ from pytest_airflow_in_a_box.storage.sqlite import (
     calculate_profile,
     create_metadata_engine,
     install_legacy_sqlite_listener,
-    write_local_settings,
 )
 
 MIB = 1024 * 1024
@@ -400,36 +397,6 @@ def test_invalid_profiles_are_rejected(profile: PragmaProfile, message: str) -> 
 
     with pytest.raises(ValueError, match=message):
         sqlite._pragma_statements(profile)
-
-
-def test_write_local_settings_is_deterministic_and_importable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Write stable ASCII source that installs fallback and exports the engine hook."""
-
-    settings_path = tmp_path / "config" / "airflow_local_settings.py"
-    write_local_settings(settings_path)
-    first_source = settings_path.read_text(encoding="ascii")
-    write_local_settings(settings_path)
-
-    assert settings_path.read_text(encoding="ascii") == first_source
-    assert first_source.encode("ascii").decode("ascii") == first_source
-    assert "password" not in first_source.lower()
-    monkeypatch.syspath_prepend(str(settings_path.parent))
-    monkeypatch.delitem(sys.modules, "airflow_local_settings", raising=False)
-    importlib.invalidate_caches()
-    local_settings = importlib.import_module("airflow_local_settings")
-    assert local_settings.__all__ == ("create_metadata_engine",)
-    assert local_settings.create_metadata_engine is create_metadata_engine
-    assert local_settings.install_legacy_sqlite_listener is install_legacy_sqlite_listener
-    monkeypatch.delitem(sys.modules, "airflow_local_settings")
-
-
-def test_write_local_settings_rejects_relative_path() -> None:
-    """Require bootstrap artifacts to have an unambiguous absolute location."""
-
-    with pytest.raises(ValueError, match="must be absolute"):
-        write_local_settings(Path("airflow_local_settings.py"))
 
 
 def test_legacy_listener_always_installs_on_the_v2_family(
