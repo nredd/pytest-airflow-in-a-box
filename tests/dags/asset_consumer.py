@@ -33,7 +33,7 @@ EmptyOperator = _resolve(
 ).EmptyOperator
 
 
-@dag(schedule=[Asset("asset://compat/corpus-output")], **EXTRA_DAG_KWARGS)
+@dag(schedule=[Asset("asset://compat/corpus-output")], catchup=False, **EXTRA_DAG_KWARGS)
 def asset_consumer() -> None:
     """Consume the synthetic corpus asset."""
 

@@ -9,6 +9,7 @@ and `tests/dags/asset_consumer.py`: the class is named `Asset` on 3.x
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,16 @@ pytestmark = [
         ),
     ),
 ]
+
+# A scheduled Dag requires an explicit `start_date` on the whole 2.x family, matching
+# `tests/dags/asset_consumer.py`'s `EXTRA_DAG_KWARGS`; the Task SDK's `DAG` on 3.x needs
+# nothing. Applied uniformly below, scheduled or not -- this module's own version floor
+# above already excludes the pre-2.8 releases where an *unscheduled* Dag would also need it.
+_SCHEDULE_DAG_KWARGS: dict[str, Any] = (
+    {"start_date": datetime(2024, 1, 1, tzinfo=timezone.utc)}
+    if _capabilities.family is AirflowFamily.V2
+    else {}
+)
 
 
 # Shared with the sibling contract modules; see `tests/enduser/_authoring.py`.
@@ -93,9 +104,11 @@ def test_asset_triggered_dagrun_is_created(dag_maker: DagMaker) -> None:
     """
 
     asset = Asset(uri="asset://compat/cross-dag")
-    with dag_maker(dag_id="compat_asset_triggering_consumer", schedule=[asset]):
+    with dag_maker(
+        dag_id="compat_asset_triggering_consumer", schedule=[asset], **_SCHEDULE_DAG_KWARGS
+    ):
         EmptyOperator(task_id="consume")
-    with dag_maker(dag_id="compat_asset_triggering_producer"):
+    with dag_maker(dag_id="compat_asset_triggering_producer", **_SCHEDULE_DAG_KWARGS):
         EmitAssetOperator(task_id="emit", outlets=[asset])
     dag_maker.run_ti("emit")
 
@@ -120,9 +133,11 @@ def test_asset_triggered_dagrun_waits_for_every_condition(dag_maker: DagMaker) -
 
     first = Asset(uri="asset://compat/cross-dag-a")
     second = Asset(uri="asset://compat/cross-dag-b")
-    with dag_maker(dag_id="compat_asset_partial_consumer", schedule=(first & second)):
+    with dag_maker(
+        dag_id="compat_asset_partial_consumer", schedule=(first & second), **_SCHEDULE_DAG_KWARGS
+    ):
         EmptyOperator(task_id="consume")
-    with dag_maker(dag_id="compat_asset_partial_producer"):
+    with dag_maker(dag_id="compat_asset_partial_producer", **_SCHEDULE_DAG_KWARGS):
         EmitAssetOperator(task_id="emit", outlets=[first])
     dag_maker.run_ti("emit")  # Only `first` is produced; `second` never arrives.
 
@@ -147,9 +162,9 @@ def test_asset_triggered_dagrun_sweeps_every_pending_consumer(dag_maker: DagMake
     """Evaluate every Dag carrying a pending queue row when `dag_ids` is omitted."""
 
     asset = Asset(uri="asset://compat/sweep")
-    with dag_maker(dag_id="compat_asset_sweep_consumer", schedule=[asset]):
+    with dag_maker(dag_id="compat_asset_sweep_consumer", schedule=[asset], **_SCHEDULE_DAG_KWARGS):
         EmptyOperator(task_id="consume")
-    with dag_maker(dag_id="compat_asset_sweep_producer"):
+    with dag_maker(dag_id="compat_asset_sweep_producer", **_SCHEDULE_DAG_KWARGS):
         EmitAssetOperator(task_id="emit", outlets=[asset])
     dag_maker.run_ti("emit")
 
@@ -163,9 +178,11 @@ def test_asset_triggered_dagrun_accepts_a_dag_id_collection(dag_maker: DagMaker)
     """Evaluate exactly the Dags named in an explicit collection."""
 
     asset = Asset(uri="asset://compat/collection")
-    with dag_maker(dag_id="compat_asset_collection_consumer", schedule=[asset]):
+    with dag_maker(
+        dag_id="compat_asset_collection_consumer", schedule=[asset], **_SCHEDULE_DAG_KWARGS
+    ):
         EmptyOperator(task_id="consume")
-    with dag_maker(dag_id="compat_asset_collection_producer"):
+    with dag_maker(dag_id="compat_asset_collection_producer", **_SCHEDULE_DAG_KWARGS):
         EmitAssetOperator(task_id="emit", outlets=[asset])
     dag_maker.run_ti("emit")
 
@@ -188,7 +205,11 @@ def test_asset_triggered_dagrun_rejects_an_asset_alias_consumer(dag_maker: DagMa
 
     from airflow.sdk import AssetAlias
 
-    with dag_maker(dag_id="compat_asset_alias_consumer", schedule=AssetAlias(name="compat-alias")):
+    with dag_maker(
+        dag_id="compat_asset_alias_consumer",
+        schedule=AssetAlias(name="compat-alias"),
+        **_SCHEDULE_DAG_KWARGS,
+    ):
         EmptyOperator(task_id="consume")
 
     with pytest.raises(ValueError, match="is scheduled through an `AssetAlias`"):
@@ -209,7 +230,7 @@ def test_asset_triggered_dagrun_rejects_a_dag_not_scheduled_by_an_asset(
 ) -> None:
     """Reject a Dag whose timetable is not asset/dataset-triggered."""
 
-    with dag_maker(dag_id="compat_asset_unscheduled_consumer"):
+    with dag_maker(dag_id="compat_asset_unscheduled_consumer", **_SCHEDULE_DAG_KWARGS):
         EmptyOperator(task_id="consume")
 
     with pytest.raises(ValueError, match="is not scheduled by a"):
@@ -221,7 +242,9 @@ def test_asset_triggered_dagrun_waits_with_no_producer_run(dag_maker: DagMaker) 
     """Leave a consumer with no queued events unevaluated to a DagRun."""
 
     asset = Asset(uri="asset://compat/never-produced")
-    with dag_maker(dag_id="compat_asset_unproduced_consumer", schedule=[asset]):
+    with dag_maker(
+        dag_id="compat_asset_unproduced_consumer", schedule=[asset], **_SCHEDULE_DAG_KWARGS
+    ):
         EmptyOperator(task_id="consume")
 
     assert (

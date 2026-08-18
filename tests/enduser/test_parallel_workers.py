@@ -225,6 +225,7 @@ def test_mixed_workload_shares_one_database(pytester: pytest.Pytester) -> None:
     reason="requires the `postgres` extra and a running Docker daemon",
 )
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+@pytest.mark.requires_airflow3
 def test_mixed_workload_shares_one_postgres_database(pytester: pytest.Pytester) -> None:
     """Rerun the mixed workload against real concurrent Postgres writers."""
 

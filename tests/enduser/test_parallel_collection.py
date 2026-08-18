@@ -186,12 +186,24 @@ def test_smoke_items_share_one_parse_while_remaining_distributed(
 
 _COLOCATION_DAG = """
     from pathlib import Path
-    from airflow.sdk import DAG, task
+
+    try:
+        from airflow.sdk import DAG, task
+
+        DAG_KWARGS = {{}}
+    except ImportError:  # Airflow 2.x: the pre-Task-SDK authoring surface, and below
+        # 2.8 an unscheduled Dag still needs an explicit `start_date`.
+        from datetime import datetime, timezone
+
+        from airflow.decorators import task
+        from airflow.models.dag import DAG
+
+        DAG_KWARGS = {{"start_date": datetime(2024, 1, 1, tzinfo=timezone.utc)}}
 
     with Path({counter!r}).open("a", encoding="utf-8") as handle:
         handle.write("x")
 
-    with DAG(dag_id="colocate_dag", schedule=None, tags=["team-a"]) as dag:
+    with DAG(dag_id="colocate_dag", schedule=None, tags=["team-a"], **DAG_KWARGS) as dag:
         @task
         def work():
             pass

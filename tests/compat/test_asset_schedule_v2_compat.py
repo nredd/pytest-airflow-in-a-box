@@ -19,14 +19,14 @@ from typing import Any
 
 import pytest
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, relationship
+from sqlalchemy.orm import Session, declarative_base, relationship
 
 from pytest_airflow_in_a_box._compat import asset_schedule as schedule_module
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 
-
-class _Base(DeclarativeBase):
-    """Local declarative base, isolated from Airflow's own metadata."""
+# `declarative_base()`, not the SQLAlchemy 2.0-only `DeclarativeBase` class, since the
+# Airflow 3.1.x line's own constraints pin SQLAlchemy as low as 1.4.54.
+_Base = declarative_base()
 
 
 class FakeDatasetModel(_Base):
