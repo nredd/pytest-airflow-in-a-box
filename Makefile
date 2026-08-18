@@ -1,4 +1,4 @@
-.PHONY: help install install-postgres format lint type test test-migration-e2e lock build dist release docs-build docs-serve clean all
+.PHONY: help install install-postgres format lint type test test-migration-e2e lock build dist changelog release docs-build docs-serve clean all
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -41,13 +41,16 @@ dist:  ## Build a clean sdist + wheel and validate them with twine
 	uv run python -m build --installer uv
 	uvx twine@7.0.0 check --strict dist/*
 
+changelog:  ## Preview the assembled Unreleased section from changelog.d fragments
+	uv run towncrier build --version Unreleased --draft
+
 docs-build:  ## Build the documentation site, failing on broken links or nav entries
 	uv run --group docs mkdocs build --strict
 
 docs-serve:  ## Serve the documentation site locally with live reload
 	uv run --group docs mkdocs serve
 
-release:  ## Tag the current version and print the gh release command (does not publish)
+release:  ## Build the changelog from fragments, tag the current version, and print the gh release command (does not publish)
 	@set -eu; \
 	pyproject_version="$$(uv version --short --color never)"; \
 	init_version="$$(sed -n 's/^__version__ = "\(.*\)"$$/\1/p' src/pytest_airflow_in_a_box/__init__.py)"; \
@@ -55,9 +58,14 @@ release:  ## Tag the current version and print the gh release command (does not 
 		echo "version mismatch: pyproject.toml=$$pyproject_version __init__.py=$$init_version" >&2; \
 		exit 1; \
 	fi; \
-	if [ -n "$$(git status --porcelain)" ]; then \
+	if [ -n "$$(git status --porcelain -- . ':!changelog.d' ':!CHANGELOG.md')" ]; then \
 		echo "working tree is not clean" >&2; \
 		exit 1; \
+	fi; \
+	if [ -n "$$(find changelog.d -maxdepth 1 -name '*.md' ! -name 'README.md')" ]; then \
+		uv run towncrier build --version "$$pyproject_version" --date "$$(date +%Y-%m-%d)" --yes; \
+		git add CHANGELOG.md changelog.d; \
+		git commit -m "Update CHANGELOG.md for v$$pyproject_version"; \
 	fi; \
 	tag="v$$pyproject_version"; \
 	git tag -a "$$tag" -m "$$tag" && \
