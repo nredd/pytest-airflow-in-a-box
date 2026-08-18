@@ -3668,6 +3668,7 @@ dev = [
     { name = "prek" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "towncrier" },
     { name = "ty" },
     { name = "uv" },
     { name = "uv-build" },
@@ -3701,6 +3702,7 @@ dev = [
     { name = "prek", specifier = "==0.4.13" },
     { name = "pytest-cov", specifier = "==7.1.0" },
     { name = "ruff", specifier = "==0.16.2" },
+    { name = "towncrier", specifier = "==24.8.0" },
     { name = "ty", specifier = "==0.0.70" },
     { name = "uv", specifier = "==0.12.3" },
     { name = "uv-build", specifier = "==0.12.3" },
@@ -4732,6 +4734,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/12/64/da524626d3b9cc40c168a13da8335fe1c51be12c0a63685cc6db7308daae/tomli-2.4.1-cp314-cp314t-win_amd64.whl", hash = "sha256:2c1c351919aca02858f740c6d33adea0c5deea37f9ecca1cc1ef9e884a619d26", size = 121196, upload-time = "2026-03-25T20:22:01.169Z" },
     { url = "https://files.pythonhosted.org/packages/5a/cd/e80b62269fc78fc36c9af5a6b89c835baa8af28ff5ad28c7028d60860320/tomli-2.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:eab21f45c7f66c13f2a9e0e1535309cee140182a9cdae1e041d02e47291e8396", size = 100393, upload-time = "2026-03-25T20:22:02.137Z" },
     { url = "https://files.pythonhosted.org/packages/7b/61/cceae43728b7de99d9b847560c262873a1f6c98202171fd5ed62640b494b/tomli-2.4.1-py3-none-any.whl", hash = "sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe", size = 14583, upload-time = "2026-03-25T20:22:03.012Z" },
+]
+
+[[package]]
+name = "towncrier"
+version = "24.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "jinja2" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/69/d7/a5183f788cf4fabf03f7c767ae0b968249b0c737eb64b4d87a07ae01fea7/towncrier-24.8.0.tar.gz", hash = "sha256:013423ee7eed102b2f393c287d22d95f66f1a3ea10a4baa82d298001a7f18af3", size = 61635, upload-time = "2024-08-23T14:52:28.197Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/1b/2f7b88506e22d9798c139261af4946865c0787cfa345514ca3c70173a9cc/towncrier-24.8.0-py3-none-any.whl", hash = "sha256:9343209592b839209cdf28c339ba45792fbfe9775b5f9c177462fd693e127d8d", size = 56981, upload-time = "2024-08-23T14:52:26.659Z" },
 ]
 
 [[package]]

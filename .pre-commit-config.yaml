@@ -51,3 +51,8 @@ repos:
         language: system
         files: \.pyi?$
         types_or: [python, pyi]
+      - id: changelog-fragment-required
+        name: Require a changelog.d fragment for src/tests changes
+        entry: uv run towncrier check
+        language: system
+        pass_filenames: false
