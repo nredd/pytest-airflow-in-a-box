@@ -15,7 +15,8 @@ from pytest_airflow_in_a_box.storage.sqlite import (
     create_metadata_engine,
     install_legacy_sqlite_listener,
     local_settings_path,
-    validate_local_settings_module,
+    resolve_local_settings_module,
+    validate_local_settings_module_shape,
     write_local_settings,
 )
 
@@ -57,6 +58,22 @@ class _FakeImportlibUtil:
 
         del name
         return self._spec
+
+
+class _RaisingImportlibUtil:
+    """Stand in for `importlib.util`, raising `ValueError` from every `find_spec` call."""
+
+    def find_spec(self, name: str) -> object:
+        """Raise `ValueError`, matching a `sys.modules` entry with no `__spec__`.
+
+        Parameters:
+            name: str containing the requested module name.
+
+        Raises:
+            ValueError: Always.
+        """
+
+        raise ValueError(f"{name!r} has no __spec__")
 
 
 @pytest.fixture(autouse=True)
@@ -185,36 +202,64 @@ def test_write_local_settings_composes_user_module_without_dunder_all(
     "value",
     ["./policies.py", "/abs/policies.py", "policies.py", "a/b", "a\\b"],
 )
-def test_validate_local_settings_module_rejects_file_path_like_values(value: str) -> None:
+def test_validate_local_settings_module_shape_rejects_file_path_like_values(
+    value: str,
+) -> None:
     """Reject filesystem-path-shaped values before ever attempting to resolve them."""
 
     with pytest.raises(pytest.UsageError, match="must be a dotted module path, not a file path"):
-        validate_local_settings_module(value)
+        validate_local_settings_module_shape(value)
 
 
 @pytest.mark.parametrize("value", ["1bad.name", "bad-name", "bad..name", ""])
-def test_validate_local_settings_module_rejects_invalid_identifiers(value: str) -> None:
+def test_validate_local_settings_module_shape_rejects_invalid_identifiers(
+    value: str,
+) -> None:
     """Reject values with a non-identifier dotted segment."""
 
     with pytest.raises(pytest.UsageError, match="must be a dotted module path"):
-        validate_local_settings_module(value)
+        validate_local_settings_module_shape(value)
 
 
-def test_validate_local_settings_module_rejects_unresolvable_top_level_module() -> None:
+def test_validate_local_settings_module_shape_accepts_well_formed_values() -> None:
+    """Accept plain and dotted identifiers without touching the filesystem."""
+
+    validate_local_settings_module_shape("policies")
+    validate_local_settings_module_shape("myproject.cluster_policies")
+
+
+def test_resolve_local_settings_module_rejects_unresolvable_top_level_module() -> None:
     """Reject a top-level module name that resolves to nothing."""
 
     with pytest.raises(pytest.UsageError, match="names a module that cannot be imported"):
-        validate_local_settings_module("definitely_not_a_real_module_xyz")
+        resolve_local_settings_module("definitely_not_a_real_module_xyz")
 
 
-def test_validate_local_settings_module_rejects_unresolvable_parent_package() -> None:
+def test_resolve_local_settings_module_rejects_unresolvable_parent_package() -> None:
     """Reject a dotted path whose parent package cannot be imported at all."""
 
     with pytest.raises(pytest.UsageError, match="names a module that cannot be imported"):
-        validate_local_settings_module("definitely_not_a_real_pkg_xyz.sub")
+        resolve_local_settings_module("definitely_not_a_real_pkg_xyz.sub")
 
 
-def test_validate_local_settings_module_rejects_namespace_package(
+def test_resolve_local_settings_module_wraps_a_broken_parent_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Report a parent package's own import-time failure as one usage error, not a traceback."""
+
+    package_dir = tmp_path / "broken_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text(
+        'raise RuntimeError("boom from parent package")\n', encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    with pytest.raises(pytest.UsageError, match="names a module that cannot be imported"):
+        resolve_local_settings_module("broken_pkg.sub")
+
+
+def test_resolve_local_settings_module_rejects_namespace_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Reject an implicit namespace package with no single origin file."""
@@ -225,10 +270,10 @@ def test_validate_local_settings_module_rejects_namespace_package(
     importlib.invalidate_caches()
 
     with pytest.raises(pytest.UsageError, match="namespace package"):
-        validate_local_settings_module("a_namespace_pkg")
+        resolve_local_settings_module("a_namespace_pkg")
 
 
-def test_validate_local_settings_module_accepts_regular_package_and_module(
+def test_resolve_local_settings_module_accepts_regular_package_and_module(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Accept both a regular package and a submodule reached through it."""
@@ -240,8 +285,8 @@ def test_validate_local_settings_module_accepts_regular_package_and_module(
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.invalidate_caches()
 
-    validate_local_settings_module("real_pkg")
-    validate_local_settings_module("real_pkg.policies")
+    resolve_local_settings_module("real_pkg")
+    resolve_local_settings_module("real_pkg.policies")
 
 
 def test_check_local_settings_collision_passes_for_the_generated_file(
@@ -311,3 +356,55 @@ def test_check_local_settings_collision_rejects_a_namespace_package_winning(
 
     with pytest.raises(pytest.UsageError, match="namespace package"):
         check_local_settings_collision(settings_path)
+
+
+def test_check_local_settings_collision_treats_a_stale_cache_value_error_as_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail loudly, not with a raw traceback, when `find_spec` raises on a bad cache entry.
+
+    `find_spec` raises `ValueError` instead of searching `sys.path` when the name is
+    already in `sys.modules` with no `__spec__` -- an edge case rather than the ordinary
+    "resolved to something else" collision, so it is treated the same as an outright miss.
+    """
+
+    settings_path = tmp_path / "config" / "airflow_local_settings.py"
+    write_local_settings(settings_path)
+    monkeypatch.setattr(sqlite, "importlib_util", _RaisingImportlibUtil())
+
+    with pytest.raises(pytest.UsageError, match="did not resolve"):
+        check_local_settings_collision(settings_path)
+
+
+def test_write_local_settings_composed_module_cannot_clobber_create_metadata_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the plugin's own `create_metadata_engine` even when the user module shadows it.
+
+    A real Airflow cluster-policy module plausibly defines `create_metadata_engine`
+    itself, since that is the exact documented Airflow override point this generated
+    file also exports. Composition must never let that silently replace the plugin's
+    SQLite-tuned engine factory -- the same class of silent-shadowing failure this
+    feature exists to prevent, just moved from file-level to symbol-level.
+    """
+
+    user_dir = tmp_path / "userpkg_clobber"
+    user_dir.mkdir()
+    (user_dir / "policy_clobber.py").write_text(
+        "def create_metadata_engine(*args, **kwargs):\n"
+        '    raise AssertionError("user override must never run")\n'
+        '__all__ = ("create_metadata_engine",)\n',
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(user_dir))
+    settings_path = tmp_path / "config" / "airflow_local_settings.py"
+    monkeypatch.syspath_prepend(str(settings_path.parent))
+    write_local_settings(settings_path, user_module="policy_clobber")
+
+    importlib.invalidate_caches()
+    module = importlib.import_module("airflow_local_settings")
+    try:
+        assert module.create_metadata_engine is create_metadata_engine
+        assert module.__all__ == ("create_metadata_engine",)
+    finally:
+        sys.modules.pop("policy_clobber", None)

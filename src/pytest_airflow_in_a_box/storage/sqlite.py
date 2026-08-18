@@ -49,7 +49,10 @@ __all__ = ("create_metadata_engine",)
 # Composes a configured cluster-policy module the same way Airflow's own
 # `airflow.settings.import_local_settings` composes ours: `__all__` if present, else
 # every non-dunder module attribute. Explicit `import_module` + `globals().update`
-# rather than `from ... import *`, which needs a lint waiver this repo forbids.
+# rather than `from ... import *`, which needs a lint waiver this repo forbids. Names
+# already in `__all__` at this point (i.e. `create_metadata_engine`) are filtered out of
+# the composed set first, so a user module cannot silently reclaim the exact hook this
+# feature exists to protect.
 USER_MODULE_BLOCK = """
 from importlib import import_module
 
@@ -57,6 +60,7 @@ _user_module = import_module("{module_path}")
 _user_names = getattr(_user_module, "__all__", None)
 if _user_names is None:
     _user_names = tuple(name for name in vars(_user_module) if not name.startswith("__"))
+_user_names = tuple(name for name in _user_names if name not in __all__)
 globals().update({{name: getattr(_user_module, name) for name in _user_names}})
 __all__ = tuple(sorted(set(__all__) | set(_user_names)))
 """
@@ -432,8 +436,16 @@ def check_local_settings_collision(path: Path) -> None:
     mode inserts a project's root at the FRONT. A project-root ``airflow_local_settings.py``
     therefore wins the plain ``import airflow_local_settings`` Airflow performs later,
     silently dropping this run's SQLite engine tuning. This mirrors that same
-    ``sys.path.append`` and resolves the same module name before Airflow ever does, while
-    the interpreter is still guaranteed not to have imported it yet this session.
+    ``sys.path.append`` and resolves the same module name.
+
+    Deliberately called from ``pytest_configure``, not during bootstrap: pytest has not
+    loaded any conftest yet at bootstrap time, so a project-root collision would not yet
+    be visible on ``sys.path`` and this check would silently miss it. By
+    ``pytest_configure``, pytest's own conftest loading has already put the project on
+    ``sys.path``, and ``import airflow_local_settings`` -- ours or a foreign one -- may
+    already be cached in ``sys.modules`` if a consumer conftest imported Airflow eagerly;
+    ``find_spec`` returns that cached module's spec either way, so the comparison below
+    still reflects reality.
 
     Parameters:
         path: pathlib.Path containing this run's generated ``airflow_local_settings.py``.
@@ -447,7 +459,13 @@ def check_local_settings_collision(path: Path) -> None:
     if config_dir not in sys.path:
         sys.path.append(config_dir)
     importlib.invalidate_caches()
-    spec = importlib_util.find_spec("airflow_local_settings")
+    try:
+        spec = importlib_util.find_spec("airflow_local_settings")
+    except ValueError:
+        # `find_spec` raises `ValueError` instead of resolving, rather than searching
+        # `sys.path`, when the name is already in `sys.modules` with no `__spec__` --
+        # treated the same as an outright miss.
+        spec = None
     if spec is None:
         raise pytest.UsageError(
             f"`airflow_local_settings` did not resolve after generating '{path}'; check "
@@ -466,14 +484,19 @@ def check_local_settings_collision(path: Path) -> None:
         )
 
 
-def validate_local_settings_module(value: str) -> None:
-    """Validate an ini-configured dotted module path before it is composed.
+def validate_local_settings_module_shape(value: str) -> None:
+    """Validate the syntactic shape of an ini-configured dotted module path.
+
+    Pure string validation only -- deliberately not resolution. A user's own project is
+    not necessarily importable yet at the point this runs (see ``resolve_local_settings_
+    module`` below), but a value that is not even shaped like a dotted module path can
+    and should fail immediately.
 
     Parameters:
         value: str containing the candidate ``airflow_local_settings`` ini value.
 
     Raises:
-        pytest.UsageError: The value is not an importable, resolvable dotted module path.
+        pytest.UsageError: The value is not shaped like a dotted module path.
     """
 
     if "/" in value or "\\" in value or value.endswith(".py"):
@@ -486,10 +509,33 @@ def validate_local_settings_module(value: str) -> None:
         raise pytest.UsageError(
             f"Ini option `airflow_local_settings` must be a dotted module path: '{value}'"
         )
+
+
+def resolve_local_settings_module(value: str) -> None:
+    """Resolve a shape-validated dotted module path once the project is importable.
+
+    Deliberately NOT run during bootstrap: pytest has not yet loaded any conftest at
+    that point (see ``check_local_settings_collision``), so a legitimate project-root
+    module would not yet be on ``sys.path`` and would be rejected as unresolvable. This
+    runs later, from ``pytest_configure``, after pytest's own conftest loading has made
+    the project importable and the isolated Airflow environment is already installed.
+
+    Resolving a dotted path executes every parent package's module-level code (to learn
+    its ``__path__``), which is arbitrary user code -- caught broadly and reported as one
+    actionable usage error rather than a raw traceback out of ``pytest_configure``.
+
+    Parameters:
+        value: str containing a shape-validated ``airflow_local_settings`` ini value.
+
+    Raises:
+        pytest.UsageError: The value cannot be imported, or resolves to a namespace
+            package with no single origin file.
+    """
+
     importlib.invalidate_caches()
     try:
         spec = importlib_util.find_spec(value)
-    except (ImportError, ValueError) as error:
+    except Exception as error:
         raise pytest.UsageError(
             "Ini option `airflow_local_settings` names a module that cannot be imported: "
             f"'{value}'"
@@ -513,6 +559,7 @@ __all__ = (
     "create_metadata_engine",
     "install_legacy_sqlite_listener",
     "local_settings_path",
-    "validate_local_settings_module",
+    "resolve_local_settings_module",
+    "validate_local_settings_module_shape",
     "write_local_settings",
 )

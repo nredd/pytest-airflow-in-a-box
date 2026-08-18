@@ -31,7 +31,8 @@ from pytest_airflow_in_a_box.storage.sqlite import (
     create_metadata_engine,
     install_legacy_sqlite_listener,
     local_settings_path,
-    validate_local_settings_module,
+    resolve_local_settings_module,
+    validate_local_settings_module_shape,
     write_local_settings,
 )
 
@@ -54,7 +55,8 @@ __all__ = (
     "local_settings_path",
     "locate_storage",
     "parse_proc_mounts",
+    "resolve_local_settings_module",
     "select_provisioner",
-    "validate_local_settings_module",
+    "validate_local_settings_module_shape",
     "write_local_settings",
 )

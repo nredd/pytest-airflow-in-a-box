@@ -27,10 +27,11 @@ airflow_local_settings = myproject.cluster_policies
 ```
 
 The value must be a plain dotted module path: no `/`, no `\`, no `.py` suffix, and every
-segment a valid Python identifier. It is resolved (not imported) during bootstrap, before any
-consumer conftest loads, so a typo or a missing module fails immediately with a
-`pytest.UsageError` naming the bad value -- not a stack trace deep inside Airflow's own import
-machinery partway through the first test.
+segment a valid Python identifier. Its shape is checked immediately during bootstrap; the
+module itself is resolved (not imported) once pytest's own conftest loading has made the
+project importable, before any test runs. Either way a typo or a missing module fails with a
+`pytest.UsageError` naming the bad value before collection starts -- not a stack trace deep
+inside Airflow's own import machinery partway through the first test.
 
 ## What gets composed
 
@@ -48,7 +49,7 @@ engine tuning always survives regardless of what your module exports.
 
 ## When it fails loudly
 
-Bootstrap raises `pytest.UsageError` and aborts before any test runs when:
+`pytest.UsageError` aborts the session before any test runs when:
 
 - A foreign `airflow_local_settings` module -- one this run did not generate -- would resolve
   ahead of the generated file on `sys.path`. The message names both paths; move the foreign
@@ -67,7 +68,9 @@ dotted path through the ini option.
 
 ## Limitations
 
-The collision guard runs once, early, during bootstrap -- before pytest has collected any test
-modules. A foreign `airflow_local_settings` module introduced only by a test file pytest has
-not collected yet (as opposed to one sitting at the project root, which pytest's own import
-setup already makes visible at that point) will not be caught by this check.
+The collision guard and module resolution both run once, from `pytest_configure` -- after
+pytest's own conftest loading has put the project on `sys.path`, but still before collection
+starts. A foreign `airflow_local_settings` module introduced only by a test file pytest has not
+collected yet (as opposed to one sitting at the project root next to a `conftest.py`, which
+pytest's own import setup already makes visible at that point) will not be caught by this
+check.
