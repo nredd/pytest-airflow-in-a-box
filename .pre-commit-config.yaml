@@ -53,6 +53,11 @@ repos:
         types_or: [python, pyi]
       - id: changelog-fragment-required
         name: Require a changelog.d fragment for src/tests changes
-        entry: uv run towncrier check
+        # Explicit `--compare-with`, not towncrier's default autodetection: detection
+        # walks `git branch -r`, which a CI runner's default shallow, single-ref
+        # checkout never populates, so it reports "Could not detect default branch"
+        # on every PR. `ci.yml`'s `check` job pairs this with `fetch-depth: 0` so
+        # `origin/main` actually resolves.
+        entry: uv run towncrier check --compare-with origin/main
         language: system
         pass_filenames: false
