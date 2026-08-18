@@ -8,15 +8,19 @@ References:
 
 from __future__ import annotations
 
+import importlib
 import os
 import sqlite3
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from importlib import metadata
+from importlib import util as importlib_util
 from pathlib import Path
 from threading import Lock
 
+import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError
@@ -42,6 +46,24 @@ install_legacy_sqlite_listener()
 
 __all__ = ("create_metadata_engine",)
 '''
+# Composes a configured cluster-policy module the same way Airflow's own
+# `airflow.settings.import_local_settings` composes ours: `__all__` if present, else
+# every non-dunder module attribute. Explicit `import_module` + `globals().update`
+# rather than `from ... import *`, which needs a lint waiver this repo forbids. Names
+# already in `__all__` at this point (i.e. `create_metadata_engine`) are filtered out of
+# the composed set first, so a user module cannot silently reclaim the exact hook this
+# feature exists to protect.
+USER_MODULE_BLOCK = """
+from importlib import import_module
+
+_user_module = import_module("{module_path}")
+_user_names = getattr(_user_module, "__all__", None)
+if _user_names is None:
+    _user_names = tuple(name for name in vars(_user_module) if not name.startswith("__"))
+_user_names = tuple(name for name in _user_names if name not in __all__)
+globals().update({{name: getattr(_user_module, name) for name in _user_names}})
+__all__ = tuple(sorted(set(__all__) | set(_user_names)))
+"""
 _LEGACY_LISTENER_LOCK = Lock()
 _LEGACY_SQLITE_LISTENER: Callable[[object, object], None] | None = None
 
@@ -369,11 +391,27 @@ def create_metadata_engine(
     return engine
 
 
-def write_local_settings(path: Path) -> None:
+def local_settings_path(root: Path) -> Path:
+    """Derive this run's generated ``airflow_local_settings.py`` location.
+
+    Parameters:
+        root: pathlib.Path containing this run's isolated Airflow home.
+
+    Returns:
+        pathlib.Path containing the generated ``airflow_local_settings.py``.
+    """
+
+    return root / "config" / "airflow_local_settings.py"
+
+
+def write_local_settings(path: Path, *, user_module: str | None = None) -> None:
     """Write deterministic Airflow metadata-engine customization source.
 
     Parameters:
         path: pathlib.Path receiving ``airflow_local_settings.py``.
+        user_module: str | None naming a dotted module composed into the generated
+            source via ``import_module`` and ``globals().update``, or None to write the
+            bare engine-tuning source.
 
     Raises:
         ValueError: The destination path is not absolute.
@@ -382,15 +420,146 @@ def write_local_settings(path: Path) -> None:
 
     if not path.is_absolute():
         raise ValueError(f"`path` must be absolute: '{path}'")
+    source = LOCAL_SETTINGS_SOURCE
+    if user_module is not None:
+        source += USER_MODULE_BLOCK.format(module_path=user_module)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii", newline="\n") as settings_file:
-        settings_file.write(LOCAL_SETTINGS_SOURCE)
+        settings_file.write(source)
+
+
+def check_local_settings_collision(path: Path) -> None:
+    """Fail loudly when a foreign ``airflow_local_settings`` would outrank this run's own.
+
+    Airflow's own ``settings.prepare_syspath_for_config_and_plugins`` appends
+    ``AIRFLOW_HOME/config`` to the END of ``sys.path``, while pytest's default import
+    mode inserts a project's root at the FRONT. A project-root ``airflow_local_settings.py``
+    therefore wins the plain ``import airflow_local_settings`` Airflow performs later,
+    silently dropping this run's SQLite engine tuning. This mirrors that same
+    ``sys.path.append`` and resolves the same module name.
+
+    Deliberately called from ``pytest_configure``, not during bootstrap: pytest has not
+    loaded any conftest yet at bootstrap time, so a project-root collision would not yet
+    be visible on ``sys.path`` and this check would silently miss it. By
+    ``pytest_configure``, pytest's own conftest loading has already put the project on
+    ``sys.path``, and ``import airflow_local_settings`` -- ours or a foreign one -- may
+    already be cached in ``sys.modules`` if a consumer conftest imported Airflow eagerly;
+    ``find_spec`` returns that cached module's spec either way, so the comparison below
+    still reflects reality.
+
+    Parameters:
+        path: pathlib.Path containing this run's generated ``airflow_local_settings.py``.
+
+    Raises:
+        pytest.UsageError: A foreign module would resolve first, the module could not be
+            resolved at all, or the resolved module is an unresolvable namespace package.
+    """
+
+    config_dir = str(path.parent)
+    if config_dir not in sys.path:
+        sys.path.append(config_dir)
+    importlib.invalidate_caches()
+    try:
+        spec = importlib_util.find_spec("airflow_local_settings")
+    except ValueError:
+        # `find_spec` raises `ValueError` instead of resolving, rather than searching
+        # `sys.path`, when the name is already in `sys.modules` with no `__spec__` --
+        # treated the same as an outright miss.
+        spec = None
+    if spec is None:
+        raise pytest.UsageError(
+            f"`airflow_local_settings` did not resolve after generating '{path}'; check "
+            "that its directory is not excluded from Python's module search"
+        )
+    if spec.origin is None:
+        raise pytest.UsageError(
+            "`airflow_local_settings` resolves to a namespace package with no single "
+            f"origin file, so this run's generated '{path}' cannot be told apart from it"
+        )
+    if Path(spec.origin).resolve() != path.resolve():
+        raise pytest.UsageError(
+            f"`airflow_local_settings` resolves to '{spec.origin}', not this run's "
+            f"generated '{path}'; move the foreign module aside, or set the "
+            "`airflow_local_settings` ini option to its dotted module path instead"
+        )
+
+
+def validate_local_settings_module_shape(value: str) -> None:
+    """Validate the syntactic shape of an ini-configured dotted module path.
+
+    Pure string validation only -- deliberately not resolution. A user's own project is
+    not necessarily importable yet at the point this runs (see ``resolve_local_settings_
+    module`` below), but a value that is not even shaped like a dotted module path can
+    and should fail immediately.
+
+    Parameters:
+        value: str containing the candidate ``airflow_local_settings`` ini value.
+
+    Raises:
+        pytest.UsageError: The value is not shaped like a dotted module path.
+    """
+
+    if "/" in value or "\\" in value or value.endswith(".py"):
+        raise pytest.UsageError(
+            "Ini option `airflow_local_settings` must be a dotted module path, not a "
+            f"file path: '{value}'"
+        )
+    segments = value.split(".")
+    if not all(segment.isidentifier() and segment.isascii() for segment in segments):
+        raise pytest.UsageError(
+            f"Ini option `airflow_local_settings` must be a dotted module path: '{value}'"
+        )
+
+
+def resolve_local_settings_module(value: str) -> None:
+    """Resolve a shape-validated dotted module path once the project is importable.
+
+    Deliberately NOT run during bootstrap: pytest has not yet loaded any conftest at
+    that point (see ``check_local_settings_collision``), so a legitimate project-root
+    module would not yet be on ``sys.path`` and would be rejected as unresolvable. This
+    runs later, from ``pytest_configure``, after pytest's own conftest loading has made
+    the project importable and the isolated Airflow environment is already installed.
+
+    Resolving a dotted path executes every parent package's module-level code (to learn
+    its ``__path__``), which is arbitrary user code -- caught broadly and reported as one
+    actionable usage error rather than a raw traceback out of ``pytest_configure``.
+
+    Parameters:
+        value: str containing a shape-validated ``airflow_local_settings`` ini value.
+
+    Raises:
+        pytest.UsageError: The value cannot be imported, or resolves to a namespace
+            package with no single origin file.
+    """
+
+    importlib.invalidate_caches()
+    try:
+        spec = importlib_util.find_spec(value)
+    except Exception as error:
+        raise pytest.UsageError(
+            "Ini option `airflow_local_settings` names a module that cannot be imported: "
+            f"'{value}'"
+        ) from error
+    if spec is None:
+        raise pytest.UsageError(
+            "Ini option `airflow_local_settings` names a module that cannot be imported: "
+            f"'{value}'"
+        )
+    if spec.origin is None:
+        raise pytest.UsageError(
+            "Ini option `airflow_local_settings` resolves to a namespace package with no "
+            f"single origin file: '{value}'"
+        )
 
 
 __all__ = (
     "PragmaProfile",
     "calculate_profile",
+    "check_local_settings_collision",
     "create_metadata_engine",
     "install_legacy_sqlite_listener",
+    "local_settings_path",
+    "resolve_local_settings_module",
+    "validate_local_settings_module_shape",
     "write_local_settings",
 )

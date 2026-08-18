@@ -257,6 +257,7 @@ def test_owner_state_wraps_storage_selection_failures(
         "airflow_home": "",
         "allow_network_airflow_home": False,
         "airflow_db_backend": "sqlite",
+        "airflow_local_settings": "",
     }
     config: Any = SimpleNamespace(
         getini=lambda name: ini_values[name], add_cleanup=lambda _callback: None
@@ -286,6 +287,7 @@ def test_owner_state_cleans_up_after_provisioning_failure(
             "airflow_home": str(base),
             "allow_network_airflow_home": False,
             "airflow_db_backend": "sqlite",
+            "airflow_local_settings": "",
         }[name],
         add_cleanup=cleanups.append,
     )
@@ -349,6 +351,7 @@ def test_owner_state_cleans_up_after_a_provisioner_usage_error(
             "airflow_home": str(base),
             "allow_network_airflow_home": False,
             "airflow_db_backend": "sqlite",
+            "airflow_local_settings": "",
         }[name],
         add_cleanup=cleanups.append,
     )
@@ -491,6 +494,91 @@ def test_validate_configure_rejects_state_disagreement(tmp_path: Path) -> None:
     )
 
     with pytest.raises(pytest.UsageError, match="differs from inherited state"):
+        validate_configure(config)
+
+
+def test_validate_configure_owner_accepts_its_own_local_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run the collision guard for the owner/serial path, unlike an xdist worker.
+
+    This test suite is itself collected under a real bootstrapped `AIRFLOW_HOME`, and
+    some earlier test in the same session has almost certainly already triggered a real
+    `import airflow`, caching `sys.modules["airflow_local_settings"]` -- `find_spec`
+    returns that cached entry regardless of `sys.path`, so it must be cleared first for
+    this test's own `sys.path.insert` to actually take effect.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    monkeypatch.syspath_prepend(str(state.root / "config"))
+    monkeypatch.delitem(sys.modules, "airflow_local_settings", raising=False)
+    stash = pytest.Stash()
+    stash[STATE_KEY] = state
+    config: Any = SimpleNamespace(
+        stash=stash, getini=lambda name: {"airflow_local_settings": ""}[name]
+    )
+
+    validate_configure(config)
+
+
+def test_validate_configure_owner_rejects_a_local_settings_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail loudly for the owner/serial path when a foreign module would win."""
+
+    state = _artifact_state(tmp_path / "run")
+    decoy_dir = tmp_path / "decoy"
+    decoy_dir.mkdir()
+    (decoy_dir / "airflow_local_settings.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(decoy_dir))
+    monkeypatch.delitem(sys.modules, "airflow_local_settings", raising=False)
+    stash = pytest.Stash()
+    stash[STATE_KEY] = state
+    config: Any = SimpleNamespace(
+        stash=stash, getini=lambda name: {"airflow_local_settings": ""}[name]
+    )
+
+    with pytest.raises(pytest.UsageError, match="resolves to"):
+        validate_configure(config)
+
+
+def test_validate_configure_owner_resolves_a_configured_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve a configured cluster-policy module for the owner/serial path."""
+
+    state = _artifact_state(tmp_path / "run")
+    monkeypatch.syspath_prepend(str(state.root / "config"))
+    monkeypatch.delitem(sys.modules, "airflow_local_settings", raising=False)
+    package_dir = tmp_path / "userpkg"
+    package_dir.mkdir()
+    (package_dir / "policy_mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(package_dir))
+    stash = pytest.Stash()
+    stash[STATE_KEY] = state
+    config: Any = SimpleNamespace(
+        stash=stash, getini=lambda name: {"airflow_local_settings": "policy_mod"}[name]
+    )
+
+    validate_configure(config)
+
+
+def test_validate_configure_owner_rejects_an_unresolvable_configured_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail loudly for the owner/serial path when the configured module cannot resolve."""
+
+    state = _artifact_state(tmp_path / "run")
+    monkeypatch.syspath_prepend(str(state.root / "config"))
+    monkeypatch.delitem(sys.modules, "airflow_local_settings", raising=False)
+    stash = pytest.Stash()
+    stash[STATE_KEY] = state
+    config: Any = SimpleNamespace(
+        stash=stash,
+        getini=lambda name: {"airflow_local_settings": "definitely_not_a_real_module_xyz"}[name],
+    )
+
+    with pytest.raises(pytest.UsageError, match="names a module that cannot be imported"):
         validate_configure(config)
 
 

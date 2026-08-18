@@ -27,7 +27,14 @@ from pytest_airflow_in_a_box.airflow_cfg import (
     write_airflow_config,
 )
 from pytest_airflow_in_a_box.airflow_home import announce_retained_root, retain_airflow_home
-from pytest_airflow_in_a_box.storage import locate_storage, write_local_settings
+from pytest_airflow_in_a_box.storage import (
+    check_local_settings_collision,
+    local_settings_path,
+    locate_storage,
+    resolve_local_settings_module,
+    validate_local_settings_module_shape,
+    write_local_settings,
+)
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
 STATE_VERSION = 4
@@ -289,14 +296,13 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         family=family_value,
     )
     if validate_files:
-        local_settings_path = state.root / "config" / "airflow_local_settings.py"
         stale = (
             not state.root.is_dir()
             or not state.dags_folder.is_dir()
             or not state.logs_folder.is_dir()
             or not state.password_file.is_file()
             or not state.config_path.is_file()
-            or not local_settings_path.is_file()
+            or not local_settings_path(state.root).is_file()
         )
         if stale:
             raise ValueError(
@@ -503,6 +509,31 @@ def _db_backend(config: pytest.Config, args: list[str]) -> DbBackend:
         ) from error
 
 
+def _local_settings_module(config: pytest.Config) -> str | None:
+    """Read and shape-validate the ini-configured cluster-policy module, if any.
+
+    Only the syntactic shape is checked here: bootstrap runs before pytest has loaded
+    any conftest, so a legitimate project-root module is not yet importable and cannot
+    be resolved yet (see ``resolve_local_settings_module``, called later from
+    ``validate_configure``).
+
+    Parameters:
+        config: pytest.Config containing parsed startup options.
+
+    Returns:
+        str | None containing a shape-validated dotted module path.
+
+    Raises:
+        pytest.UsageError: The configured value is not shaped like a dotted module path.
+    """
+
+    value: object = config.getini("airflow_local_settings")
+    if not isinstance(value, str) or not value:
+        return None
+    validate_local_settings_module_shape(value)
+    return value
+
+
 def _candidate_path(args: list[str]) -> Path | None:
     """Resolve pytest's temporary-storage candidate without constructing fixtures.
 
@@ -535,6 +566,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
     """
 
     backend = _db_backend(config, args)
+    user_module = _local_settings_module(config)
     provisioner = select_provisioner(backend)
     try:
         location = locate_storage(
@@ -598,12 +630,12 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         database_path = root / "airflow.db"
         password_file = root / "simple_auth_manager_passwords.json"
         config_path = root / "airflow.cfg"
-        local_settings_path = root / "config" / "airflow_local_settings.py"
+        settings_path = local_settings_path(root)
         dags_folder.mkdir()
         logs_folder.mkdir()
         password_file.write_text(PASSWORDS, encoding="utf-8")
         password_file.chmod(0o600)
-        write_local_settings(local_settings_path)
+        write_local_settings(settings_path, user_module=user_module)
         database_name = f"airflow_test_{secrets.token_hex(8)}"
         sql_alchemy_conn = provisioner.start(
             database_path=database_path, database_name=database_name
@@ -761,17 +793,32 @@ def configure_node(node: XdistNode) -> None:
 
 
 def validate_configure(config: pytest.Config) -> None:
-    """Validate workerinput against inherited early state after Config exists.
+    """Finalize local-settings checks, then validate workerinput against inherited state.
+
+    The collision guard and ini-configured module resolution run here rather than during
+    bootstrap: pytest has not loaded any conftest yet at bootstrap time (bootstrap runs
+    from ``pytest_load_initial_conftests``, which fires before pytest's own conftest
+    loading -- see ``bootstrap.load_initial_state``), so a project-root module is not
+    yet on ``sys.path`` and would be missed or wrongly rejected. By ``pytest_configure``,
+    which is where this runs, pytest's own conftest loading has already made the project
+    importable. Owner-only: an xdist worker inherits the controller's already-validated
+    state and never bootstraps its own.
 
     Parameters:
         config: pytest.Config containing stashed and optional xdist state.
 
     Raises:
-        pytest.UsageError: Worker state is absent, malformed, stale, or inconsistent.
+        pytest.UsageError: A foreign `airflow_local_settings` module would resolve ahead
+            of this run's own, the configured module cannot be resolved, or worker state
+            is absent, malformed, stale, or inconsistent.
     """
 
     state = get_bootstrap_state(config)
     if not isinstance(config, XdistWorkerConfig):
+        check_local_settings_collision(local_settings_path(state.root))
+        user_module: object = config.getini("airflow_local_settings")
+        if isinstance(user_module, str) and user_module:
+            resolve_local_settings_module(user_module)
         return
     payload = config.workerinput.get(WORKER_INPUT_KEY)
     try:

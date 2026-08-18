@@ -148,6 +148,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "Metadata database backend: `sqlite` or `postgres`.",
         default="sqlite",
     )
+    parser.addini(
+        "airflow_local_settings",
+        "Dotted module path composed into the generated `airflow_local_settings.py`.",
+        default="",
+    )
     group.addoption(
         "--collect-dag-folder",
         action="store",
