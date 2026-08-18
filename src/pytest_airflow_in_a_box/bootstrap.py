@@ -364,6 +364,10 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         "AIRFLOW__CORE__DAGS_FOLDER": str(state.dags_folder),
         "AIRFLOW__CORE__UNIT_TEST_MODE": "True",
         "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
+        # `airflow_cfg.py` also pins this in the written `airflow.cfg`, for 3.x (which
+        # reads `AIRFLOW_CONFIG` directly); on 2.x that file-based pin alone is inert
+        # per this function's own docstring, so it must be repeated here too.
+        "AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT": "False",
         SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE: state.sql_alchemy_conn,
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER": str(state.logs_folder),
         "AIRFLOW__CORE__FERNET_KEY": state.fernet_key,
@@ -671,6 +675,7 @@ def _environment_names() -> tuple[str, ...]:
         "AIRFLOW__CORE__DAGS_FOLDER",
         "AIRFLOW__CORE__UNIT_TEST_MODE",
         "AIRFLOW__CORE__LOAD_EXAMPLES",
+        "AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT",
         "AIRFLOW__CORE__AUTH_MANAGER",
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS",
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE",
