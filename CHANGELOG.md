@@ -8,6 +8,129 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.8.0] - 2026-08-17
+
+### Added
+
+- `--airflow-parse-secrets` and the `airflow_parse_secrets` ini option select the parse-time
+  resolution policy, `metastore` (default) or `off`; `off` leaves Airflow's own resolution
+  in place for tests that assert the un-shimmed behavior
+  ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+- `Variable.get()` and `BaseHook.get_connection()` written at Dag *top level* now resolve
+  from the rows `airflow_variables` / `airflow_connections` commit, instead of failing with
+  `ImportError: cannot import name 'SUPERVISOR_COMMS'` on Airflow 3.1 or missing silently
+  on 3.2+. Airflow 3 routes both lookups through a supervisor the test process does not
+  have, so the plugin installs one for the duration of every parse it runs --
+  `full_dag_bag`, the `--collect-dag-folder` import items, and the smoke catalog's corpus
+  build. Lookups are lazy, so a Dag folder that never reads a Variable or Connection never
+  opens the database. Airflow 2.x reads the metastore directly at parse time and is
+  unaffected. Upstream has had this open since 2025
+  ([apache/airflow#51816](https://github.com/apache/airflow/issues/51816),
+  [#48554](https://github.com/apache/airflow/issues/48554)) and
+  [PR #61630](https://github.com/apache/airflow/pull/61630) states plainly that it does not
+  fix the root cause
+  ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+- `airflow_parse_secrets` fixture, resolving the same top-level lookups for a whole test
+  rather than for one parse -- for a `Variable.get()` inside a `with dag_maker(...)` block
+  or in the test body, where no Dag file is being parsed
+  ([#117](https://github.com/nredd/pytest-airflow-in-a-box/issues/117)).
+- A DB-free `render_task` fixture (and matching `_compat.render_task_in_process`) rendering
+  one operator's `template_fields` through the Task SDK's public `render_template_fields`,
+  plus a `rendered(...)` matcher for one-expression assertions -- the documented replacement
+  for `TaskInstance.render_templates()`, which Airflow 3.2+ removed
+  ([#118](https://github.com/nredd/pytest-airflow-in-a-box/issues/118)).
+- Five Dag anti-pattern smoke checks, on by default whenever the catalog is enabled, each
+  with an ini to disable or tune it: `test_no_top_level_variable_access` (AST scan plus
+  runtime interception of `Variable`/`Connection` lookups during the corpus `DagBag` fill),
+  `test_no_top_level_io` (import-resolved calls into known I/O modules, list configurable
+  via `airflow_top_level_io_modules`), `test_dag_parse_budget` (relative-to-median parse
+  budget, `airflow_dag_parse_budget_ratio`, floored at one second), `test_forbid_catchup`,
+  and `test_no_unbounded_expand` (mapped tasks expanding over runtime data without
+  `max_active_tis_per_dag`)
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+- A "Concurrent local runs" note in `docs/development.md` documenting pytest's shared-tmpdir
+  garbage-collector race that can exit a session non-zero despite an all-passed summary, why this
+  plugin's `tmp_path_retention_policy = "failed"` default makes it likelier than a bare pytest
+  install, and the `tmp_path_retention_policy=all` / `PYTEST_DEBUG_TEMPROOT` / `TMPDIR`
+  workarounds (the last two with their `AIRFLOW_HOME` storage-ladder tradeoffs)
+  ([#158](https://github.com/nredd/pytest-airflow-in-a-box/issues/158)).
+- `airflow_smoke_disable` ini option to persistently drop any bundled smoke item from the
+  catalog; disabling every serialization-backed item skips calling the Airflow DAG serializer
+  entirely while building the corpus
+  ([#162](https://github.com/nredd/pytest-airflow-in-a-box/issues/162)).
+- A `run_dag` fixture drives a Dag pulled from `full_dag_bag` (or otherwise authored outside
+  `dag_maker`) through a full DagRun and returns the same `DagRunResult` snapshot
+  `dag_maker.run()` does, so a Dag already living in your `dags/` folder can be executed
+  without adopting `dag_maker`'s inline-authoring shape
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
+- A "What a dagbag + callable test misses" section in `docs/guide/cookbook.md`, running one
+  realistic multi-task `ingest` Dag through `dag_maker` to show task relations (trigger rules,
+  branching, cross-task xcom), asset-triggered cross-Dag relations, depends-on-past/backfill
+  DagRun sequences, and retry behavior (`up_for_retry`, `try_number`) that a dagbag-import-plus
+  callable test cannot reach. Linked from README's `Why not...` section
+  ([#165](https://github.com/nredd/pytest-airflow-in-a-box/issues/165)).
+- Added `pytest_airflow_in_a_box.assets.evaluate_asset_schedules`, evaluating a consumer Dag's
+  `AssetTriggeredTimetable`/`DatasetTriggeredTimetable` condition against queued asset/dataset
+  events in the isolated metadata database and creating its `QUEUED` `DagRun` with
+  `consumed_asset_events`/`consumed_dataset_events` attached. Closes the cross-Dag asset-triggering
+  gap `dag_maker`/`full_dag_bag` left as static-only wiring assertions, on both the Airflow 3
+  `Asset` and certified 2.x `Dataset` spellings
+  ([#166](https://github.com/nredd/pytest-airflow-in-a-box/issues/166)).
+- A "Retry behavior" recipe in `docs/guide/cookbook.md` covering `fail -> up_for_retry ->
+  succeed` state-math progression: asserting `try_number` and `retry_delay` at the
+  `TaskInstance` level and the user's `on_retry_callback` firing, without a wall-clock wait
+  ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)).
+- A `docs/guide/testing-scope.md` page ("What to test") drawing the scope line between the
+  Airflow code you wrote -- Dags, plus custom operators, hooks, sensors, decorators, and
+  connection types -- and the Airflow mechanisms Airflow's own suite already covers, with both
+  bounds named: mechanism tests below, provider/core development above (Breeze and
+  `tests_common` territory), and the one legitimate exception -- a pre-upgrade regression suite
+  pinned before a version bump. Restates the same scope in the `README.md`/`docs/index.md`
+  intros
+  ([#168](https://github.com/nredd/pytest-airflow-in-a-box/issues/168)).
+
+### Changed
+
+- The generated test `airflow.cfg` now pins `[scheduler] catchup_by_default = False` on both
+  families, so an effective `dag.catchup` no longer flips with the installed family (2.x
+  defaults it to `True`) for a value the Dag never set
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+- The shared smoke corpus artifact schema is now version 2, carrying per-Dag `catchup` and
+  `fileloc`, per-task mapping metadata, and recorded runtime secrets lookups; mixed-version
+  workers reject stale artifacts loudly
+  ([#119](https://github.com/nredd/pytest-airflow-in-a-box/issues/119)).
+- The README quickstart, `docs/index.md`, and `docs/guide/task-execution.md` now lead with
+  loading an existing Dag via `full_dag_bag` + `run_dag`; the inline `dag_maker` example moves
+  to a clearly labeled secondary "adhoc Dag" path
+  ([#164](https://github.com/nredd/pytest-airflow-in-a-box/issues/164)).
+- The `docs/index.md` requirements bullet no longer reads "Apache Airflow 3.1 or newer, below 4",
+  which contradicted the certified 2.7-2.11 tier documented in the same section and the
+  `airflow2` extra; it now names both floors
+  ([#168](https://github.com/nredd/pytest-airflow-in-a-box/issues/168)).
+
+### Fixed
+
+- The bundled smoke catalog no longer parses the Dag folder a second time, in parallel,
+  when a `full_dag_bag` consumer lands on a different `pytest-xdist` worker under
+  `--dist loadgroup`. When both are present in the run and would survive an active `-m`
+  expression, the plugin now puts the catalog and one `full_dag_bag` consumer into a
+  shared `xdist_group`, forcing `--dist loadgroup` to schedule them onto the same worker
+  so the existing process-local `DagBag` cache has a chance to be reused instead of two
+  workers each paying a full parse concurrently. An item that already carries its own
+  explicit `xdist_group` is left untouched, and only one consumer is ever grouped, so a
+  suite with many `full_dag_bag` consumers does not have all of their execution
+  serialized onto a single worker just to save one parse
+  ([#163](https://github.com/nredd/pytest-airflow-in-a-box/issues/163)).
+
+### Security
+
+- Bump the transitive `sqlparse` dependency to 0.6.0, fixing quadratic-CPU denial-of-service
+  issues in the lexer, token grouping, and `format(sql, reindent=True)`
+  (CVE-2026-59893, CVE-2026-54284, CVE-2026-71491), plus unescaped backslashes in the
+  `python`/`php` output formatters that could break out of the generated string literal
+  (CVE-2026-59894).
+  ([#179](https://github.com/nredd/pytest-airflow-in-a-box/issues/179)).
+
 ## [0.7.2] - 2026-08-15
 
 ### Changed
@@ -491,7 +614,8 @@ All notable changes to this project will be documented in this file. The format 
   behavior out of the box, always overridable by explicit user configuration.
 - Verified support matrix across supported Python and Apache Airflow versions (see README).
 
-[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nredd/pytest-airflow-in-a-box/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.8.0
 [0.7.2]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.2
 [0.7.1]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.1
 [0.7.0]: https://github.com/nredd/pytest-airflow-in-a-box/releases/tag/v0.7.0
