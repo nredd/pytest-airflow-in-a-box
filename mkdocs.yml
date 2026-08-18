@@ -44,6 +44,7 @@ plugins:
 nav:
   - Home: index.md
   - Guide:
+      - What to test: guide/testing-scope.md
       - Task execution: guide/task-execution.md
       - Deferrable operators: guide/deferrable-operators.md
       - DB-free task execution: guide/db-free-execution.md

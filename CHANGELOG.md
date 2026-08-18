@@ -8,6 +8,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- A `docs/guide/testing-scope.md` page ("What to test") drawing the scope line between the
+  Airflow code you wrote -- Dags, plus custom operators, hooks, sensors, decorators, and
+  connection types -- and the Airflow mechanisms Airflow's own suite already covers, with both
+  bounds named: mechanism tests below, provider/core development above (Breeze and
+  `tests_common` territory), and the one legitimate exception -- a pre-upgrade regression suite
+  pinned before a version bump. Restates the same scope in the `README.md`/`docs/index.md`
+  intros
+  ([#168](https://github.com/nredd/pytest-airflow-in-a-box/issues/168)).
+
 - A DB-free `render_task` fixture (and matching `_compat.render_task_in_process`) rendering
   one operator's `template_fields` through the Task SDK's public `render_template_fields`,
   plus a `rendered(...)` matcher for one-expression assertions -- the documented replacement
@@ -79,6 +88,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- The `docs/index.md` requirements bullet no longer reads "Apache Airflow 3.1 or newer, below 4",
+  which contradicted the certified 2.7-2.11 tier documented in the same section and the
+  `airflow2` extra; it now names both floors
+  ([#168](https://github.com/nredd/pytest-airflow-in-a-box/issues/168)).
 - The README quickstart, `docs/index.md`, and `docs/guide/task-execution.md` now lead with
   loading an existing Dag via `full_dag_bag` + `run_dag`; the inline `dag_maker` example moves
   to a clearly labeled secondary "adhoc Dag" path
