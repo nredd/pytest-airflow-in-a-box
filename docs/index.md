@@ -1,8 +1,13 @@
 # pytest-airflow-in-a-box
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
-Airflow deployment. It targets Airflow 3 and provides the package and plugin foundation for a
-small, typed testing surface.
+Airflow deployment. It provides the package + plugin foundation for a small, typed testing
+surface. It primarily targets Airflow 3 but maintains a certified Airflow 2.7-2.11
+compatibility tier.
+
+It is for testing the Airflow code you wrote -- your Dags, plus the custom operators, hooks,
+sensors, decorators, and connection types they lean on -- rather than Airflow's own machinery.
+See [What to test](guide/testing-scope.md) for where that line falls.
 
 The package auto-registers with pytest, creates an isolated metadata database, and provides typed
 fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
@@ -11,7 +16,8 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 
 - CPython 3.10 through 3.14
 - pytest 8 or newer
-- Apache Airflow 3.1 or newer, below 4
+- Apache Airflow 3.1 or newer, below 4 -- or Airflow 2.7 or newer, below 3, on the
+  certified 2.x compatibility tier
 - Linux or macOS for Airflow-backed tests
 
 Apache Airflow does not support native Windows installations. Windows development should use WSL2
@@ -88,6 +94,8 @@ including the "testing a Dag defined elsewhere" walkthrough.
 
 ## Where to go next
 
+- [What to test](guide/testing-scope.md) -- your Dags and custom components, not Airflow's
+  own machinery
 - [Task execution](guide/task-execution.md), including the `dag_maker` and `run_dag` fixtures
 - [Database backends](guide/database.md) -- SQLite by default, Postgres on request
 - [The isolated `AIRFLOW_HOME`](guide/airflow-home.md) -- where it lands, and how to keep it

@@ -9,9 +9,14 @@
 [![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.7--2.11-017CEE?logo=apacheairflow&logoColor=white)](#requirements)
 
 `pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
-Airflow deployment. It targets Airflow 3 (primary) with a certified Airflow 2.7-2.11
-compatibility tier, and provides the package and plugin foundation for a small, typed
-testing surface.
+Airflow deployment. It provides the package + plugin foundation for a small, typed testing
+surface. It primarily targets Airflow 3 but maintains a certified Airflow 2.7-2.11
+compatibility tier.
+
+It is for testing the Airflow code you wrote -- your Dags, plus the custom operators, hooks,
+sensors, decorators, and connection types they lean on -- rather than Airflow's own machinery.
+See [What to test](https://nredd.github.io/pytest-airflow-in-a-box/guide/testing-scope/) for
+where that line falls.
 
 The package auto-registers with pytest, creates an isolated metadata database, and provides typed
 fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
@@ -271,10 +276,10 @@ for the full option reference.
 
 ## Documentation
 
-Task execution, deferrable operators, DB-free execution, Variable/Connection seeding, structlog
-capture, Dag collection, configuration overrides, smoke tests, report artifacts, database backends
-and cleanup, the live REST API, the migration outcome diff, markers, and diagnostics are all
-covered on the
+What to test (and what not to), task execution, deferrable operators, DB-free execution,
+Variable/Connection seeding, structlog capture, Dag collection, configuration overrides, smoke
+tests, report artifacts, database backends and cleanup, the live REST API, the migration outcome
+diff, markers, and diagnostics are all covered on the
 [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/).
 
 ## Development
