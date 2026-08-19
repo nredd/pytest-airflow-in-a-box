@@ -294,14 +294,22 @@ LISTENER_CORE_MANAGER_ONLY = "listener-core-manager-only"
 LISTENER_SDK_MANAGER_ONLY = "listener-sdk-manager-only"
 
 # `airflow.listeners.listener.get_listener_manager` registers all five; the Task SDK's
-# `airflow.sdk.listener.get_listener_manager` registers only the first two. Both
-# `lifecycle` and `taskinstance` are physically duplicated between the core and SDK
+# `airflow.sdk.listener.get_listener_manager` (3.2+ only -- see
+# `AirflowCapabilities.sdk_listener_manager_available`) registers only the first two. On
+# 3.2+, `lifecycle` and `taskinstance` are physically duplicated between the core and SDK
 # packages (`airflow._shared.listeners.spec.*` vs `airflow.sdk._shared.listeners.spec.*`)
-# rather than shared, but their hookspec names and signatures are identical. Verified
-# against the installed 3.3.0; see `PROVENANCE.md`.
+# rather than shared, but their hookspec names and signatures are identical. On 3.1.x the
+# `_shared` split does not exist at all -- `airflow._shared.listeners` is not importable --
+# and the one and only manager builds all five hookspecs directly from
+# `airflow.listeners.spec.*`, `lifecycle`/`taskinstance` included; those two legacy
+# candidates are listed after the `_shared` ones and are simply skipped by
+# `_listener_hookspecs` wherever the `_shared` split exists instead. Verified against the
+# installed 3.3.0 and against 3.1.0/3.2.0 in isolated environments; see `PROVENANCE.md`.
 _CORE_LISTENER_SPEC_MODULES = (
     "airflow._shared.listeners.spec.lifecycle",
     "airflow._shared.listeners.spec.taskinstance",
+    "airflow.listeners.spec.lifecycle",
+    "airflow.listeners.spec.taskinstance",
     "airflow.listeners.spec.dagrun",
     "airflow.listeners.spec.asset",
     "airflow.listeners.spec.importerrors",
@@ -534,6 +542,14 @@ def _check_listener_manager_scope(
 ) -> Iterable[ComponentProblem]:
     """Flag a hookimpl method whose hookspec exists only in one manager's registry.
 
+    On 3.1.x, `other_scope` resolves to no hookspecs at all when it names the SDK
+    manager's modules, since that manager does not exist there (see
+    `AirflowCapabilities.sdk_listener_manager_available`) -- not because it exists but
+    happens not to register this particular hookspec, which is the normal 3.2+ case this
+    check is for. An empty `other_scope` is therefore treated as "no second manager to be
+    unreachable from" and skipped entirely, rather than as every hookspec in `this_scope`
+    trivially qualifying.
+
     Parameters:
         component: object containing the listener class or instance under check.
         this_scope: tuple[str, ...] containing the hookspec modules naming methods that
@@ -552,7 +568,10 @@ def _check_listener_manager_scope(
     impls = _listener_hookimpls(component_type)
     if not impls:
         return
-    only_this = set(_listener_hookspecs(this_scope)) - set(_listener_hookspecs(other_scope))
+    other_hookspecs = set(_listener_hookspecs(other_scope))
+    if not other_hookspecs:
+        return
+    only_this = set(_listener_hookspecs(this_scope)) - other_hookspecs
     for info in sorted(impls, key=lambda item: item.method_name):
         if info.hookspec_name not in only_this:
             continue

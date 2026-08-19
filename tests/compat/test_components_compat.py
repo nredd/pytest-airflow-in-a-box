@@ -341,6 +341,37 @@ def test_listener_checks_report_nothing_without_any_hookimpl() -> None:
         assert tuple(checker(NotAListener)) == ()
 
 
+def test_listener_manager_scope_skips_when_the_other_manager_does_not_exist() -> None:
+    """Report nothing when `other_scope` resolves no hookspecs at all.
+
+    Reproduces the real Airflow 3.1.0 scenario directly: on 3.1.x, the SDK listener
+    manager does not exist, so `_SDK_LISTENER_SPEC_MODULES` resolves zero hookspecs, not
+    "a manager that exists but does not register this particular hook." Before this fix,
+    an empty `other_scope` made `only_this` equal to the *entire* `this_scope` hookspec
+    set, so every real hookimpl on a plain, correctly written 3.1.x listener (e.g.
+    `on_task_instance_success`) was wrongly flagged `listener-core-manager-only` --
+    caught by real CI on the 3.1.x compat matrix legs, not by this repo's own
+    single-Airflow-version local gate.
+    """
+
+    from airflow.listeners import hookimpl
+
+    class CleanListener:
+        @hookimpl
+        def on_task_instance_success(self, previous_state: object, task_instance: object) -> None:
+            del previous_state, task_instance
+
+    problems = compat_components._check_listener_manager_scope(
+        CleanListener,
+        this_scope=compat_components._CORE_LISTENER_SPEC_MODULES,
+        other_scope=("pytest_airflow_in_a_box._no_such_module",),
+        code="listener-core-manager-only",
+        other_manager="airflow.sdk.listener",
+    )
+
+    assert tuple(problems) == ()
+
+
 def test_listener_hookspecs_skips_an_unimportable_module() -> None:
     """Degrade conservatively rather than raise when a hookspec module cannot import.
 

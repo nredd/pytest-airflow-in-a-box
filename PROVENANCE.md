@@ -48,7 +48,15 @@ and `execute_async` removal were additionally verified against `base_executor.py
 does not exist at all at the `3.1.0` commit -- confirmed both by installing the real `3.1.0` wheel
 and by the absence of the path in the `3.1.0` tag's own source tree -- so
 `sdk_listener_manager_available` certifies `False` for every 3.1.x release and `True` from `3.2`
-onward, alongside the rest of that release's Task SDK listener-architecture changes.
+onward, alongside the rest of that release's Task SDK listener-architecture changes. The same
+`3.1.0` wheel install additionally shows `lifecycle`/`taskinstance` living directly at
+`airflow.listeners.spec.{lifecycle,taskinstance}` on 3.1.x, with no `_shared` split at all --
+`airflow.listeners.listener.ListenerManager.__init__` builds all five hookspecs from
+`airflow.listeners.spec` itself
+(https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/listeners/listener.py) --
+and the installed `3.2.0` wheel confirms the old path is fully removed there, replaced by the
+`_shared` one; `_CORE_LISTENER_SPEC_MODULES` lists both candidates so each release resolves the
+one that exists.
 
 No proprietary source code, credentials, hostnames, internal paths, or private repository history
 may be included in this project.
