@@ -179,7 +179,13 @@ def test_v3_only_checks_are_inapplicable_on_2x(
 
     Checked against real, unpatched 3.x first, so the emptiness asserted after patching
     to 2.x is proven to be the `installed_family()` gate closing rather than an
-    already-empty result for an unrelated reason.
+    already-empty result for an unrelated reason. `core_manager_only`/`sdk_manager_only`
+    additionally depend on whether a second listener manager exists on the *running*
+    release at all (`AirflowCapabilities.sdk_listener_manager_available`), not just on
+    family -- on 3.1.x there is only one manager, registering every hookspec directly, so
+    neither has anything to report there regardless of family, and the "fires on real
+    unpatched 3.x" precondition below is skipped for whichever of the two that applies to
+    on whatever release this test actually runs under.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch installing the fake 2.x family.
@@ -188,14 +194,13 @@ def test_v3_only_checks_are_inapplicable_on_2x(
 
     from airflow.listeners import hookimpl
 
+    from pytest_airflow_in_a_box._compat import resolve_capabilities
+
     checker = getattr(compat_components, checker_name)
 
     # A component carrying every offending shape at once: a stale attribute and an
     # unenforced missing override for the executor checks, an unmatched hookimpl name,
-    # an unknown hookimpl argument, and a core-only hookspec for the listener checks. No
-    # real hookspec exists only in the SDK manager today (its hookspec set is a strict
-    # subset of the core one), so `sdk_manager_only` has nothing to genuinely fire on and
-    # is exercised for emptiness under the 2.x gate only.
+    # an unknown hookimpl argument, and a core-only hookspec for the listener checks.
     class ObviouslyBroken:
         is_single_threaded = True
         supports_pickling = True
@@ -216,7 +221,18 @@ def test_v3_only_checks_are_inapplicable_on_2x(
         def on_dag_run_success(self, dag_run: object, msg: object) -> None:
             del dag_run, msg
 
-    if checker_name != "_check_listener_sdk_manager_only":
+    # No real hookspec exists only in the SDK manager today (its hookspec set is a
+    # strict subset of the core one on every release that has one at all), so
+    # `sdk_manager_only` never fires on real data and is always exempt here.
+    # `core_manager_only` fires on any release with a genuine second manager
+    # (`sdk_listener_manager_available`); on the one release line without it (3.1.x) it
+    # is exempt too, for the same structural reason `sdk_manager_only` always is.
+    sdk_manager_exists = resolve_capabilities().sdk_listener_manager_available
+    always_exempt = checker_name == "_check_listener_sdk_manager_only"
+    conditionally_exempt = (
+        checker_name == "_check_listener_core_manager_only" and not sdk_manager_exists
+    )
+    if not (always_exempt or conditionally_exempt):
         assert tuple(checker(ObviouslyBroken)) != (), "expected a real problem on unpatched 3.x"
 
     monkeypatch.setattr(compat_components, "installed_family", lambda: AirflowFamily.V2)
@@ -378,14 +394,17 @@ def test_listener_hookspecs_skips_an_unimportable_module() -> None:
     These listener checks deliberately validate against the light, non-raising
     `installed_family()` instead of a certified release, so a module renamed or removed
     on an uncertified installed release must not raise out of `check_component` --
-    mirroring every other capability probe in `_compat/`.
+    mirroring every other capability probe in `_compat/`. Uses
+    `airflow.listeners.spec.dagrun` as the real module: unlike `lifecycle`/`taskinstance`,
+    it was never touched by the 3.2 `_shared` split and resolves identically on every
+    certified 3.x release.
     """
 
     specs = compat_components._listener_hookspecs(
-        ("airflow._shared.listeners.spec.lifecycle", "pytest_airflow_in_a_box._no_such_module")
+        ("airflow.listeners.spec.dagrun", "pytest_airflow_in_a_box._no_such_module")
     )
 
-    assert "on_starting" in specs
+    assert "on_dag_run_success" in specs
 
 
 def test_timetable_serialize_pair_incomplete_ignores_airflows_own_override() -> None:

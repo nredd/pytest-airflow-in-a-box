@@ -110,7 +110,10 @@ class _BrokenExecutor(BaseExecutor):
     """Executor exercising every executor check at once."""
 
     is_single_threaded = True
-    supports_sentry = True  # belongs to the 3.1 contract, not the resolved one
+    # Wrong on every certified contract, not just one: on 3.1 `sentry_integration` is
+    # simply the wrong name (3.1 wants `supports_sentry`); on 3.2+ it is the right name
+    # holding the wrong type (an int, not `str`).
+    sentry_integration = 123
 
 
 def test_check_component_reports_no_problems_for_a_clean_timetable() -> None:
@@ -158,16 +161,23 @@ def test_check_component_reports_no_problems_for_a_clean_listener() -> None:
 
 
 def test_check_component_flags_every_listener_problem() -> None:
-    """Flag an unmatched hookspec, an unknown argument, and a core-only hook."""
+    """Flag an unmatched hookspec, an unknown argument, and (on 3.2+) a core-only hook.
+
+    `on_dag_run_success` has no hookspec in the SDK listener manager only where that
+    manager exists at all (3.2+); on 3.1.x, which has one manager registering every
+    hookspec, it is not a real problem, so `listener-core-manager-only` is conditioned
+    on `AirflowCapabilities.sdk_listener_manager_available` here.
+    """
+
+    from pytest_airflow_in_a_box._compat import resolve_capabilities
 
     report = check_component(_BrokenListener)
 
     codes = {problem.code for problem in report.problems}
-    assert codes == {
-        "listener-core-manager-only",
-        "listener-no-matching-hookspec",
-        "listener-unknown-argument",
-    }
+    expected = {"listener-no-matching-hookspec", "listener-unknown-argument"}
+    if resolve_capabilities().sdk_listener_manager_available:
+        expected.add("listener-core-manager-only")
+    assert codes == expected
 
 
 def test_check_component_reports_no_problems_for_a_clean_executor() -> None:
