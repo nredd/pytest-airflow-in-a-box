@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from airflow.utils.state import TaskInstanceState
 
+from pytest_airflow_in_a_box.components import check_component
 from pytest_airflow_in_a_box.types import RunTask
 
 pytestmark = pytest.mark.compat
@@ -44,6 +45,23 @@ def test_provider_package_composes_in_a_corpus_dag(pytester: pytest.Pytester) ->
     result = pytester.runpytest_subprocess("-q", f"--dag-folder={CORPUS}")
 
     result.assert_outcomes(passed=1)
+
+
+def test_provider_package_components_pass_check_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catch a false positive in the bundled checks against real component shapes."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    provider: Any = import_module("provider_package")
+
+    for component in (
+        provider.ExampleTimetable,
+        provider.ExampleListener,
+        provider.ExampleExecutor,
+    ):
+        report = check_component(component)
+        assert report.ok, report.summary()
 
 
 @pytest.mark.requires_airflow3

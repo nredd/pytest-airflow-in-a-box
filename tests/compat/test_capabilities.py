@@ -20,6 +20,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AssetUniqueKeyLocation,
     DagBagLocation,
     DagRunInterface,
+    ExecutorContract,
     ParamsLocation,
     SecretsResolution,
     TaskInstanceRunner,
@@ -86,6 +87,25 @@ class _DagRunAwareTaskInstance:
         del task, pool_override, dag_run
 
 
+class _V31Executor:
+    """Fake pre-3.2 BaseExecutor exposing the boolean sentry flag."""
+
+    supports_sentry = False
+
+
+class _V32Executor:
+    """Fake 3.2/3.2.x BaseExecutor exposing the renamed string sentry flag."""
+
+    sentry_integration = ""
+
+
+class _V33Executor:
+    """Fake 3.3 BaseExecutor adding the connection-test flag."""
+
+    sentry_integration = ""
+    supports_connection_test = False
+
+
 def _callable_symbol() -> None:
     """Provide a callable placeholder for required functions."""
 
@@ -147,6 +167,7 @@ def _base_modules() -> dict[str, SimpleNamespace]:
         "airflow.assets.evaluation": SimpleNamespace(AssetEvaluator=generic_class),
         "airflow.models.asset": SimpleNamespace(AssetDagRunQueue=generic_class),
         "airflow.timetables.simple": SimpleNamespace(AssetTriggeredTimetable=generic_class),
+        "airflow.sdk.listener": SimpleNamespace(get_listener_manager=_callable_symbol),
     }
 
 
@@ -226,6 +247,10 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
         modules["airflow.serialization.definitions.assets"] = SimpleNamespace(
             SerializedAssetUniqueKey=generic_class
         )
+    executor_by_minor = {(3, 1): _V31Executor, (3, 2): _V32Executor}
+    modules["airflow.executors.base_executor"] = SimpleNamespace(
+        BaseExecutor=executor_by_minor.get(release[:2], _V33Executor)
+    )
     return modules
 
 
@@ -329,6 +354,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -354,6 +381,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -379,6 +408,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -404,6 +435,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -429,6 +462,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -454,6 +489,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -479,6 +516,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -504,6 +543,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+                executor_contract=ExecutorContract.V3_1,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -529,6 +570,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+                executor_contract=ExecutorContract.V3_2,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -554,6 +597,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+                executor_contract=ExecutorContract.V3_2,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -579,6 +624,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+                executor_contract=ExecutorContract.V3_2,
+                sdk_listener_manager_available=True,
             ),
         ),
         (
@@ -604,6 +651,8 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 max_python=None,
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+                executor_contract=ExecutorContract.V3_3,
+                sdk_listener_manager_available=True,
             ),
         ),
     ],
@@ -751,6 +800,8 @@ def test_resolves_certified_v2_release_capabilities(
         max_python=max_python,
         dag_requires_start_date=requires_start_date,
         asset_unique_key_location=None,
+        executor_contract=None,
+        sdk_listener_manager_available=False,
     )
 
 
@@ -1183,6 +1234,24 @@ def _backport_serialized_dag_location(modules: dict[str, SimpleNamespace]) -> No
     )
 
 
+def _downgrade_executor_sentry_flag(modules: dict[str, SimpleNamespace]) -> None:
+    """Mutate a 3.2+ release to report the 3.1 boolean sentry flag."""
+
+    modules["airflow.executors.base_executor"] = SimpleNamespace(BaseExecutor=_V31Executor)
+
+
+def _add_connection_test_support(modules: dict[str, SimpleNamespace]) -> None:
+    """Mutate a 3.2 release to report the 3.3 connection-test flag."""
+
+    modules["airflow.executors.base_executor"] = SimpleNamespace(BaseExecutor=_V33Executor)
+
+
+def _remove_sdk_listener_manager(modules: dict[str, SimpleNamespace]) -> None:
+    """Mutate a 3.x release to remove the SDK listener manager module."""
+
+    del modules["airflow.sdk.listener"]
+
+
 @pytest.mark.parametrize(
     ("release", "mutate", "symbol"),
     [
@@ -1193,6 +1262,9 @@ def _backport_serialized_dag_location(modules: dict[str, SimpleNamespace]) -> No
         ((3, 2, 2), _remove_sentry_field, "StartupDetails.sentry_integration"),
         ((3, 3, 0), _remove_queue_field, "TaskInstance DTO queue"),
         ((3, 1, 8), _backport_serialized_dag_location, "SerializedDAG canonical location"),
+        ((3, 2, 2), _downgrade_executor_sentry_flag, "BaseExecutor attribute contract"),
+        ((3, 2, 2), _add_connection_test_support, "BaseExecutor attribute contract"),
+        ((3, 3, 0), _remove_sdk_listener_manager, "airflow.sdk.listener manager"),
     ],
 )
 def test_rejects_vendor_contract_mismatch(
@@ -1373,6 +1445,55 @@ def test_unexpected_asset_unique_key_import_failure_is_wrapped(
     monkeypatch.setattr(capability_module, "import_module", broken_import)
 
     with pytest.raises(AirflowCompatibilityError, match="SerializedAssetUniqueKey") as caught:
+        capability_module.resolve_capabilities()
+
+    assert caught.value.__cause__ is failure
+
+
+def test_executor_contract_rejects_neither_sentry_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Name the probed symbol when a vendor executor drops both sentry flags."""
+
+    modules = _fake_modules((3, 3, 0))
+    modules["airflow.executors.base_executor"] = SimpleNamespace(
+        BaseExecutor=type("BareExecutor", (), {})
+    )
+    _install_fake_environment(monkeypatch, "3.3.0+vendor", modules)
+
+    with pytest.raises(
+        AirflowCompatibilityError,
+        match=r"airflow\.executors\.base_executor\.BaseExecutor\.sentry_integration",
+    ) as caught:
+        capability_module.resolve_capabilities()
+
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_sdk_listener_manager_import_failure_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retain initialization failures from the SDK listener manager module."""
+
+    modules = _fake_modules((3, 3, 0))
+    failure = RuntimeError("broken sdk listener module initialization")
+
+    def broken_import(name: str, package: str | None = None) -> object:
+        """Fail unexpectedly while probing the SDK listener manager module."""
+
+        del package
+        if name == "airflow.sdk.listener":
+            raise failure
+        return modules[name]
+
+    def fake_version(distribution_name: str) -> str:
+        """Return certified metadata for the SDK listener manager failure test."""
+
+        del distribution_name
+        return "3.3.0"
+
+    monkeypatch.setattr(capability_module.metadata, "version", fake_version)
+    monkeypatch.setattr(capability_module, "import_module", broken_import)
+
+    with pytest.raises(
+        AirflowCompatibilityError, match=r"airflow\.sdk\.listener\.get_listener_manager"
+    ) as caught:
         capability_module.resolve_capabilities()
 
     assert caught.value.__cause__ is failure

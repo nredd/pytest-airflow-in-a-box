@@ -16,6 +16,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AssetUniqueKeyLocation,
     DagBagLocation,
     DagRunInterface,
+    ExecutorContract,
     ParamsLocation,
     SecretsResolution,
     TaskInstanceRunner,
@@ -60,6 +61,8 @@ def _capabilities() -> AirflowCapabilities:
         max_python=None,
         dag_requires_start_date=False,
         asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+        executor_contract=ExecutorContract.V3_3,
+        sdk_listener_manager_available=True,
     )
 
 
