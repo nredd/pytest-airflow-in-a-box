@@ -27,6 +27,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 from pytest_airflow_in_a_box._compat.capabilities import (
+    AirflowCompatibilityError,
     AirflowFamily,
     ExecutorContract,
     installed_family,
@@ -111,11 +112,27 @@ TIMETABLE_MISSING_PROTOCOL_METHOD = "timetable-missing-protocol-method"
 TIMETABLE_SERIALIZE_PAIR_INCOMPLETE = "timetable-serialize-pair-incomplete"
 TIMETABLE_SERIALIZE_NOT_JSON = "timetable-serialize-not-json"
 
-# The two `Timetable` Protocol methods whose default body raises `NotImplementedError`;
-# every other Protocol member (the data attributes, `serialize`/`deserialize`,
-# `validate`, the partition hooks) has a usable default. Verified against
-# `airflow.timetables.base.Timetable` on the installed 3.3.0; see `PROVENANCE.md`.
+# The two `Timetable` Protocol methods a timetable always needs: their default body
+# raises `NotImplementedError` unconditionally, and the scheduler calls both for every
+# DagRun regardless of `partitioned`. Verified against `airflow.timetables.base.Timetable`
+# on the installed 3.3.0; see `PROVENANCE.md`.
 _TIMETABLE_REQUIRED_METHODS = ("infer_manual_data_interval", "next_dagrun_info")
+# Required only when the checked timetable sets `partitioned = True`: the scheduler calls
+# these two conditionally, but their default body raises `NotImplementedError`
+# unconditionally the moment either is actually called, same as the pair above. Verified
+# against the installed 3.3.0; see `PROVENANCE.md`.
+_TIMETABLE_PARTITIONED_REQUIRED_METHODS = ("get_partition_mapper", "iter_partition_dagrun_infos")
+_TIMETABLE_METHOD_HINTS: dict[str, str] = {
+    "infer_manual_data_interval": "the scheduler calls it for every manually triggered DagRun.",
+    "next_dagrun_info": "the scheduler calls it for every DagRun this timetable schedules.",
+    "get_partition_mapper": (
+        "the scheduler calls it for every partitioned asset this timetable references, "
+        "since `partitioned` is True."
+    ),
+    "iter_partition_dagrun_infos": (
+        "the scheduler calls it to enumerate partition runs, since `partitioned` is True."
+    ),
+}
 
 
 def _check_timetable_local_qualname(component: object) -> Iterable[ComponentProblem]:
@@ -149,6 +166,9 @@ def _check_timetable_local_qualname(component: object) -> Iterable[ComponentProb
 def _check_timetable_missing_protocol_method(component: object) -> Iterable[ComponentProblem]:
     """Flag a timetable that never overrides a method the Protocol default cannot serve.
 
+    `get_partition_mapper`/`iter_partition_dagrun_infos` join the required set only when
+    the checked component sets `partitioned = True`.
+
     Parameters:
         component: object containing the timetable class or instance under check.
 
@@ -159,7 +179,10 @@ def _check_timetable_missing_protocol_method(component: object) -> Iterable[Comp
     from airflow.timetables.base import Timetable
 
     component_type = _as_type(component)
-    for name in _TIMETABLE_REQUIRED_METHODS:
+    required = _TIMETABLE_REQUIRED_METHODS
+    if getattr(component, "partitioned", False):
+        required += _TIMETABLE_PARTITIONED_REQUIRED_METHODS
+    for name in required:
         defining = _defining_class(component_type, name)
         if defining is not None and defining is not Timetable:
             continue
@@ -169,14 +192,20 @@ def _check_timetable_missing_protocol_method(component: object) -> Iterable[Comp
             hint=(
                 f"`Timetable.{name}`'s default implementation raises "
                 f"`NotImplementedError()`. Implement `{name}` on "
-                f"`{component_type.__name__}` -- the scheduler calls it for every "
-                f"DagRun this timetable schedules."
+                f"`{component_type.__name__}` -- {_TIMETABLE_METHOD_HINTS[name]}"
             ),
         )
 
 
 def _check_timetable_serialize_pair_incomplete(component: object) -> Iterable[ComponentProblem]:
     """Flag a timetable that overrides exactly one of `serialize`/`deserialize`.
+
+    An override inherited from Airflow's own shipped timetables does not count as a user
+    override: `airflow.timetables.simple.NullTimetable`, for example, redefines
+    `deserialize` identically to the Protocol default and inherits `serialize` -- a
+    complete, correct pair Airflow itself ships, not a gap in a `NullTimetable` subclass.
+    Only a definition outside the `airflow.` package (including `airflow.providers.*`)
+    counts. Verified against the installed 3.3.0; see `PROVENANCE.md`.
 
     Parameters:
         component: object containing the timetable class or instance under check.
@@ -188,12 +217,15 @@ def _check_timetable_serialize_pair_incomplete(component: object) -> Iterable[Co
     from airflow.timetables.base import Timetable
 
     component_type = _as_type(component)
-    serialize_defining = _defining_class(component_type, "serialize")
-    deserialize_defining = _defining_class(component_type, "deserialize")
-    serialize_overridden = serialize_defining is not None and serialize_defining is not Timetable
-    deserialize_overridden = (
-        deserialize_defining is not None and deserialize_defining is not Timetable
-    )
+
+    def _user_overridden(name: str) -> bool:
+        defining = _defining_class(component_type, name)
+        if defining is None or defining is Timetable:
+            return False
+        return not defining.__module__.startswith("airflow.")
+
+    serialize_overridden = _user_overridden("serialize")
+    deserialize_overridden = _user_overridden("deserialize")
     if serialize_overridden == deserialize_overridden:
         return
     implemented, missing = (
@@ -213,7 +245,7 @@ def _check_timetable_serialize_pair_incomplete(component: object) -> Iterable[Co
 
 
 def _check_timetable_serialize_not_json(component: object) -> Iterable[ComponentProblem]:
-    """Flag a timetable instance whose `serialize()` does not return JSON-safe data.
+    """Flag a timetable instance whose `serialize()` does not return a JSON-safe dict.
 
     Only runs against an already-built instance: calling `serialize()` on a bare class
     would require constructing one, which this module never does. A class-only check
@@ -232,18 +264,22 @@ def _check_timetable_serialize_not_json(component: object) -> Iterable[Component
     if not callable(serialize):
         return
     try:
-        json.dumps(serialize())
+        payload = serialize()
+        if not isinstance(payload, dict):
+            raise TypeError(f"expected a dict, got {type(payload).__name__}")
+        json.dumps(payload)
     except Exception as error:
         yield ComponentProblem(
             code=TIMETABLE_SERIALIZE_NOT_JSON,
             message=(
                 f"`{type(component).__name__}.serialize()` did not return a "
-                f"JSON-serializable mapping ({type(error).__name__}: {error})."
+                f"JSON-serializable dict ({type(error).__name__}: {error})."
             ),
             hint=(
                 "`serialize()`'s return value is stored in the metadata database as "
-                "JSON and fed back into `deserialize`. Return only JSON-safe types "
-                "(str, int, float, bool, None, list, dict)."
+                "JSON and fed into `deserialize(cls, data: dict[str, Any])`. Return a "
+                "dict with only JSON-safe values (str, int, float, bool, None, list, "
+                "dict)."
             ),
         )
 
@@ -297,48 +333,117 @@ def _listener_marker_attribute(name: str) -> str:
     return f"{hookimpl.project_name}_{name}"
 
 
+def _pluggy_argnames(func: Callable[..., object]) -> tuple[str, ...]:
+    """Extract the parameter names pluggy's own `varnames()` would validate.
+
+    Mirrors `pluggy._hooks.varnames`: only `POSITIONAL_ONLY`/`POSITIONAL_OR_KEYWORD`
+    parameters are ever compared against a hookspec by pluggy -- a hookimpl's own
+    `**kwargs`, `*args`, and keyword-only parameters are invisible to pluggy's validation,
+    and a defaulted parameter is split off into a group pluggy never validates against the
+    hookspec at all, so recording it here would false-positive `listener-unknown-argument`
+    on pluggy-legal code. `check_component` never binds an instance, so unlike pluggy
+    itself this cannot detect a genuinely bound method; it reproduces pluggy's own
+    fallback for that case instead -- strip a first parameter literally named `self` on a
+    function whose qualified name shows it was defined inside a class body. Verified
+    against `pluggy` 1.6.0's `varnames()` source directly.
+
+    Parameters:
+        func: Callable[..., object] containing the raw function to inspect.
+
+    Returns:
+        tuple[str, ...] containing the parameter names pluggy would require to match a
+        hookspec, in declaration order.
+    """
+
+    valid_kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    valid_params = [
+        parameter
+        for parameter in inspect.signature(func).parameters.values()
+        if parameter.kind in valid_kinds
+    ]
+    required = tuple(
+        parameter.name
+        for parameter in valid_params
+        if parameter.default is inspect.Parameter.empty
+    )
+    qualname = getattr(func, "__qualname__", "")
+    if required and "." in qualname and required[0] == "self":
+        required = required[1:]
+    return required
+
+
 def _listener_hookspecs(module_names: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
-    """Map each `@hookspec` function name in the given modules to its parameter names.
+    """Map each `@hookspec` function name in the given modules to its validated parameters.
+
+    A module that fails to import is skipped rather than raised: these listener checks
+    deliberately validate against the light, non-raising `installed_family()` rather than
+    a certified release, so an uncertified installed release renaming or removing one of
+    these private modules degrades the check conservatively instead of raising out of
+    `check_component`, mirroring every other capability probe in `_compat/`.
 
     Parameters:
         module_names: tuple[str, ...] containing hookspec module import paths.
 
     Returns:
-        dict[str, tuple[str, ...]] mapping hookspec function name to its declared
-        parameter names, in declaration order.
+        dict[str, tuple[str, ...]] mapping hookspec function name to the parameter names
+        pluggy would validate, in declaration order.
     """
 
     marker = _listener_marker_attribute("spec")
     specs: dict[str, tuple[str, ...]] = {}
     for module_name in module_names:
-        module = import_module(module_name)
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            continue
         for name, value in vars(module).items():
             if callable(value) and hasattr(value, marker):
-                specs[name] = tuple(inspect.signature(value).parameters)
+                specs[name] = _pluggy_argnames(value)
     return specs
 
 
-def _listener_hookimpls(component_type: type) -> dict[str, tuple[str, ...]]:
-    """Map each `@hookimpl`-decorated method on a type to its non-`self` parameter names.
+@dataclass(frozen=True)
+class _HookimplInfo:
+    """One hookimpl method's effective hookspec name and pluggy-validated parameters.
+
+    Parameters:
+        method_name: str naming the Python method as the class defines it, used in
+            problem messages so they point at the code the user actually wrote.
+        hookspec_name: str naming the hookspec this method is registered against --
+            `@hookimpl(specname=...)` when given, else `method_name`.
+        params: tuple[str, ...] containing the parameter names pluggy itself would
+            validate against that hookspec; see `_pluggy_argnames`.
+    """
+
+    method_name: str
+    hookspec_name: str
+    params: tuple[str, ...]
+
+
+def _listener_hookimpls(component_type: type) -> tuple[_HookimplInfo, ...]:
+    """Collect every `@hookimpl`-decorated method's effective name and validated parameters.
 
     Parameters:
         component_type: type containing the listener class under check.
 
     Returns:
-        dict[str, tuple[str, ...]] mapping hookimpl method name to its declared
-        parameter names, `self` excluded, in declaration order.
+        tuple[_HookimplInfo, ...] containing one entry per hookimpl-marked method, in
+        `inspect.getmembers` order (alphabetical by method name).
     """
 
     marker = _listener_marker_attribute("impl")
-    impls: dict[str, tuple[str, ...]] = {}
+    infos: list[_HookimplInfo] = []
     for name, value in inspect.getmembers(component_type, callable):
-        if not hasattr(value, marker):
+        opts = getattr(value, marker, None)
+        if opts is None:
             continue
-        params = tuple(inspect.signature(value).parameters)
-        if params and params[0] == "self":
-            params = params[1:]
-        impls[name] = params
-    return impls
+        hookspec_name = opts.get("specname") or name
+        infos.append(
+            _HookimplInfo(
+                method_name=name, hookspec_name=hookspec_name, params=_pluggy_argnames(value)
+            )
+        )
+    return tuple(infos)
 
 
 def _check_listener_no_matching_hookspec(component: object) -> Iterable[ComponentProblem]:
@@ -360,19 +465,21 @@ def _check_listener_no_matching_hookspec(component: object) -> Iterable[Componen
     known = set(_listener_hookspecs(_CORE_LISTENER_SPEC_MODULES)) | set(
         _listener_hookspecs(_SDK_LISTENER_SPEC_MODULES)
     )
-    for name in sorted(impls):
-        if name in known:
+    for info in sorted(impls, key=lambda item: item.method_name):
+        if info.hookspec_name in known:
             continue
         yield ComponentProblem(
             code=LISTENER_NO_MATCHING_HOOKSPEC,
             message=(
-                f"`{component_type.__name__}.{name}` matches no hookspec registered by "
-                f"either `airflow.listeners.listener` or `airflow.sdk.listener`."
+                f"`{component_type.__name__}.{info.method_name}` matches no hookspec "
+                f"registered by either `airflow.listeners.listener` or "
+                f"`airflow.sdk.listener`."
             ),
             hint=(
                 "pluggy silently ignores a hookimpl matching no hookspec -- this method "
-                "never fires, with no warning. Check the method name against "
-                "`airflow.listeners.spec.*` and the Task SDK's listener hookspecs."
+                "never fires, with no warning. Check the method name (or `specname=`) "
+                "against `airflow.listeners.spec.*` and the Task SDK's listener "
+                "hookspecs."
             ),
         )
 
@@ -397,22 +504,22 @@ def _check_listener_unknown_argument(component: object) -> Iterable[ComponentPro
         **_listener_hookspecs(_SDK_LISTENER_SPEC_MODULES),
         **_listener_hookspecs(_CORE_LISTENER_SPEC_MODULES),
     }
-    for name in sorted(impls):
-        hookspec_params = specs.get(name)
+    for info in sorted(impls, key=lambda item: item.method_name):
+        hookspec_params = specs.get(info.hookspec_name)
         if hookspec_params is None:
             continue
-        unknown = [param for param in impls[name] if param not in hookspec_params]
+        unknown = [param for param in info.params if param not in hookspec_params]
         if not unknown:
             continue
         yield ComponentProblem(
             code=LISTENER_UNKNOWN_ARGUMENT,
             message=(
-                f"`{component_type.__name__}.{name}` declares argument(s) "
-                f"{unknown} that `{name}`'s hookspec does not accept."
+                f"`{component_type.__name__}.{info.method_name}` declares argument(s) "
+                f"{unknown} that `{info.hookspec_name}`'s hookspec does not accept."
             ),
             hint=(
                 f"pluggy hard-errors at registration time on an unknown hookimpl "
-                f"argument name. `{name}` accepts: {list(hookspec_params)}."
+                f"argument name. `{info.hookspec_name}` accepts: {list(hookspec_params)}."
             ),
         )
 
@@ -446,17 +553,21 @@ def _check_listener_manager_scope(
     if not impls:
         return
     only_this = set(_listener_hookspecs(this_scope)) - set(_listener_hookspecs(other_scope))
-    for name in sorted(impls):
-        if name not in only_this:
+    for info in sorted(impls, key=lambda item: item.method_name):
+        if info.hookspec_name not in only_this:
             continue
         yield ComponentProblem(
             code=code,
-            message=f"`{component_type.__name__}.{name}` has no hookspec in `{other_manager}`.",
+            message=(
+                f"`{component_type.__name__}.{info.method_name}` has no hookspec in "
+                f"`{other_manager}`."
+            ),
             hint=(
                 f"Registering `{component_type.__name__}` only with `{other_manager}` "
-                f"never fires `{name}`. `airflow.listeners.listener` registers "
-                f"lifecycle, taskinstance, dagrun, asset, and import-error hookspecs; "
-                f"`airflow.sdk.listener` registers only lifecycle and taskinstance."
+                f"never fires `{info.method_name}`. `airflow.listeners.listener` "
+                f"registers lifecycle, taskinstance, dagrun, asset, and import-error "
+                f"hookspecs; `airflow.sdk.listener` registers only lifecycle and "
+                f"taskinstance."
             ),
         )
 
@@ -615,6 +726,15 @@ def _check_executor_stale_attribute(component: object) -> Iterable[ComponentProb
 def _check_executor_flag_wrong_type(component: object) -> Iterable[ComponentProblem]:
     """Flag an executor's sentry flag using the wrong name or type for the resolved release.
 
+    Unlike every other checker in this registry, resolving the expected flag needs
+    `resolve_capabilities()` rather than the non-raising `installed_family()`, because
+    `executor_contract` only exists on the fully validated contract. `resolve_capabilities()`
+    validates the whole environment -- symbols this check never touches included -- and can
+    raise `AirflowCompatibilityError` for reasons that have nothing to do with the checked
+    executor, an installed release that is not certified for example; that must never
+    escape this checker, since a wrong or unrelated environment problem cannot be allowed
+    to raise instead of reporting a problem.
+
     Parameters:
         component: object containing the executor class or instance under check.
 
@@ -623,7 +743,12 @@ def _check_executor_flag_wrong_type(component: object) -> Iterable[ComponentProb
         found.
     """
 
-    contract = resolve_capabilities().executor_contract
+    if installed_family() is not AirflowFamily.V3:
+        return
+    try:
+        contract = resolve_capabilities().executor_contract
+    except AirflowCompatibilityError:
+        return
     if contract is None:
         return
     expected_name, expected_type = _EXECUTOR_SENTRY_FLAG_BY_CONTRACT[contract]

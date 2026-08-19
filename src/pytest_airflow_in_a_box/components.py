@@ -27,6 +27,7 @@ from pytest_airflow_in_a_box._compat.components import (
     CHECK_REGISTRY,
     KIND_CLASSIFIERS,
     ComponentProblem,
+    _as_type,
 )
 
 
@@ -116,7 +117,7 @@ def check_component(component: object, *, kind: ComponentKind | None = None) -> 
         None and `component` matches no known kind.
     """
 
-    component_type = component if isinstance(component, type) else type(component)
+    component_type = _as_type(component)
     if kind is not None:
         applicable_kinds = {kind.value}
     else:
