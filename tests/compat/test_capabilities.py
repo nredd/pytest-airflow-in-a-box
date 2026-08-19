@@ -236,6 +236,9 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
         modules["airflow.models.dagbag"] = SimpleNamespace(DagBag=_OldDagBag)
         modules["airflow.models.taskinstance"] = SimpleNamespace(TaskInstance=_LegacyTaskInstance)
         modules["airflow.serialization.serialized_objects"].SerializedDAG = generic_class
+        # `airflow.sdk.listener` does not exist at all on 3.1.x; verified against the
+        # installed 3.1.0 in an isolated environment -- see `PROVENANCE.md`.
+        del modules["airflow.sdk.listener"]
     else:
         dag_bag = _NewDagBag if release[:2] == (3, 2) else _NewestDagBag
         task_instance = _SdkTaskInstance if release[:2] == (3, 2) else _DagRunAwareTaskInstance
@@ -355,7 +358,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -382,7 +385,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -409,7 +412,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -436,7 +439,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -463,7 +466,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -490,7 +493,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -517,7 +520,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (
@@ -544,7 +547,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 dag_requires_start_date=False,
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
-                sdk_listener_manager_available=True,
+                sdk_listener_manager_available=False,
             ),
         ),
         (

@@ -44,7 +44,11 @@ unchanged into both `airflow-core/src/airflow/_shared/listeners` and
 commit `1438ea3587031417cc85d74323235cf087a058fb` (tag `3.3.0`). The executor's sentry-flag rename
 and `execute_async` removal were additionally verified against `base_executor.py` at commit
 `54bd5d8cd9f6f477cc83445737614dec81c4323c` (tag `3.1.0`) and commit
-`3bc3ccfacc3dec9f359a3b153bfd4fc706c661ba` (tag `3.2.0`).
+`3bc3ccfacc3dec9f359a3b153bfd4fc706c661ba` (tag `3.2.0`). `task-sdk/src/airflow/sdk/listener.py`
+does not exist at all at the `3.1.0` commit -- confirmed both by installing the real `3.1.0` wheel
+and by the absence of the path in the `3.1.0` tag's own source tree -- so
+`sdk_listener_manager_available` certifies `False` for every 3.1.x release and `True` from `3.2`
+onward, alongside the rest of that release's Task SDK listener-architecture changes.
 
 No proprietary source code, credentials, hostnames, internal paths, or private repository history
 may be included in this project.

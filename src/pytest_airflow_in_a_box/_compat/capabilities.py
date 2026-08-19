@@ -300,6 +300,7 @@ def _certify_v3(
     runtime_task_instance_supports_queue: bool,
     asset_unique_key_location: AssetUniqueKeyLocation,
     executor_contract: ExecutorContract,
+    sdk_listener_manager_available: bool,
 ) -> AirflowCapabilities:
     """Build one certified 3.x contract row with the family-static fields filled.
 
@@ -315,6 +316,12 @@ def _certify_v3(
             location for asset-condition evaluation's unique-key type.
         executor_contract: ExecutorContract naming the certified `BaseExecutor`
             attribute contract for this release.
+        sdk_listener_manager_available: bool indicating whether `airflow.sdk.listener`
+            exists and exposes a listener manager on this release. False on 3.1.x, whose
+            `airflow.sdk` carries no listener manager module at all; True from 3.2
+            onward, alongside the rest of that release's Task SDK listener-architecture
+            changes (`dag_bag_location`, `task_instance_runner`,
+            `asset_unique_key_location`).
 
     Returns:
         AirflowCapabilities containing the complete certified contract.
@@ -341,7 +348,7 @@ def _certify_v3(
         dag_requires_start_date=False,
         asset_unique_key_location=asset_unique_key_location,
         executor_contract=executor_contract,
-        sdk_listener_manager_available=True,
+        sdk_listener_manager_available=sdk_listener_manager_available,
     )
 
 
@@ -401,6 +408,7 @@ _CERTIFIED_CAPABILITIES = (
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             executor_contract=ExecutorContract.V3_1,
+            sdk_listener_manager_available=False,
         )
         for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
         if release < (3, 2, 0)
@@ -416,6 +424,7 @@ _CERTIFIED_CAPABILITIES = (
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
         ),
         (3, 2, 1): _certify_v3(
             (3, 2, 1),
@@ -427,6 +436,7 @@ _CERTIFIED_CAPABILITIES = (
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
         ),
         (3, 2, 2): _certify_v3(
             (3, 2, 2),
@@ -438,6 +448,7 @@ _CERTIFIED_CAPABILITIES = (
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
         ),
         (3, 3, 0): _certify_v3(
             (3, 3, 0),
@@ -449,6 +460,7 @@ _CERTIFIED_CAPABILITIES = (
             runtime_task_instance_supports_queue=True,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_3,
+            sdk_listener_manager_available=True,
         ),
         (3, 3, 1): _certify_v3(
             (3, 3, 1),
@@ -460,6 +472,7 @@ _CERTIFIED_CAPABILITIES = (
             runtime_task_instance_supports_queue=True,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_3,
+            sdk_listener_manager_available=True,
         ),
     }
 )
