@@ -30,6 +30,24 @@ abort every worker with a drift error naming a variable the consumer never typed
 2.x branch assigns it, and only when it is absent), and ``--airflow-doctor`` already tells users
 to override it.
 
+Bootstrap is not the only writer, though, so a second and *conditional* denial exists.
+``fixtures.dagbag._cached_dag_bag`` and ``smoke._build_smoke_corpus`` both pin
+``AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT`` from the ``airflow_dag_parse_timeout`` ini option
+immediately before parsing, and that same value scales the per-file parse watchdog and the
+slowpoke budget -- so an ini override of that option would be silently discarded on a smoke run,
+and honoring it instead would leave the watchdog shorter than the parser it is supposed to back
+up. Neither is acceptable, so declaring it *while the catalog is enabled* is an error naming the
+one knob that drives all three. On a run without the catalog nothing else writes the name and
+the override applies normally, which is why the denial is conditional rather than absolute.
+
+That conditional check runs from ``pytest_configure``, not from the initial parse. Command-line
+options are not reliably readable through ``config.getoption`` during
+``pytest_load_initial_conftests`` -- pytest has not finished populating ``config.option`` there,
+which is why ``bootstrap`` is handed the raw ``args`` list instead -- and ``smoke._smoke_enabled``
+memoizes its answer onto the config stash, so calling it that early would cache a wrong ``False``
+and silently disable the catalog for the whole run. Applying the overrides still happens during
+the initial parse; only the conflict check waits.
+
 Nothing is written into the generated ``airflow.cfg``. On Airflow 3.x the environment already
 outranks every file on each ``conf.get()``, and on 2.x ``core.unit_test_mode`` redirects the
 parser to ``unit_tests.cfg`` and never reads ``AIRFLOW_CONFIG`` at all, so the environment is the
@@ -73,6 +91,16 @@ _REMEDIES: Final[dict[str, str]] = {
     ),
     "AIRFLOW__LOGGING__BASE_LOG_FOLDER": (
         "set the `airflow_home` ini option or pass `--airflow-home`"
+    ),
+}
+
+# The catalog pins this from `airflow_dag_parse_timeout`, which also scales the per-file parse
+# watchdog and the slowpoke budget, so the two knobs cannot both be authoritative.
+_SMOKE_OWNED: Final[dict[str, str]] = {
+    "AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT": (
+        "the bundled smoke catalog pins it from the `airflow_dag_parse_timeout` ini option, "
+        "which also scales the per-file parse watchdog and the slowpoke budget; set that "
+        "option instead"
     ),
 }
 
@@ -162,6 +190,38 @@ def parse_ini_overrides(config: pytest.Config) -> dict[tuple[str, str], str]:
     return overrides
 
 
+def validate_smoke_conflict(config: pytest.Config) -> None:
+    """Reject a declared override the enabled smoke catalog would silently overwrite.
+
+    Runs from ``pytest_configure`` rather than from the initial parse, because resolving
+    whether the catalog is enabled needs a fully parsed command line and memoizes its answer
+    onto the config stash -- see this module's docstring.
+
+    A no-op when the catalog is off, when nothing is declared, or when nothing declared
+    collides, which is every ordinary run.
+
+    Parameters:
+        config: pytest.Config for the active test session.
+
+    Raises:
+        pytest.UsageError: A declared option is one the enabled smoke catalog pins itself.
+    """
+
+    # Deferred: `smoke` pulls in `fixtures.dagbag` and the Airflow compatibility layer, which
+    # this module must not drag onto the initial-parse import path.
+    from pytest_airflow_in_a_box.smoke import _smoke_enabled
+
+    if not _smoke_enabled(config):
+        return
+    for section, key in config.stash[INI_OVERRIDES_KEY]:
+        name = env_var_name(section, key)
+        if name in _SMOKE_OWNED:
+            raise pytest.UsageError(
+                f"Ini option `{INI_OPTION_NAME}` may not set `{section}.{key}` while the "
+                f"bundled smoke catalog is enabled; {_SMOKE_OWNED[name]}"
+            )
+
+
 def apply_ini_overrides(config: pytest.Config) -> None:
     """Apply the declared overrides process-wide and restore them when pytest shuts down.
 
@@ -196,4 +256,5 @@ __all__ = (
     "apply_ini_overrides",
     "owned_env_names",
     "parse_ini_overrides",
+    "validate_smoke_conflict",
 )

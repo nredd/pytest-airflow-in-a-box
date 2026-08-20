@@ -26,6 +26,7 @@ from pytest_airflow_in_a_box.ini_config import (
     apply_ini_overrides,
     owned_env_names,
     parse_ini_overrides,
+    validate_smoke_conflict,
 )
 
 TIMEOUT_KEY = ("core", "dagbag_import_timeout")
@@ -49,6 +50,26 @@ OWNED_NAMES = frozenset(
         "AIRFLOW__CORE__FERNET_KEY",
     }
 )
+
+
+def _smoke_config(overrides: dict[tuple[str, str], str], *, smoke: object) -> Any:
+    """Create a configuration double carrying parsed overrides and a smoke enablement answer.
+
+    Parameters:
+        overrides: dict[tuple[str, str], str] pre-stashed as the parsed ini overrides.
+        smoke: object returned for the ``--airflow-smoke`` command-line option.
+
+    Returns:
+        types.SimpleNamespace shaped like the configuration surface under test.
+    """
+
+    stash = pytest.Stash()
+    stash[INI_OVERRIDES_KEY] = overrides
+    return SimpleNamespace(
+        getoption=lambda name: {"airflow_smoke": smoke}[name],
+        getini=lambda name: {"airflow_smoke": False}[name],
+        stash=stash,
+    )
 
 
 def _config(lines: object) -> Any:
@@ -242,3 +263,22 @@ def test_the_registered_cleanup_restores_the_environment_exactly(
 
     assert os.environ[TIMEOUT_NAME] == "original"
     assert PLUGINS_NAME not in os.environ
+
+
+def test_smoke_conflict_is_ignored_when_the_catalog_is_off() -> None:
+    """Leave `core.dagbag_import_timeout` alone on a run with no catalog to fight it."""
+
+    validate_smoke_conflict(_smoke_config({TIMEOUT_KEY: "120"}, smoke=None))
+
+
+def test_smoke_conflict_ignores_an_unrelated_override() -> None:
+    """Reject only the options the catalog actually pins."""
+
+    validate_smoke_conflict(_smoke_config({("core", "plugins_folder"): "/p"}, smoke=True))
+
+
+def test_smoke_conflict_rejects_the_parse_timeout() -> None:
+    """Fail rather than let the catalog silently overwrite a declared parse timeout."""
+
+    with pytest.raises(pytest.UsageError, match="airflow_dag_parse_timeout"):
+        validate_smoke_conflict(_smoke_config({TIMEOUT_KEY: "120"}, smoke=True))

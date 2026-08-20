@@ -68,11 +68,23 @@ globals the way upstream's does -- use `airflow_config(..., refresh_settings=Tru
 applies them as `AIRFLOW__SECTION__KEY` variables during pytest's initial parse -- before your
 `conftest.py` is imported, and therefore before anything can build a `DagBag`:
 
-```toml
-# pytest.ini / tox.ini / setup.cfg / pyproject.toml `[tool.pytest.ini_options]`
+```ini
+# pytest.ini
+[pytest]
 airflow_config =
     core.dag_ignore_file_syntax = glob
     core.dagbag_import_timeout = 120
+```
+
+In `pyproject.toml` the same option is an array of strings, and in `tox.ini` / `setup.cfg` the
+section is `[tool:pytest]`:
+
+```toml
+[tool.pytest.ini_options]
+airflow_config = [
+    "core.dag_ignore_file_syntax = glob",
+    "core.dagbag_import_timeout = 120",
+]
 ```
 
 That ordering is the point. A `with airflow_config(...)` block in a test runs long after
@@ -99,12 +111,20 @@ That covers the metadata database URL and pool flag, `core.dags_folder`, `core.u
 auth-manager and JWT surface. Each message names the supported knob. `core.executor` is *not*
 on the list -- bootstrap does not own it, and `--airflow-doctor` already tells you to set it.
 
+One option is rejected only *conditionally*: `core.dagbag_import_timeout` is fine on an ordinary
+run, but with [the smoke catalog](smoke-tests.md) enabled it is an error, because the catalog
+pins that same variable from `airflow_dag_parse_timeout` -- which also scales the per-file parse
+watchdog and the slowpoke budget. Set `airflow_dag_parse_timeout` instead; it is the one knob
+driving all three.
+
 Nothing is written into the generated `airflow.cfg`. On Airflow 3 the environment already
 outranks every file on each `conf.get()`, and on 2.x `core.unit_test_mode` sends the parser to
 `unit_tests.cfg` and never reads `AIRFLOW_CONFIG` at all, so the environment is the only channel
 that works on both families. One consequence: a *retained* `AIRFLOW_HOME` inspected with
 `airflow config list` outside the pytest process will not show these overrides. Use
-[`--airflow-doctor`](../reference/diagnostics.md), which echoes them back.
+[`--airflow-doctor`](../reference/diagnostics.md), which echoes them back -- redacting any value
+whose option name reads as a credential, since that report is meant to be pasted into bug
+reports.
 
 Under `xdist` the overrides reach every worker: workers inherit the controller's environment and
 re-apply the identical values.
@@ -121,8 +141,15 @@ import pytest
 
 @pytest.fixture(scope="session", autouse=True)
 def _repo_defaults(airflow_configure, tmp_path_factory):
-    airflow_configure({("core", "plugins_folder"): str(tmp_path_factory.mktemp("plugins"))})
+    airflow_configure(
+        {("core", "plugins_folder"): str(tmp_path_factory.mktemp("plugins"))},
+        refresh_settings=True,
+    )
 ```
+
+`refresh_settings=True` is there for the same reason it is above: `core.plugins_folder` is one
+of the options Airflow reads through `airflow.settings` rather than through the configuration
+parser, so an environment assignment alone does not move it.
 
 Arguments are `airflow_config`'s, unchanged: `overrides`, `env=`, `refresh_settings=`, and a
 `None` value to make a name absent. Batches compose and unwind last-in-first-out at session

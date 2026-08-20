@@ -63,7 +63,7 @@ from pytest_airflow_in_a_box.fixtures.dagbag import (
     FULL_DAG_BAG_FIXTURE_NAME,
     FULL_DAG_BAG_XDIST_GROUP,
 )
-from pytest_airflow_in_a_box.ini_config import apply_ini_overrides
+from pytest_airflow_in_a_box.ini_config import apply_ini_overrides, validate_smoke_conflict
 from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
@@ -441,6 +441,7 @@ def pytest_configure(config: pytest.Config) -> None:
     airflow_home.resolve_retention_policy(config)
     register_markers(config)
     validate_configure(config)
+    validate_smoke_conflict(config)
     configure_report_dir(config)
     configure_reporting(config)
     apply_option_defaults(config)

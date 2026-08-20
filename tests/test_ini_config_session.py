@@ -154,3 +154,48 @@ def test_a_command_line_override_ini_applies(pytester: pytest.Pytester) -> None:
     )
 
     result.assert_outcomes(passed=1)
+
+
+def test_the_parse_timeout_conflicts_with_an_enabled_smoke_catalog(
+    pytester: pytest.Pytester,
+) -> None:
+    """Refuse a declared parse timeout the catalog would pin over, naming its own knob."""
+
+    pytester.makepyfile("def test_never_runs(): pass")
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "-o", "airflow_config=core.dagbag_import_timeout = 120"
+    )
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*airflow_dag_parse_timeout*"])
+
+
+def test_the_conflict_check_leaves_the_catalog_enabled(pytester: pytest.Pytester) -> None:
+    """Resolve smoke enablement without poisoning the catalog's own memoized answer.
+
+    Reading `--airflow-smoke` during the initial parse would cache a wrong `False` and silently
+    drop every bundled item, which no assertion about the overrides themselves would catch.
+    """
+
+    pytester.makefile(
+        ".ini",
+        pytest="""
+        [pytest]
+        airflow_config =
+            core.plugins_folder = /plugins-from-ini
+        """,
+    )
+    dags = pytester.mkdir("dags")
+    (dags / "one.py").write_text(
+        "from airflow.sdk import DAG\n\none = DAG(dag_id='one', schedule=None)\n",
+        encoding="utf-8",
+    )
+    pytester.makepyfile("def test_own_item(): pass")
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", f"--dag-folder={dags}", "--collect-only"
+    )
+
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*test_dag_bag_integrity*"])

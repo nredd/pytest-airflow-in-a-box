@@ -207,6 +207,7 @@ def test_public_surface_is_explicit() -> None:
         "apply_ini_overrides",
         "owned_env_names",
         "parse_ini_overrides",
+        "validate_smoke_conflict",
     )
     assert types.__all__ == (
         "AirflowConfigure",

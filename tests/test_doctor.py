@@ -670,6 +670,19 @@ def test_overrides_section_lists_declared_overrides() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "key",
+    ["smtp_password", "broker_url", "jwt_secret", "fernet_key", "sql_alchemy_conn", "api_token"],
+    ids=["password", "url", "secret", "key", "conn", "token"],
+)
+def test_overrides_section_redacts_a_credential_value(key: str) -> None:
+    """Keep a declared credential out of a report meant to be pasted into a bug report."""
+
+    lines = doctor._overrides_section({("some", key): "hunter2!"})
+
+    assert lines == [f"- `some.{key}` = `<redacted, 8 characters>`"]
+
+
 def test_render_doctor_report_combines_every_section(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
