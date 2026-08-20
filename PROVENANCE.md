@@ -114,6 +114,20 @@ rather than embedding a copy, so it always validates against whichever schema th
 actually ships (the schema's own optional fields grew between `3.1.0` and `3.2.0`, confirmed by
 diffing the two installed copies).
 
+`BaseSecretsBackend.get_conn_value`'s own docstring ("If the client your secrets backend uses
+already returns a python dict, you should override ``get_connection`` instead") and the installed
+`airflow.secrets.environment_variables.EnvironmentVariablesBackend` overriding `get_conn_value`
+rather than `get_connection` are both confirmed on the installed 3.3.0; `_SECRETS_BACKEND_GETTERS`
+includes `get_conn_value` on that basis, not `get_connection` alone.
+
+`_distribution_editable_roots` reads a `.pth` file's own line content -- confirmed against this
+project's own real `uv pip install -e .` install (`pytest_airflow_in_a_box.pth`, whose one line is
+the absolute path to `src/`, not the project root PEP 610's `direct_url.json` would otherwise
+suggest) -- rather than PEP 610's `direct_url.json` project root, since the latter over-attributes:
+a `src/`-layout package (this project included) is editable-exposed only under `src/`, and a
+sibling directory sharing the same project root (`tests/`, another package in a workspace) is not
+actually reachable through the installed `.pth` redirect at all.
+
 No proprietary source code, credentials, hostnames, internal paths, or private repository history
 may be included in this project.
 

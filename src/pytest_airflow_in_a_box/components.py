@@ -111,20 +111,23 @@ class ComponentReport:
 def check_component(component: object, *, kind: ComponentKind | None = None) -> ComponentReport:
     """Run every applicable static conformance check against one component.
 
-    Accepts a bare class or an already-built instance interchangeably and never
-    constructs one itself, so it is safe to call on a `Timetable`, listener, or
-    `BaseExecutor` subclass whose constructor is not side-effect-free or takes required
+    Accepts a bare class, an already-built instance, or (for a provider) a plain
+    `get_provider_info`-shaped callable interchangeably, and never constructs or calls
+    a class itself, so it is safe to call on a `Timetable`, listener, `BaseExecutor`, or
+    similar subclass whose constructor is not side-effect-free or takes required
     arguments. Checks are additive: each reports the problems it finds and never raises
     on the component itself, so a wrong or overly strict check cannot fail an
     otherwise-passing suite -- only `raise_for_problems()` (or asserting `.ok` yourself)
     turns a report into a test failure.
 
     Parameters:
-        component: object containing the timetable, listener, or executor class or
-            instance to check.
+        component: object containing the class, instance, or (for a provider) callable
+            to check.
         kind: ComponentKind | None selecting which checks to run. None classifies
-            `component` itself: by nominal `Timetable` inheritance, by carrying at least
-            one `@hookimpl`-decorated method, or by `BaseExecutor` subclassing. Pass an
+            `component` itself: by nominal base-class inheritance for most kinds, by
+            carrying at least one `@hookimpl`-decorated method for a listener or policy,
+            by the same duck typing Airflow's own `is_valid_plugin` uses for a plugin, or
+            by being a callable named `get_provider_info` for a provider. Pass an
             explicit kind to force a check set regardless of how `component` classifies
             -- for example, a purely duck-typed listener that does not match any
             classifier on its own.
@@ -149,7 +152,14 @@ def check_component(component: object, *, kind: ComponentKind | None = None) -> 
         if kind_value in applicable_kinds
         for problem in checker(component)
     )
-    return ComponentReport(component_name=component_type.__name__, problems=problems)
+    # `component`'s own `__name__` names a provider callable ("get_provider_info") far
+    # more usefully than `_as_type(component).__name__` ever could -- for a callable
+    # that is neither a class nor a built instance, `_as_type` can only fall back to the
+    # unhelpful generic `type(component).__name__` ("function"). A class or instance is
+    # unaffected: a class's own `__name__` already equals `_as_type(component).__name__`
+    # exactly, and a plain instance has no `__name__` of its own to prefer.
+    component_name = getattr(component, "__name__", None) or component_type.__name__
+    return ComponentReport(component_name=component_name, problems=problems)
 
 
 __all__ = (

@@ -501,15 +501,30 @@ def test_check_component_reports_no_problems_for_a_clean_provider() -> None:
     assert report.ok is True
 
 
-def test_check_component_flags_a_provider_info_schema_violation() -> None:
-    """Flag a `get_provider_info` callable missing a schema-required field.
+def test_check_component_names_a_provider_by_its_own_function_name() -> None:
+    """Name a provider report after the callable's own name, not `\"function\"`.
 
-    Defined and called from this test module, which is itself part of this
-    repository's own (editable-installed) distribution -- so the package-name and
-    entry-point checks legitimately fire too, since `apache-airflow-providers-sqlite`
-    is not this distribution's real name and it registers no `apache_airflow_provider`
-    entry point. Only presence of the schema code is asserted; the other two are this
-    test's own incidental, still-correct side effect, not what it targets.
+    Regression test: `_as_type(component)` falls back to `type(component).__name__` for
+    a bare callable that is neither a class nor a built instance, which for every
+    real-world provider is the unhelpful, indistinguishable generic string `\"function\"`.
+    A class or instance is unaffected -- see `test_component_report_summary_lists_every_
+    problem` and the class-based tests above, none of which name-check `component_name`
+    because it was already correct for them.
+    """
+
+    report = check_component(_real_provider_info)
+
+    assert report.component_name == "get_provider_info"
+
+
+def test_check_component_flags_a_provider_info_schema_violation() -> None:
+    """Flag a `get_provider_info` callable missing schema-required fields.
+
+    Defined and called from this test module -- a sibling of `src/`, not a file the
+    editable install's own `.pth` root exposes -- so `_provider_owning_distribution`
+    cannot attribute it to any installed distribution, and the package-name-mismatch
+    and no-entry-point checks silently skip rather than firing on an unrelated,
+    incidental "distribution".
     """
 
     def get_provider_info() -> dict[str, Any]:
@@ -517,7 +532,7 @@ def test_check_component_flags_a_provider_info_schema_violation() -> None:
 
     report = check_component(get_provider_info, kind=ComponentKind.PROVIDER)
 
-    assert "provider-info-schema" in {problem.code for problem in report.problems}
+    assert {problem.code for problem in report.problems} == {"provider-info-schema"}
 
 
 def test_check_component_classifies_by_kind_automatically() -> None:

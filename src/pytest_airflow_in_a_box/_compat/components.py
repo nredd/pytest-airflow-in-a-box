@@ -34,7 +34,7 @@ import sys
 from dataclasses import dataclass
 from importlib import import_module, metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, get_args
 
 from packaging.utils import canonicalize_name
 
@@ -1004,19 +1004,31 @@ def _check_weight_strategy_abstract(component: object) -> Iterable[ComponentProb
 
 
 def _check_weight_strategy_hash_of_none(component: object) -> Iterable[ComponentProblem]:
-    """Flag a weight strategy that does not override `__hash__`.
+    """Flag a weight strategy whose effective `__hash__` is unusable.
 
     `PriorityWeightStrategy` defines `__eq__` without a matching `__hash__`. Python sets
     a class's own `__hash__` to `None` whenever a class body defines `__eq__` without
-    `__hash__`, which is exactly what the certified 3.1.x base does -- making every
-    instance unhashable (`TypeError` from `hash()`). The certified 3.2+ base instead
-    defines `__hash__` explicitly as `return hash(None)`, making every instance hash
-    *equal* instead, so a `set` or `dict` keyed on strategy instances silently
-    collapses distinct strategies together. Either way, relying on the inherited
-    behavior breaks deduplication. This reads the real installed base's own `__hash__`
-    to describe which of the two applies, rather than hardcoding a per-release table,
-    so the message stays accurate even if a future release changes which failure mode
-    applies.
+    `__hash__`. On the certified 3.1.x base that class is `PriorityWeightStrategy`
+    itself, making every instance of every subclass that does not fix it unhashable
+    (`TypeError` from `hash()`); the same automatic rule just as easily fires on a
+    *user's own* subclass that defines `__eq__` for value semantics and does not think
+    to also define `__hash__`, independently of which release is installed. The
+    certified 3.2+ base instead defines `__hash__` explicitly as `return hash(None)`,
+    making every instance hash *equal* instead when nothing overrides it, so a `set` or
+    `dict` keyed on strategy instances silently collapses distinct strategies together.
+    Either way, relying on the inherited or automatically-nulled behavior breaks
+    deduplication.
+
+    Checking whether `__hash__` was "user overridden" is not the same question as
+    whether the *effective* `__hash__` still works, since Python's automatic rule can
+    plant `None` on a user's own subclass exactly as it does on the base -- so this
+    compares the component's own resolved `__hash__` by identity against the
+    installed `PriorityWeightStrategy.__hash__` instead of asking who defined it: `None`
+    is always broken regardless of which class in the MRO it came from, and a resolved
+    `__hash__` identical to the un-subclassed base's is never a real override either.
+    Reads the real installed base's own `__hash__` to describe which failure mode
+    applies, rather than hardcoding a per-release table, so the message stays accurate
+    even if a future release changes which one applies.
 
     Parameters:
         component: object containing the weight strategy class or instance under check.
@@ -1030,29 +1042,31 @@ def _check_weight_strategy_hash_of_none(component: object) -> Iterable[Component
     from airflow.task.priority_strategy import PriorityWeightStrategy
 
     component_type = _as_type(component)
-
-    def _user_overridden(name: str) -> bool:
-        defining = _defining_class(component_type, name)
-        if defining is None or defining is PriorityWeightStrategy:
-            return False
-        return not defining.__module__.startswith("airflow.")
-
-    if _user_overridden("__hash__"):
+    effective_hash = component_type.__hash__
+    if effective_hash is not None and effective_hash is not PriorityWeightStrategy.__hash__:
         return
-    if PriorityWeightStrategy.__hash__ is None:
-        observed = "raises `TypeError: unhashable type` on the installed Airflow release"
+    if effective_hash is None:
+        observed = "raises `TypeError: unhashable type`"
     else:
         observed = (
             "returns `hash(None)` on the installed Airflow release, so every instance hashes equal"
         )
     yield ComponentProblem(
         code=WEIGHT_STRATEGY_HASH_OF_NONE,
-        message=f"`{component_type.__name__}` does not override `__hash__`.",
+        message=f"`{component_type.__name__}`'s effective `__hash__` is unusable.",
         hint=(
-            f"`PriorityWeightStrategy` defines `__eq__` without `__hash__`; the "
-            f"inherited `__hash__` {observed}, so a `set` or `dict` cannot dedupe or "
-            f"key on instances correctly. Override `__hash__` too, for example by "
-            f"hashing `tuple(sorted(self.serialize().items()))`."
+            f"`PriorityWeightStrategy` defines `__eq__` without `__hash__`; the same "
+            f"automatic Python rule that nulls the base's own `__hash__` on some "
+            f"releases fires just as easily on a subclass that defines `__eq__` "
+            f"without `__hash__` too. The effective `__hash__` here {observed}, so a "
+            f"`set` or `dict` cannot dedupe or key on instances correctly. Define "
+            f"`__hash__` explicitly, for example by hashing "
+            f"`(type(self).__module__, type(self).__qualname__)` -- `serialize()`/"
+            f"`deserialize()` exist on `PriorityWeightStrategy` only on 3.1.x; 3.2+ "
+            f"identifies a strategy by its qualname instead, so a hash based on "
+            f"`serialize()` raises `AttributeError` on the releases where this check "
+            f"is most likely to fire (`hash(None)` never raises, so more code "
+            f"carrying this bug ships unnoticed there)."
         ),
     )
 
@@ -1121,7 +1135,42 @@ def _check_notifier_template_fields_unresolvable(component: object) -> Iterable[
         return
     if isinstance(component, type):
         return
-    for name in getattr(component, "template_fields", ()):
+    template_fields = getattr(component, "template_fields", ())
+    if isinstance(template_fields, str):
+        # `str` is technically a `Sequence[str]`, so nothing rejects it structurally --
+        # but `_update_context` then iterates it character by character, treating each
+        # character as a field name, almost always from a missing trailing comma.
+        yield ComponentProblem(
+            code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
+            message=(
+                f"`{type(component).__name__}.template_fields` is the bare string "
+                f"{template_fields!r}, not a sequence of field names."
+            ),
+            hint=(
+                "`_update_context` iterates `template_fields` character by character "
+                "when it is a bare string, treating each character as a field name. "
+                'This is almost always a missing trailing comma: `("message",)`, not '
+                '`("message")`.'
+            ),
+        )
+        return
+    try:
+        names = tuple(template_fields)
+    except TypeError:
+        yield ComponentProblem(
+            code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
+            message=(
+                f"`{type(component).__name__}.template_fields` is {template_fields!r}, "
+                f"which is not iterable."
+            ),
+            hint=(
+                "`_update_context` iterates `template_fields` directly; a non-iterable "
+                "value raises `TypeError` the first time this notifier actually runs. "
+                "Set it to a tuple or list of attribute names."
+            ),
+        )
+        return
+    for name in names:
         if hasattr(component, name):
             continue
         yield ComponentProblem(
@@ -1144,24 +1193,61 @@ def _check_notifier_template_fields_unresolvable(component: object) -> Iterable[
 
 SECRETS_BACKEND_RAISES_ON_MISS = "secrets-backend-raises-on-miss"
 
-# The three public getters a secrets backend author overrides; `get_conn_value` is the
-# lower-level protocol hook `get_connection` composes internally and is not itself part
-# of this public contract. Verified against the installed 3.3.0, plus 3.1.0 and 3.2.0
-# in isolated environments; see `PROVENANCE.md`.
-_SECRETS_BACKEND_GETTERS = ("get_connection", "get_variable", "get_config")
+# The four getters a secrets backend author overrides, all sharing the same `-> str |
+# None` (or, for `get_connection`, `Connection | None`) contract. `get_conn_value`'s own
+# docstring names it the *default* override point ("If the client your secrets backend
+# uses already returns a python dict, you should override `get_connection` instead"),
+# and Airflow's own shipped `EnvironmentVariablesBackend` and `ExecutionAPISecretsBackend`
+# override `get_conn_value`, not `get_connection` -- so excluding it would miss the more
+# commonly overridden of the two connection getters, not a rarely-used one. Verified
+# against the installed 3.3.0, plus 3.1.0 and 3.2.0 in isolated environments; see
+# `PROVENANCE.md`.
+_SECRETS_BACKEND_GETTERS = ("get_conn_value", "get_connection", "get_variable", "get_config")
+
+
+def _annotation_allows_none(annotation: object) -> bool:
+    """Report whether a return annotation admits `None` as a value.
+
+    A real (already-evaluated) annotation object is checked structurally via
+    `typing.get_args`, which normalizes `X | None`, `typing.Optional[X]`, and
+    `typing.Union[X, None]` identically -- unlike a plain substring search, which finds
+    the word `None` in the first spelling but not the other two: `str(typing.Optional
+    [str])` renders as `'typing.Optional[str]'`, containing no literal `None` at all.
+    A bare `-> None` annotation (the real object `None`, or `type(None)` itself) is
+    special-cased ahead of the structural check: `get_args(None)` is `()`, since `None`
+    is not a parametrized generic at all, so the structural check alone would wrongly
+    reject the one annotation that is trivially, entirely `None`. When the defining
+    module uses `from __future__ import annotations`, `inspect.signature` instead
+    reports the annotation as an unevaluated string; this module never resolves those
+    (doing so can raise for a forward reference it cannot see), so a string annotation
+    falls back to a conservative text match covering both the `None` and `Optional[`
+    spellings.
+
+    Parameters:
+        annotation: object containing the return annotation to inspect.
+
+    Returns:
+        bool indicating whether the annotation is recognized as nullable.
+    """
+
+    if isinstance(annotation, str):
+        return "None" in annotation or "Optional[" in annotation
+    if annotation is None or annotation is type(None):
+        return True
+    return type(None) in get_args(annotation)
 
 
 def _check_secrets_backend_raises_on_miss(component: object) -> Iterable[ComponentProblem]:
     """Flag a secrets backend getter annotated to never return `None`.
 
-    All three getters must return `None`, not raise, on a miss -- a very common bug is
+    All four getters must return `None`, not raise, on a miss -- a very common bug is
     raising the backing client's own not-found error instead. `check_component` never
     calls a secrets backend for real (a genuine miss needs real credentials and a real
     backend this module cannot fabricate safely), so this reads the override's own
-    declared return annotation instead: one that is present but does not mention `None`
-    is a strong static signal the author did not design for the miss case. An
-    unannotated override is not flagged -- silence, not a false positive, on code this
-    cannot judge.
+    declared return annotation instead: one that is present but does not admit `None`
+    (see `_annotation_allows_none`) is a strong static signal the author did not design
+    for the miss case. An unannotated override is not flagged -- silence, not a false
+    positive, on code this cannot judge.
 
     Parameters:
         component: object containing the secrets backend class or instance under check.
@@ -1184,13 +1270,13 @@ def _check_secrets_backend_raises_on_miss(component: object) -> Iterable[Compone
         return_annotation = inspect.signature(getattr(component_type, name)).return_annotation
         if return_annotation is inspect.Signature.empty:
             continue
-        if "None" in str(return_annotation):
+        if _annotation_allows_none(return_annotation):
             continue
         yield ComponentProblem(
             code=SECRETS_BACKEND_RAISES_ON_MISS,
             message=(
                 f"`{component_type.__name__}.{name}` is annotated to return "
-                f"`{return_annotation}`, which does not mention `None`."
+                f"`{return_annotation}`, which does not admit `None`."
             ),
             hint=(
                 f"`{name}` must return `None` on a miss, not raise. If it genuinely "
@@ -1438,46 +1524,95 @@ def _call_provider_info(component: object) -> object:
     return cast("Callable[[], object]", component)()
 
 
-def _distribution_editable_root(dist: metadata.Distribution) -> Path | None:
-    """Resolve an editable-installed distribution's real source root, if any.
+def _distribution_editable_roots(dist: metadata.Distribution) -> tuple[Path, ...]:
+    """Resolve the real, precise source roots a `.pth`-based editable install exposes.
 
     A `pip install -e .` / `uv pip install -e .` install -- the standard way a provider
     author develops their own package -- records no real file paths in its RECORD at
-    all: only its `.dist-info` metadata and a `.pth`/import-hook redirect are actually
-    installed into `site-packages`. `_provider_owning_distribution`'s file-manifest match
-    can never find such a distribution, so this reads PEP 610's `direct_url.json`
-    instead, which every editable install writes.
+    all: only its `.dist-info` metadata and a `.pth` file are actually installed into
+    `site-packages`. But that `.pth` file's own content is precisely the directory (or
+    directories, one per line) Python's site module adds to `sys.path` for this
+    distribution -- the real editable-exposed boundary. The project root PEP 610's
+    `direct_url.json` names instead is not that boundary: a package built with a
+    `src/` layout (this project included) is editable-exposed only under `src/`, not
+    the whole checkout, so attributing every file under the project root -- `tests/`,
+    `docs/`, a sibling package in a workspace -- to this one distribution over-attributes
+    and can misattribute in a workspace where sibling distributions share a root.
 
     Parameters:
         dist: importlib.metadata.Distribution to inspect.
 
     Returns:
-        Path | None containing the resolved local source root, or None when this
-        distribution carries no editable `direct_url.json`.
+        tuple[Path, ...] containing each resolved, existing directory this
+        distribution's own `.pth` file(s) add to `sys.path`. Empty when this
+        distribution ships no `.pth` file, or none of its lines resolve to a real
+        directory.
     """
 
-    from urllib.parse import urlparse
-    from urllib.request import url2pathname
+    roots: list[Path] = []
+    for recorded_file in dist.files or ():
+        if not str(recorded_file).endswith(".pth"):
+            continue
+        try:
+            content = Path(str(dist.locate_file(recorded_file))).read_text()
+        except OSError:
+            continue
+        for line in content.splitlines():
+            stripped = line.strip()
+            # Mirrors Python's own `site` module: a `.pth` line starting with `import`
+            # is an executable hook, not a path, and `#` starts a comment. Neither
+            # names a directory this distribution exposes.
+            if not stripped or stripped.startswith(("#", "import")):
+                continue
+            try:
+                candidate = Path(stripped).resolve()
+            except (OSError, ValueError):
+                continue
+            if candidate.is_dir():
+                roots.append(candidate)
+    return tuple(roots)
 
-    raw = dist.read_text("direct_url.json")
-    if raw is None:
-        return None
-    try:
-        info = json.loads(raw)
-    except ValueError:
-        return None
-    if not isinstance(info, dict) or not info.get("dir_info", {}).get("editable"):
-        return None
-    url = info.get("url")
-    if not isinstance(url, str):
-        return None
-    parsed = urlparse(url)
-    if parsed.scheme != "file":
-        return None
-    try:
-        return Path(url2pathname(parsed.path)).resolve()
-    except (OSError, ValueError):
-        return None
+
+# Process-local cache: every installed distribution's file manifest and editable
+# `.pth` roots, built once. Mirrors `capabilities.py`'s `_CAPABILITIES` caching -- the
+# installed set of distributions is a fact about the environment, not about any one
+# checked component, so rebuilding it on every `check_component()` call over a
+# provider (there can be many, across a whole test session) would repeat an
+# `O(distributions x files)` filesystem walk for no benefit.
+_DISTRIBUTION_INDEX: tuple[dict[Path, str], tuple[tuple[Path, str], ...]] | None = None
+
+
+def _build_distribution_index() -> tuple[dict[Path, str], tuple[tuple[Path, str], ...]]:
+    """Build the file-manifest and editable-root index for every installed distribution.
+
+    Returns:
+        tuple[dict[Path, str], tuple[tuple[Path, str], ...]] containing a mapping from
+        each real recorded file's resolved path to its owning distribution's name, and
+        a tuple of `(editable root, owning distribution name)` pairs sorted by root
+        length descending, so the most specific (deepest) root is checked first when
+        more than one contains a given file.
+    """
+
+    file_index: dict[Path, str] = {}
+    editable_roots: list[tuple[Path, str]] = []
+    for dist in metadata.distributions():
+        for recorded_file in dist.files or ():
+            try:
+                located = Path(str(dist.locate_file(recorded_file))).resolve()
+            except Exception:
+                continue
+            file_index.setdefault(located, dist.name)
+        for root in _distribution_editable_roots(dist):
+            editable_roots.append((root, dist.name))
+    editable_roots.sort(key=lambda pair: len(pair[0].parts), reverse=True)
+    return file_index, tuple(editable_roots)
+
+
+def _reset_provider_distribution_index_for_testing() -> None:
+    """Clear the cached distribution index so a test can install a fresh fake one."""
+
+    global _DISTRIBUTION_INDEX
+    _DISTRIBUTION_INDEX = None
 
 
 def _provider_owning_distribution(component: object) -> str | None:
@@ -1486,12 +1621,13 @@ def _provider_owning_distribution(component: object) -> str | None:
     Every real Airflow provider lives under the shared `airflow.providers.*` namespace
     package, so `importlib.metadata.packages_distributions()` -- which maps by top-level
     import name -- resolves the top-level name `airflow` to every provider distribution
-    installed at once, never to exactly one; it is unusable here. Matching each
-    distribution's own recorded file list against the callable's actual module file
-    instead correctly attributes a namespace-packaged module to its one real owner, for
-    a normally (non-editable) installed provider. A provider under active development is
-    typically installed editable instead, whose RECORD contains no real file paths at
-    all -- `_distribution_editable_root` is the fallback for that case.
+    installed at once, never to exactly one; it is unusable here. Matching the cached
+    file-manifest index against the callable's actual module file instead correctly
+    attributes a namespace-packaged module to its one real owner, for a normally
+    (non-editable) installed provider. A provider under active development is typically
+    installed editable instead, whose RECORD contains no real file paths at all --
+    `_distribution_editable_roots`' precise `.pth`-derived roots are the fallback for
+    that case.
 
     Parameters:
         component: object containing the `get_provider_info`-shaped callable to trace.
@@ -1502,6 +1638,8 @@ def _provider_owning_distribution(component: object) -> str | None:
         attributed to it either way.
     """
 
+    global _DISTRIBUTION_INDEX
+
     module_name = getattr(component, "__module__", None)
     if not module_name:
         return None
@@ -1511,20 +1649,17 @@ def _provider_owning_distribution(component: object) -> str | None:
         return None
     module_path = Path(module_file).resolve()
 
-    editable_candidate: str | None = None
-    for dist in metadata.distributions():
-        for recorded_file in dist.files or ():
-            try:
-                located = Path(str(dist.locate_file(recorded_file))).resolve()
-            except Exception:
-                continue
-            if located == module_path:
-                return dist.name
-        if editable_candidate is None:
-            editable_root = _distribution_editable_root(dist)
-            if editable_root is not None and module_path.is_relative_to(editable_root):
-                editable_candidate = dist.name
-    return editable_candidate
+    if _DISTRIBUTION_INDEX is None:
+        _DISTRIBUTION_INDEX = _build_distribution_index()
+    file_index, editable_roots = _DISTRIBUTION_INDEX
+
+    exact = file_index.get(module_path)
+    if exact is not None:
+        return exact
+    for root, distribution_name in editable_roots:
+        if module_path.is_relative_to(root):
+            return distribution_name
+    return None
 
 
 def _check_provider_info_schema(component: object) -> Iterable[ComponentProblem]:
@@ -1549,7 +1684,17 @@ def _check_provider_info_schema(component: object) -> Iterable[ComponentProblem]
         return
     from importlib.resources import files
 
-    import jsonschema
+    try:
+        import jsonschema
+    except ImportError:
+        # `jsonschema` is not a direct dependency of this project -- it rides in only
+        # because the installed `apache-airflow-core` currently requires it, which
+        # `installed_family()` never verifies (it classifies from `apache-airflow-core`'s
+        # own dist-info metadata alone, not its dependencies' importability). A pruned
+        # or `--no-deps` environment can have Airflow's metadata present without
+        # `jsonschema` actually installed; a checker must never raise on the checked
+        # component for a reason that has nothing to do with it.
+        return
 
     name = getattr(component, "__name__", type(component).__name__)
     try:

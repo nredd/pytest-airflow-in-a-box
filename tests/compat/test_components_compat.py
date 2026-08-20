@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from importlib import metadata
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,6 +18,20 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     ExecutorContract,
 )
 from pytest_airflow_in_a_box.components import ComponentKind
+
+
+@pytest.fixture(autouse=True)
+def _reset_provider_distribution_index() -> None:
+    """Isolate the process-local provider distribution index cache.
+
+    `_provider_owning_distribution` caches its `importlib.metadata.distributions()`
+    scan for the whole process; a test that monkeypatches `metadata.distributions`
+    without resetting this cache first would either see a stale result from an earlier
+    test or (worse) populate the *real* environment's index, which then leaks into
+    every later test expecting to see its own fake one.
+    """
+
+    compat_components._reset_provider_distribution_index_for_testing()
 
 
 def test_components_compat_import_does_not_import_airflow() -> None:
@@ -629,6 +643,57 @@ def test_weight_strategy_abstract_names_the_missing_methods() -> None:
     assert "get_weight" in problem.message
 
 
+def test_weight_strategy_hash_of_none_catches_a_user_eq_without_hash() -> None:
+    """Flag a user subclass whose own `__eq__` silently nulls its own `__hash__`.
+
+    Regression test: Python's rule that defining `__eq__` without `__hash__` sets
+    `__hash__` to `None` fires on *any* class body that does it, not just
+    `PriorityWeightStrategy` itself. A user subclass overriding `__eq__` for value
+    semantics -- a completely ordinary thing to do -- silently becomes unhashable the
+    same way. Checking "who defines `__hash__`" alone missed this: `_defining_class`
+    finds the user's own subclass (not `PriorityWeightStrategy`, not `airflow.*`) as the
+    definer of the automatically-inserted `None`, which a naive "was it user overridden"
+    reading would wrongly treat as a deliberate, working override. Comparing the
+    effective `__hash__` by identity against the installed base's own catches it
+    correctly instead.
+    """
+
+    from airflow.task.priority_strategy import PriorityWeightStrategy
+
+    class EqWithoutHash(PriorityWeightStrategy):
+        def get_weight(self, ti: object) -> int:
+            del ti
+            return 1
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, EqWithoutHash)
+
+    assert EqWithoutHash.__hash__ is None
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(EqWithoutHash())
+
+    (problem,) = compat_components._check_weight_strategy_hash_of_none(EqWithoutHash)
+
+    assert problem.code == "weight-strategy-hash-of-none"
+    assert "unhashable" in problem.hint
+
+
+def test_weight_strategy_hash_of_none_accepts_a_genuine_override() -> None:
+    """Do not flag a subclass whose effective `__hash__` is a real, different callable."""
+
+    from airflow.task.priority_strategy import PriorityWeightStrategy
+
+    class RealOverride(PriorityWeightStrategy):
+        def get_weight(self, ti: object) -> int:
+            del ti
+            return 1
+
+        def __hash__(self) -> int:
+            return 12345
+
+    assert tuple(compat_components._check_weight_strategy_hash_of_none(RealOverride)) == ()
+
+
 def test_notifier_missing_notify_skips_an_airflow_shipped_override() -> None:
     """Do not flag a subclass of an Airflow-authored notifier that already implements it.
 
@@ -645,12 +710,62 @@ def test_notifier_missing_notify_skips_an_airflow_shipped_override() -> None:
     assert tuple(compat_components._check_notifier_missing_notify(MySmtpNotifier)) == ()
 
 
+def test_notifier_template_fields_unresolvable_flags_a_bare_string() -> None:
+    """Flag a bare-string `template_fields`, not iterate it character by character.
+
+    Regression test: `str` is technically a `Sequence[str]`, so nothing structurally
+    rejects `template_fields = "message"` -- a one-character typo away from the correct
+    `("message",)`. Iterating it directly would check `hasattr` for each of `"m"`,
+    `"e"`, `"s"`, ... instead of reporting the real mistake once, clearly.
+    """
+
+    from airflow.sdk.bases.notifier import BaseNotifier
+
+    class StringTemplateFields(BaseNotifier):
+        template_fields = "message"
+
+        def notify(self, context: object) -> None:
+            del context
+
+    (problem,) = compat_components._check_notifier_template_fields_unresolvable(
+        StringTemplateFields()
+    )
+
+    assert problem.code == "notifier-template-fields-unresolvable"
+    assert "bare string" in problem.message
+
+
+def test_notifier_template_fields_unresolvable_flags_a_non_iterable_value() -> None:
+    """Flag a non-iterable `template_fields` instead of raising `TypeError`.
+
+    Regression test: `BaseNotifier._update_context` iterates `template_fields` directly
+    with no type check, so `template_fields = None` (or any other non-iterable) raises
+    `TypeError` the moment a real notifier fires -- and, before this fix, out of
+    `check_component` itself, which must never raise on the checked component.
+    """
+
+    from airflow.sdk.bases.notifier import BaseNotifier
+
+    class NoneTemplateFields(BaseNotifier):
+        template_fields = None
+
+        def notify(self, context: object) -> None:
+            del context
+
+    (problem,) = compat_components._check_notifier_template_fields_unresolvable(
+        NoneTemplateFields()
+    )
+
+    assert problem.code == "notifier-template-fields-unresolvable"
+    assert "not iterable" in problem.message
+
+
 def test_secrets_backend_raises_on_miss_skips_a_class_defining_no_getters_at_all() -> None:
     """Report nothing for a duck-typed, forced-kind class defining none of the getters.
 
     `_defining_class` returns None when no class in the MRO defines the name at all --
     unreachable for a real `BaseSecretsBackend` subclass, since the base always defines
-    all three, but reachable for a forced-kind component that duck-types as this kind
+    all four, but reachable for a forced-kind component that duck-types as this kind
     without actually subclassing it, mirroring `_NotAnExecutor` in `test_components.py`.
     """
 
@@ -658,6 +773,122 @@ def test_secrets_backend_raises_on_miss_skips_a_class_defining_no_getters_at_all
         pass
 
     assert tuple(compat_components._check_secrets_backend_raises_on_miss(NotASecretsBackend)) == ()
+
+
+def test_secrets_backend_raises_on_miss_catches_a_get_conn_value_only_override() -> None:
+    """Flag a backend overriding only `get_conn_value`, not `get_connection`.
+
+    Regression test: `get_conn_value`'s own docstring names it the *default* override
+    point ("If the client your secrets backend uses already returns a python dict, you
+    should override `get_connection` instead"), and Airflow's own shipped
+    `EnvironmentVariablesBackend` overrides it, not `get_connection`. Excluding
+    `get_conn_value` from `_SECRETS_BACKEND_GETTERS` would miss the more commonly
+    overridden of the two connection getters entirely.
+    """
+
+    from airflow.secrets.base_secrets import BaseSecretsBackend
+
+    class VaultishBackend(BaseSecretsBackend):
+        def get_conn_value(self, conn_id: str, team_name: str | None = None) -> str:
+            del team_name
+            raise KeyError(conn_id)
+
+    (problem,) = compat_components._check_secrets_backend_raises_on_miss(VaultishBackend)
+
+    assert problem.code == "secrets-backend-raises-on-miss"
+    assert "get_conn_value" in problem.message
+
+
+def test_annotation_allows_none_recognizes_a_real_pep604_union_object() -> None:
+    """Recognize a real (already-evaluated) `X | None` annotation object."""
+
+    assert compat_components._annotation_allows_none(str | None) is True
+
+
+def test_annotation_allows_none_recognizes_optional_and_union_spellings_too() -> None:
+    """Recognize the pre-PEP604 `typing.Optional`/`typing.Union` spellings identically.
+
+    Regression test: `str(typing.Optional[str])` renders as `'typing.Optional[str]'`,
+    containing no literal `None` at all, unlike `str(str | None)` which does -- a plain
+    substring search over `str(annotation)` would miss these two spellings even though
+    `typing.get_args()` normalizes all three identically. Built via `getattr` rather
+    than the `Optional[...]`/`Union[...]` subscript syntax directly, which names a
+    spelling this repo's own style no longer writes.
+    """
+
+    typing_optional = __import__("typing").Optional
+    typing_union = __import__("typing").Union
+
+    assert compat_components._annotation_allows_none(typing_optional[str]) is True
+    assert compat_components._annotation_allows_none(typing_union[str, None]) is True
+
+
+def test_annotation_allows_none_rejects_a_non_nullable_real_object() -> None:
+    """Reject a real annotation object that does not admit `None`."""
+
+    assert compat_components._annotation_allows_none(str) is False
+
+
+@pytest.mark.parametrize("annotation", [None, type(None)])
+def test_annotation_allows_none_accepts_a_bare_none_annotation(annotation: object) -> None:
+    """Recognize a bare `-> None` real object annotation as nullable.
+
+    Regression test: `get_args(None)` is `()`, since `None` is not itself a
+    parametrized generic -- the structural check alone would wrongly reject the one
+    annotation that is trivially, entirely `None`, so it is special-cased ahead of
+    `get_args`. `inspect.signature` reports a bare `-> None` return annotation as
+    either the real object `None` or, equivalently, `type(None)`, depending on the
+    Python version.
+    """
+
+    assert compat_components._annotation_allows_none(annotation) is True
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    ["str | None", "Optional[str]", "typing.Union[str, None]"],
+)
+def test_annotation_allows_none_recognizes_every_string_spelling(annotation: str) -> None:
+    """Recognize the same three spellings when reported as an unevaluated string.
+
+    `inspect.signature` reports a string annotation instead of a real object when the
+    defining module uses `from __future__ import annotations` -- the common case for
+    this codebase's own style, and plausible for any user module too.
+    """
+
+    assert compat_components._annotation_allows_none(annotation) is True
+
+
+def test_annotation_allows_none_rejects_a_non_nullable_string() -> None:
+    """Reject a string annotation that does not admit `None`."""
+
+    assert compat_components._annotation_allows_none("str") is False
+
+
+def test_secrets_backend_raises_on_miss_accepts_a_real_optional_object_annotation() -> None:
+    """Do not flag an override annotated with a real (non-string) `Optional[X]` object.
+
+    Assigns `__annotations__` directly rather than writing `Optional[str]` in this
+    module's own (postponed-evaluation) source, so `inspect.signature` reports the real
+    `typing.Optional[str]` object instead of a string -- exercising the
+    `_annotation_allows_none` branch that inspects a live annotation object instead of
+    text.
+    """
+
+    from airflow.secrets.base_secrets import BaseSecretsBackend
+
+    class RealOptionalAnnotation(BaseSecretsBackend):
+        def get_variable(self, key: str, team_name: str | None = None) -> str | None:
+            del key, team_name
+            return None
+
+    typing_optional = __import__("typing").Optional
+    RealOptionalAnnotation.get_variable.__annotations__["return"] = typing_optional[str]
+
+    assert (
+        tuple(compat_components._check_secrets_backend_raises_on_miss(RealOptionalAnnotation))
+        == ()
+    )
 
 
 def test_secrets_backend_raises_on_miss_skips_unannotated_overrides() -> None:
@@ -689,6 +920,10 @@ def test_secrets_backend_raises_on_miss_flags_every_offending_getter() -> None:
 
     from airflow.secrets.base_secrets import BaseSecretsBackend
 
+    def _broken_get_conn_value(self: Any, conn_id: str, team_name: str | None = None) -> str:
+        del self, team_name
+        raise KeyError(conn_id)
+
     def _broken_get_connection(self: Any, conn_id: str, team_name: str | None = None) -> str:
         del self, team_name
         raise KeyError(conn_id)
@@ -709,6 +944,7 @@ def test_secrets_backend_raises_on_miss_flags_every_offending_getter() -> None:
         "AllBroken",
         (BaseSecretsBackend,),
         {
+            "get_conn_value": _broken_get_conn_value,
             "get_connection": _broken_get_connection,
             "get_variable": _broken_get_variable,
             "get_config": _broken_get_config,
@@ -781,11 +1017,13 @@ class _FakeDistribution(metadata.Distribution):
     `Distribution.name` and `.files` are read-only properties on the real ABC, so the
     fake values live behind a leading-underscore attribute and are exposed through
     properties of the same names, rather than plain instance attributes that would
-    shadow (and, per `ty`, illegally reassign) the base's own.
+    shadow (and, per `ty`, illegally reassign) the base's own. `read_text` is one of
+    only two real abstract methods (`locate_file` is the other) and so must exist, but
+    nothing under test reads distribution metadata files by name, only `.pth` file
+    content reached through `files`/`locate_file`.
 
     Parameters:
         name: str naming the fake distribution.
-        direct_url_text: str | None returned by `read_text("direct_url.json")`.
         files: tuple[str, ...] | None containing fake `PackagePath`-like relative paths.
         root: pathlib.Path | None resolving each fake file when `locate_file` is called.
     """
@@ -794,12 +1032,10 @@ class _FakeDistribution(metadata.Distribution):
         self,
         name: str,
         *,
-        direct_url_text: str | None = None,
         files: tuple[str, ...] | None = None,
         root: Any = None,
     ) -> None:
         self._name = name
-        self._direct_url_text = direct_url_text
         self._files = files
         self._root = root
 
@@ -812,8 +1048,7 @@ class _FakeDistribution(metadata.Distribution):
         return self._files
 
     def read_text(self, filename: str) -> str | None:
-        if filename == "direct_url.json":
-            return self._direct_url_text
+        del filename
         return None
 
     def locate_file(self, path: Any) -> Any:
@@ -821,81 +1056,88 @@ class _FakeDistribution(metadata.Distribution):
         return self._root / path
 
 
-def test_distribution_editable_root_returns_none_without_direct_url() -> None:
-    """Return None for a distribution recording no `direct_url.json` at all."""
+def test_distribution_editable_roots_returns_empty_without_any_pth_file() -> None:
+    """Return no roots for a distribution recording no `.pth` file at all."""
 
-    dist = _FakeDistribution("plain-dist", direct_url_text=None)
+    dist = _FakeDistribution("plain-dist", files=("some/file.py",), root=Path("/nonexistent"))
 
-    assert compat_components._distribution_editable_root(dist) is None
-
-
-def test_distribution_editable_root_returns_none_for_unparseable_json() -> None:
-    """Return None rather than raise for a malformed `direct_url.json`."""
-
-    dist = _FakeDistribution("broken-dist", direct_url_text="{not valid json")
-
-    assert compat_components._distribution_editable_root(dist) is None
+    assert compat_components._distribution_editable_roots(dist) == ()
 
 
-def test_distribution_editable_root_returns_none_for_a_non_dict_payload() -> None:
-    """Return None when `direct_url.json` parses to something other than a dict."""
+def test_distribution_editable_roots_returns_empty_without_any_files() -> None:
+    """Tolerate a distribution whose `files` is None rather than raising."""
 
-    dist = _FakeDistribution("weird-dist", direct_url_text=json.dumps("just a string"))
+    dist = _FakeDistribution("no-files-dist", files=None)
 
-    assert compat_components._distribution_editable_root(dist) is None
-
-
-def test_distribution_editable_root_returns_none_for_a_non_editable_install() -> None:
-    """Return None for a real (non-editable) `direct_url.json`, e.g. a VCS install."""
-
-    payload = json.dumps({"url": "file:///some/path", "dir_info": {}})
-    dist = _FakeDistribution("vcs-dist", direct_url_text=payload)
-
-    assert compat_components._distribution_editable_root(dist) is None
+    assert compat_components._distribution_editable_roots(dist) == ()
 
 
-def test_distribution_editable_root_returns_none_without_a_url() -> None:
-    """Return None when the editable payload carries no `url` field at all."""
+def test_distribution_editable_roots_skips_an_unreadable_pth_file(tmp_path: Path) -> None:
+    """Return no roots rather than raise when the recorded `.pth` file cannot be read."""
 
-    payload = json.dumps({"dir_info": {"editable": True}})
-    dist = _FakeDistribution("url-less-dist", direct_url_text=payload)
+    dist = _FakeDistribution("broken-dist", files=("missing.pth",), root=tmp_path)
 
-    assert compat_components._distribution_editable_root(dist) is None
-
-
-def test_distribution_editable_root_returns_none_for_a_non_file_scheme() -> None:
-    """Return None when the editable install's URL is not a local `file://` URL."""
-
-    payload = json.dumps({"url": "https://example.com/pkg", "dir_info": {"editable": True}})
-    dist = _FakeDistribution("remote-dist", direct_url_text=payload)
-
-    assert compat_components._distribution_editable_root(dist) is None
+    assert compat_components._distribution_editable_roots(dist) == ()
 
 
-def test_distribution_editable_root_resolves_a_real_editable_install() -> None:
-    """Resolve the real local source root for a genuine editable `direct_url.json`."""
+def test_distribution_editable_roots_ignores_a_non_pth_file(tmp_path: Path) -> None:
+    """Ignore a recorded file that is not itself a `.pth` file."""
 
-    payload = json.dumps({"url": "file:///a/b/c", "dir_info": {"editable": True}})
-    dist = _FakeDistribution("editable-dist", direct_url_text=payload)
+    (tmp_path / "module.py").write_text(str(tmp_path))
+    dist = _FakeDistribution("py-file-dist", files=("module.py",), root=tmp_path)
 
-    from pathlib import Path
-
-    assert compat_components._distribution_editable_root(dist) == Path("/a/b/c").resolve()
+    assert compat_components._distribution_editable_roots(dist) == ()
 
 
-def test_distribution_editable_root_wraps_an_unresolvable_path(
-    monkeypatch: pytest.MonkeyPatch,
+def test_distribution_editable_roots_skips_comment_blank_and_import_lines(
+    tmp_path: Path,
 ) -> None:
-    """Return None rather than raise when resolving the editable URL's path fails."""
+    """Skip `#`-comment, blank, and `import`-hook lines, matching Python's `site` module."""
 
-    def broken_url2pathname(_path: str) -> str:
-        raise ValueError("unresolvable path")
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (tmp_path / "pkg.pth").write_text(f"# a comment\n\nimport something_installed\n{real_dir}\n")
+    dist = _FakeDistribution("mixed-dist", files=("pkg.pth",), root=tmp_path)
 
-    monkeypatch.setattr("urllib.request.url2pathname", broken_url2pathname)
-    payload = json.dumps({"url": "file:///a/b/c", "dir_info": {"editable": True}})
-    dist = _FakeDistribution("broken-path-dist", direct_url_text=payload)
+    assert compat_components._distribution_editable_roots(dist) == (real_dir.resolve(),)
 
-    assert compat_components._distribution_editable_root(dist) is None
+
+def test_distribution_editable_roots_skips_a_nonexistent_directory_line(tmp_path: Path) -> None:
+    """Skip a `.pth` line naming a directory that does not actually exist."""
+
+    (tmp_path / "pkg.pth").write_text(str(tmp_path / "does-not-exist") + "\n")
+    dist = _FakeDistribution("dangling-dist", files=("pkg.pth",), root=tmp_path)
+
+    assert compat_components._distribution_editable_roots(dist) == ()
+
+
+def test_distribution_editable_roots_skips_an_unresolvable_line(tmp_path: Path) -> None:
+    """Skip a `.pth` line that cannot even be resolved to a path, rather than raise.
+
+    An embedded null character is a real, portable way to make `Path.resolve()` itself
+    raise `ValueError` -- no monkeypatching needed to exercise this defensive branch.
+    """
+
+    (tmp_path / "pkg.pth").write_text("/tmp/\x00bad\n")
+    dist = _FakeDistribution("null-byte-dist", files=("pkg.pth",), root=tmp_path)
+
+    assert compat_components._distribution_editable_roots(dist) == ()
+
+
+def test_distribution_editable_roots_resolves_every_real_directory_line(tmp_path: Path) -> None:
+    """Resolve every real directory line, in order, from a multi-line `.pth` file."""
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (tmp_path / "pkg.pth").write_text(f"{first}\n{second}\n")
+    dist = _FakeDistribution("multi-root-dist", files=("pkg.pth",), root=tmp_path)
+
+    assert compat_components._distribution_editable_roots(dist) == (
+        first.resolve(),
+        second.resolve(),
+    )
 
 
 def _provider_component(module_name: str) -> object:
@@ -964,8 +1206,6 @@ def test_provider_owning_distribution_matches_via_file_manifest(
 ) -> None:
     """Attribute a module to the distribution whose recorded file matches it exactly."""
 
-    from pathlib import Path
-
     this_module_file = sys.modules[__name__].__file__
     assert this_module_file is not None
     module_file = Path(this_module_file).resolve()
@@ -974,6 +1214,129 @@ def test_provider_owning_distribution_matches_via_file_manifest(
     component = _provider_component(__name__)
 
     assert compat_components._provider_owning_distribution(component) == "manifest-dist"
+
+
+def _fake_module_at(monkeypatch: pytest.MonkeyPatch, module_name: str, file_path: Path) -> object:
+    """Register a synthetic module in `sys.modules` claiming a given file path.
+
+    Uses `monkeypatch.setitem` rather than mutating any real module's `__file__`, so
+    cleanup is automatic and nothing about a genuinely-imported module is disturbed.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch registering the fake module for cleanup.
+        module_name: str naming the fake module.
+        file_path: pathlib.Path the fake module claims as its `__file__`.
+
+    Returns:
+        object containing a fake `get_provider_info`-shaped component whose
+        `__module__` resolves to the newly registered fake module.
+    """
+
+    import types
+
+    fake_module = types.ModuleType(module_name)
+    fake_module.__file__ = str(file_path)
+    monkeypatch.setitem(sys.modules, module_name, fake_module)
+    return _provider_component(module_name)
+
+
+def test_provider_owning_distribution_matches_via_a_precise_editable_pth_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Attribute a module under an editable `.pth` root, precisely -- not the whole project.
+
+    Regression test for over-attribution: a naive "the whole project root is exposed"
+    reading would also match a sibling directory (`tests/`, `docs/`, another package in
+    a workspace) that the `.pth` file's own content does not actually add to
+    `sys.path`.
+    """
+
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    sibling = tmp_path / "tests"
+    sibling.mkdir()
+    (tmp_path / "pkg.pth").write_text(str(src_root) + "\n")
+    dist = _FakeDistribution("editable-dist", files=("pkg.pth",), root=tmp_path)
+    monkeypatch.setattr(compat_components.metadata, "distributions", lambda: iter([dist]))
+
+    inside = _fake_module_at(monkeypatch, "fake_inside_module", src_root / "mymodule.py")
+    assert compat_components._provider_owning_distribution(inside) == "editable-dist"
+
+    outside = _fake_module_at(monkeypatch, "fake_outside_module", sibling / "test_mymodule.py")
+    assert compat_components._provider_owning_distribution(outside) is None
+
+
+def test_provider_owning_distribution_prefers_the_most_specific_editable_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Prefer the deepest matching editable root when more than one contains a file.
+
+    Regression test for workspace nondeterminism: an outer distribution's `.pth` root
+    and an inner (nested) distribution's own, more specific `.pth` root can both
+    legitimately contain the same file; the more specific one identifies the real owner.
+    """
+
+    outer_root = tmp_path
+    inner_root = tmp_path / "providers" / "foo" / "src"
+    inner_root.mkdir(parents=True)
+    (tmp_path / "outer.pth").write_text(str(outer_root) + "\n")
+    (tmp_path / "inner.pth").write_text(str(inner_root) + "\n")
+    outer_dist = _FakeDistribution("my-monorepo", files=("outer.pth",), root=tmp_path)
+    inner_dist = _FakeDistribution(
+        "apache-airflow-providers-foo", files=("inner.pth",), root=tmp_path
+    )
+    monkeypatch.setattr(
+        compat_components.metadata, "distributions", lambda: iter([outer_dist, inner_dist])
+    )
+    component = _fake_module_at(
+        monkeypatch, "fake_nested_module", inner_root / "get_provider_info.py"
+    )
+
+    assert compat_components._provider_owning_distribution(component) == (
+        "apache-airflow-providers-foo"
+    )
+
+
+def test_provider_owning_distribution_caches_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Build the distribution index once and reuse it, not once per call."""
+
+    calls = 0
+    real_distributions = compat_components.metadata.distributions
+
+    def counting_distributions() -> object:
+        nonlocal calls
+        calls += 1
+        return real_distributions()
+
+    monkeypatch.setattr(compat_components.metadata, "distributions", counting_distributions)
+    component = _provider_component(__name__)
+
+    compat_components._provider_owning_distribution(component)
+    compat_components._provider_owning_distribution(component)
+
+    assert calls == 1
+
+
+def test_provider_owning_distribution_resolves_a_real_installed_provider() -> None:
+    """Attribute the real, non-editable `apache-airflow-providers-sqlite` for real.
+
+    Pins the resolution result directly rather than only inferring it from
+    `check_component(...).ok`: `provider-package-name-mismatch`/`provider-no-entry-point`
+    both silently report nothing when `_provider_owning_distribution` cannot attribute a
+    callable, so a `check_component(real_get_provider_info).ok is True` assertion alone
+    cannot distinguish "genuinely validated and passed" from "resolution silently failed
+    and both checks no-opped" -- a regression in file-manifest matching would otherwise
+    downgrade `test_check_component_reports_no_problems_for_a_clean_provider` to a
+    vacuous pass instead of failing it.
+    """
+
+    from airflow.providers.sqlite.get_provider_info import get_provider_info
+
+    resolved = compat_components._provider_owning_distribution(get_provider_info)
+
+    assert resolved == "apache-airflow-providers-sqlite"
 
 
 def test_check_provider_info_schema_returns_nothing_for_a_class() -> None:
@@ -1002,10 +1365,58 @@ def test_check_provider_info_schema_reports_nothing_when_the_schema_cannot_load(
     assert tuple(compat_components._check_provider_info_schema(get_provider_info)) == ()
 
 
+def test_check_provider_info_schema_reports_nothing_when_jsonschema_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never raise `ImportError` just because `jsonschema` is not actually installed.
+
+    Regression test: `jsonschema` is not a direct dependency of this project -- it rides
+    in only because the installed `apache-airflow-core` currently requires it, which
+    `installed_family()` never verifies (it classifies from `apache-airflow-core`'s own
+    dist-info metadata alone, not its dependencies' importability). A pruned or
+    `--no-deps` environment can have Airflow's metadata present without `jsonschema`
+    actually installed; a checker must never raise on the checked component for a
+    reason that has nothing to do with it. `sys.modules[name] = None` is the standard
+    way to simulate "this module cannot be imported" without needing it genuinely
+    uninstalled.
+    """
+
+    monkeypatch.setitem(sys.modules, "jsonschema", None)
+
+    def get_provider_info() -> dict[str, str]:
+        return {"package-name": "x", "name": "x", "description": "x"}
+
+    assert tuple(compat_components._check_provider_info_schema(get_provider_info)) == ()
+
+
 def test_check_provider_package_name_mismatch_returns_nothing_for_a_class() -> None:
     """Skip a bare class for the package-name-mismatch check too."""
 
     assert tuple(compat_components._check_provider_package_name_mismatch(object)) == ()
+
+
+def test_check_provider_package_name_mismatch_fires_on_a_genuine_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag a `package-name` that genuinely disagrees with the owning distribution.
+
+    The positive case: no prior test exercised this check actually firing against a
+    fake (rather than only an accident of the real environment), which would let a
+    regression that always skips go unnoticed by every negative ("skips ...") test here.
+    """
+
+    def get_provider_info() -> dict[str, str]:
+        return {"package-name": "totally-wrong-name"}
+
+    monkeypatch.setattr(
+        compat_components, "_provider_owning_distribution", lambda _component: "My-Real-Dist"
+    )
+
+    (problem,) = compat_components._check_provider_package_name_mismatch(get_provider_info)
+
+    assert problem.code == "provider-package-name-mismatch"
+    assert "totally-wrong-name" in problem.message
+    assert "my-real-dist" in problem.message
 
 
 def test_check_provider_package_name_mismatch_skips_a_non_dict_return(

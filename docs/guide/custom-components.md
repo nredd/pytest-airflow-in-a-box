@@ -135,11 +135,16 @@ Executor checks also require Airflow 3.x and report no problems on 2.x.
   example `get_weight`). `PriorityWeightStrategy` is a real `abc.ABC`, so Python refuses
   to instantiate an incomplete subclass, but only when something actually tries to --
   which for a `weight_rule` class reference can be long after Dag parsing
-- `weight-strategy-hash-of-none` -- `__hash__` is not overridden.
-  `PriorityWeightStrategy` defines `__eq__` without `__hash__`; on the certified 3.1.x
-  base that makes every instance unhashable, and on 3.2+ the base instead defines
-  `__hash__` as `return hash(None)`, making every instance hash equal. Either way, a
-  `set` or `dict` keyed on strategy instances cannot dedupe or key on them correctly
+- `weight-strategy-hash-of-none` -- the effective `__hash__` (compared by identity
+  against the installed `PriorityWeightStrategy.__hash__`, not by who defines it) is
+  either `None` or still the un-subclassed base's own. `PriorityWeightStrategy` defines
+  `__eq__` without `__hash__`; on the certified 3.1.x base that makes every instance
+  unhashable, and on 3.2+ the base instead defines `__hash__` as `return hash(None)`,
+  making every instance hash equal. The same automatic Python rule fires just as easily
+  on a user subclass that defines `__eq__` without `__hash__` too -- identity
+  comparison catches that case as readily as an untouched base, where checking "who
+  defines `__hash__`" alone would miss it. Either way, a `set` or `dict` keyed on
+  strategy instances cannot dedupe or key on them correctly
 
 ## Notifier checks
 
@@ -156,13 +161,16 @@ Executor checks also require Airflow 3.x and report no problems on 2.x.
 
 ## Secrets backend checks
 
-- `secrets-backend-raises-on-miss` -- an overridden `get_connection`, `get_variable`, or
-  `get_config` is annotated to return something that does not mention `None`. All three
+- `secrets-backend-raises-on-miss` -- an overridden `get_conn_value`, `get_connection`,
+  `get_variable`, or `get_config` is annotated to return something that does not admit
+  `None` (recognizing `X | None`, `Optional[X]`, and `Union[X, None]` alike). All four
   must return `None` on a miss, not raise -- a very common bug is raising the backing
-  client's own not-found error instead. `check_component` never calls a secrets backend
-  for real, since a genuine miss needs real credentials this module cannot fabricate
-  safely, so this reads the override's own declared return annotation; an unannotated
-  override is not flagged
+  client's own not-found error instead. `get_conn_value` is included because it is the
+  *default* override point Airflow's own docs and shipped backends actually use, not a
+  rarely-touched internal. `check_component` never calls a secrets backend for real,
+  since a genuine miss needs real credentials this module cannot fabricate safely, so
+  this reads the override's own declared return annotation; an unannotated override is
+  not flagged
 
 ## Policy checks
 
@@ -201,8 +209,12 @@ it internally, the same way `ProvidersManager` calls the real entry point as
 
 The last two need `check_component` to attribute the callable's module to a real
 installed distribution, which it does by matching the distribution's own recorded file
-list, falling back to the distribution's `direct_url.json` for an editable
-(`pip install -e .`) install -- the standard way a provider author develops their own
-package. A callable that cannot be attributed to any installed distribution (for example
-one defined directly in a test file, not part of an installed package) is silently
-skipped by both checks.
+list, falling back to the precise source root(s) named in the distribution's own `.pth`
+file for an editable (`pip install -e .`) install -- the standard way a provider author
+develops their own package. That precise root is deliberately narrower than the whole
+project checkout: a `src/`-layout package is editable-exposed only under `src/`, so a
+sibling directory sharing the same project root (a `tests/` folder, another package in
+a workspace) is not attributed to it. A callable that cannot be attributed to any
+installed distribution this way (for example one defined directly in a test file, not
+part of an installed package) is silently skipped by both checks. The underlying
+distribution index is built once per process and reused, not rescanned on every call.
