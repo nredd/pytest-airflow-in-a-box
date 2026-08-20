@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from pytest_airflow_in_a_box._compat import dag as dag_module
 from pytest_airflow_in_a_box._compat.capabilities import (
@@ -175,9 +176,35 @@ def test_ensure_bundle_is_vacuous_on_v2() -> None:
     assert record.bundle_created is False
 
 
-@pytest.mark.usefixtures("v2_capabilities")
-def test_sync_dag_model_uses_the_authoring_writer_on_v2() -> None:
-    """Write through the authoring class's bundle-free `bulk_write_to_db`."""
+class _RollbackRecordingSession:
+    """Count `rollback` calls and expose an empty pending-state surface."""
+
+    def __init__(self) -> None:
+        """Initialize the rollback counter and the empty identity sets."""
+
+        self.rollbacks = 0
+        self.new: set[Any] = set()
+        self.dirty: set[Any] = set()
+        self.deleted: set[Any] = set()
+
+    def rollback(self) -> None:
+        """Record one rollback."""
+
+        self.rollbacks += 1
+
+
+def _fake_authoring_dag(failures: list[IntegrityError]) -> tuple[Any, list[tuple[Any, ...]]]:
+    """Build a 2.x authoring double raising each queued failure before succeeding.
+
+    Centralizes the 2.x `bulk_write_to_db(dags, session=None)` compat signature so a
+    shift in that call shape needs exactly one edit here.
+
+    Parameters:
+        failures: list[IntegrityError] consumed one per write call before success.
+
+    Returns:
+        tuple[Any, list[tuple[Any, ...]]] containing the Dag double and its call log.
+    """
 
     calls: list[tuple[Any, ...]] = []
 
@@ -187,13 +214,139 @@ def test_sync_dag_model_uses_the_authoring_writer_on_v2() -> None:
         @classmethod
         def bulk_write_to_db(cls, dags: list[Any], session: Any = None) -> None:
             calls.append((tuple(dags), session))
+            if failures:
+                raise failures.pop(0)
 
-    dag: Any = FakeAuthoringDag()
-    record = _record(session="session-token")
+    return FakeAuthoringDag(), calls
 
-    dag_module._sync_dag_model(dag, record)
 
-    assert calls == [((dag,), "session-token")]
+def _dag_code_integrity_error() -> IntegrityError:
+    """Build the UNIQUE-violation shape issue #157's CI leg observed.
+
+    Returns:
+        sqlalchemy.exc.IntegrityError carrying a `dag_code.fileloc_hash` cause.
+    """
+
+    return IntegrityError(
+        "INSERT INTO dag_code",
+        None,
+        Exception("UNIQUE constraint failed: dag_code.fileloc_hash"),
+    )
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_uses_the_authoring_writer_on_v2() -> None:
+    """Write through the authoring class's bundle-free `bulk_write_to_db`."""
+
+    dag, calls = _fake_authoring_dag([])
+    session = _RollbackRecordingSession()
+
+    dag_module._sync_dag_model(dag, _record(session=session))
+
+    assert calls == [((dag,), session)]
+    assert session.rollbacks == 0
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_retries_a_concurrent_dag_code_insert(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Roll back and retry once another worker wins the `dag_code` insert race.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the retry diagnostic.
+    """
+
+    dag, calls = _fake_authoring_dag([_dag_code_integrity_error()])
+    session = _RollbackRecordingSession()
+
+    with caplog.at_level("WARNING", logger=dag_module.__name__):
+        dag_module._sync_dag_model(dag, _record(session=session))
+
+    assert calls == [((dag,), session), ((dag,), session)]
+    assert session.rollbacks == 1
+    assert any("attempt 1" in message for message in caplog.messages)
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_raises_after_exhausted_retries() -> None:
+    """Surface the `IntegrityError` once every bounded attempt loses the race."""
+
+    attempts = dag_module._V2_DAG_CODE_SYNC_ATTEMPTS
+    dag, calls = _fake_authoring_dag([_dag_code_integrity_error() for _ in range(attempts)])
+    session = _RollbackRecordingSession()
+
+    with pytest.raises(IntegrityError, match="fileloc_hash"):
+        dag_module._sync_dag_model(dag, _record(session=session))
+
+    assert len(calls) == attempts
+    # The final attempt raises without a rollback; `persist_dag`'s handler owns it.
+    assert session.rollbacks == attempts - 1
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_does_not_retry_a_foreign_integrity_error() -> None:
+    """Keep a non-`dag_code` violation loud instead of absorbing it as the race.
+
+    A cross-worker `dag_id` collision that slips past `ensure_dag_absent`'s
+    non-locking check must fail the test, not silently take the update path over
+    another worker's committed rows.
+    """
+
+    collision = IntegrityError(
+        "INSERT INTO dag", None, Exception("UNIQUE constraint failed: dag.dag_id")
+    )
+    dag, calls = _fake_authoring_dag([collision])
+    session = _RollbackRecordingSession()
+
+    with pytest.raises(IntegrityError, match=r"dag\.dag_id"):
+        dag_module._sync_dag_model(dag, _record(session=session))
+
+    assert len(calls) == 1
+    assert session.rollbacks == 0
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_does_not_retry_over_pending_user_state() -> None:
+    """Never roll back user work staged on the published `dag_maker.session`.
+
+    The session is handed to the test body before persistence runs, so a retry's
+    rollback would silently discard rows the user staged inside the `with` block and
+    the eventual commit would drop them without a trace.
+    """
+
+    dag, calls = _fake_authoring_dag([_dag_code_integrity_error()])
+    session = _RollbackRecordingSession()
+    session.new = {"staged-user-connection"}
+
+    with pytest.raises(IntegrityError, match="fileloc_hash"):
+        dag_module._sync_dag_model(dag, _record(session=session))
+
+    assert len(calls) == 1
+    assert session.rollbacks == 0
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_persist_dag_reports_exhausted_dag_code_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report the exhausted race through the existing sync-labelled persistence error.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch disarming the cleanup path.
+    """
+
+    attempts = dag_module._V2_DAG_CODE_SYNC_ATTEMPTS
+    dag, _calls = _fake_authoring_dag([_dag_code_integrity_error() for _ in range(attempts)])
+    monkeypatch.setattr(dag_module, "_cleanup_dag", lambda _record: None)
+    session = _RollbackRecordingSession()
+
+    with pytest.raises(
+        dag_module.DagPersistenceError, match="syncing DagModel metadata"
+    ) as caught:
+        dag_module.persist_dag(dag, _record(session=session))
+
+    assert isinstance(caught.value.__cause__, IntegrityError)
 
 
 @pytest.mark.usefixtures("v2_capabilities")
@@ -391,16 +544,9 @@ def test_expand_mapped_task_uses_the_operator_method_on_v2(
 
 
 class _FakeV2CleanupSession:
-    """Record ORM and core delete traffic for v2 `_cleanup_dag` probes.
+    """Record ORM and core delete traffic for v2 `_cleanup_dag` probes."""
 
-    Parameters:
-        fileloc: str | None reported as the Dag model's source location.
-        fileloc_still_used: bool reporting another Dag model sharing the fileloc.
-    """
-
-    def __init__(self, fileloc: str | None, fileloc_still_used: bool) -> None:
-        self.fileloc = fileloc
-        self.fileloc_still_used = fileloc_still_used
+    def __init__(self) -> None:
         self.deleted: list[Any] = []
         self.executed: list[str] = []
         self.committed = False
@@ -411,7 +557,7 @@ class _FakeV2CleanupSession:
     def get(self, model: Any, key: Any) -> Any:
         name = getattr(model, "__name__", str(model))
         if name == "DagModel":
-            return SimpleNamespace(kind=f"{name}:{key}", fileloc=self.fileloc)
+            return SimpleNamespace(kind=f"{name}:{key}")
         return f"{name}:{key}"
 
     def delete(self, row: Any) -> None:
@@ -423,19 +569,20 @@ class _FakeV2CleanupSession:
     def execute(self, statement: Any) -> None:
         self.executed.append(str(statement))
 
-    def scalars(self, statement: Any) -> Any:
-        del statement
-        return SimpleNamespace(first=lambda: "other_dag" if self.fileloc_still_used else None)
-
     def commit(self) -> None:
         self.committed = True
 
 
 @pytest.mark.usefixtures("v2_capabilities")
 def test_cleanup_dag_deletes_the_v2_row_set() -> None:
-    """Delete runs, serialized rows, the Dag model, and the orphaned code row."""
+    """Delete runs, serialized rows, and the Dag model, keeping the shared code row.
 
-    session = _FakeV2CleanupSession(fileloc="/suite/test_module.py", fileloc_still_used=False)
+    The `dag_code` row keys on `fileloc`, shared across xdist workers testing one
+    source file; deleting it would re-arm issue #157's insert race, so cleanup must
+    leave it alone.
+    """
+
+    session = _FakeV2CleanupSession()
     record = _record(session=session)
     record.dag_run_ids.add(5)
 
@@ -444,19 +591,6 @@ def test_cleanup_dag_deletes_the_v2_row_set() -> None:
     assert session.deleted[0].endswith(":5")
     assert any("serialized_dag" in statement for statement in session.executed)
     assert session.deleted[-1].kind.endswith(":fake_dag")
-    assert any("dag_code" in statement for statement in session.executed)
-    assert session.committed is True
-
-
-@pytest.mark.usefixtures("v2_capabilities")
-def test_cleanup_dag_keeps_a_shared_v2_code_row() -> None:
-    """Leave the `dag_code` row alone while another Dag still shares the fileloc."""
-
-    session = _FakeV2CleanupSession(fileloc="/suite/test_module.py", fileloc_still_used=True)
-    record = _record(session=session)
-
-    dag_module._cleanup_dag(record)
-
     assert not any("dag_code" in statement for statement in session.executed)
     assert session.committed is True
 
