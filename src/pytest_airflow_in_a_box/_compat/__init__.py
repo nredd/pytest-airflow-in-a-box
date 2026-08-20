@@ -31,8 +31,10 @@ from pytest_airflow_in_a_box._compat.db import (
 from pytest_airflow_in_a_box._compat.in_process import (
     FakeSupervisorComms,
     InProcessRunResult,
+    InProcessTaskContext,
     render_task_in_process,
     run_task_in_process,
+    task_context_in_process,
 )
 from pytest_airflow_in_a_box._compat.params import ParamsCaseError, validate_dag_params
 from pytest_airflow_in_a_box._compat.parse_time import ParseTimeComms, parse_time_supervision
@@ -57,6 +59,7 @@ __all__ = (
     "DatabaseInitializationError",
     "FakeSupervisorComms",
     "InProcessRunResult",
+    "InProcessTaskContext",
     "ParamsCaseError",
     "ParseTimeComms",
     "SeedCleanupError",
@@ -76,6 +79,7 @@ __all__ = (
     "run_task_in_process",
     "seed_connections",
     "seed_variables",
+    "task_context_in_process",
     "validate_connections",
     "validate_dag_params",
     "validate_variables",

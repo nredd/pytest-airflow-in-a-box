@@ -44,8 +44,8 @@ Airflow's published constraints files) can install the plugin bare. The `airflow
 ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`
 (including whole-DagRun execution through `dag_maker.run()`), `run_ti`, `full_dag_bag`,
 `run_dag`, `clear_db`, seeding, and the bundled smoke checks run on both families, while
-`run_task`, `render_task`, `cap_structlog`, and the REST API fixtures fail on 2.x with
-actionable errors naming the 2.x alternative.
+`run_task`, `render_task`, `task_context`, `cap_structlog`, and the REST API fixtures fail
+on 2.x with actionable errors naming the 2.x alternative.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

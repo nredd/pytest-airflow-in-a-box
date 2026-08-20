@@ -319,6 +319,82 @@ class RenderTask(Protocol):
         """
 
 
+class TaskContextHandle(Protocol):
+    """Live handle over one installed in-process task context."""
+
+    @property
+    def ti(self) -> Any:
+        """Return the real ``RuntimeTaskInstance`` behind ``context["ti"]``."""
+
+    @property
+    def context(self) -> Any:
+        """Return the synthesized Task SDK template context mapping."""
+
+    @property
+    def task(self) -> Any:
+        """Return the execution-time operator copy to drive.
+
+        Always drive this copy, never the operator passed in -- for a mapped
+        operator this tracks Airflow's own swap to the concrete unmapped instance.
+        """
+
+    @property
+    def xcoms(self) -> dict[str, Any]:
+        """Return a snapshot of XCom values held by the fake supervisor."""
+
+    @property
+    def sent(self) -> tuple[Any, ...]:
+        """Return a snapshot of every supervisor message in send order."""
+
+
+class TaskContext(Protocol):
+    """Open one Task SDK template context in process without a metadata database."""
+
+    def __call__(
+        self,
+        task: Any,
+        *,
+        dag_id: str | None = None,
+        run_id: str = "in-process-test",
+        logical_date: datetime | None = None,
+        params: dict[str, Any] | None = None,
+        xcoms: dict[str, Any] | None = None,
+        variables: dict[str, str] | None = None,
+        connections: dict[str, dict[str, Any]] | None = None,
+        map_index: int = -1,
+        try_number: int = 1,
+        context_overrides: dict[str, Any] | None = None,
+        render: bool = True,
+    ) -> AbstractContextManager[TaskContextHandle]:
+        """Open one template context with seeded fake supervisor state.
+
+        Parameters:
+            task: Any containing the Airflow operator or bound TaskFlow task.
+            dag_id: str | None overriding the Dag identifier, or ``None`` to
+                read it from the task's bound Dag.
+            run_id: str identifying the synthetic manual run.
+            logical_date: datetime | None pinning the run's logical date.
+            params: dict[str, Any] | None overriding declared Dag params.
+            xcoms: dict[str, Any] | None seeding XCom values by key.
+            variables: dict[str, str] | None seeding Variable values by key.
+            connections: dict[str, dict[str, Any]] | None seeding connection
+                fields by connection id.
+            map_index: int selecting the mapped task index.
+            try_number: int selecting the synthetic task attempt number.
+            context_overrides: dict[str, Any] | None merged into the
+                synthesized template context before rendering.
+            render: bool pre-rendering template fields like a real run. Pass
+                ``False`` for operators that call
+                ``context["ti"].render_templates()`` inside ``execute()``.
+
+        Returns:
+            contextlib.AbstractContextManager[TaskContextHandle] yielding the
+            handle. The fake supervisor stays installed only inside the ``with``
+            block; the handle's ``xcoms``/``sent`` snapshots remain readable
+            after exit.
+        """
+
+
 class RunTask(Protocol):
     """Execute one operator in process without a metadata database."""
 
@@ -368,5 +444,7 @@ __all__ = (
     "RunDag",
     "RunTask",
     "SerializedDag",
+    "TaskContext",
+    "TaskContextHandle",
     "TaskRunResult",
 )

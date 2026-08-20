@@ -81,6 +81,7 @@ def test_public_surface_is_explicit() -> None:
         "run_dag",
         "run_task",
         "session",
+        "task_context",
     )
     assert logging.__all__ == ("StructlogCapture", "TestContextFilter", "ensure_handlers")
     assert markers.__all__ == (
@@ -136,6 +137,7 @@ def test_public_surface_is_explicit() -> None:
         "run_dag",
         "run_task",
         "session",
+        "task_context",
     )
     assert reporting.__all__ == (
         "configure_report_dir",
@@ -178,6 +180,8 @@ def test_public_surface_is_explicit() -> None:
         "RunDag",
         "RunTask",
         "SerializedDag",
+        "TaskContext",
+        "TaskContextHandle",
         "TaskRunResult",
     )
     assert _compat.__all__ == (
@@ -189,6 +193,7 @@ def test_public_surface_is_explicit() -> None:
         "DatabaseInitializationError",
         "FakeSupervisorComms",
         "InProcessRunResult",
+        "InProcessTaskContext",
         "ParamsCaseError",
         "ParseTimeComms",
         "SeedCleanupError",
@@ -208,6 +213,7 @@ def test_public_surface_is_explicit() -> None:
         "run_task_in_process",
         "seed_connections",
         "seed_variables",
+        "task_context_in_process",
         "validate_connections",
         "validate_dag_params",
         "validate_variables",
