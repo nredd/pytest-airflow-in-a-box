@@ -160,7 +160,7 @@ jobs:
           PYTHON_VERSION: "3.12"
         run: |
           uv venv --python "$PYTHON_VERSION" .venv-ci
-          curl --fail --location --silent --show-error \
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
             "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
             --output airflow-constraints.txt
           uv pip install --python .venv-ci/bin/python \
