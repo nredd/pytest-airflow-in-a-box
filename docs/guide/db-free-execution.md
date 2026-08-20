@@ -36,8 +36,8 @@ def test_floating_operator(run_task):
     assert result.state == TaskInstanceState.SUCCESS
 ```
 
-The Task SDK requires every executing task to have a bound Dag, so `run_task` (and
-`render_task`) bind an unbound operator IN PLACE to a synthetic
+The Task SDK requires every executing task to have a bound Dag, so `run_task`,
+`render_task`, and `task_context` bind an unbound operator IN PLACE to a synthetic
 `DAG(dag_id=..., schedule=None)`. Pass `dag_id="..."` to name it, or leave it off for a
 deterministic, bounded, xdist-safe identifier derived from the test's nodeid, the xdist
 worker, and a per-fixture invocation counter -- the same derivation `dag_maker` uses for

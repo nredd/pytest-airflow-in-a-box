@@ -619,6 +619,7 @@ def render_task_in_process(
     with task_context_in_process(
         task,
         dag_id=dag_id,
+        fileloc=fileloc,
         run_id=run_id,
         logical_date=logical_date,
         params=params,
@@ -706,6 +707,7 @@ def task_context_in_process(
     task: Any,
     *,
     dag_id: str | None = None,
+    fileloc: str | None = None,
     run_id: str = DEFAULT_RUN_ID,
     logical_date: datetime | None = None,
     params: dict[str, Any] | None = None,
@@ -728,8 +730,12 @@ def task_context_in_process(
 
     Parameters:
         task: Any containing the Airflow operator or bound TaskFlow task.
-        dag_id: str | None overriding the Dag identifier, or ``None`` to read
-            it from the task's bound Dag.
+        dag_id: str | None overriding the Dag identifier and naming the synthetic
+            Dag auto-bound to an unbound task, or ``None`` to read it from the
+            task's bound Dag.
+        fileloc: str | None naming the consumer test module, stamped on the
+            synthetic Dag so ``template_ext`` files resolve next to the test,
+            or ``None`` to keep Airflow's own default.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -748,9 +754,10 @@ def task_context_in_process(
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available, ``run_id`` is empty,
-            ``try_number`` is less than 1, or ``render=False`` was passed for a
-            mapped operator.
+        ValueError: No Dag identifier is available, ``dag_id`` is passed but
+            empty, ``run_id`` is empty, ``try_number`` is less than 1, ``dag_id``
+            conflicts with the synthetic Dag a prior call already bound to the
+            task, or ``render=False`` was passed for a mapped operator.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
