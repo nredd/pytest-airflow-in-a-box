@@ -162,6 +162,31 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "Dotted module path composed into the generated `airflow_local_settings.py`.",
         default="",
     )
+    parser.addini(
+        "airflow_plugins_folder",
+        "Directory whose entries are symlinked into the run's `plugins/` directory.",
+        default="",
+    )
+    parser.addini(
+        "airflow_executor",
+        "Executor written to `[core] executor` before the first Airflow import.",
+        default="",
+    )
+    parser.addini(
+        "airflow_xcom_backend",
+        "XCom backend written to `[core] xcom_backend` before the first Airflow import.",
+        default="",
+    )
+    parser.addini(
+        "airflow_secrets_backend",
+        "Secrets backend written to `[secrets] backend` before the first Airflow import.",
+        default="",
+    )
+    parser.addini(
+        "airflow_secrets_backend_kwargs",
+        "Secrets backend kwargs written to `[secrets] backend_kwargs`.",
+        default="",
+    )
     group.addoption(
         "--collect-dag-folder",
         action="store",

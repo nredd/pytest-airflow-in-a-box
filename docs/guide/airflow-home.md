@@ -11,8 +11,8 @@ pytest-airflow-in-a-box: AIRFLOW_HOME=/dev/shm/pytest-airflow-in-a-box-8f2a1c (s
 rootdir: /home/redd/dags
 ```
 
-That directory holds `airflow.cfg`, `dags/`, `logs/`, `config/airflow_local_settings.py`, the
-SimpleAuthManager password file, and -- on the default backend -- the SQLite metadata database.
+That directory holds `airflow.cfg`, `dags/`, `logs/`, `plugins/`, `config/airflow_local_settings.py`,
+the SimpleAuthManager password file, and -- on the default backend -- the SQLite metadata database.
 pytest suppresses its own header under `-q` and `--no-header`, so the line goes with it; under
 `xdist` only the controller prints, because workers inherit the controller's directory rather
 than creating their own.

@@ -37,7 +37,7 @@ from pytest_airflow_in_a_box.storage import (
 )
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
-STATE_VERSION = 4
+STATE_VERSION = 5
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
 WORKER_INPUT_KEY = "pytest_airflow_in_a_box_bootstrap_state"
 XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
@@ -62,6 +62,7 @@ class BootstrapState:
         database_path: pathlib.Path reserved for the SQLite metadata database.
         password_file: pathlib.Path containing SimpleAuthManager passwords.
         config_path: pathlib.Path containing ``airflow.cfg``.
+        plugins_folder: pathlib.Path containing symlinked or empty plugin sources.
         jwt_secret: str shared by all Airflow processes in this run.
         fernet_key: str shared by all Airflow processes encrypting metadata.
         storage_reason: str describing why the storage base was selected.
@@ -70,6 +71,11 @@ class BootstrapState:
         db_backend: str naming the selected metadata database backend.
         family: str naming the Airflow distribution family (`AirflowFamily` value); on
             2.x the `jwt_secret` doubles as the webserver secret key.
+        executor: str naming the configured `core.executor`, or `""` when unset.
+        xcom_backend: str naming the configured `core.xcom_backend`, or `""` when unset.
+        secrets_backend: str naming the configured `secrets.backend`, or `""` when unset.
+        secrets_backend_kwargs: str containing the configured `secrets.backend_kwargs`,
+            or `""` when unset.
     """
 
     version: int
@@ -80,6 +86,7 @@ class BootstrapState:
     database_path: Path
     password_file: Path
     config_path: Path
+    plugins_folder: Path
     jwt_secret: str
     fernet_key: str
     storage_reason: str
@@ -87,6 +94,10 @@ class BootstrapState:
     sql_alchemy_conn: str
     db_backend: str
     family: str
+    executor: str
+    xcom_backend: str
+    secrets_backend: str
+    secrets_backend_kwargs: str
 
     def to_payload(self) -> StatePayload:
         """Serialize state to JSON-compatible primitives.
@@ -104,6 +115,7 @@ class BootstrapState:
             "database_path": str(self.database_path),
             "password_file": str(self.password_file),
             "config_path": str(self.config_path),
+            "plugins_folder": str(self.plugins_folder),
             "jwt_secret": self.jwt_secret,
             "fernet_key": self.fernet_key,
             "storage_reason": self.storage_reason,
@@ -111,6 +123,10 @@ class BootstrapState:
             "sql_alchemy_conn": self.sql_alchemy_conn,
             "db_backend": self.db_backend,
             "family": self.family,
+            "executor": self.executor,
+            "xcom_backend": self.xcom_backend,
+            "secrets_backend": self.secrets_backend,
+            "secrets_backend_kwargs": self.secrets_backend_kwargs,
         }
 
 
@@ -204,6 +220,32 @@ def _require_bool(payload: dict[str, object], key: str) -> bool:
     return value
 
 
+def _optional_string(payload: dict[str, object], key: str) -> str:
+    """Read one optional string from a decoded state payload, defaulting to unset.
+
+    Unlike `_require_string`, an absent field is not an error: it means the underlying
+    ini was never configured, and `""` is the in-band value for "unset" throughout
+    `BootstrapState`'s optional fields.
+
+    Parameters:
+        payload: dict[str, object] containing decoded state.
+        key: str naming the optional field.
+
+    Returns:
+        str containing the field value, or `""` when the field is absent.
+
+    Raises:
+        ValueError: The field is present and is not a string.
+    """
+
+    if key not in payload:
+        return ""
+    value = payload[key]
+    if not isinstance(value, str):
+        raise ValueError(f"Bootstrap state field `{key}` must be a string")
+    return value
+
+
 def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapState:
     """Validate and construct state from decoded JSON-compatible data.
 
@@ -230,6 +272,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "database_path",
         "password_file",
         "config_path",
+        "plugins_folder",
         "jwt_secret",
         "fernet_key",
         "storage_reason",
@@ -237,6 +280,10 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "sql_alchemy_conn",
         "db_backend",
         "family",
+        "executor",
+        "xcom_backend",
+        "secrets_backend",
+        "secrets_backend_kwargs",
     }
     if set(payload) != expected_keys:
         raise ValueError("Bootstrap state has missing or unexpected fields")
@@ -251,6 +298,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         "database_path": Path(_require_string(payload, "database_path")),
         "password_file": Path(_require_string(payload, "password_file")),
         "config_path": Path(_require_string(payload, "config_path")),
+        "plugins_folder": Path(_require_string(payload, "plugins_folder")),
     }
     if not root.is_absolute() or any(not path.is_absolute() for path in path_values.values()):
         raise ValueError("Bootstrap state paths must be absolute")
@@ -287,6 +335,7 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         database_path=path_values["database_path"],
         password_file=path_values["password_file"],
         config_path=path_values["config_path"],
+        plugins_folder=path_values["plugins_folder"],
         jwt_secret=_require_string(payload, "jwt_secret"),
         fernet_key=_require_string(payload, "fernet_key"),
         storage_reason=_require_string(payload, "storage_reason"),
@@ -294,12 +343,17 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
         sql_alchemy_conn=sql_alchemy_conn,
         db_backend=str(backend),
         family=family_value,
+        executor=_optional_string(payload, "executor"),
+        xcom_backend=_optional_string(payload, "xcom_backend"),
+        secrets_backend=_optional_string(payload, "secrets_backend"),
+        secrets_backend_kwargs=_optional_string(payload, "secrets_backend_kwargs"),
     )
     if validate_files:
         stale = (
             not state.root.is_dir()
             or not state.dags_folder.is_dir()
             or not state.logs_folder.is_dir()
+            or not state.plugins_folder.is_dir()
             or not state.password_file.is_file()
             or not state.config_path.is_file()
             or not local_settings_path(state.root).is_file()
@@ -368,6 +422,7 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         "AIRFLOW_HOME": str(state.root),
         "AIRFLOW_CONFIG": str(state.config_path),
         "AIRFLOW__CORE__DAGS_FOLDER": str(state.dags_folder),
+        "AIRFLOW__CORE__PLUGINS_FOLDER": str(state.plugins_folder),
         "AIRFLOW__CORE__UNIT_TEST_MODE": "True",
         "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
         # `airflow_cfg.py` also pins this in the written `airflow.cfg`, for 3.x (which
@@ -396,6 +451,18 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         variables["AIRFLOW__API_AUTH__JWT_SECRET"] = state.jwt_secret
     if state.db_backend == DbBackend.POSTGRES:
         variables[SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE] = "False"
+    # Independent of the family branch above: an ini-configured value is a deliberate
+    # project fact and wins over both the 2.x `SequentialExecutor` convenience default
+    # and (via `_install_environment`'s unconditional `os.environ.update`) any ambient
+    # value, unlike the ambient-wins carve-out the default itself respects.
+    if state.executor:
+        variables["AIRFLOW__CORE__EXECUTOR"] = state.executor
+    if state.xcom_backend:
+        variables["AIRFLOW__CORE__XCOM_BACKEND"] = state.xcom_backend
+    if state.secrets_backend:
+        variables["AIRFLOW__SECRETS__BACKEND"] = state.secrets_backend
+    if state.secrets_backend_kwargs:
+        variables["AIRFLOW__SECRETS__BACKEND_KWARGS"] = state.secrets_backend_kwargs
     return variables
 
 
@@ -534,6 +601,66 @@ def _local_settings_module(config: pytest.Config) -> str | None:
     return value
 
 
+def _ini_string(config: pytest.Config, name: str) -> str:
+    """Read one plain string ini value, defaulting to the empty string.
+
+    Every ini this reads is declared with `addini(..., default="")` and no `type=`, so
+    a `.ini`/`setup.cfg`/`tox.ini` source always yields a string; a `pyproject.toml`
+    `[tool.pytest.ini_options]` table can still supply a non-string value directly, so
+    the malformed case is real and, like ``_local_settings_module``'s own ini read, is
+    treated as unset rather than rejected.
+
+    Parameters:
+        config: pytest.Config containing parsed ini values.
+        name: str naming a string-typed ini option.
+
+    Returns:
+        str containing the ini value, or `""` when unset or malformed.
+    """
+
+    value: object = config.getini(name)
+    return value if isinstance(value, str) else ""
+
+
+def _plugins_source(config: pytest.Config) -> Path | None:
+    """Resolve the ini-configured user plugins directory, if any.
+
+    Parameters:
+        config: pytest.Config containing parsed startup options.
+
+    Returns:
+        pathlib.Path | None containing the configured source directory.
+    """
+
+    value = _ini_string(config, "airflow_plugins_folder")
+    return Path(value) if value else None
+
+
+def _populate_plugins_folder(plugins_folder: Path, source: Path | None) -> None:
+    """Create the run's plugins directory, optionally linking in a user directory's entries.
+
+    Each entry of ``source`` is symlinked individually rather than symlinking
+    ``plugins_folder`` itself to ``source``: edits to an existing entry stay live either
+    way, but linking per-entry also lets the user add or remove plugin sources between
+    runs without this plugin's own listing going stale.
+
+    Parameters:
+        plugins_folder: pathlib.Path receiving the run's plugins directory.
+        source: pathlib.Path | None naming a user plugins directory to link from.
+
+    Raises:
+        pytest.UsageError: The configured source does not exist or is not a directory.
+    """
+
+    plugins_folder.mkdir()
+    if source is None:
+        return
+    if not source.is_dir():
+        raise pytest.UsageError(f"Ini `airflow_plugins_folder` must name a directory: '{source}'")
+    for entry in source.iterdir():
+        (plugins_folder / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+
+
 def _candidate_path(args: list[str]) -> Path | None:
     """Resolve pytest's temporary-storage candidate without constructing fixtures.
 
@@ -567,6 +694,11 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
 
     backend = _db_backend(config, args)
     user_module = _local_settings_module(config)
+    plugins_source = _plugins_source(config)
+    executor = _ini_string(config, "airflow_executor")
+    xcom_backend = _ini_string(config, "airflow_xcom_backend")
+    secrets_backend = _ini_string(config, "airflow_secrets_backend")
+    secrets_backend_kwargs = _ini_string(config, "airflow_secrets_backend_kwargs")
     provisioner = select_provisioner(backend)
     try:
         location = locate_storage(
@@ -627,12 +759,14 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
     try:
         dags_folder = root / "dags"
         logs_folder = root / "logs"
+        plugins_folder = root / "plugins"
         database_path = root / "airflow.db"
         password_file = root / "simple_auth_manager_passwords.json"
         config_path = root / "airflow.cfg"
         settings_path = local_settings_path(root)
         dags_folder.mkdir()
         logs_folder.mkdir()
+        _populate_plugins_folder(plugins_folder, plugins_source)
         password_file.write_text(PASSWORDS, encoding="utf-8")
         password_file.chmod(0o600)
         write_local_settings(settings_path, user_module=user_module)
@@ -653,6 +787,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             database_path=database_path,
             password_file=password_file,
             config_path=config_path,
+            plugins_folder=plugins_folder,
             jwt_secret=secrets.token_urlsafe(48),
             fernet_key=generate_fernet_key(),
             storage_reason=str(location.reason),
@@ -660,6 +795,10 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             sql_alchemy_conn=sql_alchemy_conn,
             db_backend=str(backend),
             family=family.value,
+            executor=executor,
+            xcom_backend=xcom_backend,
+            secrets_backend=secrets_backend,
+            secrets_backend_kwargs=secrets_backend_kwargs,
         )
         write_airflow_config(
             config_path,
@@ -670,6 +809,11 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
             jwt_secret=state.jwt_secret,
             fernet_key=state.fernet_key,
             family=family,
+            plugins_folder=plugins_folder,
+            executor=executor,
+            xcom_backend=xcom_backend,
+            secrets_backend=secrets_backend,
+            secrets_backend_kwargs=secrets_backend_kwargs,
         )
     except pytest.UsageError:
         # `PostgresProvisioner.start` raises this directly with its own actionable
@@ -695,7 +839,11 @@ def _environment_names() -> tuple[str, ...]:
 
     `AIRFLOW__CORE__EXECUTOR` is deliberately NOT owned: the V2 branch sets it (so the
     assignment overwrites any ambient value there), but on 3.x an ambient executor
-    choice is legitimate consumer configuration and must survive bootstrap unscrubbed.
+    choice is legitimate consumer configuration and must survive bootstrap unscrubbed;
+    the same holds for an ini-configured `state.executor`, which reuses this name. The
+    other three optional-field variables have no such ambient-survival precedent to
+    respect, so they ARE owned: a prior run's `airflow_xcom_backend` (etc.) must not
+    leak into a run whose ini no longer configures it.
 
     Returns:
         tuple[str, ...] containing Airflow and handoff variable names.
@@ -705,6 +853,7 @@ def _environment_names() -> tuple[str, ...]:
         "AIRFLOW_HOME",
         "AIRFLOW_CONFIG",
         "AIRFLOW__CORE__DAGS_FOLDER",
+        "AIRFLOW__CORE__PLUGINS_FOLDER",
         "AIRFLOW__CORE__UNIT_TEST_MODE",
         "AIRFLOW__CORE__LOAD_EXAMPLES",
         "AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT",
@@ -713,6 +862,9 @@ def _environment_names() -> tuple[str, ...]:
         "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE",
         SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE,
         SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE,
+        "AIRFLOW__CORE__XCOM_BACKEND",
+        "AIRFLOW__SECRETS__BACKEND",
+        "AIRFLOW__SECRETS__BACKEND_KWARGS",
         "AIRFLOW__LOGGING__BASE_LOG_FOLDER",
         "AIRFLOW__API_AUTH__JWT_SECRET",
         "AIRFLOW__WEBSERVER__SECRET_KEY",
