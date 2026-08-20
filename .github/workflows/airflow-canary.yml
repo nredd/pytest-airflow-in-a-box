@@ -57,7 +57,7 @@ jobs:
           AIRFLOW_VERSION: ${{ steps.resolve.outputs.airflow-version }}
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error \
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
             "https://github.com/apache/airflow/raw/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt" \
             --output airflow-constraints.txt
           # Airflow's constraints pin transitive dependencies but not core itself.
