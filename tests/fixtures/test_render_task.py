@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -122,6 +123,7 @@ def test_render_task_renders_unbound_operator_with_derived_dag_id(
     assert operator.dag.dag_id == expected
     assert DERIVED_DAG_ID_PATTERN.fullmatch(expected) is not None
     assert operator.executed is False
+    assert operator.dag.fileloc == str(Path(str(request.node.path)).resolve())
 
 
 def test_render_task_explicit_dag_id_binds_unbound_operator(render_task: RenderTask) -> None:

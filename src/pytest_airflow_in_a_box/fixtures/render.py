@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -31,6 +32,7 @@ def _render_task(
     task: Any,
     *,
     dag_id: str | None = None,
+    fileloc: str | None = None,
     run_id: str = DEFAULT_RUN_ID,
     logical_date: datetime | None = None,
     params: dict[str, Any] | None = None,
@@ -48,6 +50,9 @@ def _render_task(
         dag_id: str | None overriding the Dag identifier and naming the
             synthetic Dag auto-bound in place to an unbound task, or ``None``
             to read it from the task's bound Dag.
+        fileloc: str | None naming the consumer test module, stamped on the
+            synthetic Dag so ``template_ext`` files resolve next to the test,
+            or ``None`` to keep Airflow's own default.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -72,6 +77,7 @@ def _render_task(
     return render_task_in_process(
         task,
         dag_id=dag_id,
+        fileloc=fileloc,
         run_id=run_id,
         logical_date=logical_date,
         params=params,
@@ -110,6 +116,7 @@ def render_task(request: pytest.FixtureRequest) -> RenderTask:
         pytest.fail(message, pytrace=False)
 
     nodeid = request.node.nodeid
+    fileloc = str(Path(str(request.node.path)).resolve())
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
     invocations = 0
 
@@ -160,6 +167,7 @@ def render_task(request: pytest.FixtureRequest) -> RenderTask:
         return _render_task(
             task,
             dag_id=resolved_dag_id,
+            fileloc=fileloc,
             run_id=run_id,
             logical_date=logical_date,
             params=params,

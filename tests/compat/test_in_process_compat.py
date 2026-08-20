@@ -315,6 +315,47 @@ def test_render_binds_unbound_task_to_synthetic_dag() -> None:
     assert operator.dag.dag_id == "render_bind"
 
 
+class SqlReturnOperator(ReturnOperator):
+    """Resolve ``.sql`` template-extension files into ``expression``."""
+
+    template_ext = (".sql",)
+
+
+def test_synthetic_dag_fileloc_resolves_template_ext_files(tmp_path: Any) -> None:
+    """Search ``template_ext`` files next to the stamped ``fileloc``."""
+
+    (tmp_path / "query.sql").write_text("SELECT {{ 21 * 2 }}", encoding="utf-8")
+    operator = SqlReturnOperator(task_id="floating", expression="query.sql")
+    fileloc = str(tmp_path / "test_module.py")
+
+    rendered_operator = render_task_in_process(operator, dag_id="fileloc_bind", fileloc=fileloc)
+
+    assert rendered_operator.expression == "SELECT 42"
+    assert operator.dag.fileloc == fileloc
+
+
+def test_conflicting_dag_id_on_synthetic_binding_fails_loudly() -> None:
+    """Reject a second explicit ``dag_id`` once a synthetic Dag is bound."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+    run_task_in_process(operator, dag_id="first_bind")
+
+    with pytest.raises(ValueError, match="already bound to the synthetic Dag 'first_bind'"):
+        run_task_in_process(operator, dag_id="second_bind")
+
+
+def test_matching_dag_id_on_synthetic_binding_reruns() -> None:
+    """Accept the same explicit ``dag_id`` on repeated synthetic-bound runs."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+    run_task_in_process(operator, dag_id="repeat_bind")
+
+    result = run_task_in_process(operator, dag_id="repeat_bind")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag.dag_id == "repeat_bind"
+
+
 def test_rejects_empty_run_id() -> None:
     """Reject an empty run identifier."""
 

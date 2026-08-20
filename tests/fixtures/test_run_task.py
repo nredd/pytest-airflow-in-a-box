@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -204,6 +205,7 @@ def test_run_task_runs_unbound_operator_with_derived_dag_id(
     assert operator.dag.dag_id == expected
     assert DERIVED_DAG_ID_PATTERN.fullmatch(expected) is not None
     assert result.xcoms["return_value"] == expected
+    assert operator.dag.fileloc == str(Path(str(request.node.path)).resolve())
 
 
 def test_run_task_derives_distinct_ids_per_unbound_operator(run_task: RunTask) -> None:

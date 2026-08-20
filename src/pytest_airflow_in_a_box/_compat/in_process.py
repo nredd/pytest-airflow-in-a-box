@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +49,10 @@ from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_RUN_ID = "in-process-test"
+
+# Synthetic Dags bound to previously unbound tasks, tracked so a later conflicting
+# explicit `dag_id` fails loudly instead of half-applying (the SDK forbids rebinding).
+_SYNTHETIC_DAGS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
 class FakeSupervisorComms:
@@ -309,6 +314,7 @@ def _build_runtime_task_instance(
     task: Any,
     *,
     dag_id: str | None,
+    fileloc: str | None,
     run_id: str,
     logical_date: datetime | None,
     params: dict[str, Any] | None,
@@ -328,6 +334,9 @@ def _build_runtime_task_instance(
         dag_id: str | None overriding the Dag identifier and naming the synthetic
             Dag auto-bound to an unbound task, or ``None`` to read it from the
             task's bound Dag.
+        fileloc: str | None naming the consumer test module, stamped on the
+            synthetic Dag so ``template_ext`` files resolve next to the test,
+            or ``None`` to keep Airflow's own default.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -340,8 +349,9 @@ def _build_runtime_task_instance(
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available, ``run_id`` is empty, or
-            ``try_number`` is less than 1.
+        ValueError: No Dag identifier is available, ``run_id`` is empty,
+            ``try_number`` is less than 1, or ``dag_id`` conflicts with the
+            synthetic Dag a prior call already bound to the task.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
@@ -356,6 +366,17 @@ def _build_runtime_task_instance(
     resolved_dag_id = dag_id if dag_id else getattr(bound_dag, "dag_id", None)
     if not isinstance(resolved_dag_id, str) or not resolved_dag_id:
         raise ValueError("`dag_id` is required when the task is not bound to a Dag")
+    if (
+        dag_id
+        and bound_dag is not None
+        and bound_dag in _SYNTHETIC_DAGS
+        and dag_id != bound_dag.dag_id
+    ):
+        raise ValueError(
+            f"`task` is already bound to the synthetic Dag '{bound_dag.dag_id}' and the "
+            f"SDK forbids rebinding; pass `dag_id` '{dag_id}' on the first call or use "
+            "a fresh operator"
+        )
 
     resolve_capabilities()
 
@@ -363,7 +384,14 @@ def _build_runtime_task_instance(
         # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
         from airflow.sdk import DAG
 
-        task.dag = DAG(dag_id=resolved_dag_id, schedule=None)
+        dag = DAG(dag_id=resolved_dag_id, schedule=None)
+        if fileloc is not None:
+            dag.fileloc = fileloc
+            dag.relative_fileloc = fileloc.rsplit("/", maxsplit=1)[-1]
+        # Registered after binding: `DAG.__hash__` covers the task ids, so the
+        # weak-set entry must be stored with its final hash.
+        task.dag = dag
+        _SYNTHETIC_DAGS.add(dag)
 
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     from airflow.sdk.api.datamodels._generated import DagRun as DagRunDataModel
@@ -443,6 +471,7 @@ def run_task_in_process(
     task: Any,
     *,
     dag_id: str | None = None,
+    fileloc: str | None = None,
     run_id: str = DEFAULT_RUN_ID,
     logical_date: datetime | None = None,
     params: dict[str, Any] | None = None,
@@ -463,6 +492,9 @@ def run_task_in_process(
         dag_id: str | None overriding the Dag identifier and naming the synthetic
             Dag auto-bound to an unbound task, or ``None`` to read it from the
             task's bound Dag.
+        fileloc: str | None naming the consumer test module, stamped on the
+            synthetic Dag so ``template_ext`` files resolve next to the test,
+            or ``None`` to keep Airflow's own default.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -477,14 +509,16 @@ def run_task_in_process(
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available, ``run_id`` is empty, or
-            ``try_number`` is less than 1.
+        ValueError: No Dag identifier is available, ``run_id`` is empty,
+            ``try_number`` is less than 1, or ``dag_id`` conflicts with the
+            synthetic Dag a prior call already bound to the task.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
     task_runner, runtime_ti = _build_runtime_task_instance(
         task,
         dag_id=dag_id,
+        fileloc=fileloc,
         run_id=run_id,
         logical_date=logical_date,
         params=params,
@@ -515,6 +549,7 @@ def render_task_in_process(
     task: Any,
     *,
     dag_id: str | None = None,
+    fileloc: str | None = None,
     run_id: str = DEFAULT_RUN_ID,
     logical_date: datetime | None = None,
     params: dict[str, Any] | None = None,
@@ -543,6 +578,9 @@ def render_task_in_process(
         dag_id: str | None overriding the Dag identifier and naming the synthetic
             Dag auto-bound to an unbound task, or ``None`` to read it from the
             task's bound Dag.
+        fileloc: str | None naming the consumer test module, stamped on the
+            synthetic Dag so ``template_ext`` files resolve next to the test,
+            or ``None`` to keep Airflow's own default.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -559,8 +597,9 @@ def render_task_in_process(
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available, ``run_id`` is empty, or
-            ``try_number`` is less than 1.
+        ValueError: No Dag identifier is available, ``run_id`` is empty,
+            ``try_number`` is less than 1, or ``dag_id`` conflicts with the
+            synthetic Dag a prior call already bound to the task.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
@@ -715,6 +754,7 @@ def task_context_in_process(
     task_runner, runtime_ti = _build_runtime_task_instance(
         task,
         dag_id=dag_id,
+        fileloc=fileloc,
         run_id=run_id,
         logical_date=logical_date,
         params=params,

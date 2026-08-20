@@ -42,9 +42,12 @@ The Task SDK requires every executing task to have a bound Dag, so `run_task` (a
 deterministic, bounded, xdist-safe identifier derived from the test's nodeid, the xdist
 worker, and a per-fixture invocation counter -- the same derivation `dag_maker` uses for
 its default Dag ids, salted so the two never collide. The identifier is visible as
-`{{ dag.dag_id }}` in templates and as `operator.dag.dag_id` after the call. A bound
-operator is never rebound (the SDK forbids it) -- repeated calls with the same operator
-reuse the first binding.
+`{{ dag.dag_id }}` in templates and as `operator.dag.dag_id` after the call. The
+synthetic Dag is stamped with the test module's location, so `template_ext` files
+(`.sql`, `.sh`, ...) resolve next to the test, same as an explicit `with DAG(...)` in the
+test file. A bound operator is never rebound (the SDK forbids it) -- repeated calls with
+the same operator reuse the first binding, and a later call passing a *different*
+explicit `dag_id` for a synthetic binding fails loudly instead of half-applying.
 
 ## Rendering template fields without running
 
