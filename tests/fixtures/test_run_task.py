@@ -6,12 +6,19 @@ References:
 
 from __future__ import annotations
 
+import os
+import re
+from pathlib import Path
 from typing import Any, ClassVar
 
+import pytest
 from airflow.sdk import DAG, BaseHook, BaseOperator, Variable
 from airflow.utils.state import TaskInstanceState
 
+from pytest_airflow_in_a_box.fixtures.dag import _default_dag_id
 from pytest_airflow_in_a_box.types import RunTask
+
+DERIVED_DAG_ID_PATTERN = re.compile(r"^[\w.-]+-[0-9a-f]{16}$")
 
 
 class VariableOperator(BaseOperator):
@@ -152,6 +159,103 @@ def test_run_task_records_supervisor_traffic_in_order(run_task: RunTask) -> None
     names = [type(msg).__name__ for msg in result.sent]
     assert names.index("GetVariable") < names.index("SetXCom")
     assert names[-1] == "SucceedTask"
+
+
+class EchoDagIdOperator(BaseOperator):
+    """Return the bound Dag's identifier from the template context."""
+
+    template_fields = ("expression",)
+
+    def __init__(self, **kwargs: Any) -> None:
+        """Template the Dag identifier into ``expression``.
+
+        Parameters:
+            kwargs: Any forwarded to ``BaseOperator``.
+        """
+
+        super().__init__(**kwargs)
+        self.expression = "{{ dag.dag_id }}"
+
+    def execute(self, context: Any) -> Any:
+        """Return the rendered Dag identifier.
+
+        Parameters:
+            context: Any containing the task execution context.
+
+        Returns:
+            Any containing the rendered Dag identifier.
+        """
+
+        del context
+        return self.expression
+
+
+def test_run_task_runs_unbound_operator_with_derived_dag_id(
+    run_task: RunTask, request: pytest.FixtureRequest
+) -> None:
+    """Bind an unbound operator to a synthetic Dag with the derived per-test id."""
+
+    operator = EchoDagIdOperator(task_id="floating")
+
+    result = run_task(operator)
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    expected = _default_dag_id(f"{request.node.nodeid}::run_task", worker, 1)
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag.dag_id == expected
+    assert DERIVED_DAG_ID_PATTERN.fullmatch(expected) is not None
+    assert result.xcoms["return_value"] == expected
+    assert operator.dag.fileloc == str(Path(str(request.node.path)).resolve())
+
+
+def test_run_task_derives_distinct_ids_per_unbound_operator(run_task: RunTask) -> None:
+    """Give each unbound operator its own derived Dag identifier."""
+
+    first = EchoDagIdOperator(task_id="first_floating")
+    second = EchoDagIdOperator(task_id="second_floating")
+
+    run_task(first)
+    run_task(second)
+
+    assert first.dag.dag_id != second.dag.dag_id
+
+
+def test_run_task_reuses_binding_on_repeated_calls(run_task: RunTask) -> None:
+    """Keep the first synthetic binding when the same operator runs again."""
+
+    operator = EchoDagIdOperator(task_id="floating")
+
+    first = run_task(operator)
+    bound_dag = operator.dag
+    second = run_task(operator)
+
+    assert operator.dag is bound_dag
+    assert first.xcoms["return_value"] == second.xcoms["return_value"]
+
+
+def test_run_task_explicit_dag_id_binds_unbound_operator(run_task: RunTask) -> None:
+    """Name the synthetic Dag with the call's explicit ``dag_id``."""
+
+    operator = EchoDagIdOperator(task_id="floating")
+
+    result = run_task(operator, dag_id="explicit_id")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag.dag_id == "explicit_id"
+    assert result.xcoms["return_value"] == "explicit_id"
+
+
+def test_run_task_derived_id_differs_from_dag_maker_derivation(
+    run_task: RunTask, request: pytest.FixtureRequest
+) -> None:
+    """Never collide with `dag_maker`'s default id for the same test and worker."""
+
+    operator = EchoDagIdOperator(task_id="floating")
+
+    run_task(operator)
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    assert operator.dag.dag_id != _default_dag_id(request.node.nodeid, worker, 1)
 
 
 class CallbackOperator(BaseOperator):

@@ -247,10 +247,18 @@ def test_explicit_true_overrides_false_serialized_marker(dag_maker: DagMaker) ->
 
 
 def test_failed_context_body_does_not_persist_metadata(dag_maker: DagMaker) -> None:
-    """Close the metadata session without writing rows when Dag construction fails."""
+    """Close the metadata session without writing rows when Dag construction fails.
 
-    with pytest.raises(RuntimeError, match="body failed"), dag_maker(dag_id="failed_context"):
-        raise RuntimeError("body failed")
+    The body raises a sentinel exception class instead of `RuntimeError` so that an entry-path
+    `DagPersistenceError` (a `RuntimeError` subclass) propagates as itself rather than surfacing
+    as a confusing `pytest.raises` regex mismatch -- the masking identified in issue #153.
+    """
+
+    class BodyFailedError(Exception):
+        """Sentinel raised by the context body; never raised by the plugin itself."""
+
+    with pytest.raises(BodyFailedError, match="body failed"), dag_maker(dag_id="failed_context"):
+        raise BodyFailedError("body failed")
 
     assert _row_counts("failed_context") == (0, 0, 0, 0)
 

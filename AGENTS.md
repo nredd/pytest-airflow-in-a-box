@@ -94,3 +94,17 @@ xdist, macOS, arm, musl legs), a real-Docker postgres job, and a coverage-combin
 that enforces the 100% union. `airflow-canary.yml` runs weekly against the newest
 Airflow and files an issue on failure. `act pull_request` can run the Linux workflow
 locally.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`nredd/pytest-airflow-in-a-box`), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout (`CONTEXT.md` + `docs/adr/` at repo root, created lazily by `/domain-modeling`). See `docs/agents/domain.md`.
