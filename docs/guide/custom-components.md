@@ -183,6 +183,18 @@ Executor checks also require Airflow 3.x and report no problems on 2.x.
   older one; this reads the live, installed hookspec, so it reflects whatever the
   resolved Airflow actually declares rather than a hardcoded table
 
+Both checks cover a policy registered as an `@hookimpl`-decorated class through the
+`airflow.policy` plugin entry point -- the shape `ComponentKind.POLICY`'s classifier
+requires. A plain module-level function in `airflow_local_settings.py`, the older and
+still-common way to write cluster policies, is a different surface entirely:
+`make_plugin_from_local_settings` loads it through a dynamically generated shim that
+calls it positionally and deliberately tolerates a name or arity mismatch, rather than
+registering it with pluggy directly -- a mismatch that hard-errors on the plugin
+entry-point path this check models is often silently accepted on that one. Forcing
+`kind=ComponentKind.POLICY` on such a function does not help either: neither check finds
+anything to say, since a plain function is never `@hookimpl`-marked and both checks
+require that marker to find a hookimpl to examine at all.
+
 ## Plugin checks
 
 - `plugin-name-missing` -- the plugin does not set `name`. `AirflowPlugin.validate()`

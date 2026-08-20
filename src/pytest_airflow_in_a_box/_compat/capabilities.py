@@ -1245,7 +1245,7 @@ _PROBED_FIELD_LABELS: dict[str, str] = {
     "asset_unique_key_location": "Asset unique-key canonical location",
     "executor_contract": "BaseExecutor attribute contract",
     "sdk_listener_manager_available": "airflow.sdk.listener manager",
-    "task_instance_mutation_hook_supports_dag_run": ("task_instance_mutation_hook.dag_run"),
+    "task_instance_mutation_hook_supports_dag_run": "task_instance_mutation_hook.dag_run",
 }
 
 

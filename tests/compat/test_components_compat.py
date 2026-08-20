@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Iterator
 from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,16 +22,22 @@ from pytest_airflow_in_a_box.components import ComponentKind
 
 
 @pytest.fixture(autouse=True)
-def _reset_provider_distribution_index() -> None:
+def _reset_provider_distribution_index() -> Iterator[None]:
     """Isolate the process-local provider distribution index cache.
 
     `_provider_owning_distribution` caches its `importlib.metadata.distributions()`
     scan for the whole process; a test that monkeypatches `metadata.distributions`
     without resetting this cache first would either see a stale result from an earlier
     test or (worse) populate the *real* environment's index, which then leaks into
-    every later test expecting to see its own fake one.
+    every later test expecting to see its own fake one. Resets both before and after:
+    before, so no earlier test's fake index leaks in; after, so a fake index built here
+    (from a `metadata.distributions` monkeypatch already undone by the time the next
+    test's own `before` reset runs, if pytest ever changed fixture teardown ordering)
+    never survives to be read by a test that never expected to see it.
     """
 
+    compat_components._reset_provider_distribution_index_for_testing()
+    yield
     compat_components._reset_provider_distribution_index_for_testing()
 
 
@@ -1597,3 +1604,277 @@ def test_check_provider_info_schema_flags_a_callable_that_raises() -> None:
 
     assert problem.code == "provider-info-schema"
     assert "RuntimeError" in problem.message
+
+
+# ---------------------------------------------------------------------------
+# Regression coverage for review round 2: checkers/classifiers must never raise
+# when their own Airflow submodule cannot import, no matter how pathological the
+# checked component's own shape is.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("checker_name", "blocked_module"),
+    [
+        ("_check_xcom_backend_signature", "airflow.sdk.bases.xcom"),
+        ("_check_weight_strategy_hash_of_none", "airflow.task.priority_strategy"),
+        ("_check_notifier_missing_notify", "airflow.sdk.bases.notifier"),
+        ("_check_secrets_backend_raises_on_miss", "airflow.secrets.base_secrets"),
+    ],
+)
+def test_v3_checks_degrade_conservatively_when_their_airflow_submodule_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch, checker_name: str, blocked_module: str
+) -> None:
+    """Report nothing, never raise, when a checker's own Airflow submodule cannot import.
+
+    `installed_family()` classifies from `apache-airflow-core`'s own dist-info metadata
+    alone, never this submodule's actual importability (see
+    `_provider_owning_distribution`'s docstring for the same distinction from the other
+    direction) -- an uncertified installed release (a pre-release build, or a future
+    release this project has not certified yet) that has moved or removed one of these
+    internal submodules must degrade the same conservative way `_listener_hookspecs`
+    already does for a listener hookspec module, not raise out of `check_component` for
+    an environment reason that has nothing to do with the checked component.
+    `monkeypatch.setitem(sys.modules, name, None)` is the standard way to make Python's
+    own import system raise on a subsequent `import`/`from ... import ...` of `name`,
+    regardless of whether it was already imported before this test ran.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch blocking the checker's own Airflow submodule.
+        checker_name: str naming the module-level checker function under test.
+        blocked_module: str naming the Airflow submodule this checker imports.
+    """
+
+    monkeypatch.setitem(sys.modules, blocked_module, None)
+    checker = getattr(compat_components, checker_name)
+
+    assert tuple(checker(object())) == ()
+
+
+@pytest.mark.parametrize(
+    ("classifier_name", "blocked_module"),
+    [
+        ("_is_xcom", "airflow.sdk.bases.xcom"),
+        ("_is_weight_strategy", "airflow.task.priority_strategy"),
+        ("_is_notifier", "airflow.sdk.bases.notifier"),
+        ("_is_secrets_backend", "airflow.secrets.base_secrets"),
+    ],
+)
+def test_v3_classifiers_degrade_conservatively_when_their_airflow_submodule_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch, classifier_name: str, blocked_module: str
+) -> None:
+    """Report False, never raise, when a classifier's own Airflow submodule cannot import.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch blocking the classifier's own Airflow submodule.
+        classifier_name: str naming the module-level classifier function under test.
+        blocked_module: str naming the Airflow submodule this classifier imports.
+    """
+
+    monkeypatch.setitem(sys.modules, blocked_module, None)
+    classifier = getattr(compat_components, classifier_name)
+
+    assert classifier(object()) is False
+
+
+def test_policy_hookspecs_degrades_conservatively_when_airflow_policies_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return an empty mapping, not raise, when `airflow.policies` cannot import.
+
+    Calling the two policy checker functions end-to-end with `airflow.policies` blocked
+    cannot reach this codepath: `_policy_hookimpls` (called first by both checkers)
+    degrades to an empty tuple for the same reason, and both checkers return early on an
+    empty `impls` before ever calling `_policy_hookspecs`. This unit-level call is the
+    only way to actually exercise this function's own guard.
+    """
+
+    monkeypatch.setitem(sys.modules, "airflow.policies", None)
+
+    assert compat_components._policy_hookspecs(("airflow.policies",)) == {}
+
+
+def test_policy_hookimpls_degrades_conservatively_when_airflow_policies_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return an empty tuple, not raise, when `airflow.policies` cannot import."""
+
+    monkeypatch.setitem(sys.modules, "airflow.policies", None)
+
+    class _SomeClass:
+        pass
+
+    assert compat_components._policy_hookimpls(_SomeClass) == ()
+
+
+def test_is_policy_degrades_conservatively_when_airflow_policies_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return False, not raise, when `airflow.policies` cannot import."""
+
+    monkeypatch.setitem(sys.modules, "airflow.policies", None)
+
+    assert compat_components._is_policy(object()) is False
+
+
+def test_notifier_template_fields_unresolvable_reports_a_raising_property() -> None:
+    """Report, not raise, when `template_fields` itself raises on access.
+
+    `getattr(component, "template_fields", ())` only substitutes the default for
+    `AttributeError`; a `template_fields` implemented as a `property` that raises
+    something else (before some other required state is configured, a plausible
+    defensive pattern) propagates straight through `getattr`. This is exactly the shape
+    this check exists to catch -- a notifier that will crash the first time Airflow
+    actually reads `template_fields` -- so it must become a reported `ComponentProblem`,
+    not an exception escaping `check_component` itself.
+    """
+
+    from airflow.sdk.bases.notifier import BaseNotifier
+
+    class RaisingTemplateFields(BaseNotifier):
+        @property
+        def template_fields(self) -> tuple[str, ...]:
+            raise RuntimeError("not configured yet")
+
+        def notify(self, context: Any) -> None:
+            del context
+
+    (problem,) = compat_components._check_notifier_template_fields_unresolvable(
+        RaisingTemplateFields()
+    )
+
+    assert problem.code == "notifier-template-fields-unresolvable"
+    assert "RuntimeError" in problem.message
+
+
+def test_notifier_template_fields_unresolvable_reports_a_non_string_entry() -> None:
+    """Report, not raise, when a `template_fields` entry is not a string.
+
+    `hasattr(component, name)` raises `TypeError` when `name` is not a string -- an
+    ordinary typo (a missing trailing comma leaves a tuple containing `None`, not just
+    the deliberately adversarial shape this also happens to guard against).
+    """
+
+    from airflow.sdk.bases.notifier import BaseNotifier
+
+    class BadEntryNotifier(BaseNotifier):
+        template_fields = ("message", None)
+        message = "hello"
+
+        def notify(self, context: Any) -> None:
+            del context
+
+    (problem,) = compat_components._check_notifier_template_fields_unresolvable(BadEntryNotifier())
+
+    assert problem.code == "notifier-template-fields-unresolvable"
+    assert "None" in problem.message
+
+
+def test_secrets_backend_raises_on_miss_skips_a_non_callable_getter_override() -> None:
+    """Report nothing, not raise, when an override is not actually callable.
+
+    `_defining_class` only confirms an attribute is defined somewhere in the MRO, not
+    that it is callable. `get_variable = None` (a plausible work-in-progress leftover)
+    makes `inspect.signature` raise `TypeError`; that is not this check's business to
+    judge, the same as an override with no annotation at all.
+    """
+
+    from airflow.secrets.base_secrets import BaseSecretsBackend
+
+    NonCallableGetter = type("NonCallableGetter", (BaseSecretsBackend,), {"get_variable": None})
+
+    assert tuple(compat_components._check_secrets_backend_raises_on_miss(NonCallableGetter)) == ()
+
+
+def test_secrets_backend_raises_on_miss_skips_an_unintrospectable_getter_override() -> None:
+    """Report nothing, not raise, when an override has no introspectable signature.
+
+    `inspect.signature` raises `ValueError`, not `TypeError`, for a callable it cannot
+    introspect at all -- a C-accelerated builtin wired in directly as an override.
+    """
+
+    from airflow.secrets.base_secrets import BaseSecretsBackend
+
+    UnintrospectableGetter = type(
+        "UnintrospectableGetter", (BaseSecretsBackend,), {"get_config": staticmethod(min)}
+    )
+
+    assert (
+        tuple(compat_components._check_secrets_backend_raises_on_miss(UnintrospectableGetter))
+        == ()
+    )
+
+
+def test_xcom_backend_signature_catches_an_unintrospectable_override() -> None:
+    """Flag (not raise on) an override `inspect.signature` cannot introspect at all.
+
+    `inspect.signature` raises `ValueError`, not `TypeError`, for a callable with no
+    recoverable signature -- a C-accelerated builtin wired in directly as an override,
+    plausible for a performance-conscious XCom backend. Catching only `TypeError` let
+    this shape raise straight out of `check_component` instead of reporting it.
+    """
+
+    from airflow.sdk.bases.xcom import BaseXCom
+
+    UnintrospectableSerialize = type(
+        "UnintrospectableSerialize", (BaseXCom,), {"serialize_value": staticmethod(min)}
+    )
+    UnintrospectableDeserialize = type(
+        "UnintrospectableDeserialize", (BaseXCom,), {"deserialize_value": staticmethod(str)}
+    )
+
+    (problem1,) = compat_components._check_xcom_backend_signature(UnintrospectableSerialize)
+    assert problem1.code == "xcom-backend-signature"
+
+    (problem2,) = compat_components._check_xcom_backend_signature(UnintrospectableDeserialize)
+    assert problem2.code == "xcom-backend-signature"
+
+
+def test_check_provider_no_entry_point_tolerates_an_unrelated_malformed_distribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip an unrelated registered distribution whose own name is None, not raise.
+
+    `Distribution.name` reads the `Name` metadata header and is `None` for malformed
+    `.dist-info` metadata -- real, confirmed Python behavior (`email.message.Message`
+    returns `None` for a missing header rather than raising), not a purely theoretical
+    shape. `canonicalize_name(None)` raises `AttributeError`; since this scan walks
+    every distribution registering `apache_airflow_provider`, not just the one being
+    checked, one unrelated distribution with broken metadata must not crash
+    `check_component` on a provider that has nothing to do with it.
+    """
+
+    def get_provider_info() -> dict[str, str]:
+        return {"package-name": "my-provider"}
+
+    monkeypatch.setattr(
+        compat_components, "_provider_owning_distribution", lambda _component: "my-provider"
+    )
+    malformed_entry_point = SimpleNamespace(dist=SimpleNamespace(name=None))
+    good_entry_point = SimpleNamespace(dist=SimpleNamespace(name="my-provider"))
+
+    def fake_entry_points(*, group: str) -> list[SimpleNamespace]:
+        del group
+        return [malformed_entry_point, good_entry_point]
+
+    monkeypatch.setattr(compat_components.metadata, "entry_points", fake_entry_points)
+
+    assert tuple(compat_components._check_provider_no_entry_point(get_provider_info)) == ()
+
+
+def test_distribution_editable_roots_skips_a_pth_file_with_undecodable_bytes(
+    tmp_path: Path,
+) -> None:
+    """Tolerate a `.pth` file that is not valid text in the default encoding.
+
+    `UnicodeDecodeError` is a `ValueError`, not an `OSError` -- a `.pth` file is
+    ordinary text this module does not control the encoding of, so both are real
+    possibilities, not just a permissions/existence failure. `site.addpackage` (the
+    stdlib's own `.pth` reader) tolerates the same failure the same way.
+    """
+
+    pth_file = tmp_path / "broken.pth"
+    pth_file.write_bytes(b"\xff\xfe\x00\x01garbage")
+    dist = _FakeDistribution("broken-encoding-dist", files=("broken.pth",), root=tmp_path)
+
+    assert compat_components._distribution_editable_roots(dist) == ()

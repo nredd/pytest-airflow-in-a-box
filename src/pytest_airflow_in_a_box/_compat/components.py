@@ -6,8 +6,11 @@ at class-creation time at all -- `Timetable` is a `typing.Protocol`, `BaseExecut
 not an ABC, a listener or policy hookimpl carries no base class whatsoever -- so a bug
 ships and only fails once a scheduler, worker, or the Dag processor actually exercises
 it. Every checker here is a pure function over a class, an instance, or (for providers) a
-plain callable: no Airflow bootstrap, metadata database, or cache is touched, and Airflow
-itself is imported only inside a checker body, never at module scope.
+plain callable: no Airflow bootstrap or metadata database is touched, and Airflow itself
+is imported only inside a checker body, never at module scope. The provider checks are
+the one exception to "no cache": attributing a callable to its owning distribution scans
+every installed distribution's file manifest, so that index is built once per process and
+reused (see `_DISTRIBUTION_INDEX`) rather than rescanned on every `check_component()` call.
 
 The registry is a flat, appendable list of `(kind, check_name, checker)` rows.
 `pytest_airflow_in_a_box.components.check_component` iterates it generically -- filtering
@@ -899,7 +902,17 @@ def _check_xcom_backend_signature(component: object) -> Iterable[ComponentProble
 
     if installed_family() is not AirflowFamily.V3:
         return
-    from airflow.sdk.bases.xcom import BaseXCom
+    try:
+        from airflow.sdk.bases.xcom import BaseXCom
+    except ImportError:
+        # `installed_family()` classifies from `apache-airflow-core`'s own dist-info
+        # metadata alone, never this submodule's actual importability -- an uncertified
+        # release (a pre-release build, or a future release this project has not
+        # certified yet) that has moved or removed it must degrade to reporting nothing,
+        # the same conservative-degradation precedent `_listener_hookspecs` already sets,
+        # not raise out of `check_component` for a reason unrelated to the checked
+        # component.
+        return
 
     component_type = _as_type(component)
     if not issubclass(component_type, BaseXCom):
@@ -925,7 +938,13 @@ def _check_xcom_backend_signature(component: object) -> Iterable[ComponentProble
             inspect.signature(component_type.serialize_value).bind(
                 **_XCOM_SERIALIZE_VALUE_PROBE_KWARGS
             )
-        except TypeError as error:
+        except (TypeError, ValueError) as error:
+            # `inspect.signature` itself raises `ValueError`, not `TypeError`, for a
+            # callable it cannot introspect at all -- `staticmethod(min)` or another
+            # C-accelerated builtin wired in directly, a plausible move for a
+            # performance-conscious override. That is exactly as broken an override as
+            # one `.bind()` itself rejects; catching only `TypeError` let this shape
+            # raise straight out of `check_component` instead of reporting it.
             yield ComponentProblem(
                 code=XCOM_BACKEND_SIGNATURE,
                 message=(
@@ -944,7 +963,7 @@ def _check_xcom_backend_signature(component: object) -> Iterable[ComponentProble
     if _user_overridden("deserialize_value"):
         try:
             inspect.signature(component_type.deserialize_value).bind(None)
-        except TypeError as error:
+        except (TypeError, ValueError) as error:
             yield ComponentProblem(
                 code=XCOM_BACKEND_SIGNATURE,
                 message=(
@@ -1039,7 +1058,10 @@ def _check_weight_strategy_hash_of_none(component: object) -> Iterable[Component
 
     if installed_family() is not AirflowFamily.V3:
         return
-    from airflow.task.priority_strategy import PriorityWeightStrategy
+    try:
+        from airflow.task.priority_strategy import PriorityWeightStrategy
+    except ImportError:
+        return
 
     component_type = _as_type(component)
     effective_hash = component_type.__hash__
@@ -1097,7 +1119,10 @@ def _check_notifier_missing_notify(component: object) -> Iterable[ComponentProbl
 
     if installed_family() is not AirflowFamily.V3:
         return
-    from airflow.sdk.bases.notifier import BaseNotifier
+    try:
+        from airflow.sdk.bases.notifier import BaseNotifier
+    except ImportError:
+        return
 
     component_type = _as_type(component)
     defining = _defining_class(component_type, "notify")
@@ -1135,7 +1160,29 @@ def _check_notifier_template_fields_unresolvable(component: object) -> Iterable[
         return
     if isinstance(component, type):
         return
-    template_fields = getattr(component, "template_fields", ())
+    try:
+        template_fields = getattr(component, "template_fields", ())
+    except Exception as error:
+        # `getattr(..., default)` only substitutes `default` for `AttributeError`; a
+        # `template_fields` implemented as a `property` that itself raises (say, before
+        # some other required state is configured) raises straight through instead. That
+        # is exactly the shape this check exists to catch -- a notifier that will crash
+        # the first time Airflow actually reads `template_fields` -- so it is reported as
+        # a problem, not silently swallowed the way an unrelated environment failure
+        # would be.
+        yield ComponentProblem(
+            code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
+            message=(
+                f"`{type(component).__name__}.template_fields` raised "
+                f"{type(error).__name__} instead of returning a value ({error})."
+            ),
+            hint=(
+                "`_update_context` reads `template_fields` directly off the instance; "
+                "an attribute access that raises breaks the notifier the first time it "
+                "actually runs. Make `template_fields` a plain, side-effect-free value."
+            ),
+        )
+        return
     if isinstance(template_fields, str):
         # `str` is technically a `Sequence[str]`, so nothing rejects it structurally --
         # but `_update_context` then iterates it character by character, treating each
@@ -1156,22 +1203,49 @@ def _check_notifier_template_fields_unresolvable(component: object) -> Iterable[
         return
     try:
         names = tuple(template_fields)
-    except TypeError:
+    except Exception as error:
+        # Broader than `TypeError` on purpose: a non-iterable value raises `TypeError`
+        # from `tuple()` itself, but a generator or other lazy iterable that raises
+        # partway through iteration can surface any exception type, and both are exactly
+        # the same "this notifier's `template_fields` cannot be safely resolved" problem.
         yield ComponentProblem(
             code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
             message=(
-                f"`{type(component).__name__}.template_fields` is {template_fields!r}, "
-                f"which is not iterable."
+                f"`{type(component).__name__}.template_fields` is not usable as a "
+                f"sequence of field names ({type(error).__name__}: {error})."
             ),
             hint=(
-                "`_update_context` iterates `template_fields` directly; a non-iterable "
-                "value raises `TypeError` the first time this notifier actually runs. "
-                "Set it to a tuple or list of attribute names."
+                "`_update_context` iterates `template_fields` directly; a value that is "
+                "not iterable, or that raises while being iterated, breaks the notifier "
+                "the first time it actually runs. Set it to a tuple or list of attribute "
+                "names."
             ),
         )
         return
     for name in names:
-        if hasattr(component, name):
+        try:
+            resolvable = hasattr(component, name)
+        except Exception as error:
+            # `hasattr` only swallows `AttributeError`; a non-`str` entry (a missing
+            # trailing comma turning `("message")` into a bare string is one way, but a
+            # plain typo like `("message", None)` is another) raises `TypeError` from
+            # `hasattr` itself, and a `property` that raises something other than
+            # `AttributeError` when accessed propagates too. Both are real, checkable
+            # problems, not reasons to crash `check_component`.
+            yield ComponentProblem(
+                code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
+                message=(
+                    f"`{type(component).__name__}.template_fields` entry {name!r} could "
+                    f"not be resolved ({type(error).__name__}: {error})."
+                ),
+                hint=(
+                    "`_update_context` does `getattr(self, f)` for every `template_fields` "
+                    "entry; this entry is not a valid attribute name, or resolving it "
+                    "raises. Fix the entry, or remove it from `template_fields`."
+                ),
+            )
+            continue
+        if resolvable:
             continue
         yield ComponentProblem(
             code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
@@ -1258,7 +1332,10 @@ def _check_secrets_backend_raises_on_miss(component: object) -> Iterable[Compone
 
     if installed_family() is not AirflowFamily.V3:
         return
-    from airflow.secrets.base_secrets import BaseSecretsBackend
+    try:
+        from airflow.secrets.base_secrets import BaseSecretsBackend
+    except ImportError:
+        return
 
     component_type = _as_type(component)
     for name in _SECRETS_BACKEND_GETTERS:
@@ -1267,7 +1344,17 @@ def _check_secrets_backend_raises_on_miss(component: object) -> Iterable[Compone
             continue
         if defining.__module__.startswith("airflow."):
             continue
-        return_annotation = inspect.signature(getattr(component_type, name)).return_annotation
+        try:
+            return_annotation = inspect.signature(getattr(component_type, name)).return_annotation
+        except (TypeError, ValueError):
+            # `_defining_class` only confirms `name in vars(klass)` for some class in the
+            # MRO -- not that the stored value is callable or introspectable. A getter
+            # stubbed out as `get_variable = None` (a plausible work-in-progress leftover)
+            # makes `inspect.signature` raise `TypeError`; a getter that is callable but
+            # unintrospectable (a C-accelerated builtin wired in directly) raises
+            # `ValueError` instead. Neither is this check's business to judge -- skip,
+            # the same as the "no annotation at all" case just below.
+            continue
         if return_annotation is inspect.Signature.empty:
             continue
         if _annotation_allows_none(return_annotation):
@@ -1333,7 +1420,13 @@ def _policy_hookspecs(module_names: tuple[str, ...]) -> dict[str, tuple[str, ...
         pluggy would validate, in declaration order.
     """
 
-    marker = _policy_marker_attribute("spec")
+    try:
+        marker = _policy_marker_attribute("spec")
+    except ImportError:
+        # Mirrors the per-module `ImportError` tolerance just below: `airflow.policies`
+        # itself failing to import (an uncertified release moving or removing it) must
+        # degrade to reporting nothing, not raise out of `check_component`.
+        return {}
     specs: dict[str, tuple[str, ...]] = {}
     for module_name in module_names:
         try:
@@ -1359,7 +1452,10 @@ def _policy_hookimpls(component_type: type) -> tuple[_HookimplInfo, ...]:
         `inspect.getmembers` order (alphabetical by method name).
     """
 
-    marker = _policy_marker_attribute("impl")
+    try:
+        marker = _policy_marker_attribute("impl")
+    except ImportError:
+        return ()
     infos: list[_HookimplInfo] = []
     for name, value in inspect.getmembers(component_type, callable):
         opts = getattr(value, marker, None)
@@ -1555,7 +1651,10 @@ def _distribution_editable_roots(dist: metadata.Distribution) -> tuple[Path, ...
             continue
         try:
             content = Path(str(dist.locate_file(recorded_file))).read_text()
-        except OSError:
+        except (OSError, ValueError):
+            # `UnicodeDecodeError` (a `ValueError`) is as real a possibility as `OSError`
+            # here: a `.pth` file is ordinary text this module does not control the
+            # encoding of. `site.addpackage` tolerates the same failure the same way.
             continue
         for line in content.splitlines():
             stripped = line.strip()
@@ -1806,7 +1905,16 @@ def _check_provider_no_entry_point(component: object) -> Iterable[ComponentProbl
     registered = {
         canonicalize_name(entry_point.dist.name)
         for entry_point in metadata.entry_points(group=_PROVIDER_ENTRY_POINT_GROUP)
-        if entry_point.dist is not None
+        # `entry_point.dist is not None` only confirms the `Distribution` object exists,
+        # not that its own `.name` does: `Distribution.name` reads the `Name` metadata
+        # header and is `None` for a distribution with malformed `.dist-info` metadata
+        # (a real, if rare, possibility -- `email.message.Message` returns `None` for a
+        # missing header rather than raising). `canonicalize_name(None)` raises
+        # `AttributeError`, and this scan walks every distribution registering this
+        # entry-point group, not just the one being checked -- one unrelated distribution
+        # with broken metadata must not crash `check_component` on a provider that has
+        # nothing to do with it.
+        if entry_point.dist is not None and isinstance(entry_point.dist.name, str)
     }
     if canonical_distribution_name in registered:
         return
@@ -1901,7 +2009,10 @@ def _is_xcom(component: object) -> bool:
 
     if installed_family() is not AirflowFamily.V3:
         return False
-    from airflow.sdk.bases.xcom import BaseXCom
+    try:
+        from airflow.sdk.bases.xcom import BaseXCom
+    except ImportError:
+        return False
 
     return issubclass(_as_type(component), BaseXCom)
 
@@ -1918,7 +2029,10 @@ def _is_weight_strategy(component: object) -> bool:
 
     if installed_family() is not AirflowFamily.V3:
         return False
-    from airflow.task.priority_strategy import PriorityWeightStrategy
+    try:
+        from airflow.task.priority_strategy import PriorityWeightStrategy
+    except ImportError:
+        return False
 
     return issubclass(_as_type(component), PriorityWeightStrategy)
 
@@ -1935,7 +2049,10 @@ def _is_notifier(component: object) -> bool:
 
     if installed_family() is not AirflowFamily.V3:
         return False
-    from airflow.sdk.bases.notifier import BaseNotifier
+    try:
+        from airflow.sdk.bases.notifier import BaseNotifier
+    except ImportError:
+        return False
 
     return issubclass(_as_type(component), BaseNotifier)
 
@@ -1952,7 +2069,10 @@ def _is_secrets_backend(component: object) -> bool:
 
     if installed_family() is not AirflowFamily.V3:
         return False
-    from airflow.secrets.base_secrets import BaseSecretsBackend
+    try:
+        from airflow.secrets.base_secrets import BaseSecretsBackend
+    except ImportError:
+        return False
 
     return issubclass(_as_type(component), BaseSecretsBackend)
 
@@ -1969,7 +2089,10 @@ def _is_policy(component: object) -> bool:
 
     if installed_family() is not AirflowFamily.V3:
         return False
-    marker = _policy_marker_attribute("impl")
+    try:
+        marker = _policy_marker_attribute("impl")
+    except ImportError:
+        return False
     component_type = _as_type(component)
     return any(hasattr(value, marker) for _, value in inspect.getmembers(component_type, callable))
 

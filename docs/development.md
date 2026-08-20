@@ -35,8 +35,12 @@ distribution. `check_component`'s `ComponentKind.PROVIDER` checks close part of 
 statically instead: given an already-installed provider's `get_provider_info` callable, they
 validate its return value against the shipped `provider_info.schema.json`, cross-check its
 declared `package-name` against the owning distribution's real name, and confirm that distribution
-actually registers an `apache_airflow_provider` entry point -- the three ways a provider silently
-fails discovery, all catchable without a live scheduler or webserver.
+actually registers an `apache_airflow_provider` entry point -- one way a provider silently vanishes
+from discovery (no entry point at all) and two ways discovery hard-fails with a raised exception
+instead of a warning (a schema violation, a `package-name` disagreement), all catchable without a
+live scheduler or webserver. All three call the already-loaded callable directly and attribute it
+to its owning distribution by file manifest; none of them exercises real `entry_points()`
+resolution through a live `ProvidersManager`.
 
 ## Concurrent local runs
 

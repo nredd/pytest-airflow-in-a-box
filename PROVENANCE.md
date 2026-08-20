@@ -88,6 +88,16 @@ the installed 3.2.0 and 3.3.0 wheels both define `__hash__` explicitly as `retur
 confirmed the same way, so `weight-strategy-hash-of-none` reads `PriorityWeightStrategy.__hash__`
 live rather than hardcoding either behavior as a per-release constant.
 
+`airflow.policies.make_plugin_from_local_settings` wraps an `airflow_local_settings.py`
+module-level policy function in a dynamically generated shim (`_make_shim_fn`) that calls it
+positionally and deliberately tolerates a name or arity mismatch that pluggy's own hookimpl
+registration would hard-error on for the plugin entry-point path -- confirmed by reading
+`airflow-core/src/airflow/policies.py` directly at commit
+`1438ea3587031417cc85d74323235cf087a058fb` (tag `3.3.0`). `docs/guide/custom-components.md`'s
+Policy checks section cites this as the reason `policy-unknown-hookspec`/
+`policy-argument-name-mismatch` -- which model the plugin entry-point path pluggy actually
+validates -- do not cover a plain `airflow_local_settings.py` function.
+
 `airflow._shared.plugins_manager.plugins_manager.is_valid_plugin`'s duck-typing match (`base.__name__
 == "AirflowPlugin" and "plugins_manager" in base.__module__`) exists verbatim on the installed 3.2.0
 and 3.3.0 wheels; the installed 3.1.0 wheel's `airflow.plugins_manager.is_valid_plugin` instead uses
@@ -147,7 +157,7 @@ may be included in this project.
 - Core-only listener hookspecs (3.3.0): https://github.com/apache/airflow/tree/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/listeners/spec
 - Shared lifecycle/taskinstance listener hookspecs (3.3.0): https://github.com/apache/airflow/tree/1438ea3587031417cc85d74323235cf087a058fb/shared/listeners/src/airflow_shared/listeners/spec
 - Task SDK listener manager (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/task-sdk/src/airflow/sdk/listener.py
-- Policies, including `task_instance_mutation_hook` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/policies.py
+- Policies, including `task_instance_mutation_hook` and `make_plugin_from_local_settings` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/policies.py
 - Policies (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/policies.py
 - Policies (2.11.2): https://github.com/apache/airflow/blob/2.11.2/airflow/policies.py
 - Plugins manager, `is_valid_plugin` duck typing (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/shared/plugins_manager/src/airflow_shared/plugins_manager/plugins_manager.py
