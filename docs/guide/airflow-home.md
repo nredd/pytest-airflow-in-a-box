@@ -103,6 +103,22 @@ One known gap: pytest raises the exit status to `MAX_WARNINGS_ERROR` after every
 `--max-warnings` is recorded as the clean status pytest reported at the time and its directory
 is removed under `failed`. Pass `--airflow-home-retention=all` when you need to inspect one.
 
+## Reaching it from a test
+
+The `airflow_home_path` fixture returns the directory as a `pathlib.Path`, so a test or a
+consumer fixture never needs to reach into the plugin's bootstrap internals or re-read
+`AIRFLOW_HOME` from the environment:
+
+```python
+def test_local_settings_were_written(airflow_home_path):
+    assert (airflow_home_path / "config" / "airflow_local_settings.py").is_file()
+```
+
+It is session-scoped and imports no Airflow. Under `xdist` every worker reports the controller's
+directory, because workers inherit it rather than creating their own. See
+[Airflow configuration](configuration.md#where-the-run-lives) for the companion
+`airflow_dags_folder_path`.
+
 ## Pairing with report artifacts
 
 `--airflow-report-dir` and a retained `AIRFLOW_HOME` are the two halves of "give me the

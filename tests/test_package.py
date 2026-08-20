@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from importlib.metadata import entry_points, version
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,7 @@ from pytest_airflow_in_a_box import (
     db,
     defaults,
     fixtures,
+    ini_config,
     logging,
     markers,
     matchers,
@@ -34,6 +36,27 @@ from pytest_airflow_in_a_box import (
 def test_version_matches_distribution_metadata() -> None:
     """Keep the package and distribution versions synchronized."""
     assert __version__ == version("pytest-airflow-in-a-box")
+
+
+def test_no_fixture_name_shadows_a_package_module() -> None:
+    """Keep fixture names disjoint from module names `plugin.py` imports.
+
+    `plugin.py` imports both package modules and fixture functions into one namespace, and
+    pytest discovers fixtures as attributes of that namespace. A fixture named after an
+    imported module -- `airflow_home` was the near miss -- silently replaces the module and
+    breaks every `module.function()` call site with no import error to point at it.
+
+    Raises:
+        AssertionError: A fixture name collides with a `pytest_airflow_in_a_box` submodule.
+    """
+
+    modules = {
+        path.stem
+        for path in Path(pytest_airflow_in_a_box.__file__).parent.glob("*.py")
+        if not path.stem.startswith("_")
+    }
+
+    assert modules.isdisjoint(fixtures.__all__)
 
 
 def test_public_surface_is_explicit() -> None:
@@ -68,7 +91,10 @@ def test_public_surface_is_explicit() -> None:
         "register_ini_defaults",
     )
     assert fixtures.__all__ == (
+        "airflow_configure",
         "airflow_connections",
+        "airflow_dags_folder_path",
+        "airflow_home_path",
         "airflow_parse_secrets",
         "airflow_variables",
         "api_base_url",
@@ -123,7 +149,10 @@ def test_public_surface_is_explicit() -> None:
         "render_terminal_summary",
     )
     assert plugin.__all__ == (
+        "airflow_configure",
         "airflow_connections",
+        "airflow_dags_folder_path",
+        "airflow_home_path",
         "airflow_parse_secrets",
         "airflow_variables",
         "api_base_url",
@@ -172,7 +201,16 @@ def test_public_surface_is_explicit() -> None:
         "succeeded",
         "upstream_failed",
     )
+    assert ini_config.__all__ == (
+        "INI_OPTION_NAME",
+        "INI_OVERRIDES_KEY",
+        "apply_ini_overrides",
+        "owned_env_names",
+        "parse_ini_overrides",
+        "validate_smoke_conflict",
+    )
     assert types.__all__ == (
+        "AirflowConfigure",
         "AirflowConnections",
         "AirflowVariables",
         "DagMaker",

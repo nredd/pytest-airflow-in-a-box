@@ -7,10 +7,15 @@ References:
 from __future__ import annotations
 
 from pytest_airflow_in_a_box.fixtures.api import api_base_url, api_client, api_server_url
+from pytest_airflow_in_a_box.fixtures.configure import airflow_configure
 from pytest_airflow_in_a_box.fixtures.context import task_context
 from pytest_airflow_in_a_box.fixtures.dag import dag_maker, run_dag
 from pytest_airflow_in_a_box.fixtures.dagbag import full_dag_bag
 from pytest_airflow_in_a_box.fixtures.logging import cap_structlog
+from pytest_airflow_in_a_box.fixtures.paths import (
+    airflow_dags_folder_path,
+    airflow_home_path,
+)
 from pytest_airflow_in_a_box.fixtures.render import render_task
 from pytest_airflow_in_a_box.fixtures.seed import (
     airflow_connections,
@@ -35,7 +40,10 @@ DATABASE_FIXTURE_NAMES = frozenset(
 )
 
 __all__ = (
+    "airflow_configure",
     "airflow_connections",
+    "airflow_dags_folder_path",
+    "airflow_home_path",
     "airflow_parse_secrets",
     "airflow_variables",
     "api_base_url",

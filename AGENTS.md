@@ -63,12 +63,14 @@ zero-ini defaults on purpose.
 - `config.py` -- `airflow_config()` context manager/decorator for option + env overrides
 - `db.py` -- registry-driven metadata DB cleanup (`clear_db`, `TableGroup`)
 - `defaults.py` -- zero-ini pytest defaults and narrowed warning filters
+- `ini_config.py` -- the `airflow_config` ini option: grammar, bootstrap-owned denylist,
+  and pre-conftest application
 - `collection.py` / `smoke.py` / `doctor.py` -- Dag import collection, `--airflow-smoke`
   checks, `--airflow-doctor` diagnostics
 - `taskinstance.py` -- `run_trigger`, `ordered_task_instances`
 - `types.py` -- public typing contracts for fixtures
 - `fixtures/` -- `dag_maker`, `full_dag_bag`, sessions, DB-free
-  `run_task`/`render_task`/`task_context`, REST API server + client, `airflow_variables`/`airflow_connections`, `cap_structlog`
+  `run_task`/`render_task`/`task_context`, REST API server + client, `airflow_variables`/`airflow_connections`, `cap_structlog`, `airflow_configure`, `airflow_home_path`/`airflow_dags_folder_path`
 - `storage/` -- storage-ladder selection, SQLite tuning, Postgres provisioning
 - `_compat/` -- private Airflow-version shims, each guarded by `capabilities.py` probes
 

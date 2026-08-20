@@ -230,6 +230,21 @@ behavior ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)). 
 adapted from a real test in `tests/enduser/`. Two are already covered elsewhere in this guide
 and are cross-referenced rather than duplicated.
 
+### Locating files a test needs
+
+The plugin ships `airflow_home_path` and `airflow_dags_folder_path` for the two directories it
+resolves itself (see [Airflow configuration](configuration.md#where-the-run-lives)). It
+deliberately ships nothing for "my repo's `tests/` folder": pytest does not model one --
+`testpaths` is a list, empty by default, and ignored entirely once you pass arguments on the
+command line -- and the answer people actually want is the requesting module's own directory:
+
+```python
+def test_reads_a_local_fixture_file(request):
+    payload = (request.path.parent / "data" / "orders.json").read_text(encoding="utf-8")
+```
+
+`pytestconfig.rootpath` and `pytestconfig.inipath` cover the repo-root and config-file cases.
+
 ### SQL operators with mocked connections
 
 Point a real provider operator at a synthetic SQLite file instead of a live warehouse, via

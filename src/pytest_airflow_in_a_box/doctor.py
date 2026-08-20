@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import platform
 import urllib.parse
+from collections.abc import Mapping
 from dataclasses import fields
 from enum import Enum
 from pathlib import Path
@@ -29,11 +30,17 @@ from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
 from pytest_airflow_in_a_box.collection import collection_folder
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
+from pytest_airflow_in_a_box.ini_config import INI_OPTION_NAME, INI_OVERRIDES_KEY
 from pytest_airflow_in_a_box.migration_strict import migration_strict_enabled
 from pytest_airflow_in_a_box.reporting import PYTEST_COV_PLUGIN_NAME
 from pytest_airflow_in_a_box.storage.provision import DbBackend
 
 REPORT_TITLE = "# pytest-airflow-in-a-box diagnostics"
+# Substrings marking a declared `airflow_config` value as a credential rather than a
+# setting. Airflow's own `sensitive_config_values` is the exact answer, but reading it
+# means importing the configuration parser, and this module is on `plugin.py`'s
+# import path. Over-redacting a `*_url` is the safe direction to be wrong in.
+_SENSITIVE_KEY_MARKERS = ("password", "secret", "key", "token", "conn", "url")
 # Airflow 2.x gates SQLite compatibility on `Executor.is_single_threaded`, not a name
 # list; `SequentialExecutor` and `DebugExecutor` are the two core executors setting it
 # True (`ExecutorLoader.validate_database_executor_compatibility`).
@@ -381,6 +388,50 @@ def _coverage_section(config: pytest.Config, state: BootstrapState) -> list[str]
     return lines
 
 
+def _rendered_override(key: str, value: str) -> str:
+    """Render one declared override value, redacting anything that reads as a credential.
+
+    Parameters:
+        key: str naming the configuration option within its section.
+        value: str containing the declared value.
+
+    Returns:
+        str containing the value, or a redaction placeholder naming its length.
+    """
+
+    if any(marker in key.lower() for marker in _SENSITIVE_KEY_MARKERS):
+        return f"<redacted, {len(value)} characters>"
+    return value
+
+
+def _overrides_section(overrides: Mapping[tuple[str, str], str]) -> list[str]:
+    """Render the Airflow configuration overrides declared through the ini option.
+
+    Takes the already-parsed mapping rather than re-reading the ini, because a malformed
+    value aborted the session during the initial parse and can never reach this report.
+
+    Values whose key reads as a credential are replaced by their length. This report exists to
+    be pasted into a bug report, and `_database_section` already declines to print a
+    provisioned database URL for exactly that reason; a declared `smtp.smtp_password` or
+    `celery.broker_url` deserves the same treatment. The name is always shown, because
+    "which options are set" is the diagnostic question.
+
+    Parameters:
+        overrides: Mapping[tuple[str, str], str] mapping ``(section, key)`` pairs to the
+            values declared by the `airflow_config` ini option.
+
+    Returns:
+        list[str] containing Markdown bullet lines.
+    """
+
+    if not overrides:
+        return [f"- No `{INI_OPTION_NAME}` overrides are declared"]
+    return [
+        f"- `{section}.{key}` = `{_rendered_override(key, value)}`"
+        for (section, key), value in sorted(overrides.items())
+    ]
+
+
 def _api_server_section() -> list[str]:
     """Render the API server section, which never has live state for this invocation.
 
@@ -412,6 +463,7 @@ def render_doctor_report(config: pytest.Config) -> str:
     sections = (
         ("Storage", _storage_section(state)),
         ("AIRFLOW_HOME and database", _database_section(state)),
+        ("Airflow config overrides", _overrides_section(config.stash[INI_OVERRIDES_KEY])),
         ("Versions and capabilities", _version_section()),
         ("Executor", _executor_section(state)),
         ("Migration-strict", _migration_strict_section(config, state)),

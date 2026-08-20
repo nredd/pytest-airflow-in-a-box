@@ -649,6 +649,40 @@ def test_migration_strict_section_flags_noop_off_v2(tmp_path: Path) -> None:
     assert "Airflow 2.x" in lines[0]
 
 
+def test_overrides_section_reports_an_empty_declaration() -> None:
+    """State plainly that no repo-wide overrides are declared."""
+
+    lines = doctor._overrides_section({})
+
+    assert lines == ["- No `airflow_config` overrides are declared"]
+
+
+def test_overrides_section_lists_declared_overrides() -> None:
+    """List every declared override, sorted, so the report is stable across runs."""
+
+    lines = doctor._overrides_section(
+        {("core", "plugins_folder"): "/plugins", ("core", "dagbag_import_timeout"): "12.5"}
+    )
+
+    assert lines == [
+        "- `core.dagbag_import_timeout` = `12.5`",
+        "- `core.plugins_folder` = `/plugins`",
+    ]
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["smtp_password", "broker_url", "jwt_secret", "fernet_key", "sql_alchemy_conn", "api_token"],
+    ids=["password", "url", "secret", "key", "conn", "token"],
+)
+def test_overrides_section_redacts_a_credential_value(key: str) -> None:
+    """Keep a declared credential out of a report meant to be pasted into a bug report."""
+
+    lines = doctor._overrides_section({("some", key): "hunter2!"})
+
+    assert lines == [f"- `some.{key}` = `<redacted, 8 characters>`"]
+
+
 def test_render_doctor_report_combines_every_section(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -668,16 +702,20 @@ def test_render_doctor_report_combines_every_section(
 
     monkeypatch.setattr(doctor, "get_bootstrap_state", _fake_get_bootstrap_state)
 
+    stash = pytest.Stash()
+    stash[doctor.INI_OVERRIDES_KEY] = {("core", "dagbag_import_timeout"): "12.5"}
     fake_config: Any = SimpleNamespace(
         getoption=lambda _name, default=None: default,
         getini=lambda _name: False,
-        stash=pytest.Stash(),
+        stash=stash,
     )
     report = doctor.render_doctor_report(config=fake_config)
 
     assert report.startswith(doctor.REPORT_TITLE)
     assert "## Storage" in report
     assert "## AIRFLOW_HOME and database" in report
+    assert "## Airflow config overrides" in report
+    assert "- `core.dagbag_import_timeout` = `12.5`" in report
     assert "## Executor" in report
     assert "## Migration-strict" in report
     assert "## Dag coverage" in report

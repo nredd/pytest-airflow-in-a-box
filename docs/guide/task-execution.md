@@ -21,7 +21,9 @@ below) -- keyed on the Dag's own `dag_id`, not a synthetic one, so `result.dag_i
 what your real Dag declares. `--dag-folder`/`airflow_dags_folder` is a different option from
 `--collect-dag-folder`/`airflow_collect_dags_folder`, which drives
 [Dag-file collection](dag-collection.md) instead -- see
-[the two Dag folder options](dag-coverage.md#footguns) if you're wiring both up.
+[the two Dag folder options](dag-coverage.md#footguns) if you're wiring both up. The
+`airflow_dags_folder_path` fixture returns whichever directory that ladder resolved, as a
+`pathlib.Path`, when a test needs the folder itself rather than the parsed bag.
 
 Because the persisted `dag_id` is the real one, running the same `dag_id` through `run_dag`
 from two different tests scheduled onto different `pytest-xdist` workers at the same time can

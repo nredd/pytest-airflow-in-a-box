@@ -41,7 +41,10 @@ from pytest_airflow_in_a_box.defaults import (
 from pytest_airflow_in_a_box.doctor import render_doctor_report
 from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
+    airflow_configure,
     airflow_connections,
+    airflow_dags_folder_path,
+    airflow_home_path,
     airflow_parse_secrets,
     airflow_variables,
     api_base_url,
@@ -60,6 +63,7 @@ from pytest_airflow_in_a_box.fixtures.dagbag import (
     FULL_DAG_BAG_FIXTURE_NAME,
     FULL_DAG_BAG_XDIST_GROUP,
 )
+from pytest_airflow_in_a_box.ini_config import apply_ini_overrides, validate_smoke_conflict
 from pytest_airflow_in_a_box.logging import (
     _install_dict_config_interceptor,
     _uninstall_dict_config_interceptor,
@@ -82,7 +86,10 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 __all__ = (
+    "airflow_configure",
     "airflow_connections",
+    "airflow_dags_folder_path",
+    "airflow_home_path",
     "airflow_parse_secrets",
     "airflow_variables",
     "api_base_url",
@@ -196,6 +203,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini(
         "airflow_pools",
         "Pools seeded before `test_pool_references_exist` runs, as `name = slots` lines.",
+        type="linelist",
+        default=[],
+    )
+    parser.addini(
+        "airflow_config",
+        "Airflow configuration applied process-wide, as `section.key = value` lines.",
         type="linelist",
         default=[],
     )
@@ -358,13 +371,23 @@ def pytest_load_initial_conftests(
 ) -> None:
     """Install Airflow paths and configuration before importing consumer conftests.
 
+    Bootstrap runs first and owns its own environment surface, then the ``airflow_config``
+    ini option is applied on top. pytest has already parsed the ini file and folded any
+    ``-o`` override into it by the time this hook is dispatched, and its own
+    conftest-collecting hookimpl is ``trylast``, so declared overrides are in place before
+    a single consumer conftest is imported -- and therefore before any Dag parse.
+
     Parameters:
         early_config: pytest.Config for initial command-line parsing.
         parser: pytest.Parser used during initial command-line parsing.
         args: list[str] containing the command-line arguments.
+
+    Raises:
+        pytest.UsageError: The `airflow_config` ini option is malformed.
     """
     del parser
     early_config.stash[STATE_KEY] = load_initial_state(early_config, args)
+    apply_ini_overrides(early_config)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -418,6 +441,7 @@ def pytest_configure(config: pytest.Config) -> None:
     airflow_home.resolve_retention_policy(config)
     register_markers(config)
     validate_configure(config)
+    validate_smoke_conflict(config)
     configure_report_dir(config)
     configure_reporting(config)
     apply_option_defaults(config)
