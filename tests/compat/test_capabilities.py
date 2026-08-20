@@ -141,6 +141,7 @@ def _base_modules() -> dict[str, SimpleNamespace]:
         "airflow.sdk.execution_time.context": SimpleNamespace(
             _get_variable=_callable_symbol,
             _get_connection=_callable_symbol,
+            set_current_context=_callable_symbol,
         ),
         "airflow.sdk.execution_time.cache": SimpleNamespace(SecretCache=generic_class),
         "airflow.assets.evaluation": SimpleNamespace(AssetEvaluator=generic_class),

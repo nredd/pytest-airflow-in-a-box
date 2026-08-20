@@ -291,10 +291,11 @@ into the Task SDK's execution-time `RuntimeTaskInstance`, which this table is po
 `MyOperator` must declare `query` in `template_fields` (and `".sql"` in `template_ext` for a
 file-backed field) for it to render at all. When the test only needs the rendered *values*, not
 proof they were persisted, the DB-free [`render_task`](db-free-execution.md#rendering-template-fields-without-running)
-fixture skips the database and the `dag_maker` recipe below entirely. When the operator
+fixture skips the database and the `dag_maker` recipe below entirely, and when the operator
 renders its templates from *inside* `execute()` (or the test needs a real `context["ti"]` to
-hand-drive `execute()` against), use
-[`task_context`](db-free-execution.md#hand-driving-execute-with-a-real-task-context) instead:
+hand-drive `execute()` against),
+[`task_context`](db-free-execution.md#hand-driving-execute-with-a-real-task-context) covers
+that too. The DB-backed recipe:
 
 ```python
 from airflow.models.renderedtifields import RenderedTaskInstanceFields

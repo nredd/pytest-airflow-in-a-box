@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from airflow.sdk import DAG, BaseOperator
+from airflow.sdk import DAG, BaseOperator, get_current_context
 
 from pytest_airflow_in_a_box.types import TaskContext
 
@@ -72,6 +72,23 @@ class DeferredRenderOperator(BaseOperator):
 
         context["ti"].render_templates(context)
         return self.expression
+
+
+class CurrentContextOperator(BaseOperator):
+    """Read the active context through ``airflow.sdk.get_current_context``."""
+
+    def execute(self, context: Any) -> str:
+        """Return the current context's ``task_id``.
+
+        Parameters:
+            context: Any containing the task execution context.
+
+        Returns:
+            str containing the ``task_id`` read from the ambient context.
+        """
+
+        del context
+        return get_current_context()["ti"].task_id
 
 
 class PushXComOperator(BaseOperator):
@@ -213,6 +230,17 @@ def test_task_context_records_xcom_pushes_and_supervisor_traffic(
 
     assert handle.xcoms["manual"] == {"a": 1}
     assert "SetXCom" in [type(msg).__name__ for msg in handle.sent]
+
+
+def test_task_context_serves_get_current_context(task_context: TaskContext) -> None:
+    """Resolve ``airflow.sdk.get_current_context`` inside a hand-driven ``execute``."""
+
+    operator = _build(CurrentContextOperator, "task_context_current")
+
+    with task_context(operator) as handle:
+        result = handle.task.execute(handle.context)
+
+    assert result == "probe"
 
 
 def test_task_context_applies_params_and_context_overrides(

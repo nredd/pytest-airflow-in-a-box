@@ -529,30 +529,22 @@ def render_task_in_process(
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
-    task_runner, runtime_ti = _build_runtime_task_instance(
+    # One shared prepare/render sequence on purpose: it hand-mirrors the
+    # release-sensitive `task_runner._prepare`, and two copies would silently
+    # diverge at the next upstream reordering.
+    with task_context_in_process(
         task,
         dag_id=dag_id,
         run_id=run_id,
         logical_date=logical_date,
         params=params,
+        comms=comms,
         map_index=map_index,
         try_number=try_number,
-    )
-
-    with _installed_supervisor_comms(task_runner, comms):
-        context = runtime_ti.get_template_context()
-        # Mirrors `task_runner._prepare`'s own order: build the context bound to the
-        # original task, then swap in the execution-time copy before rendering, same
-        # as a real run. A mapped operator's `prepare_for_execution()` is a no-op --
-        # `render_template_fields` below is what swaps `runtime_ti.task` to the
-        # concrete unmapped instance, through Airflow's own `context["ti"]` mutation.
-        runtime_ti.task = runtime_ti.task.prepare_for_execution()
-        context["task"] = runtime_ti.task
-        if context_overrides:
-            context |= context_overrides
-        runtime_ti.task.render_template_fields(context)
-
-    return runtime_ti.task
+        context_overrides=context_overrides,
+        render=True,
+    ) as handle:
+        return handle.task
 
 
 class InProcessTaskContext:
@@ -571,13 +563,21 @@ class InProcessTaskContext:
 
     @property
     def ti(self) -> Any:
-        """Return the real ``RuntimeTaskInstance`` behind ``context["ti"]``."""
+        """Return the task instance behind ``context["ti"]``.
+
+        Returns:
+            Any containing the real ``RuntimeTaskInstance``.
+        """
 
         return self._ti
 
     @property
     def context(self) -> Any:
-        """Return the synthesized Task SDK template context mapping."""
+        """Return the synthesized template context.
+
+        Returns:
+            Any containing the Task SDK template context mapping.
+        """
 
         return self._context
 
@@ -588,19 +588,31 @@ class InProcessTaskContext:
         A property over ``ti.task`` on purpose: rendering a mapped operator swaps
         ``ti.task`` to the concrete unmapped instance through Airflow's own
         ``context["ti"]`` mutation, and a value captured at yield time would go stale.
+
+        Returns:
+            Any containing the prepared operator copy, or the concrete unmapped
+            instance for a rendered mapped operator.
         """
 
         return self._ti.task
 
     @property
     def xcoms(self) -> dict[str, Any]:
-        """Return a snapshot of XCom values held by the fake supervisor."""
+        """Return a snapshot of XCom values held by the fake supervisor.
+
+        Returns:
+            dict[str, Any] containing XCom values by key.
+        """
 
         return dict(self._comms.xcoms)
 
     @property
     def sent(self) -> tuple[Any, ...]:
-        """Return a snapshot of every supervisor message in send order."""
+        """Return a snapshot of supervisor traffic.
+
+        Returns:
+            tuple[Any, ...] containing every supervisor message in send order.
+        """
 
         return tuple(self._comms.sent)
 
@@ -652,11 +664,19 @@ def task_context_in_process(
 
     Raises:
         TypeError: The task does not expose a string ``task_id``.
-        ValueError: No Dag identifier is available, ``run_id`` is empty, or
-            ``try_number`` is less than 1.
+        ValueError: No Dag identifier is available, ``run_id`` is empty,
+            ``try_number`` is less than 1, or ``render=False`` was passed for a
+            mapped operator.
         AirflowCompatibilityError: The installed Airflow interface is unsupported.
     """
 
+    if not render and getattr(task, "is_mapped", False):
+        raise ValueError(
+            "`render=False` is unsupported for a mapped operator: Airflow unmaps the "
+            "task to its concrete instance inside `render_template_fields`, which "
+            "`render=False` skips, leaving a `MappedOperator` with no `execute()`. "
+            "Use the default `render=True`."
+        )
     task_runner, runtime_ti = _build_runtime_task_instance(
         task,
         dag_id=dag_id,
@@ -667,20 +687,30 @@ def task_context_in_process(
         try_number=try_number,
     )
 
+    # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
+    from airflow.sdk.execution_time.context import set_current_context
+
     with _installed_supervisor_comms(task_runner, comms) as active_comms:
         context = runtime_ti.get_template_context()
-        # Mirrors `render_task_in_process`: build the context bound to the original
-        # task, then swap in the execution-time copy, same as a real run. For a
-        # mapped operator with `render=True`, `render_template_fields` swaps
-        # `runtime_ti.task` to the concrete unmapped instance -- the handle's `task`
-        # property tracks that swap.
+        # Mirrors `task_runner._prepare`'s own order: build the context bound to the
+        # original task, then swap in the execution-time copy before rendering, same
+        # as a real run. A mapped operator's `prepare_for_execution()` is a no-op --
+        # rendering below is what swaps `runtime_ti.task` to the concrete unmapped
+        # instance, through Airflow's own `context["ti"]` mutation, and the handle's
+        # `task` property tracks that swap.
         runtime_ti.task = runtime_ti.task.prepare_for_execution()
         context["task"] = runtime_ti.task
         if context_overrides:
             context |= context_overrides
         if render:
-            runtime_ti.task.render_template_fields(context)
-        yield InProcessTaskContext(ti=runtime_ti, context=context, comms=active_comms)
+            # The TI's own `render_templates` (not the operator's public
+            # `render_template_fields`) also syncs `ti.is_mapped`, matching what a
+            # supervised run exposes to code branching on it.
+            runtime_ti.render_templates(context)
+        # `task_runner.run` wraps execution the same way, so hand-driven `execute()`
+        # bodies calling `airflow.sdk.get_current_context()` resolve this context.
+        with set_current_context(context):
+            yield InProcessTaskContext(ti=runtime_ti, context=context, comms=active_comms)
 
 
 __all__ = (

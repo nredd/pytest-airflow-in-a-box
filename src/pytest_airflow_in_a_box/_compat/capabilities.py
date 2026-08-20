@@ -469,6 +469,9 @@ _V3_REQUIRED_SYMBOLS = (
     # that move into a loud compatibility failure rather than a silent no-op shim.
     ("airflow.sdk.execution_time.context", "_get_variable"),
     ("airflow.sdk.execution_time.context", "_get_connection"),
+    # `task_context_in_process` wraps the caller's block in `set_current_context` so
+    # hand-driven `execute()` bodies can call `airflow.sdk.get_current_context()`.
+    ("airflow.sdk.execution_time.context", "set_current_context"),
     ("airflow.sdk.execution_time.cache", "SecretCache"),
     ("airflow.sdk.api.datamodels._generated", "DagRun"),
     ("airflow.sdk.api.datamodels._generated", "DagRunState"),

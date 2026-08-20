@@ -468,6 +468,21 @@ def test_task_context_tracks_a_mapped_operator_through_its_task_property() -> No
         assert handle.task is not mapped_operator
         assert handle.task.expression == "4"
         assert handle.task is handle.ti.task
+        assert handle.ti.is_mapped is True
+
+
+def test_task_context_rejects_render_false_for_a_mapped_operator() -> None:
+    """Reject the combination that would yield a ``MappedOperator`` without ``execute``."""
+
+    with DAG(dag_id="in_process_context_mapped_raw", schedule=None) as dag:
+        ReturnOperator.partial(task_id="probe").expand(expression=["{{ 1 + 1 }}"])
+    mapped_operator = dag.get_task("probe")
+
+    with (
+        pytest.raises(ValueError, match="`render=False` is unsupported for a mapped operator"),
+        task_context_in_process(mapped_operator, render=False),
+    ):
+        pytest.fail("the guard must raise before the block runs")
 
 
 def test_task_context_supervisor_comms_deleted_when_previously_absent(
