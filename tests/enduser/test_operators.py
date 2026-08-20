@@ -223,6 +223,18 @@ def test_rendered_template_fields_are_queryable_after_a_run(
 
 
 @pytest.mark.requires_airflow3
+def test_run_task_executes_operator_without_a_dag(run_task: RunTask) -> None:
+    """Run an operator never bound to any Dag, with no `dag=DAG(...)` boilerplate."""
+
+    operator = TemplateOperator(task_id="my_task", payload="{{ dag.dag_id }}", query="SELECT 1")
+
+    result = run_task(operator)
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert result.xcoms["return_value"]["payload"] == operator.dag.dag_id
+
+
+@pytest.mark.requires_airflow3
 def test_operator_lifecycle_hooks_run_in_order(run_task: RunTask) -> None:
     """Invoke pre-execute, execute, and post-execute in author order."""
 

@@ -297,8 +297,11 @@ class RenderTask(Protocol):
 
         Parameters:
             task: Any containing the Airflow operator or bound TaskFlow task.
-            dag_id: str | None overriding the Dag identifier, or ``None`` to
-                read it from the task's bound Dag.
+            dag_id: str | None overriding a bound Dag's identifier or naming
+                the synthetic Dag auto-created and bound in place when the
+                task is unbound, or ``None`` to read the bound Dag -- deriving
+                a deterministic per-test, xdist-safe identifier when there is
+                none.
             run_id: str identifying the synthetic manual run.
             logical_date: datetime | None pinning the run's logical date.
             params: dict[str, Any] | None overriding declared Dag params.
@@ -314,8 +317,9 @@ class RenderTask(Protocol):
         Returns:
             Any containing the rendered operator: a `prepare_for_execution()` copy
             of `task` for a plain operator, or the concrete unmapped instance for a
-            mapped one. Never the exact `task` object passed in -- the original is
-            never mutated, so always use the return value.
+            mapped one. Never the exact `task` object passed in -- rendering never
+            mutates the original (binding an unbound task in place to a synthetic
+            Dag is the one side effect), so always use the return value.
         """
 
 
@@ -417,8 +421,11 @@ class RunTask(Protocol):
 
         Parameters:
             task: Any containing the Airflow operator or bound TaskFlow task.
-            dag_id: str | None overriding the Dag identifier, or ``None`` to
-                read it from the task's bound Dag.
+            dag_id: str | None overriding a bound Dag's identifier or naming
+                the synthetic Dag auto-created and bound in place when the
+                task is unbound, or ``None`` to read the bound Dag -- deriving
+                a deterministic per-test, xdist-safe identifier when there is
+                none.
             run_id: str identifying the synthetic manual run.
             logical_date: datetime | None pinning the run's logical date.
             params: dict[str, Any] | None overriding declared Dag params.

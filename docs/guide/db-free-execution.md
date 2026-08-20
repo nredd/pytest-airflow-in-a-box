@@ -23,12 +23,36 @@ def test_operator(run_task):
     assert result.xcoms["return_value"] == "expected"
 ```
 
+## Operators without a Dag
+
+An operator never bound to any Dag works as-is -- no `dag=DAG(...)` boilerplate:
+
+```python
+def test_floating_operator(run_task):
+    operator = BashOperator(task_id="my_task", bash_command="echo {{ dag.dag_id }}")
+
+    result = run_task(operator)
+
+    assert result.state == TaskInstanceState.SUCCESS
+```
+
+The Task SDK requires every executing task to have a bound Dag, so `run_task` (and
+`render_task`) bind an unbound operator IN PLACE to a synthetic
+`DAG(dag_id=..., schedule=None)`. Pass `dag_id="..."` to name it, or leave it off for a
+deterministic, bounded, xdist-safe identifier derived from the test's nodeid, the xdist
+worker, and a per-fixture invocation counter -- the same derivation `dag_maker` uses for
+its default Dag ids, salted so the two never collide. The identifier is visible as
+`{{ dag.dag_id }}` in templates and as `operator.dag.dag_id` after the call. A bound
+operator is never rebound (the SDK forbids it) -- repeated calls with the same operator
+reuse the first binding.
+
 ## Rendering template fields without running
 
 `render_task` shares `run_task`'s Task SDK machinery and the same 2.x gate, but stops after
 resolving `template_fields` -- it never calls `execute()`. Use it when a test only needs to
 assert on an operator's resolved attributes, not drive its body. It renders onto a fresh copy
-and returns that copy; the operator passed in is never mutated, so a Dag built once and reused
+and returns that copy; rendering never mutates the operator passed in (auto-binding an
+unbound operator to a synthetic Dag is the one side effect), so a Dag built once and reused
 across tests renders independently every call. Always assert against the return value (note the
 `rendered(...)` matcher goes on the LEFT -- see its docstring for why):
 

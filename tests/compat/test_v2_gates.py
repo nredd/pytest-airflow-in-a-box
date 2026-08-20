@@ -76,7 +76,8 @@ def test_fixtures_fail_loud_when_gated(
 
     monkeypatch.setattr(module, "v2_gate_message", fake_gate)
     raw = getattr(module, fixture_name).__wrapped__
-    arguments = (SimpleNamespace(),) if fixture_name == "api_server_url" else ()
+    needs_request = {"api_server_url", "run_task", "render_task"}
+    arguments = (SimpleNamespace(),) if fixture_name in needs_request else ()
 
     with pytest.raises(pytest.fail.Exception, match=f"gated `{fixture_name}`"):
         _drive_fixture(raw, arguments)

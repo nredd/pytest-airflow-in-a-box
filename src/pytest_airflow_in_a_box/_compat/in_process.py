@@ -13,8 +13,13 @@ supervisor, but stops after ``get_template_context()`` and calls the operator's 
 public ``render_template_fields`` instead of ``task_runner.run``. It mirrors
 ``task_runner.run``'s own preparation step and renders onto a
 ``prepare_for_execution()`` copy too, so a shared operator (a module-level Dag, a
-session-scoped fixture) never contaminates across repeated calls -- the caller's
-`task` is never mutated, and every result comes back through the return value.
+session-scoped fixture) never contaminates across repeated calls -- rendering never
+mutates the caller's `task`, and every result comes back through the return value.
+
+Both entry points accept a task bound to no Dag at all: the Task SDK's own context
+construction requires ``task.dag`` unconditionally, so an unbound task is bound IN
+PLACE to a synthetic ``DAG(dag_id=..., schedule=None)`` named by the `dag_id`
+argument. A bound task is never rebound.
 
 ``task_context_in_process`` stops even earlier: it prepares the same real
 ``RuntimeTaskInstance``-backed template context and then hands control to the
@@ -270,6 +275,24 @@ def _fill_declared_nones(model: Any, payload: dict[str, Any]) -> dict[str, Any]:
     } | payload
 
 
+def bound_dag_or_none(task: Any) -> Any | None:
+    """Return the task's bound Dag, or ``None`` when the task is unbound.
+
+    Parameters:
+        task: Any containing the Airflow operator or bound TaskFlow task.
+
+    Returns:
+        Any | None containing the bound Dag object, or ``None`` when the SDK
+        operator's ``dag`` property reports the task as unbound.
+    """
+
+    try:
+        return task.dag
+    except (AttributeError, RuntimeError):
+        # The SDK operator's `dag` property raises when the task is unbound.
+        return None
+
+
 class _RuntimeTaskInstanceBuild(NamedTuple):
     """Paired result of constructing one ``RuntimeTaskInstance``.
 
@@ -295,12 +318,16 @@ def _build_runtime_task_instance(
     """Validate arguments and construct one ``RuntimeTaskInstance`` bound to `task`.
 
     Shared by `run_task_in_process` and `render_task_in_process`, which diverge only
-    in what they do with the resulting instance and its template context.
+    in what they do with the resulting instance and its template context. An unbound
+    `task` is bound IN PLACE to a synthetic ``DAG(dag_id=..., schedule=None)`` named
+    by `dag_id`, because the Task SDK's own context construction requires
+    ``task.dag`` unconditionally. A bound task is never rebound.
 
     Parameters:
         task: Any containing the Airflow operator or bound TaskFlow task.
-        dag_id: str | None overriding the Dag identifier, or ``None`` to read
-            it from the task's bound Dag.
+        dag_id: str | None overriding the Dag identifier and naming the synthetic
+            Dag auto-bound to an unbound task, or ``None`` to read it from the
+            task's bound Dag.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -325,16 +352,18 @@ def _build_runtime_task_instance(
         raise ValueError("`run_id` must be a non-empty run identifier")
     if try_number < 1:
         raise ValueError("`try_number` must be at least 1")
-    try:
-        bound_dag = task.dag
-    except (AttributeError, RuntimeError):
-        # The SDK operator's `dag` property raises when the task is unbound.
-        bound_dag = None
+    bound_dag = bound_dag_or_none(task)
     resolved_dag_id = dag_id if dag_id else getattr(bound_dag, "dag_id", None)
     if not isinstance(resolved_dag_id, str) or not resolved_dag_id:
         raise ValueError("`dag_id` is required when the task is not bound to a Dag")
 
     resolve_capabilities()
+
+    if bound_dag is None:
+        # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
+        from airflow.sdk import DAG
+
+        task.dag = DAG(dag_id=resolved_dag_id, schedule=None)
 
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     from airflow.sdk.api.datamodels._generated import DagRun as DagRunDataModel
@@ -425,12 +454,15 @@ def run_task_in_process(
     """Execute one operator through ``task_runner.run`` with fake supervision.
 
     ``params`` are delivered as the synthetic DagRun's ``conf`` and validated
-    against the Dag's declared params exactly like a triggered run.
+    against the Dag's declared params exactly like a triggered run. An unbound
+    `task` is bound in place to a synthetic Dag named by `dag_id` -- an observable
+    side effect on the caller's operator; a bound task is never rebound.
 
     Parameters:
         task: Any containing the Airflow operator or bound TaskFlow task.
-        dag_id: str | None overriding the Dag identifier, or ``None`` to read
-            it from the task's bound Dag.
+        dag_id: str | None overriding the Dag identifier and naming the synthetic
+            Dag auto-bound to an unbound task, or ``None`` to read it from the
+            task's bound Dag.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -502,12 +534,15 @@ def render_task_in_process(
     template that the first call already collapsed to a literal. Always use the
     return value. For a mapped operator, that is the concrete unmapped instance
     Airflow's own unmapping produces for `map_index`, not a copy of the mapped
-    operator itself.
+    operator itself. Rendering never mutates the caller's `task`; binding an
+    unbound task in place to a synthetic Dag named by `dag_id` is the one
+    observable side effect, and a bound task is never rebound.
 
     Parameters:
         task: Any containing the Airflow operator or bound TaskFlow task.
-        dag_id: str | None overriding the Dag identifier, or ``None`` to read
-            it from the task's bound Dag.
+        dag_id: str | None overriding the Dag identifier and naming the synthetic
+            Dag auto-bound to an unbound task, or ``None`` to read it from the
+            task's bound Dag.
         run_id: str identifying the synthetic manual run.
         logical_date: datetime | None pinning the run's logical date.
         params: dict[str, Any] | None overriding declared Dag params.
@@ -718,6 +753,7 @@ __all__ = (
     "FakeSupervisorComms",
     "InProcessRunResult",
     "InProcessTaskContext",
+    "bound_dag_or_none",
     "render_task_in_process",
     "run_task_in_process",
     "task_context_in_process",

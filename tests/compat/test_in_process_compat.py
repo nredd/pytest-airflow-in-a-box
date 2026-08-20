@@ -279,6 +279,42 @@ def test_requires_dag_id_for_unbound_task() -> None:
         run_task_in_process(operator)
 
 
+def test_binds_unbound_task_to_synthetic_dag() -> None:
+    """Bind an unbound task in place to a synthetic Dag named by ``dag_id``."""
+
+    operator = ReturnOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    result = run_task_in_process(operator, dag_id="synthetic_bind")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert result.xcoms["return_value"] == "synthetic_bind"
+    assert operator.dag.dag_id == "synthetic_bind"
+
+
+def test_bound_task_is_not_rebound_by_dag_id_override() -> None:
+    """Keep the original Dag binding when ``dag_id`` overrides a bound task's id."""
+
+    operator = _build(ReturnOperator, "in_process_bound", expression="x")
+    original_dag = operator.dag
+
+    result = run_task_in_process(operator, dag_id="other")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag is original_dag
+    assert operator.dag.dag_id == "in_process_bound"
+
+
+def test_render_binds_unbound_task_to_synthetic_dag() -> None:
+    """Render an unbound task against the synthetic Dag named by ``dag_id``."""
+
+    operator = ReturnOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    rendered_operator = render_task_in_process(operator, dag_id="render_bind")
+
+    assert rendered_operator.expression == "render_bind"
+    assert operator.dag.dag_id == "render_bind"
+
+
 def test_rejects_empty_run_id() -> None:
     """Reject an empty run identifier."""
 
