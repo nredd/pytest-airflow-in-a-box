@@ -10,21 +10,29 @@ References:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
 
 from pytest_airflow_in_a_box._compat import components as sandbox
 from pytest_airflow_in_a_box._compat.capabilities import v2_gate_message
-from pytest_airflow_in_a_box._compat.components import KIND_CLASSIFIERS, _as_type
+from pytest_airflow_in_a_box._compat.components import (
+    KIND_CLASSIFIERS,
+    LISTENER_CORE_MANAGER_ONLY,
+    LISTENER_SDK_MANAGER_ONLY,
+    _as_type,
+)
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
-from pytest_airflow_in_a_box.components import ComponentKind, check_component
+from pytest_airflow_in_a_box.components import ComponentKind, ComponentReport, check_component
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from pytest_airflow_in_a_box.types import ComponentRegistry
+
+LOGGER = logging.getLogger(__name__)
 
 # The four kinds `round_trip()` can classify unambiguously: each takes a bare component
 # positionally and nothing else structurally identifies it. `POLICY` is excluded on
@@ -41,6 +49,42 @@ _ROUND_TRIP_KINDS = (
     ComponentKind.EXECUTOR,
     ComponentKind.SECRETS_BACKEND,
 )
+
+
+def _scoped_listener_problems(
+    report: ComponentReport, *, core: bool, task: bool
+) -> ComponentReport:
+    """Drop the manager-scope listener problems the requested registration scope moots.
+
+    `check_component` reports everything wrong with a listener in the abstract,
+    including `listener-core-manager-only` / `listener-sdk-manager-only` -- hookimpls
+    whose hookspec exists on only one manager. Those are real registration problems
+    ONLY when the one manager carrying the hookspec was not requested (the hookimpl
+    could never fire); when that manager IS requested, a single-scope hookspec is the
+    normal, supported case (`on_dag_run_success` exists on the core manager alone by
+    design). Only the registration call knows the requested scope, so the filtering
+    lives here rather than in the public, purely static `check_component`. The two
+    scope-independent checks (`listener-no-matching-hookspec`,
+    `listener-unknown-argument`) always pass through.
+
+    Parameters:
+        report: ComponentReport containing the unfiltered `check_component` outcome.
+        core: bool mirroring `ComponentRegistry.listener`'s own flag.
+        task: bool mirroring `ComponentRegistry.listener`'s own flag.
+
+    Returns:
+        ComponentReport containing only the problems relevant to the requested scope.
+    """
+
+    mooted: set[str] = set()
+    if core:
+        mooted.add(LISTENER_CORE_MANAGER_ONLY)
+    if task:
+        mooted.add(LISTENER_SDK_MANAGER_ONLY)
+    return ComponentReport(
+        component_name=report.component_name,
+        problems=tuple(problem for problem in report.problems if problem.code not in mooted),
+    )
 
 
 class _ComponentSandbox:
@@ -66,6 +110,7 @@ class _ComponentSandbox:
         sandbox.clear_plugins_manager_caches()
         self._sys_modules_before = sandbox.snapshot_sys_modules()
         self._settings_keys_before = sandbox.snapshot_settings_keys()
+        self._macros_keys_before = sandbox.snapshot_macros_module_keys()
         self._is_noop_before = sandbox.snapshot_task_instance_mutation_hook_is_noop()
         self._secrets_backend_list_before = sandbox.snapshot_secrets_backend_list()
         self._executor_loader_before = sandbox.snapshot_executor_loader()
@@ -88,7 +133,8 @@ class _ComponentSandbox:
     def listener(self, component: object, *, core: bool = True, task: bool = True) -> None:
         """See `pytest_airflow_in_a_box.types.ComponentRegistry.listener`."""
 
-        check_component(component, kind=ComponentKind.LISTENER).raise_for_problems()
+        report = check_component(component, kind=ComponentKind.LISTENER)
+        _scoped_listener_problems(report, core=core, task=task).raise_for_problems()
         managers = []
         if core:
             managers.append(self._core_listener)
@@ -107,7 +153,14 @@ class _ComponentSandbox:
         sandbox.register_listener(component, tuple(managers))
 
     def policy(self, **hooks: Callable[..., object]) -> None:
-        """See `pytest_airflow_in_a_box.types.ComponentRegistry.policy`."""
+        """See `pytest_airflow_in_a_box.types.ComponentRegistry.policy`.
+
+        A registered `task_instance_mutation_hook` additionally flips
+        `task_instance_mutation_hook.is_noop` to False -- without that, Airflow's own
+        dispatch sites short-circuit on the flag and the hookimpl never fires (see
+        `mark_task_instance_mutation_hook_active`). The construction-time is_noop
+        snapshot already covers reverting it.
+        """
 
         if not hooks:
             raise sandbox.ComponentSandboxError(
@@ -116,6 +169,8 @@ class _ComponentSandbox:
         plugin_class = sandbox.build_policy_plugin(hooks)
         check_component(plugin_class, kind=ComponentKind.POLICY).raise_for_problems()
         sandbox.register_policy(plugin_class, self._policy_pm)
+        if "task_instance_mutation_hook" in hooks:
+            sandbox.mark_task_instance_mutation_hook_active()
 
     def secrets_backend(self, component: object, *, first: bool = True) -> None:
         """See `pytest_airflow_in_a_box.types.ComponentRegistry.secrets_backend`."""
@@ -143,31 +198,107 @@ class _ComponentSandbox:
         if kind is ComponentKind.PLUGIN:
             self.plugin(component)
         elif kind is ComponentKind.LISTENER:
-            self.listener(component)
+            # `task` follows the installed release's Task SDK availability rather than
+            # `listener()`'s own default, so a 3.1.x install (no Task SDK listener
+            # manager at all) round-trips core-only instead of raising.
+            self.listener(component, task=self._task_listener is not None)
         elif kind is ComponentKind.EXECUTOR:
             self.executor(component)
         else:
             self.secrets_backend(component)
 
     def finalize(self) -> None:
-        """Restore every snapshot, in roughly reverse registration order.
+        """Restore every snapshot, isolating the steps from each other's failures.
 
-        Plugins-manager caches are cleared again at the end (not just restored via a
-        snapshot -- there is no cache *value* to snapshot, only a clear operation; see
-        `clear_plugins_manager_caches`'s docstring), so nothing this test computed
-        lingers for the next one.
+        Ordering, in three deliberate groups: first the registry restores (executor
+        loader, secrets, is_noop, listeners, policy), in roughly reverse registration
+        order; then `restore_sys_modules` BEFORE `clear_plugins_manager_caches`, so
+        that if anything swapped a plugins-manager module object during the test the
+        clear lands on the restored module the next test will actually import, not on
+        a discarded replacement; then the attribute-key sweeps (macros parent,
+        `airflow.settings`), which depend on nothing above. Plugins-manager caches are
+        cleared rather than restored because there is no cache *value* to snapshot,
+        only a clear operation -- see `clear_plugins_manager_caches`'s docstring.
+
+        Every step runs even when an earlier one raises: each is guarded individually,
+        the first failure is re-raised afterward with its original traceback, and any
+        additional failures are logged -- a raise partway through must never skip the
+        remaining restores, since a partial restore is exactly the cross-test
+        contamination this sandbox exists to prevent.
+
+        Raises:
+            Exception: The first failure any restore step raised, re-raised as-is
+                after every remaining step has run.
         """
 
-        sandbox.restore_executor_loader(self._executor_loader_before)
-        sandbox.restore_secrets_backend_list(self._secrets_backend_list_before)
-        sandbox.restore_task_instance_mutation_hook_is_noop(self._is_noop_before)
-        sandbox.listener_manager_restore(self._core_listener, self._core_listener_before)
+        steps: list[tuple[str, Callable[[], None]]] = [
+            (
+                "restore_executor_loader",
+                lambda: sandbox.restore_executor_loader(self._executor_loader_before),
+            ),
+            (
+                "restore_secrets_backend_list",
+                lambda: sandbox.restore_secrets_backend_list(self._secrets_backend_list_before),
+            ),
+            (
+                "restore_task_instance_mutation_hook_is_noop",
+                lambda: sandbox.restore_task_instance_mutation_hook_is_noop(self._is_noop_before),
+            ),
+            (
+                "listener_manager_restore (core)",
+                lambda: sandbox.listener_manager_restore(
+                    self._core_listener, self._core_listener_before
+                ),
+            ),
+        ]
         if self._task_listener is not None:
-            sandbox.listener_manager_restore(self._task_listener, self._task_listener_before)
-        sandbox.restore_policy_plugins(self._policy_pm, self._policy_plugins_before)
-        sandbox.clear_plugins_manager_caches()
-        sandbox.restore_sys_modules(self._sys_modules_before, self._plugins_folder)
-        sandbox.restore_settings_keys(self._settings_keys_before)
+            steps.append(
+                (
+                    "listener_manager_restore (task)",
+                    lambda: sandbox.listener_manager_restore(
+                        self._task_listener, self._task_listener_before
+                    ),
+                )
+            )
+        steps.extend(
+            (
+                (
+                    "restore_policy_plugins",
+                    lambda: sandbox.restore_policy_plugins(
+                        self._policy_pm, self._policy_plugins_before
+                    ),
+                ),
+                (
+                    "restore_sys_modules",
+                    lambda: sandbox.restore_sys_modules(
+                        self._sys_modules_before, self._plugins_folder
+                    ),
+                ),
+                ("clear_plugins_manager_caches", sandbox.clear_plugins_manager_caches),
+                (
+                    "restore_macros_module_keys",
+                    lambda: sandbox.restore_macros_module_keys(self._macros_keys_before),
+                ),
+                (
+                    "restore_settings_keys",
+                    lambda: sandbox.restore_settings_keys(self._settings_keys_before),
+                ),
+            )
+        )
+        failures: list[tuple[str, Exception]] = []
+        for step_name, step in steps:
+            try:
+                step()
+            except Exception as error:
+                failures.append((step_name, error))
+        if not failures:
+            return
+        for step_name, error in failures[1:]:
+            LOGGER.error(
+                f"component sandbox restore step `{step_name}` also failed "
+                f"(suppressed in favor of the first failure): {error!r}"
+            )
+        raise failures[0][1]
 
 
 @pytest.fixture

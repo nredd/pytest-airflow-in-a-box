@@ -494,6 +494,12 @@ class ComponentRegistry(Protocol):
     def listener(self, component: object, *, core: bool = True, task: bool = True) -> None:
         """Register one listener with the core and/or Task SDK listener manager.
 
+        The conformance check's manager-scope findings are filtered by the requested
+        scope: a hookimpl whose hookspec exists on only one manager (core-only
+        ``on_dag_run_success``, for example) is accepted whenever that manager is among
+        the requested ones, and refused only when it could never fire -- registered
+        exclusively with the manager that lacks its hookspec.
+
         Parameters:
             component: object containing a listener class or instance carrying at least
                 one ``@hookimpl``-decorated method.
@@ -510,7 +516,11 @@ class ComponentRegistry(Protocol):
 
         Registers directly with Airflow's policy plugin manager and never writes an
         ``airflow_local_settings.py`` file, so per-test policies are fully decoupled
-        from the ``airflow_local_settings`` collision guard.
+        from the ``airflow_local_settings`` collision guard. A registered
+        ``task_instance_mutation_hook`` additionally flips the
+        ``task_instance_mutation_hook.is_noop`` dispatch gate to False for the test
+        (reverted at teardown) -- Airflow short-circuits on that flag, so the hookimpl
+        would otherwise register but never fire.
 
         Parameters:
             hooks: Callable[..., object] values keyed by hookspec name (``task_policy``,
@@ -553,8 +563,11 @@ class ComponentRegistry(Protocol):
         Classifies ``component`` as exactly one of plugin, listener, executor, or
         secrets backend -- the same classification
         ``pytest_airflow_in_a_box.components.check_component`` uses for auto-detection
-        -- and calls that method with its default keyword arguments. Not a substitute
-        for ``policy()``, which has no bare-component form to classify.
+        -- and calls that method with its default keyword arguments, except a
+        listener's ``task`` flag, which follows the installed release's Task SDK
+        availability so a 3.1.x install (no Task SDK listener manager at all)
+        round-trips core-only rather than raising. Not a substitute for ``policy()``,
+        which has no bare-component form to classify.
 
         Parameters:
             component: object containing the component to classify and register.

@@ -31,7 +31,6 @@ References:
 
 from __future__ import annotations
 
-import copy
 import inspect
 import json
 import sys
@@ -48,6 +47,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     CERTIFIED_SHARED_MODULE_LOADING_CACHES,
     AirflowCompatibilityError,
     AirflowFamily,
+    CertifiedCaches,
     ExecutorContract,
     PluginsManagerShape,
     SharedModuleLoading,
@@ -2238,14 +2238,16 @@ CHECK_REGISTRY: tuple[tuple[str, str, Callable[[object], Iterable[ComponentProbl
 #
 # THE LOAD-BEARING DECISION: cache-clearable callables are enumerated BY INTROSPECTION
 # (walking `vars(module)` for anything exposing a callable `.cache_clear`), then the
-# observed name set is verified against the certified set in `_compat.capabilities` and
-# any symmetric difference is a hard failure (`ComponentSandboxError`), never a silent
-# skip. Pure introspection with no certified cross-check would under-clear silently the
-# moment upstream adds a twelfth cache function in a release this plugin has not
-# certified yet -- surfacing three files later as unexplained cross-test contamination,
-# the worst failure mode this feature can have. A pure hardcoded table (introspection
-# dropped entirely) is unmaintainable at eleven names times a dozen releases; certifying
-# by `PluginsManagerShape`/`SharedModuleLoading` instead of by release keeps the table at
+# observed name set is verified against the certified `CertifiedCaches` row in
+# `_compat.capabilities` -- a missing `required` name or an uncertified extra is a hard
+# failure (`ComponentSandboxError`), never a silent skip, while a certified-but-absent
+# `optional` name (upstream added it mid-release-line) is tolerated. Pure introspection
+# with no certified cross-check would under-clear silently the moment upstream adds
+# another cache function in a release this plugin has not certified yet -- surfacing
+# three files later as unexplained cross-test contamination, the worst failure mode this
+# feature can have. A pure hardcoded table (introspection dropped entirely) is
+# unmaintainable at eleven names times a dozen releases; certifying by
+# `PluginsManagerShape`/`SharedModuleLoading` instead of by release keeps the table at
 # two rows apiece. Do NOT simplify this to bare introspection with no certified
 # cross-check, and do NOT simplify it to a bare hardcoded table with no introspection --
 # either alone reintroduces the exact failure this design exists to prevent.
@@ -2328,17 +2330,46 @@ def listener_managers() -> tuple[Any, Any | None]:
 def policy_plugin_manager() -> Any:
     """Resolve the policy plugin manager without static attribute constraints.
 
+    Two certified shapes, probed by import failure like `listener_managers`: 3.2+
+    exposes the cached getter `airflow.settings.get_policy_plugin_manager()`, while
+    3.1.x has only the module global `airflow.settings.POLICY_PLUGIN_MANAGER`, assigned
+    by `import_local_settings()` during `settings.initialize()` (confirmed by reading
+    the `apache-airflow-core==3.1.0` and `==3.1.8` wheels' `settings.py`; see
+    PROVENANCE.md). The 3.2+ getter's cache must never be cleared -- like the listener
+    managers, clearing it would rebuild a fresh manager on the next call and lose the
+    run's own `airflow_local_settings.py`-derived policy plugin (if any) until something
+    re-triggers `import_local_settings()`, which nothing in a running test session does.
+
     Returns:
-        Any containing the cached `pluggy.PluginManager`
-        `airflow.settings.get_policy_plugin_manager()` returns. Its cache must never be
-        cleared -- like the listener managers, clearing it would rebuild a fresh manager
-        on the next call and lose the run's own `airflow_local_settings.py`-derived
-        policy plugin (if any) until something re-triggers `import_local_settings()`,
-        which nothing in a running test session does.
+        Any containing the live policy `pluggy.PluginManager`.
+
+    Raises:
+        ComponentSandboxError: The 3.1.x module global is still None, meaning
+            `settings.initialize()` has not run -- impossible through the
+            `airflow_components` fixture, whose bootstrap always initializes settings
+            first, so this is a loud guard against direct misuse.
     """
 
-    from airflow.settings import get_policy_plugin_manager
+    try:
+        from airflow.settings import get_policy_plugin_manager
+    except ImportError:
+        # A dynamic, string-based import on purpose, mirroring
+        # `_shared_module_loading_modules`'s SINGLE branch: `POLICY_PLUGIN_MANAGER`
+        # does not exist on the certified 3.2+ releases this project is actually
+        # developed and type-checked against, so a static attribute access on the
+        # statically-imported `airflow.settings` does not resolve under `ty`.
+        settings_module = import_module("airflow.settings")
 
+        manager = settings_module.POLICY_PLUGIN_MANAGER
+        if manager is None:
+            raise ComponentSandboxError(
+                "`airflow.settings.POLICY_PLUGIN_MANAGER` is None: "
+                "`settings.initialize()` has not run yet, so there is no policy plugin "
+                "manager to register with."
+                # `from None` on purpose: the swallowed ImportError is the 3.1.x shape
+                # probe, not the cause of this failure.
+            ) from None
+        return manager
     return get_policy_plugin_manager()
 
 
@@ -2361,13 +2392,16 @@ def _shared_module_loading_modules(shape: SharedModuleLoading) -> tuple[Any, ...
     """
 
     if shape is SharedModuleLoading.SINGLE:
-        # A dynamic, string-based import on purpose: `airflow.utils.entry_points` does
-        # not exist on the certified 3.2+ releases this project is actually developed
-        # and type-checked against (it raises `AttributeError`, not `ModuleNotFoundError`
-        # -- `airflow.utils` shims removed submodules that way), so a static
-        # `from airflow.utils import entry_points` does not resolve under `ty` at all.
-        # This branch is reached only when `shape is SINGLE`, i.e. only on the 3.1.x
-        # release where the module genuinely exists; see PROVENANCE.md.
+        # A dynamic, string-based import on purpose: on the certified 3.2+ releases
+        # this project is actually developed and type-checked against,
+        # `airflow.utils.entry_points` survives only as a PEP 562 deprecation shim (an
+        # essentially empty namespace forwarding to `airflow._shared.module_loading`),
+        # so a static `from airflow.utils import entry_points` does not resolve under
+        # `ty`. The shim also means `import_module` here SUCCEEDS on 3.2+ -- returning
+        # an empty stub with none of the certified cache functions -- which is why the
+        # compat test for this branch asserts the resolved function set, not just the
+        # module name. The branch is reached only when `shape is SINGLE`, i.e. only on
+        # the 3.1.x releases where the real module exists; see PROVENANCE.md.
         module = import_module("airflow.utils.entry_points")
 
         return (module,)
@@ -2400,28 +2434,38 @@ def _cache_clearable_names(module: Any) -> frozenset[str]:
     )
 
 
-def _verify_and_clear_cache_functions(module: Any, certified: frozenset[str]) -> None:
-    """Verify observed `functools.cache` names against the certified set, then clear them.
+def _verify_and_clear_cache_functions(module: Any, certified: CertifiedCaches) -> None:
+    """Verify observed `functools.cache` names against the certified sets, then clear them.
+
+    The observed set must be a superset of `certified.required` and a subset of
+    `certified.required | certified.optional`: a missing required name and an
+    uncertified extra are both hard failures, while a certified-but-absent optional name
+    (a cache function upstream added mid-release-line, absent on the earlier releases
+    the same `PluginsManagerShape` row covers) is tolerated. Only names that are both
+    certified and actually present are cleared.
 
     Parameters:
         module: Any containing the module to introspect and clear.
-        certified: frozenset[str] containing the certified cache-clearable names.
+        certified: CertifiedCaches containing the certified cache-clearable names.
 
     Raises:
-        ComponentSandboxError: The observed name set differs from `certified`.
+        ComponentSandboxError: The observed name set is missing a required name or
+            contains an uncertified extra.
     """
 
     observed = _cache_clearable_names(module)
-    if observed != certified:
-        missing = sorted(certified - observed)
-        extra = sorted(observed - certified)
+    allowed = certified.required | certified.optional
+    missing = sorted(certified.required - observed)
+    extra = sorted(observed - allowed)
+    if missing or extra:
         raise ComponentSandboxError(
             f"`{module.__name__}`'s cache-clearable callables no longer match the "
             f"certified set for the installed Apache Airflow release: missing "
-            f"{missing}, uncertified extra {extra}. This plugin's `airflow_components` "
+            f"{missing}, uncertified extra {extra} (certified-but-absent optional "
+            f"names are tolerated and not listed). This plugin's `airflow_components` "
             f"snapshot/restore machinery is out of date for this release; file an issue."
         )
-    for name in certified:
+    for name in observed & allowed:
         getattr(module, name).cache_clear()
 
 
@@ -2436,8 +2480,11 @@ _MODULE_GLOBAL_EMPTY_CONTAINER_RESETS: dict[str, Callable[[], object]] = {
 }
 
 
-def _verify_and_reset_module_globals(module: Any, certified: frozenset[str]) -> None:
+def _verify_and_reset_module_globals(module: Any, certified: CertifiedCaches) -> None:
     """Verify every certified global is present, then reset each to its cache-empty value.
+
+    Only `certified.required` participates -- the MODULE_GLOBALS rows certify a closed,
+    fully released 3.1.x line, so their `optional` set is structurally empty.
 
     No symmetric-difference check runs here, unlike `_verify_and_clear_cache_functions`:
     a plain module-level global carries no structural marker distinguishing lazily-cached
@@ -2452,20 +2499,20 @@ def _verify_and_reset_module_globals(module: Any, certified: frozenset[str]) -> 
 
     Parameters:
         module: Any containing the module to introspect and reset.
-        certified: frozenset[str] containing the certified global names.
+        certified: CertifiedCaches containing the certified global names.
 
     Raises:
         ComponentSandboxError: A certified name is missing from `module`.
     """
 
-    missing = sorted(name for name in certified if not hasattr(module, name))
+    missing = sorted(name for name in certified.required if not hasattr(module, name))
     if missing:
         raise ComponentSandboxError(
             f"`{module.__name__}` no longer defines the certified plugin-cache globals "
             f"{missing}. This plugin's `airflow_components` snapshot/restore machinery "
             f"is out of date for the installed Apache Airflow release; file an issue."
         )
-    for name in certified:
+    for name in certified.required:
         factory = _MODULE_GLOBAL_EMPTY_CONTAINER_RESETS.get(name)
         setattr(module, name, factory() if factory is not None else None)
 
@@ -2605,7 +2652,7 @@ PLUGIN_LIST_ATTRIBUTES = (
 
 
 def _prepare_plugin_instance(component: object) -> object:
-    """Instantiate a plugin class if needed and deep-copy its mutable list attributes.
+    """Instantiate a plugin class if needed and shallow-copy its mutable list attributes.
 
     `_get_ui_plugins` (and its sibling cache functions) call `.remove()` on a plugin's
     `external_views`/`react_apps`/etc in place while building their own return value.
@@ -2614,10 +2661,19 @@ def _prepare_plugin_instance(component: object) -> object:
     overridden one may be a class attribute shared across every instance of that class --
     so a second registration of "the same" plugin class (a module-level fixture reused by
     two tests, or a plugin object a test happens to hold onto and register twice) would
-    see a list an earlier `.remove()` call already mutated. Deep-copying every list
-    attribute onto THIS instance specifically, at registration time, makes every
-    registration start from an unmutated copy regardless of what happened to any other
-    instance or to the class default.
+    see a list an earlier `.remove()` call already mutated. Rebinding every list
+    attribute to a fresh `list(...)` onto THIS instance specifically, at registration
+    time, makes every registration start from an unmutated list regardless of what
+    happened to any other instance or to the class default.
+
+    A SHALLOW list copy on purpose, never `copy.deepcopy`: the documented failure mode
+    is in-place mutation of the list CONTAINER, so copying the container fully defeats
+    it, while copying the elements would break real plugins twice over -- the canonical
+    `listeners = [some_module]` shape (Airflow's own shipped
+    `example_dags/plugins/listener_plugin.py`) cannot deepcopy a module at all
+    (`TypeError: cannot pickle 'module' object`), and where elements CAN copy, Airflow
+    would silently register the copies, so a test asserting against the original
+    objects would observe nothing.
 
     Parameters:
         component: object containing the plugin class or instance to register.
@@ -2629,8 +2685,32 @@ def _prepare_plugin_instance(component: object) -> object:
     instance = component() if isinstance(component, type) else component
     for name in PLUGIN_LIST_ATTRIBUTES:
         if hasattr(instance, name):
-            setattr(instance, name, copy.deepcopy(getattr(instance, name)))
+            setattr(instance, name, list(getattr(instance, name)))
     return instance
+
+
+def _live_plugin_list(module: Any) -> list[Any]:
+    """Resolve one plugins-manager half's live, appendable plugin list.
+
+    Branches on the same structural fact `PluginsManagerShape` certifies, probed
+    directly on the module so a seam-substituted fake drives the branch in tests: the
+    3.2+ CACHED_FUNCTIONS shape stores the list inside `_get_plugins()`'s cached
+    `(plugins, import_errors)` tuple, while the 3.1.x MODULE_GLOBALS shape keeps a plain
+    `plugins` module global that is `None` until `ensure_plugins_loaded()` populates it
+    (both names certified in `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES`; transcribed from
+    the `apache-airflow-core==3.1.0` wheel's `plugins_manager.py`, see PROVENANCE.md).
+
+    Parameters:
+        module: Any containing one plugins-manager module.
+
+    Returns:
+        list[Any] containing the module's live plugin list, loaded if it was not yet.
+    """
+
+    if hasattr(module, "_get_plugins"):
+        return module._get_plugins()[0]
+    module.ensure_plugins_loaded()
+    return module.plugins
 
 
 def register_plugin(component: object) -> object:
@@ -2646,14 +2726,14 @@ def register_plugin(component: object) -> object:
         component: object containing the plugin class or instance to register.
 
     Returns:
-        object containing the live, deep-copied plugin instance that was registered.
+        object containing the live plugin instance that was registered.
     """
 
     instance = _prepare_plugin_instance(component)
     core_module, sdk_module = _plugins_manager_modules()
-    core_module._get_plugins()[0].append(instance)
+    _live_plugin_list(core_module).append(instance)
     if sdk_module is not None:
-        sdk_module._get_plugins()[0].append(instance)
+        _live_plugin_list(sdk_module).append(instance)
     return instance
 
 
@@ -2812,9 +2892,69 @@ def restore_task_instance_mutation_hook_is_noop(value: bool) -> None:
     cast("Any", task_instance_mutation_hook).is_noop = value
 
 
+def mark_task_instance_mutation_hook_active() -> None:
+    """Flip `task_instance_mutation_hook.is_noop` to False so registered hooks fire.
+
+    `airflow/settings.py` sets `is_noop = True` at import time, and the only upstream
+    code that ever flips it is `import_local_settings()` -- which the sandbox's
+    `policy()` deliberately bypasses (that decoupling is the whole point of registering
+    directly with the policy plugin manager; see #109). Real dispatch sites
+    (`DagRun.verify_integrity` among them) short-circuit on the flag and never invoke
+    the pluggy hook while it is True, so a `task_instance_mutation_hook` hookimpl
+    registered without this call would silently never fire. Mirrors
+    `import_local_settings`'s own assignment; the sandbox's is_noop snapshot/restore
+    pair reverts it at teardown.
+    """
+
+    from airflow.settings import task_instance_mutation_hook
+
+    cast("Any", task_instance_mutation_hook).is_noop = False
+
+
+def _executor_loader_module() -> Any:
+    """Import `airflow.executors.executor_loader` without static attribute constraints.
+
+    A seam, mirroring `_plugins_manager_modules()`: a plain function returning `Any`,
+    freely monkeypatchable in a test to substitute a fake module and make the flat 3.1.x
+    global shape (real only on an actual 3.1.x install) coverable on this repository's
+    3.2+ development install.
+
+    Returns:
+        Any containing the `airflow.executors.executor_loader` module.
+    """
+
+    from airflow.executors import executor_loader as module
+
+    return module
+
+
+def _executor_loader_is_per_team(module: Any) -> bool:
+    """Probe whether `executor_loader.py` carries the 3.2+ per-team global shape.
+
+    3.2.0 split every flat lookup global (`_alias_to_executors` and siblings, each
+    `dict[str, ExecutorName]`, plus scalar-valued `_team_name_to_executors`) into a
+    `_per_team`-suffixed dict-of-dicts keyed by team name, with `_team_name_to_executors`
+    becoming list-valued. A structural probe on the live module, not a release-table
+    lookup, so a seam-substituted fake module drives the branch directly in tests. NOT
+    derivable from `ExecutorContract` -- that enum certifies `BaseExecutor` *attribute*
+    contracts for `check_component`, a different fact that merely happens to share the
+    3.2 boundary today; do not merge the two.
+
+    Parameters:
+        module: Any containing the `executor_loader` module to probe.
+
+    Returns:
+        bool containing True for the 3.2+ per-team shape, False for the flat 3.1.x one.
+    """
+
+    return hasattr(module, "_alias_to_executors_per_team")
+
+
 @dataclass(frozen=True)
 class ExecutorLoaderSnapshot:
     """Immutable snapshot of `airflow.executors.executor_loader`'s mutable global state.
+
+    The 3.2+ per-team shape; `ExecutorLoaderSnapshotV31` is the flat 3.1.x sibling.
 
     Parameters:
         executors: dict[str, str] containing `ExecutorLoader.executors`, the class dict
@@ -2838,7 +2978,36 @@ class ExecutorLoaderSnapshot:
     executor_names: list[ExecutorName]
 
 
-def snapshot_executor_loader() -> ExecutorLoaderSnapshot:
+@dataclass(frozen=True)
+class ExecutorLoaderSnapshotV31:
+    """Immutable snapshot of the flat, pre-per-team 3.1.x `executor_loader.py` globals.
+
+    Transcribed from the `apache-airflow-core==3.1.0` and `==3.1.8` wheels'
+    `airflow/executors/executor_loader.py` (identical shape on both; see PROVENANCE.md):
+    the lookup globals carry no `_per_team` suffix and are flat single-level dicts, and
+    `_team_name_to_executors` maps each team name to ONE `ExecutorName` (the last one
+    resolved for that team), not a list.
+
+    Parameters:
+        executors: dict[str, str] containing `ExecutorLoader.executors`.
+        alias_to_executors: dict[str, ExecutorName] containing `_alias_to_executors`.
+        module_to_executors: dict[str, ExecutorName] containing `_module_to_executors`.
+        classname_to_executors: dict[str, ExecutorName] containing
+            `_classname_to_executors`.
+        team_name_to_executors: dict[str | None, ExecutorName] containing
+            `_team_name_to_executors`.
+        executor_names: list[ExecutorName] containing `_executor_names`.
+    """
+
+    executors: dict[str, str]
+    alias_to_executors: dict[str, ExecutorName]
+    module_to_executors: dict[str, ExecutorName]
+    classname_to_executors: dict[str, ExecutorName]
+    team_name_to_executors: dict[str | None, ExecutorName]
+    executor_names: list[ExecutorName]
+
+
+def snapshot_executor_loader() -> ExecutorLoaderSnapshot | ExecutorLoaderSnapshotV31:
     """Force natural executor-name resolution once, then snapshot the resulting state.
 
     Forcing `ExecutorLoader._get_executor_names()` before snapshotting ensures the
@@ -2848,12 +3017,21 @@ def snapshot_executor_loader() -> ExecutorLoaderSnapshot:
     at all, so nothing else in this sandbox would trigger that natural resolution later.
 
     Returns:
-        ExecutorLoaderSnapshot containing independent copies of every mutable global.
+        ExecutorLoaderSnapshot | ExecutorLoaderSnapshotV31 containing independent copies
+        of every mutable global, in the shape matching the installed release.
     """
 
-    from airflow.executors import executor_loader as module
-
+    module = _executor_loader_module()
     module.ExecutorLoader._get_executor_names()
+    if not _executor_loader_is_per_team(module):
+        return ExecutorLoaderSnapshotV31(
+            executors=dict(module.ExecutorLoader.executors),
+            alias_to_executors=dict(module._alias_to_executors),
+            module_to_executors=dict(module._module_to_executors),
+            classname_to_executors=dict(module._classname_to_executors),
+            team_name_to_executors=dict(module._team_name_to_executors),
+            executor_names=list(module._executor_names),
+        )
     return ExecutorLoaderSnapshot(
         executors=dict(module.ExecutorLoader.executors),
         alias_to_executors_per_team={
@@ -2872,22 +3050,35 @@ def snapshot_executor_loader() -> ExecutorLoaderSnapshot:
     )
 
 
-def restore_executor_loader(snapshot: ExecutorLoaderSnapshot) -> None:
+def restore_executor_loader(snapshot: ExecutorLoaderSnapshot | ExecutorLoaderSnapshotV31) -> None:
     """Restore every `executor_loader.py` global from a snapshot, in place.
 
     Every container is cleared and repopulated rather than rebound to a new object,
     matching `restore_secrets_backend_list`'s reasoning: nothing observed imports these
     specific names by reference today, but mutating in place costs nothing extra and
-    stays correct if that ever changes.
+    stays correct if that ever changes. The snapshot's own type, not a fresh probe,
+    selects the branch: the snapshot was built from the live module's actual shape, and
+    dispatching on it keeps snapshot and restore structurally paired.
 
     Parameters:
-        snapshot: ExecutorLoaderSnapshot containing the state to restore.
+        snapshot: ExecutorLoaderSnapshot | ExecutorLoaderSnapshotV31 containing the
+            state to restore.
     """
 
-    from airflow.executors import executor_loader as module
-
+    module = _executor_loader_module()
     module.ExecutorLoader.executors.clear()
     module.ExecutorLoader.executors.update(snapshot.executors)
+    if isinstance(snapshot, ExecutorLoaderSnapshotV31):
+        for flat_target, flat_source in (
+            (module._alias_to_executors, snapshot.alias_to_executors),
+            (module._module_to_executors, snapshot.module_to_executors),
+            (module._classname_to_executors, snapshot.classname_to_executors),
+            (module._team_name_to_executors, snapshot.team_name_to_executors),
+        ):
+            flat_target.clear()
+            flat_target.update(flat_source)
+        module._executor_names[:] = snapshot.executor_names
+        return
     for target, source in (
         (module._alias_to_executors_per_team, snapshot.alias_to_executors_per_team),
         (module._module_to_executors_per_team, snapshot.module_to_executors_per_team),
@@ -2905,13 +3096,21 @@ def restore_executor_loader(snapshot: ExecutorLoaderSnapshot) -> None:
 def register_executor(component: object, *, alias: str) -> str:
     """Register one executor class under `alias` for the duration of the sandbox.
 
-    Injects directly into `ExecutorLoader`'s per-team lookup dicts and its
-    `_executor_names` list, bypassing `core.executor` config-string parsing entirely: a
-    test author's executor class is never already named in the run's fixed
-    `core.executor` config, so there is nothing for the real parsing path to find for it.
-    `component` must be defined at module scope somewhere importable --
-    `ExecutorLoader.load_executor` resolves it later by dotted import path, and a class
-    defined inside a test function has no such path.
+    Injects directly into `ExecutorLoader`'s lookup globals and its `_executor_names`
+    list, bypassing `core.executor` config-string parsing entirely: a test author's
+    executor class is never already named in the run's fixed `core.executor` config, so
+    there is nothing for the real parsing path to find for it. `component` must be
+    defined at module scope somewhere importable -- `ExecutorLoader.load_executor`
+    resolves it later by dotted import path, and a class defined inside a test function
+    has no such path.
+
+    On the 3.2+ per-team shape the `None`-team buckets are created via `setdefault`
+    rather than assumed present, so this function stays independently correct even when
+    nothing (snapshot included) has forced natural resolution first. On the flat 3.1.x
+    shape every write mirrors `_get_executor_names`'s own population loop, including
+    the scalar `_team_name_to_executors[None]` overwrite (upstream's loop assigns, not
+    appends -- last resolved executor per team wins) and the classname key, which
+    upstream derives as `module_path.split(".")[-1]`, exactly the class `__name__` here.
 
     Parameters:
         component: object containing the executor class to register.
@@ -2925,9 +3124,9 @@ def register_executor(component: object, *, alias: str) -> str:
         ComponentSandboxError: `component` has no real, importable module-level path.
     """
 
-    from airflow.executors import executor_loader as module
     from airflow.executors.executor_utils import ExecutorName
 
+    module = _executor_loader_module()
     executor_type = component if isinstance(component, type) else type(component)
     module_path = f"{executor_type.__module__}.{executor_type.__qualname__}"
     if "<locals>" in executor_type.__qualname__:
@@ -2936,10 +3135,16 @@ def register_executor(component: object, *, alias: str) -> str:
             f"inside a function and has no importable path. Move it to module scope."
         )
     name = ExecutorName(alias=alias, module_path=module_path, team_name=None)
-    module._alias_to_executors_per_team[None][alias] = name
-    module._module_to_executors_per_team[None][module_path] = name
-    module._classname_to_executors_per_team[None][executor_type.__name__] = name
-    module._team_name_to_executors[None].append(name)
+    if _executor_loader_is_per_team(module):
+        module._alias_to_executors_per_team.setdefault(None, {})[alias] = name
+        module._module_to_executors_per_team.setdefault(None, {})[module_path] = name
+        module._classname_to_executors_per_team.setdefault(None, {})[executor_type.__name__] = name
+        module._team_name_to_executors.setdefault(None, []).append(name)
+    else:
+        module._alias_to_executors[alias] = name
+        module._module_to_executors[module_path] = name
+        module._classname_to_executors[executor_type.__name__] = name
+        module._team_name_to_executors[None] = name
     module._executor_names.append(name)
     module.ExecutorLoader.executors[alias] = module_path
     return alias
@@ -2993,6 +3198,70 @@ def restore_sys_modules(before: dict[str, ModuleType], plugins_folder: Path) -> 
             del sys.modules[name]
 
 
+def _sdk_macros_module() -> Any | None:
+    """Import the macros parent module plugin macros are attached to, if it exists.
+
+    A seam, mirroring `_plugins_manager_modules()`: monkeypatchable in a test to fake
+    the absent-module branch. Every certified 3.x release attaches plugin macros to the
+    SAME parent, `airflow.sdk.execution_time.macros` -- 3.1.x's core
+    `integrate_macros_plugins` imports it directly, and the 3.2+ shared implementation
+    receives it as `target_macros_module` from both halves (confirmed by reading the
+    3.1.0/3.1.8/3.2.0 core and 1.2.0 task-sdk wheels; see PROVENANCE.md) -- so one seam
+    covers both release lines. The None branch is pure defensive structure for an
+    upstream relocation this plugin has not certified yet.
+
+    Returns:
+        Any | None containing the `airflow.sdk.execution_time.macros` module, or None
+        when it is not importable.
+    """
+
+    try:
+        from airflow.sdk.execution_time import macros
+    except (ImportError, AttributeError):
+        return None
+    return macros
+
+
+def snapshot_macros_module_keys() -> frozenset[str] | None:
+    """Snapshot the attribute names currently defined on the macros parent module.
+
+    Returns:
+        frozenset[str] | None containing every attribute name on
+        `airflow.sdk.execution_time.macros`, or None when the module is not importable.
+    """
+
+    module = _sdk_macros_module()
+    if module is None:
+        return None
+    return frozenset(vars(module))
+
+
+def restore_macros_module_keys(before: frozenset[str] | None) -> None:
+    """Delete any macros-parent attribute not present in a prior snapshot.
+
+    `integrate_macros_plugins` leaks in TWO places per plugin, and they need separate
+    handling because their names differ: it installs the per-plugin macros module into
+    `sys.modules` under a `make_module`-LOWERCASED dotted name (undone by
+    `restore_sys_modules`'s prefix rule), and it `setattr`s the same module object onto
+    the macros parent under the RAW `plugin.name` (undone here). Upstream never removes
+    the attribute, so without this a later test's `{{ macros.<plugin_name>.f() }}`
+    still resolves a module that is no longer in `sys.modules`.
+
+    Parameters:
+        before: frozenset[str] | None containing the snapshot taken at sandbox
+            construction, or None when the macros parent module was not importable then
+            (in which case this is a no-op).
+    """
+
+    if before is None:
+        return
+    module = _sdk_macros_module()
+    if module is None:
+        return
+    for name in set(vars(module)) - before:
+        delattr(module, name)
+
+
 def snapshot_settings_keys() -> frozenset[str]:
     """Snapshot the attribute names currently defined on `airflow.settings`.
 
@@ -3044,11 +3313,13 @@ __all__ = (
     "ComponentProblem",
     "ComponentSandboxError",
     "ExecutorLoaderSnapshot",
+    "ExecutorLoaderSnapshotV31",
     "build_policy_plugin",
     "clear_plugins_manager_caches",
     "listener_manager_restore",
     "listener_manager_snapshot",
     "listener_managers",
+    "mark_task_instance_mutation_hook_active",
     "policy_plugin_manager",
     "register_executor",
     "register_listener",
@@ -3056,12 +3327,14 @@ __all__ = (
     "register_policy",
     "register_secrets_backend",
     "restore_executor_loader",
+    "restore_macros_module_keys",
     "restore_policy_plugins",
     "restore_secrets_backend_list",
     "restore_settings_keys",
     "restore_sys_modules",
     "restore_task_instance_mutation_hook_is_noop",
     "snapshot_executor_loader",
+    "snapshot_macros_module_keys",
     "snapshot_secrets_backend_list",
     "snapshot_settings_keys",
     "snapshot_sys_modules",

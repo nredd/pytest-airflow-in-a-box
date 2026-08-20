@@ -301,13 +301,19 @@ longer match what this plugin has certified.
 - `listener(component, *, core=True, task=True)` -- registers with the core and/or Task
   SDK listener manager. Requesting `task=True` on 3.1.x (no Task SDK listener manager at
   all) raises rather than silently registering core-only; pass `task=False` explicitly on
-  a test that intentionally spans both families
+  a test that intentionally spans both families. The conformance check's manager-scope
+  findings follow the requested scope: a hookimpl whose hookspec exists on only one
+  manager (core-only `on_dag_run_success`, say) is accepted whenever that manager is
+  among the requested ones, and refused only when it could never fire
 - `policy(**hookname_to_callable)` -- builds a policy plugin from hookspec-named
   callables (`task_policy`, `dag_policy`, `task_instance_mutation_hook`,
   `pod_mutation_hook`, `get_airflow_context_vars`, `get_dagbag_import_timeout`) and
   registers it directly with Airflow's policy plugin manager. Never writes an
   `airflow_local_settings.py` file, so per-test policies are fully decoupled from the
-  `airflow_local_settings` collision guard above
+  `airflow_local_settings` collision guard above. A registered
+  `task_instance_mutation_hook` also flips the `is_noop` dispatch gate to False for the
+  test (reverted at teardown) -- Airflow short-circuits on that flag, so the hookimpl
+  would otherwise register but never fire
 - `secrets_backend(component, *, first=True)` -- inserts into the secrets backend search
   path, at the front (checked before every other configured backend) by default
 - `executor(component, *, alias="test") -> str` -- registers an executor class under
@@ -317,8 +323,10 @@ longer match what this plugin has certified.
   inside a test function has none
 - `round_trip(component)` -- classifies `component` as exactly one of plugin, listener,
   executor, or secrets backend (the same classification `check_component`'s own
-  auto-detection uses) and calls that method with its defaults. Not a substitute for
-  `policy()`, which has no bare-component form to classify
+  auto-detection uses) and calls that method with its defaults, except a listener's
+  `task` flag, which follows the installed release's Task SDK availability so a 3.1.x
+  install round-trips core-only rather than raising. Not a substitute for `policy()`,
+  which has no bare-component form to classify
 
 `airflow_components` is unavailable on the Airflow 2.x family, which predates the Task
 SDK's own plugin and listener managers entirely.

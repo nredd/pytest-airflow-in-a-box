@@ -170,7 +170,18 @@ rather than assumed, the same wheel-introspection methodology the capability pro
 `airflow.sdk.plugins_manager` exposes exactly three on the installed 3.3.0, matching issue #113's
 own verified list exactly; `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES` and
 `CERTIFIED_SDK_PLUGINS_MANAGER_CACHES` in `_compat/capabilities.py` encode both sets keyed by
-`PluginsManagerShape.CACHED_FUNCTIONS`. The installed `apache-airflow-core==3.1.0` wheel's
+`PluginsManagerShape.CACHED_FUNCTIONS`. The eleven are NOT release-invariant across the
+`CACHED_FUNCTIONS` bucket: the `apache-airflow-core==3.2.0` and `==3.2.1` wheels' `airflow/plugins_manager.py`
+each carry exactly nine (`get_deadline_references_plugins` and `get_windows_plugins` absent), the
+`==3.2.2` wheel carries ten (`get_deadline_references_plugins` added, `get_windows_plugins` still
+absent), and the `==3.3.0`/`==3.3.1` wheels carry all eleven -- every count read directly from
+the downloaded wheels' `@cache`-decorated definitions, never assumed. `CertifiedCaches` encodes
+that as nine `required` names plus two `optional` ones (each commented with its introduction
+release), and `_verify_and_clear_cache_functions` verifies superset-of-required /
+subset-of-required-plus-optional rather than strict symmetric difference. The Task SDK's three
+names are all present from the `apache-airflow-task-sdk==1.2.0` wheel (the release paired with
+core 3.2.0, the first `CACHED_FUNCTIONS` release) onward, confirmed by reading that wheel's
+`airflow/sdk/plugins_manager.py` directly, so the SDK row carries no optional names. The installed `apache-airflow-core==3.1.0` wheel's
 `airflow/plugins_manager.py` instead carries the entire plugin cache as nineteen plain
 module-level globals (`plugins`, `loaded_plugins`, `import_errors`, `macros_modules`,
 `admin_views`, `flask_blueprints`, `fastapi_apps`, `fastapi_root_middlewares`, `external_views`,
@@ -207,7 +218,31 @@ runs. `register_executor` injects a constructed `ExecutorName` directly into all
 going through `ExecutorLoader._get_executor_names()`'s `core.executor` config-string parsing,
 confirmed live by actually registering an alias this way and resolving it through
 `ExecutorLoader.lookup_executor_name_by_str`/`load_executor` end to end against the installed
-3.3.0, not merely by reading the source.
+3.3.0, not merely by reading the source. The `_per_team` split is a 3.2.0 change: the
+`apache-airflow-core==3.1.0` and `==3.1.8` wheels' `airflow/executors/executor_loader.py` (identical
+shape on both, read directly) instead declare the flat `_alias_to_executors`, `_module_to_executors`,
+`_classname_to_executors` (each `dict[str, ExecutorName]`, the classname key derived upstream as
+`module_path.split(".")[-1]`), a SCALAR-valued `_team_name_to_executors: dict[str | None, ExecutorName]`
+(upstream's own `_get_executor_names` population loop assigns per team, never appends), and the
+same `_executor_names` list -- `ExecutorLoaderSnapshotV31` and `register_executor`'s flat branch
+transcribe exactly that, and `_executor_loader_is_per_team` probes the live module for the
+`_alias_to_executors_per_team` name rather than consulting a release table. `ExecutorName`'s
+constructor signature (`module_path`, `alias=None`, `team_name=None`) is identical on the 3.1.0,
+3.1.8, and installed 3.3.0 `executor_utils.py`, so no per-release construction branch exists.
+`airflow.settings` on the 3.1.0/3.1.8 wheels has no `get_policy_plugin_manager` at all; the policy
+manager lives in the module global `POLICY_PLUGIN_MANAGER` (`None` until
+`configure_policy_plugin_manager()` runs during `settings.initialize()`), which
+`policy_plugin_manager()`'s `ImportError` fallback reads. The 3.1.x plugin list is reached via
+`ensure_plugins_loaded()` populating the `plugins` module global, both already certified in the
+`MODULE_GLOBALS` row; `_live_plugin_list` branches on `hasattr(module, "_get_plugins")` for the same
+structural-probe reason. `integrate_macros_plugins` attaches per-plugin macros modules to the SAME
+parent on every certified 3.x release -- 3.1.x's core implementation imports
+`airflow.sdk.execution_time.macros` directly and both 3.2+ halves pass it as
+`target_macros_module` to the shared implementation, all with the
+`airflow.sdk.execution_time.macros.` `sys.modules` prefix (lowercased by `make_module`) plus a raw
+`plugin.name` `setattr` on the parent, confirmed by reading the 3.1.0, 3.1.8, and 3.2.0 core wheels
+and the `apache-airflow-task-sdk==1.2.0` wheel -- `snapshot_macros_module_keys` /
+`restore_macros_module_keys` revert the `setattr` half, which upstream never removes.
 
 `airflow.configuration.secrets_backend_list` is a plain module-level list `initialize_secrets_backends()`
 builds once; `restore_secrets_backend_list` restores it by slice assignment (`secrets_backend_list[:] = before`)
@@ -266,6 +301,11 @@ may be included in this project.
 - Provider info schema (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/provider_info.schema.json
 - Plugins manager, core cache functions (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/plugins_manager.py
 - Plugins manager, Task SDK cache functions (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/task-sdk/src/airflow/sdk/plugins_manager.py
+- Plugins manager, nine core cache functions (3.2.0): https://github.com/apache/airflow/blob/3bc3ccfacc3dec9f359a3b153bfd4fc706c661ba/airflow-core/src/airflow/plugins_manager.py
+- Executor loader, flat pre-per-team globals (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/executors/executor_loader.py
+- ExecutorName (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/executors/executor_utils.py
+- Settings, `POLICY_PLUGIN_MANAGER` module global (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/settings.py
+- Plugins manager, `ensure_plugins_loaded`/`integrate_macros_plugins` (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/plugins_manager.py
 - Shared module loading, `_get_grouped_entry_points` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/shared/module_loading/src/airflow_shared/module_loading/__init__.py
 - Settings, `get_policy_plugin_manager` and `task_instance_mutation_hook.is_noop` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/settings.py
 - Configuration, `secrets_backend_list` and `ensure_secrets_loaded` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/configuration.py

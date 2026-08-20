@@ -7,13 +7,14 @@ import sys
 import types
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from airflow.executors.base_executor import BaseExecutor
 
 from pytest_airflow_in_a_box._compat import components as compat_components
 from pytest_airflow_in_a_box._compat.capabilities import (
+    CertifiedCaches,
     PluginsManagerShape,
     SharedModuleLoading,
     resolve_capabilities,
@@ -121,6 +122,10 @@ def test_component_sandbox_compat_import_does_not_import_airflow() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    resolve_capabilities().plugins_manager is not PluginsManagerShape.CACHED_FUNCTIONS,
+    reason="airflow.sdk.plugins_manager exists only on the 3.2+ CACHED_FUNCTIONS shape",
+)
 def test_plugins_manager_modules_resolves_both_on_the_installed_release() -> None:
     """Resolve both real plugins-manager modules on the certified 3.2+ install."""
 
@@ -157,6 +162,10 @@ def test_plugins_manager_modules_reports_no_sdk_half_when_absent(
     assert sdk_module is None
 
 
+@pytest.mark.skipif(
+    not resolve_capabilities().sdk_listener_manager_available,
+    reason="the Task SDK listener manager exists only on 3.2+",
+)
 def test_listener_managers_resolves_both_on_the_installed_release() -> None:
     """Resolve both real `ListenerManager` instances on the certified 3.2+ install."""
 
@@ -198,15 +207,114 @@ def test_policy_plugin_manager_resolves_the_real_manager() -> None:
     assert "DefaultPolicy" in names
 
 
-def test_shared_module_loading_modules_single_resolves_the_pre_32_module() -> None:
-    """Resolve the one pre-3.2 module for the `SINGLE` shape."""
+def test_policy_plugin_manager_falls_back_to_the_31_module_global(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fall back to `settings.POLICY_PLUGIN_MANAGER` when the 3.2+ getter is absent.
+
+    `monkeypatch.delattr` on the already-imported `airflow.settings` makes the
+    `from airflow.settings import get_policy_plugin_manager` raise `ImportError` (a
+    from-import of a missing attribute on an imported module raises `ImportError`, not
+    `AttributeError`), simulating the 3.1.x shape; the module global the fallback reads
+    is then planted the way 3.1.x's `configure_policy_plugin_manager()` would have.
+    """
+
+    from airflow import settings
+
+    sentinel = object()
+    # `raising=False`: on a real 3.1.x leg the getter is already genuinely absent.
+    monkeypatch.delattr(settings, "get_policy_plugin_manager", raising=False)
+    monkeypatch.setattr(settings, "POLICY_PLUGIN_MANAGER", sentinel, raising=False)
+
+    assert compat_components.policy_plugin_manager() is sentinel
+
+
+def test_policy_plugin_manager_raises_when_the_31_module_global_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raise loudly when the 3.1.x module global is still None.
+
+    Unreachable through the `airflow_components` fixture, whose bootstrap always runs
+    `settings.initialize()` first -- this is the guard against direct misuse.
+    """
+
+    from airflow import settings
+
+    monkeypatch.delattr(settings, "get_policy_plugin_manager", raising=False)
+    monkeypatch.setattr(settings, "POLICY_PLUGIN_MANAGER", None, raising=False)
+
+    with pytest.raises(compat_components.ComponentSandboxError, match="initialize"):
+        compat_components.policy_plugin_manager()
+
+
+@pytest.mark.skipif(
+    resolve_capabilities().shared_module_loading is not SharedModuleLoading.SINGLE,
+    reason=(
+        "airflow.utils.entry_points is the real cache home only on 3.1.x; on 3.2+ it "
+        "survives as an empty PEP 562 deprecation shim that would satisfy a bare "
+        "module-name assertion for the wrong reason"
+    ),
+)
+def test_shared_module_loading_modules_single_resolves_the_certified_module() -> None:
+    """Resolve the one pre-3.2 module for the `SINGLE` shape, with its certified caches.
+
+    Asserts the resolved function SET, not just the module name: on 3.2+ the module
+    still imports (as the deprecation shim), so a name-only assertion would keep
+    passing there -- and would keep passing even after upstream deletes the shim's
+    forwarding target. The skipif keeps this test honest to the releases where the
+    real module exists; `..._single_imports_the_certified_location` below keeps the
+    branch itself covered on every leg.
+    """
+
+    from pytest_airflow_in_a_box._compat.capabilities import (
+        CERTIFIED_SHARED_MODULE_LOADING_CACHES,
+    )
 
     modules = compat_components._shared_module_loading_modules(SharedModuleLoading.SINGLE)
 
     assert len(modules) == 1
     assert modules[0].__name__ == "airflow.utils.entry_points"
+    certified = CERTIFIED_SHARED_MODULE_LOADING_CACHES[SharedModuleLoading.SINGLE]
+    assert compat_components._cache_clearable_names(modules[0]) == certified.required
 
 
+def test_shared_module_loading_modules_single_imports_the_certified_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover the `SINGLE` branch on every leg by faking `import_module` at the seam.
+
+    The real-module assertion above is honestly skipped on 3.2+, so this keeps the
+    branch itself (and the certified SINGLE row's round trip through
+    `_verify_and_clear_cache_functions`) exercised regardless of the installed release.
+    `import_module` is imported by name into `_compat.components`, so patching the
+    module attribute intercepts exactly this seam's dynamic import.
+    """
+
+    from pytest_airflow_in_a_box._compat.capabilities import (
+        CERTIFIED_SHARED_MODULE_LOADING_CACHES,
+    )
+
+    requested: list[str] = []
+
+    def _fake_import_module(name: str) -> Any:
+        requested.append(name)
+        return _fake_cached_module(("_get_grouped_entry_points",), module_name=name)
+
+    monkeypatch.setattr(compat_components, "import_module", _fake_import_module)
+
+    modules = compat_components._shared_module_loading_modules(SharedModuleLoading.SINGLE)
+
+    assert requested == ["airflow.utils.entry_points"]
+    assert len(modules) == 1
+    compat_components._verify_and_clear_cache_functions(
+        modules[0], CERTIFIED_SHARED_MODULE_LOADING_CACHES[SharedModuleLoading.SINGLE]
+    )
+
+
+@pytest.mark.skipif(
+    resolve_capabilities().shared_module_loading is not SharedModuleLoading.DUPLICATED,
+    reason="airflow._shared.module_loading and its Task SDK twin exist only on 3.2+",
+)
 def test_shared_module_loading_modules_duplicated_resolves_both_modules() -> None:
     """Resolve two distinct modules for the `DUPLICATED` shape."""
 
@@ -243,7 +351,9 @@ def test_verify_and_clear_cache_functions_clears_every_certified_name() -> None:
     module.beta()
     assert module.alpha.cache_info().currsize == 1
 
-    compat_components._verify_and_clear_cache_functions(module, frozenset({"alpha", "beta"}))
+    compat_components._verify_and_clear_cache_functions(
+        module, CertifiedCaches(required=frozenset({"alpha", "beta"}))
+    )
 
     assert module.alpha.cache_info().currsize == 0
     assert module.beta.cache_info().currsize == 0
@@ -255,7 +365,9 @@ def test_verify_and_clear_cache_functions_raises_on_missing_name() -> None:
     module = _fake_cached_module(("alpha",))
 
     with pytest.raises(compat_components.ComponentSandboxError, match="missing"):
-        compat_components._verify_and_clear_cache_functions(module, frozenset({"alpha", "beta"}))
+        compat_components._verify_and_clear_cache_functions(
+            module, CertifiedCaches(required=frozenset({"alpha", "beta"}))
+        )
 
 
 def test_verify_and_clear_cache_functions_raises_on_uncertified_extra_name() -> None:
@@ -264,9 +376,90 @@ def test_verify_and_clear_cache_functions_raises_on_uncertified_extra_name() -> 
     module = _fake_cached_module(("alpha", "beta"))
 
     with pytest.raises(compat_components.ComponentSandboxError, match="extra"):
-        compat_components._verify_and_clear_cache_functions(module, frozenset({"alpha"}))
+        compat_components._verify_and_clear_cache_functions(
+            module, CertifiedCaches(required=frozenset({"alpha"}))
+        )
 
 
+def test_verify_and_clear_cache_functions_tolerates_an_absent_optional_name() -> None:
+    """Tolerate a certified optional name missing from the observed set.
+
+    The exact 3.2.0/3.2.1 situation that motivated `CertifiedCaches`: upstream added
+    `get_deadline_references_plugins` (3.2.2) and `get_windows_plugins` (3.3.0)
+    mid-release-line, so the earlier releases in the same `CACHED_FUNCTIONS` bucket
+    legitimately lack them.
+    """
+
+    module = _fake_cached_module(("alpha",))
+
+    compat_components._verify_and_clear_cache_functions(
+        module, CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"}))
+    )
+
+
+def test_verify_and_clear_cache_functions_clears_a_present_optional_name() -> None:
+    """Clear a certified optional name when the installed release does have it."""
+
+    module = _fake_cached_module(("alpha", "beta"))
+    module.alpha()
+    module.beta()
+    assert module.beta.cache_info().currsize == 1
+
+    compat_components._verify_and_clear_cache_functions(
+        module, CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"}))
+    )
+
+    assert module.alpha.cache_info().currsize == 0
+    assert module.beta.cache_info().currsize == 0
+
+
+def test_verify_and_clear_cache_functions_raises_on_extra_beyond_required_and_optional() -> None:
+    """Raise on an observed name outside `required | optional` -- the under-clear guard."""
+
+    module = _fake_cached_module(("alpha", "beta", "gamma"))
+
+    with pytest.raises(compat_components.ComponentSandboxError, match="extra"):
+        compat_components._verify_and_clear_cache_functions(
+            module, CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"}))
+        )
+
+
+def test_certified_core_cached_functions_table_matches_the_3_2_0_shape() -> None:
+    """Verify the transcribed 3.2.0 cache set passes against the real certified row.
+
+    A real 3.2.0 install is not available in this environment; this fake reproduces
+    the exact nine `@cache` functions read directly from the
+    `apache-airflow-core==3.2.0` wheel's `airflow/plugins_manager.py` (see
+    PROVENANCE.md) -- the release whose missing `get_deadline_references_plugins` /
+    `get_windows_plugins` previously hard-failed the strict symmetric-difference check.
+    """
+
+    from pytest_airflow_in_a_box._compat.capabilities import CERTIFIED_CORE_PLUGINS_MANAGER_CACHES
+
+    module = _fake_cached_module(
+        (
+            "_get_plugins",
+            "_get_ui_plugins",
+            "get_flask_plugins",
+            "get_fastapi_plugins",
+            "_get_extra_operators_links_plugins",
+            "get_timetables_plugins",
+            "get_partition_mapper_plugins",
+            "integrate_macros_plugins",
+            "get_priority_weight_strategy_plugins",
+        ),
+        module_name="fake_airflow_320_plugins_manager",
+    )
+
+    compat_components._verify_and_clear_cache_functions(
+        module, CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.CACHED_FUNCTIONS]
+    )
+
+
+@pytest.mark.skipif(
+    resolve_capabilities().plugins_manager is not PluginsManagerShape.CACHED_FUNCTIONS,
+    reason="the 3.1.x MODULE_GLOBALS shape has no functools.cache functions to enumerate",
+)
 def test_verify_and_clear_cache_functions_real_core_module_matches_certified_table() -> None:
     """Verify the real installed `airflow.plugins_manager` matches its certified table."""
 
@@ -291,7 +484,7 @@ def test_verify_and_reset_module_globals_resets_every_certified_name() -> None:
     )
 
     compat_components._verify_and_reset_module_globals(
-        module, frozenset({"plugins", "loaded_plugins", "import_errors"})
+        module, CertifiedCaches(required=frozenset({"plugins", "loaded_plugins", "import_errors"}))
     )
 
     assert module.plugins is None
@@ -306,7 +499,7 @@ def test_verify_and_reset_module_globals_raises_on_missing_name() -> None:
 
     with pytest.raises(compat_components.ComponentSandboxError, match="plugins_cache"):
         compat_components._verify_and_reset_module_globals(
-            module, frozenset({"plugins", "plugins_cache"})
+            module, CertifiedCaches(required=frozenset({"plugins", "plugins_cache"}))
         )
 
 
@@ -322,13 +515,13 @@ def test_verify_and_reset_module_globals_real_31_shape_matches_certified_table()
     from pytest_airflow_in_a_box._compat.capabilities import CERTIFIED_CORE_PLUGINS_MANAGER_CACHES
 
     certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
-    module = _fake_globals_module(dict.fromkeys(certified, "populated"))
+    module = _fake_globals_module(dict.fromkeys(certified.required, "populated"))
 
     compat_components._verify_and_reset_module_globals(module, certified)
 
     assert module.loaded_plugins == set()
     assert module.import_errors == {}
-    for name in certified - {"loaded_plugins", "import_errors"}:
+    for name in certified.required - {"loaded_plugins", "import_errors"}:
         assert getattr(module, name) is None
 
 
@@ -377,21 +570,23 @@ def test_clear_plugins_manager_caches_raises_when_cached_functions_shape_has_no_
     core half alone.
     """
 
+    from pytest_airflow_in_a_box._compat.capabilities import CERTIFIED_CORE_PLUGINS_MANAGER_CACHES
+
     real_capabilities = resolve_capabilities()
     fake_capabilities = replace(
         real_capabilities, plugins_manager=PluginsManagerShape.CACHED_FUNCTIONS
     )
-    # Resolve the real core module BEFORE patching: the lambda below replaces
-    # `_plugins_manager_modules` itself, so a lambda body that calls
-    # `compat_components._plugins_manager_modules()` again would look up and invoke
-    # the very same patched attribute, recursing until `RecursionError`. Capturing the
-    # real result first and closing over that plain tuple avoids the self-reference.
-    real_core, _real_sdk = compat_components._plugins_manager_modules()
+    # A fake CACHED_FUNCTIONS-shaped core half rather than the real installed module:
+    # the core half must pass its own verification first for the missing-SDK guard to
+    # be the thing that raises, and on a real 3.1.x leg the installed core module is
+    # MODULE_GLOBALS-shaped and would fail verification with a different message.
+    certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.CACHED_FUNCTIONS]
+    fake_core = _fake_cached_module(tuple(certified.required), module_name="fake_cached_core")
     monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
     monkeypatch.setattr(
         compat_components,
         "_plugins_manager_modules",
-        lambda: (real_core, None),
+        lambda: (fake_core, None),
     )
 
     with pytest.raises(compat_components.ComponentSandboxError, match="cached-functions"):
@@ -414,17 +609,16 @@ def test_clear_plugins_manager_caches_raises_when_module_globals_shape_has_sdk_m
         real_capabilities, plugins_manager=PluginsManagerShape.MODULE_GLOBALS
     )
     certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
-    fake_core = _fake_globals_module(dict.fromkeys(certified))
-    # Resolve the real SDK module BEFORE patching, for the same reason the sibling
-    # `..._has_no_sdk_module` test above does: a lambda that calls
-    # `compat_components._plugins_manager_modules()` again would recurse into its own
-    # freshly-patched self instead of reaching the real function.
-    _real_core, real_sdk = compat_components._plugins_manager_modules()
+    fake_core = _fake_globals_module(dict.fromkeys(certified.required))
+    # Any non-None object serves as the unexpectedly-present SDK half -- the guard
+    # fires before anything introspects it, and a fake keeps this test independent of
+    # whether the installed release (a real 3.1.x leg included) actually has one.
+    fake_sdk = _fake_cached_module((), module_name="fake_unexpected_sdk")
     monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
     monkeypatch.setattr(
         compat_components,
         "_plugins_manager_modules",
-        lambda: (fake_core, real_sdk),
+        lambda: (fake_core, fake_sdk),
     )
 
     with pytest.raises(compat_components.ComponentSandboxError, match="module-globals"):
@@ -445,7 +639,7 @@ def test_clear_plugins_manager_caches_module_globals_shape_happy_path(
         shared_module_loading=SharedModuleLoading.SINGLE,
     )
     certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
-    fake_core = _fake_globals_module(dict.fromkeys(certified, "populated"))
+    fake_core = _fake_globals_module(dict.fromkeys(certified.required, "populated"))
     fake_shared = _fake_cached_module(("_get_grouped_entry_points",), module_name="fake_shared")
     monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
     monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (fake_core, None))
@@ -555,13 +749,13 @@ def test_register_plugin_appends_to_both_halves_and_clears_cleanly() -> None:
     instance = compat_components.register_plugin(_Plugin)
 
     core_module, sdk_module = compat_components._plugins_manager_modules()
-    assert instance in core_module._get_plugins()[0]
-    assert sdk_module is not None
-    assert instance in sdk_module._get_plugins()[0]
+    assert instance in compat_components._live_plugin_list(core_module)
+    if sdk_module is not None:
+        assert instance in compat_components._live_plugin_list(sdk_module)
 
     compat_components.clear_plugins_manager_caches()
 
-    assert instance not in core_module._get_plugins()[0]
+    assert instance not in compat_components._live_plugin_list(core_module)
 
 
 def test_register_plugin_without_an_sdk_half(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -577,47 +771,126 @@ def test_register_plugin_without_an_sdk_half(monkeypatch: pytest.MonkeyPatch) ->
 
     instance = compat_components.register_plugin(_Plugin)
 
-    assert instance in core_module._get_plugins()[0]
+    assert instance in compat_components._live_plugin_list(core_module)
 
-    # Undo the "no SDK half" patch before clearing: the real installed release's
-    # certified shape is `CACHED_FUNCTIONS`, which requires an SDK module to exist --
-    # `clear_plugins_manager_caches` would otherwise (correctly) treat the still-patched
-    # "no SDK half" as a real environment inconsistency and raise `ComponentSandboxError`,
-    # exactly as the neighboring `..._has_no_sdk_module` test exercises on purpose. This
-    # test's own concern is `register_plugin`'s core-only behavior, not that guard.
+    # Undo the "no SDK half" patch before clearing: on a `CACHED_FUNCTIONS` release
+    # that certified shape requires an SDK module to exist -- `clear_plugins_manager_caches`
+    # would otherwise (correctly) treat the still-patched "no SDK half" as a real
+    # environment inconsistency and raise `ComponentSandboxError`, exactly as the
+    # neighboring `..._has_no_sdk_module` test exercises on purpose. This test's own
+    # concern is `register_plugin`'s core-only behavior, not that guard.
     monkeypatch.undo()
     compat_components.clear_plugins_manager_caches()
 
 
-def test_prepare_plugin_instance_deep_copies_lists_across_two_registrations() -> None:
-    """Keep two registrations of the same plugin class independent after a mutation.
+def test_live_plugin_list_module_globals_shape_loads_then_appends() -> None:
+    """Resolve the 3.1.x `plugins` module global, loading it via `ensure_plugins_loaded`.
 
-    `_get_ui_plugins` mutates `external_views`/`react_apps` in place while building its
-    own return value; without a deep copy at registration time, a second registration of
-    the same class would inherit whatever the first registration's own downstream
-    processing already removed.
+    The fake reproduces the 3.1.0 wheel's shape: `plugins` starts as None and
+    `ensure_plugins_loaded()` populates it (see PROVENANCE.md).
     """
+
+    module = _fake_globals_module({"plugins": None}, module_name="fake_31_plugins_manager")
+
+    def _ensure_plugins_loaded() -> None:
+        if module.plugins is None:
+            module.plugins = []
+
+    module.ensure_plugins_loaded = _ensure_plugins_loaded
+
+    live = compat_components._live_plugin_list(module)
+    live.append("sentinel")
+
+    assert module.plugins == ["sentinel"]
+
+
+def test_register_plugin_module_globals_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register a plugin into a faked 3.1.x `MODULE_GLOBALS`-shaped core half."""
 
     from airflow.plugins_manager import AirflowPlugin
 
     class _Plugin(AirflowPlugin):
-        name = "sandbox_compat_test_plugin_deepcopy"
+        name = "sandbox_compat_test_plugin_module_globals"
+
+    fake_core = _fake_globals_module({"plugins": []}, module_name="fake_31_core")
+    fake_core.ensure_plugins_loaded = lambda: None
+    monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (fake_core, None))
+
+    instance = compat_components.register_plugin(_Plugin)
+
+    assert instance in fake_core.plugins
+
+
+def test_prepare_plugin_instance_copies_lists_shallowly_across_two_registrations() -> None:
+    """Keep two registrations of the same plugin class independent after a mutation.
+
+    `_get_ui_plugins` mutates `external_views`/`react_apps` in place while building its
+    own return value; without a fresh list copy at registration time, a second
+    registration of the same class would inherit whatever the first registration's own
+    downstream processing already removed. The copy is SHALLOW on purpose: the list
+    CONTAINER is rebound, but the elements keep their identity -- Airflow must register
+    the very objects the test holds references to, not copies it could never observe.
+    """
+
+    from airflow.plugins_manager import AirflowPlugin
+
+    shared_view = {"url_route": "shared", "label": "shared"}
+
+    class _Plugin(AirflowPlugin):
+        name = "sandbox_compat_test_plugin_shallow_copy"
 
         def __init__(self) -> None:
-            """Set `external_views` per instance rather than as a shared class default."""
+            """Set `external_views` per instance, holding the shared element object."""
 
             super().__init__()
-            self.external_views = [{"url_route": "shared", "label": "shared"}]
+            self.external_views = [shared_view]
 
-    first = cast(_Plugin, compat_components._prepare_plugin_instance(_Plugin))
-    first.external_views.remove(first.external_views[0])
-    assert first.external_views == []
+    built = _Plugin()
+    original_list = built.external_views
+
+    prepared = cast(_Plugin, compat_components._prepare_plugin_instance(built))
+
+    assert prepared is built
+    assert prepared.external_views is not original_list
+    assert prepared.external_views == [shared_view]
+    assert prepared.external_views[0] is shared_view
+    prepared.external_views.remove(prepared.external_views[0])
+    assert original_list == [shared_view]
 
     second = cast(_Plugin, compat_components._prepare_plugin_instance(_Plugin))
 
-    assert second.external_views == [{"url_route": "shared", "label": "shared"}]
-    assert second.external_views is not first.external_views
-    assert second.external_views is not _Plugin.external_views
+    assert second.external_views == [shared_view]
+    assert second.external_views[0] is shared_view
+    assert second.external_views is not prepared.external_views
+
+
+def test_prepare_plugin_instance_accepts_a_module_valued_listener() -> None:
+    """Accept the canonical `listeners = [module]` plugin shape without copying it.
+
+    Airflow's own shipped `example_dags/plugins/listener_plugin.py` sets `listeners`
+    to a bare module -- an object `copy.deepcopy` cannot handle at all
+    (`TypeError: cannot pickle 'module' object`), which is one of the two reasons
+    `_prepare_plugin_instance` copies shallowly.
+    """
+
+    from airflow.plugins_manager import AirflowPlugin
+
+    listener_module = types.ModuleType("sandbox_compat_test_listener_module")
+
+    class _Plugin(AirflowPlugin):
+        name = "sandbox_compat_test_plugin_module_listener"
+
+        def __init__(self) -> None:
+            """Set `listeners` to a bare module, the canonical upstream example shape."""
+
+            super().__init__()
+            self.listeners = [listener_module]
+
+    prepared = cast(_Plugin, compat_components._prepare_plugin_instance(_Plugin))
+
+    assert prepared.listeners == [listener_module]
+    assert prepared.listeners[0] is listener_module
+    assert prepared.listeners is not _Plugin.listeners
 
 
 def test_prepare_plugin_instance_skips_attributes_the_component_does_not_have() -> None:
@@ -660,15 +933,22 @@ def test_register_policy_and_restore_policy_plugins_round_trips() -> None:
 
     received: dict[str, bool] = {}
 
-    def _hook(task_instance: object, dag_run: object) -> None:
-        del task_instance, dag_run
+    # `get_dagbag_import_timeout`, not `task_instance_mutation_hook`: the mutation
+    # hook's hookspec signature grew a `dag_run` parameter in 3.3.0, so a hookimpl
+    # written against it is not registrable on the 3.1.x/3.2.x legs, while this
+    # hookspec's `(dag_file_path)` shape is identical on every certified release.
+    def _hook(dag_file_path: str) -> int:
+        del dag_file_path
         received["called"] = True
+        return 30
 
-    plugin_class = compat_components.build_policy_plugin({"task_instance_mutation_hook": _hook})
+    plugin_class = compat_components.build_policy_plugin({"get_dagbag_import_timeout": _hook})
     instance = compat_components.register_policy(plugin_class, pm)
 
     assert instance in pm.get_plugins()
-    pm.hook.task_instance_mutation_hook(task_instance=None, dag_run=None)
+    # `get_dagbag_import_timeout` is `firstresult=True` and pluggy dispatches
+    # last-registered-first, so the freshly registered hook wins over `DefaultPolicy`.
+    assert pm.hook.get_dagbag_import_timeout(dag_file_path="a_dag.py") == 30
     assert received == {"called": True}
 
     compat_components.restore_policy_plugins(pm, before)
@@ -764,9 +1044,145 @@ def test_task_instance_mutation_hook_is_noop_snapshot_and_restore() -> None:
     assert hook.is_noop is before
 
 
+def test_mark_task_instance_mutation_hook_active_flips_the_flag() -> None:
+    """Flip `is_noop` to False so a sandbox-registered mutation hook actually fires."""
+
+    from airflow.settings import task_instance_mutation_hook
+
+    hook = cast("Any", task_instance_mutation_hook)
+    before = compat_components.snapshot_task_instance_mutation_hook_is_noop()
+
+    compat_components.mark_task_instance_mutation_hook_active()
+
+    assert hook.is_noop is False
+
+    compat_components.restore_task_instance_mutation_hook_is_noop(before)
+    assert hook.is_noop is before
+
+
 # ---------------------------------------------------------------------------
 # Executor loader
 # ---------------------------------------------------------------------------
+
+
+def _fake_executor_loader_module_v31() -> Any:
+    """Build a fake module reproducing the flat 3.1.x `executor_loader.py` globals.
+
+    Transcribed from the `apache-airflow-core==3.1.0`/`==3.1.8` wheels (identical
+    shape; see PROVENANCE.md): no `_per_team` suffixes, flat single-level dicts, and a
+    scalar-valued `_team_name_to_executors`.
+
+    Returns:
+        Any containing a `types.ModuleType` with the five flat globals and a minimal
+        `ExecutorLoader` stand-in exposing `executors` and `_get_executor_names`.
+    """
+
+    class _FakeExecutorLoader:
+        executors: ClassVar[dict[str, str]] = {}
+
+        @classmethod
+        def _get_executor_names(cls) -> list[Any]:
+            return []
+
+    return _fake_globals_module(
+        {
+            "ExecutorLoader": _FakeExecutorLoader,
+            "_alias_to_executors": {},
+            "_module_to_executors": {},
+            "_classname_to_executors": {},
+            "_team_name_to_executors": {},
+            "_executor_names": [],
+        },
+        module_name="fake_executor_loader_v31",
+    )
+
+
+@pytest.mark.skipif(
+    resolve_capabilities().plugins_manager is not PluginsManagerShape.CACHED_FUNCTIONS,
+    reason=(
+        "the executor-loader per-team split shipped in the same 3.2.0 break the "
+        "CACHED_FUNCTIONS plugins-manager shape certifies"
+    ),
+)
+def test_executor_loader_is_per_team_true_on_the_installed_release() -> None:
+    """Probe the real installed `executor_loader` as the 3.2+ per-team shape."""
+
+    assert compat_components._executor_loader_is_per_team(
+        compat_components._executor_loader_module()
+    )
+
+
+def test_executor_loader_v31_snapshot_register_restore_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot, register, and restore against the faked flat 3.1.x global shape.
+
+    Mirrors upstream's own `_get_executor_names` population loop: flat dict writes
+    keyed by alias/module-path/classname, and a SCALAR `_team_name_to_executors[None]`
+    assignment (upstream assigns, never appends -- last resolved executor per team
+    wins).
+    """
+
+    fake_module = _fake_executor_loader_module_v31()
+    monkeypatch.setattr(compat_components, "_executor_loader_module", lambda: fake_module)
+
+    before = compat_components.snapshot_executor_loader()
+    assert isinstance(before, compat_components.ExecutorLoaderSnapshotV31)
+
+    alias = compat_components.register_executor(_Executor, alias="sandbox_compat_test_v31")
+
+    assert alias == "sandbox_compat_test_v31"
+    module_path = f"{_Executor.__module__}.{_Executor.__qualname__}"
+    assert fake_module._alias_to_executors[alias].module_path == module_path
+    assert fake_module._module_to_executors[module_path].alias == alias
+    assert fake_module._classname_to_executors["_Executor"].alias == alias
+    assert fake_module._team_name_to_executors[None].alias == alias
+    assert len(fake_module._executor_names) == 1
+    assert fake_module.ExecutorLoader.executors == {alias: module_path}
+
+    compat_components.restore_executor_loader(before)
+
+    assert fake_module._alias_to_executors == {}
+    assert fake_module._module_to_executors == {}
+    assert fake_module._classname_to_executors == {}
+    assert fake_module._team_name_to_executors == {}
+    assert fake_module._executor_names == []
+    assert fake_module.ExecutorLoader.executors == {}
+
+
+def test_register_executor_creates_the_none_team_buckets_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create the per-team `None` buckets via `setdefault` when nothing populated them.
+
+    `register_executor` must stay independently correct even when nothing (the
+    sandbox's own snapshot included) has forced `_get_executor_names()`'s natural
+    resolution first -- direct indexing on an empty per-team dict would `KeyError`.
+    """
+
+    class _FakeExecutorLoader:
+        executors: ClassVar[dict[str, str]] = {}
+
+    module = _fake_globals_module(
+        {
+            "ExecutorLoader": _FakeExecutorLoader,
+            "_alias_to_executors_per_team": {},
+            "_module_to_executors_per_team": {},
+            "_classname_to_executors_per_team": {},
+            "_team_name_to_executors": {},
+            "_executor_names": [],
+        },
+        module_name="fake_executor_loader_per_team_empty",
+    )
+    monkeypatch.setattr(compat_components, "_executor_loader_module", lambda: module)
+
+    alias = compat_components.register_executor(_Executor, alias="sandbox_compat_test_buckets")
+
+    module_path = f"{_Executor.__module__}.{_Executor.__qualname__}"
+    assert module._alias_to_executors_per_team[None][alias].module_path == module_path
+    assert module._module_to_executors_per_team[None][module_path].alias == alias
+    assert module._classname_to_executors_per_team[None]["_Executor"].alias == alias
+    assert module._team_name_to_executors[None][0].alias == alias
 
 
 def test_executor_loader_register_and_restore_round_trips() -> None:
@@ -899,6 +1315,83 @@ def test_restore_sys_modules_tolerates_a_missing_plugins_folder(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
+# Macros parent module new-key cleanup
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_macros_module_resolves_on_the_installed_release() -> None:
+    """Resolve the real macros parent module every certified 3.x release shares."""
+
+    module = compat_components._sdk_macros_module()
+
+    assert module is not None
+    assert module.__name__ == "airflow.sdk.execution_time.macros"
+
+
+def test_sdk_macros_module_reports_none_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report None when the macros parent module is not importable at all.
+
+    Both the `sys.modules` poison and the parent-package `delattr` are needed -- see
+    `test_plugins_manager_modules_reports_no_sdk_half_when_absent`'s docstring for why
+    relying on `sys.modules` alone is order-dependent on prior imports.
+    """
+
+    monkeypatch.setitem(sys.modules, "airflow.sdk.execution_time.macros", None)
+    monkeypatch.delattr(sys.modules["airflow.sdk.execution_time"], "macros", raising=False)
+
+    assert compat_components._sdk_macros_module() is None
+
+
+def test_restore_macros_module_keys_deletes_only_new_attributes() -> None:
+    """Delete a macros-parent attribute added after the snapshot, keeping the rest.
+
+    Reproduces `integrate_macros_plugins`'s own leak shape: `setattr` of a per-plugin
+    macros module onto the parent under the raw plugin name, which upstream never
+    removes.
+    """
+
+    module = compat_components._sdk_macros_module()
+    assert module is not None
+    pre_existing = next(iter(vars(module)))
+    before = compat_components.snapshot_macros_module_keys()
+    assert before is not None
+
+    leaked = types.ModuleType("airflow.sdk.execution_time.macros.sandbox_compat_leak")
+    module.sandbox_compat_leak = leaked
+    assert hasattr(module, "sandbox_compat_leak")
+
+    compat_components.restore_macros_module_keys(before)
+
+    assert not hasattr(module, "sandbox_compat_leak")
+    assert hasattr(module, pre_existing)
+
+
+def test_snapshot_macros_module_keys_reports_none_when_the_module_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report None from the snapshot, and no-op the restore, without the module."""
+
+    monkeypatch.setattr(compat_components, "_sdk_macros_module", lambda: None)
+
+    before = compat_components.snapshot_macros_module_keys()
+
+    assert before is None
+    compat_components.restore_macros_module_keys(before)
+
+
+def test_restore_macros_module_keys_tolerates_the_module_vanishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No-op the restore when the module resolved at snapshot time but not anymore."""
+
+    before = compat_components.snapshot_macros_module_keys()
+    assert before is not None
+    monkeypatch.setattr(compat_components, "_sdk_macros_module", lambda: None)
+
+    compat_components.restore_macros_module_keys(before)
+
+
+# ---------------------------------------------------------------------------
 # airflow.settings.__dict__ new-key cleanup
 # ---------------------------------------------------------------------------
 
@@ -928,4 +1421,6 @@ def test_restore_settings_keys_preserves_bootstrap_time_attributes() -> None:
 
     compat_components.restore_settings_keys(before)
 
-    assert hasattr(settings, "get_policy_plugin_manager")
+    # `task_instance_mutation_hook`, not `get_policy_plugin_manager`: the latter is
+    # 3.2+-only, while this dispatch function exists on every certified 3.x release.
+    assert hasattr(settings, "task_instance_mutation_hook")

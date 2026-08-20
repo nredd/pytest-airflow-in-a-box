@@ -13,19 +13,37 @@ References:
 
 from __future__ import annotations
 
+import logging
+import types
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from airflow._shared.plugins_manager import AirflowPlugin
+
+# `airflow.plugins_manager`, not `airflow._shared.plugins_manager`: the `_shared`
+# vendoring path is 3.2+-only, while the core module re-exports `AirflowPlugin` on
+# every certified 3.x release.
 from airflow.executors.base_executor import BaseExecutor
 from airflow.listeners import hookimpl
+from airflow.plugins_manager import AirflowPlugin
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.secrets.base_secrets import BaseSecretsBackend
 
 from pytest_airflow_in_a_box._compat import components as sandbox
+from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
 from pytest_airflow_in_a_box.components import ComponentContractError, ComponentSandboxError
+
+# Skipping (not faking) on 3.1.x legs is the honest choice for the tests below that
+# genuinely need the real Task SDK listener manager; the 3.1 dispatch branches
+# themselves are covered by the seam-faked tests in
+# `tests/compat/test_component_sandbox_compat.py` and by
+# `test_listener_task_true_without_a_task_manager_raises` /
+# `test_round_trip_listener_registers_core_only_when_no_task_manager` here.
+_NEEDS_TASK_LISTENER_MANAGER = pytest.mark.skipif(
+    not resolve_capabilities().sdk_listener_manager_available,
+    reason="the Task SDK listener manager exists only on 3.2+",
+)
 
 if TYPE_CHECKING:
     from pytest_airflow_in_a_box.types import ComponentRegistry, DagMaker
@@ -65,6 +83,21 @@ class _BrokenListener:
     @hookimpl
     def not_a_real_hookspec(self) -> None:
         """Never fire; no hookspec named `not_a_real_hookspec` exists."""
+
+
+class _DagRunListener:
+    """Implement a hookspec that exists on the CORE manager alone, by upstream design."""
+
+    @hookimpl
+    def on_dag_run_success(self, dag_run: Any, msg: str) -> None:
+        """Never actually fire; only registration acceptance is under test.
+
+        Parameters:
+            dag_run: Any containing the succeeding Dag run.
+            msg: str containing upstream's success message.
+        """
+
+        del dag_run, msg
 
 
 class _Plugin(AirflowPlugin):
@@ -135,7 +168,7 @@ def test_plugin_registers_into_the_core_plugins_manager(
     airflow_components.plugin(_Plugin)
 
     core_module, _sdk_module = sandbox._plugins_manager_modules()
-    names = {type(candidate).__name__ for candidate in core_module._get_plugins()[0]}
+    names = {type(candidate).__name__ for candidate in sandbox._live_plugin_list(core_module)}
     assert "_Plugin" in names
 
 
@@ -151,8 +184,39 @@ def test_plugin_rejects_a_component_missing_a_name(
         airflow_components.plugin(_Unnamed)
 
     core_module, _sdk_module = sandbox._plugins_manager_modules()
-    names = {type(candidate).__name__ for candidate in core_module._get_plugins()[0]}
+    names = {type(candidate).__name__ for candidate in sandbox._live_plugin_list(core_module)}
     assert "_Unnamed" not in names
+
+
+def test_plugin_accepts_a_module_valued_listener(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Register a plugin whose `listeners` holds a bare module, the canonical shape.
+
+    Airflow's own shipped `example_dags/plugins/listener_plugin.py` uses exactly this
+    shape; the sandbox must register the module object itself, not a copy.
+    """
+
+    listener_module = types.ModuleType("airflow_components_module_listener")
+
+    class _ModuleListenerPlugin(AirflowPlugin):
+        name = "airflow_components_module_listener_plugin"
+
+        def __init__(self) -> None:
+            """Set `listeners` to a bare module, the canonical upstream example shape."""
+
+            super().__init__()
+            self.listeners = [listener_module]
+
+    airflow_components.plugin(_ModuleListenerPlugin)
+
+    core_module, _sdk_module = sandbox._plugins_manager_modules()
+    registered = next(
+        candidate
+        for candidate in sandbox._live_plugin_list(core_module)
+        if type(candidate).__name__ == "_ModuleListenerPlugin"
+    )
+    assert registered.listeners[0] is listener_module
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +224,7 @@ def test_plugin_rejects_a_component_missing_a_name(
 # ---------------------------------------------------------------------------
 
 
+@_NEEDS_TASK_LISTENER_MANAGER
 def test_listener_default_registers_with_both_managers(
     airflow_components: ComponentRegistry,
 ) -> None:
@@ -184,10 +249,11 @@ def test_listener_core_only(airflow_components: ComponentRegistry) -> None:
 
     core_manager, task_manager = sandbox.listener_managers()
     assert listener in core_manager.pm.get_plugins()
-    assert task_manager is not None
-    assert listener not in task_manager.pm.get_plugins()
+    if task_manager is not None:
+        assert listener not in task_manager.pm.get_plugins()
 
 
+@_NEEDS_TASK_LISTENER_MANAGER
 def test_listener_task_only(airflow_components: ComponentRegistry) -> None:
     """Register with only the Task SDK manager when `core=False`."""
 
@@ -230,6 +296,79 @@ def test_listener_task_true_without_a_task_manager_raises(
         airflow_components.listener(_Listener(), task=True)
 
 
+def test_listener_core_only_accepts_a_core_only_hookspec_listener(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Accept a core-only hookspec listener when only the core manager is requested.
+
+    `on_dag_run_success` exists on the core manager alone by upstream design;
+    `check_component`'s `listener-core-manager-only` finding is mooted when the core
+    manager is the one being registered with, so `task=False` must succeed.
+    """
+
+    listener = _DagRunListener()
+
+    airflow_components.listener(listener, task=False)
+
+    core_manager, _task_manager = sandbox.listener_managers()
+    assert listener in core_manager.pm.get_plugins()
+
+
+@_NEEDS_TASK_LISTENER_MANAGER
+def test_listener_task_only_still_rejects_a_core_only_hookspec_listener(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Refuse a core-only hookspec listener when only the Task SDK manager is requested.
+
+    Registered task-only, `on_dag_run_success` could never fire -- the scope filter
+    keeps `listener-core-manager-only` for exactly this case. Needs the real Task SDK
+    manager: on 3.1.x there is no second manager for the scope checks to compare
+    against, so `check_component` reports no manager-scope findings there at all.
+    """
+
+    with pytest.raises(ComponentContractError, match="listener-core-manager-only"):
+        airflow_components.listener(_DagRunListener(), core=False, task=True)
+
+
+def test_scoped_listener_problems_filters_by_requested_scope() -> None:
+    """Filter each manager-scope problem code by its own requested-scope flag alone."""
+
+    from pytest_airflow_in_a_box.components import ComponentReport
+    from pytest_airflow_in_a_box.fixtures.components import _scoped_listener_problems
+
+    problems = (
+        sandbox.ComponentProblem(
+            code=sandbox.LISTENER_CORE_MANAGER_ONLY, message="core-only", hint="h"
+        ),
+        sandbox.ComponentProblem(
+            code=sandbox.LISTENER_SDK_MANAGER_ONLY, message="sdk-only", hint="h"
+        ),
+        sandbox.ComponentProblem(
+            code=sandbox.LISTENER_NO_MATCHING_HOOKSPEC, message="unmatched", hint="h"
+        ),
+    )
+    report = ComponentReport(component_name="_Probe", problems=problems)
+
+    both = _scoped_listener_problems(report, core=True, task=True)
+    assert {problem.code for problem in both.problems} == {sandbox.LISTENER_NO_MATCHING_HOOKSPEC}
+
+    core_only = _scoped_listener_problems(report, core=True, task=False)
+    assert {problem.code for problem in core_only.problems} == {
+        sandbox.LISTENER_SDK_MANAGER_ONLY,
+        sandbox.LISTENER_NO_MATCHING_HOOKSPEC,
+    }
+
+    task_only = _scoped_listener_problems(report, core=False, task=True)
+    assert {problem.code for problem in task_only.problems} == {
+        sandbox.LISTENER_CORE_MANAGER_ONLY,
+        sandbox.LISTENER_NO_MATCHING_HOOKSPEC,
+    }
+
+    neither = _scoped_listener_problems(report, core=False, task=False)
+    assert neither.problems == problems
+    assert neither.component_name == "_Probe"
+
+
 def test_listener_rejects_an_unmatched_hookimpl(
     airflow_components: ComponentRegistry,
 ) -> None:
@@ -250,7 +389,10 @@ def test_listener_fires_through_a_real_dag_run(
     """
 
     listener = _Listener()
-    airflow_components.listener(listener)
+    # `task` follows the installed release's Task SDK availability so this test runs
+    # on the 3.1.x legs too -- the docs' bare `listener(MyListener)` shape is exercised
+    # by `test_listener_default_registers_with_both_managers` on 3.2+.
+    airflow_components.listener(listener, task=sandbox.listener_managers()[1] is not None)
 
     with dag_maker(dag_id="airflow_components_listener_fires"):
         EmptyOperator(task_id="probe")
@@ -300,6 +442,57 @@ def test_policy_rejects_an_unknown_hookspec_name(
 
     with pytest.raises(ComponentContractError, match="policy-unknown-hookspec"):
         airflow_components.policy(not_a_real_policy_hook=lambda: None)
+
+
+def test_policy_task_instance_mutation_hook_fires_through_a_real_dag_run(
+    airflow_components: ComponentRegistry,
+    dag_maker: DagMaker,
+) -> None:
+    """Register a mutation-hook policy and see it fire through the real `is_noop` gate.
+
+    The load-bearing half of this test is the flag: `airflow/settings.py` sets
+    `task_instance_mutation_hook.is_noop = True` at import, and real dispatch sites
+    (`DagRun.verify_integrity` among them) short-circuit on it -- so without
+    `policy()`'s own activation step the hookimpl registers but never fires, and only
+    a real Dag run (not a direct `pm.hook.<name>(...)` call, which bypasses the gate)
+    can prove the difference.
+    """
+
+    received: list[str] = []
+
+    # `task_instance` alone, not the 3.3.0 hookspec's full `(task_instance, dag_run)`:
+    # pluggy accepts a hookimpl requesting any subset of its hookspec's arguments, and
+    # the 3.1.x/3.2.x hookspec has no `dag_run` parameter at all, so the subset form is
+    # the one signature valid on every certified release.
+    def _mutate(task_instance: Any) -> None:
+        received.append(task_instance.task_id)
+
+    airflow_components.policy(task_instance_mutation_hook=_mutate)
+
+    assert sandbox.snapshot_task_instance_mutation_hook_is_noop() is False
+    with dag_maker(dag_id="airflow_components_policy_mutation_hook"):
+        EmptyOperator(task_id="probe")
+
+    result = dag_maker.run()
+
+    assert result.success
+    assert "probe" in received
+
+
+def test_policy_without_a_mutation_hook_keeps_is_noop_untouched(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Leave `is_noop` alone when the registered hooks do not include the mutation hook."""
+
+    before = sandbox.snapshot_task_instance_mutation_hook_is_noop()
+
+    def _get_dagbag_import_timeout(dag_file_path: str) -> int:
+        del dag_file_path
+        return 30
+
+    airflow_components.policy(get_dagbag_import_timeout=_get_dagbag_import_timeout)
+
+    assert sandbox.snapshot_task_instance_mutation_hook_is_noop() is before
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +580,7 @@ def test_round_trip_classifies_and_registers_a_plugin(
     airflow_components.round_trip(_Plugin)
 
     core_module, _sdk_module = sandbox._plugins_manager_modules()
-    names = {type(candidate).__name__ for candidate in core_module._get_plugins()[0]}
+    names = {type(candidate).__name__ for candidate in sandbox._live_plugin_list(core_module)}
     assert "_Plugin" in names
 
 
@@ -435,6 +628,27 @@ def test_round_trip_classifies_and_registers_a_secrets_backend(
     assert isinstance(current[0], _SecretsBackend)
 
 
+def test_round_trip_listener_registers_core_only_when_no_task_manager(
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register a round-tripped listener core-only when no Task SDK manager exists.
+
+    On 3.1.x `round_trip()` must not inherit `listener()`'s `task=True` default -- it
+    follows the installed release's Task SDK availability instead, so a listener
+    round-trips core-only rather than raising. Simulated on the constructed sandbox
+    instance, matching `test_listener_task_true_without_a_task_manager_raises`.
+    """
+
+    monkeypatch.setattr(airflow_components, "_task_listener", None)
+    listener = _Listener()
+
+    airflow_components.round_trip(listener)
+
+    core_manager, _task_manager = sandbox.listener_managers()
+    assert listener in core_manager.pm.get_plugins()
+
+
 def test_round_trip_rejects_an_unclassifiable_component(
     airflow_components: ComponentRegistry,
 ) -> None:
@@ -451,6 +665,77 @@ def test_round_trip_rejects_an_ambiguous_component(
 
     with pytest.raises(ComponentSandboxError, match="could not classify"):
         airflow_components.round_trip(_AmbiguousExecutorListener)
+
+
+# ---------------------------------------------------------------------------
+# finalize() error isolation
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_runs_every_restore_step_when_one_raises(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Run every later restore step, then re-raise, when an early one fails.
+
+    A raise partway through must never skip the remaining restores -- a partial
+    restore is exactly the cross-test contamination the sandbox exists to prevent.
+    A scoped `MonkeyPatch.context()` rather than the `monkeypatch` fixture on purpose:
+    the fixture's undo runs AFTER `airflow_components`'s own teardown `finalize()`,
+    which would re-raise the injected failure a second time from teardown; the context
+    manager unpatches before this test returns, so the teardown pass runs clean.
+    """
+
+    later_steps: list[str] = []
+    real_restore_settings_keys = sandbox.restore_settings_keys
+
+    def _boom(snapshot: Any) -> None:
+        del snapshot
+        raise RuntimeError("deliberate executor restore failure")
+
+    def _recording_restore_settings_keys(before: Any) -> None:
+        later_steps.append("restore_settings_keys")
+        real_restore_settings_keys(before)
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(sandbox, "restore_executor_loader", _boom)
+        patcher.setattr(sandbox, "restore_settings_keys", _recording_restore_settings_keys)
+
+        with pytest.raises(RuntimeError, match="deliberate executor restore failure"):
+            cast("Any", airflow_components).finalize()
+
+    assert later_steps == ["restore_settings_keys"]
+
+
+def test_finalize_logs_additional_failures_beyond_the_first(
+    airflow_components: ComponentRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Re-raise the FIRST failure and log each later one rather than swallowing it.
+
+    Scoped `MonkeyPatch.context()` for the same teardown-ordering reason
+    `test_finalize_runs_every_restore_step_when_one_raises` documents.
+    """
+
+    def _boom_executor(snapshot: Any) -> None:
+        del snapshot
+        raise RuntimeError("first failure")
+
+    def _boom_secrets(before: Any) -> None:
+        del before
+        raise ValueError("second failure")
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(sandbox, "restore_executor_loader", _boom_executor)
+        patcher.setattr(sandbox, "restore_secrets_backend_list", _boom_secrets)
+
+        with (
+            caplog.at_level(logging.ERROR, logger="pytest_airflow_in_a_box.fixtures.components"),
+            pytest.raises(RuntimeError, match="first failure"),
+        ):
+            cast("Any", airflow_components).finalize()
+
+    assert "restore_secrets_backend_list" in caplog.text
+    assert "also failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -474,16 +759,21 @@ def test_registrations_leave_no_trace_across_tests(
     pytester.makepyfile(
         """
         import pytest
-        from airflow._shared.plugins_manager import AirflowPlugin
         from airflow.executors.base_executor import BaseExecutor
         from airflow.listeners import hookimpl
+        from airflow.plugins_manager import AirflowPlugin
         from airflow.secrets.base_secrets import BaseSecretsBackend
 
         pytestmark = pytest.mark.db_test
 
 
+        def _isolation_macro():
+            return 42
+
+
         class _Plugin(AirflowPlugin):
             name = "pytester_isolation_plugin"
+            macros = [_isolation_macro]
 
 
         class _Listener:
@@ -506,11 +796,26 @@ def test_registrations_leave_no_trace_across_tests(
 
 
         def test_register_everything(airflow_components):
+            from pytest_airflow_in_a_box._compat import components as sandbox
+
             airflow_components.plugin(_Plugin)
-            airflow_components.listener(_Listener())
+            task_manager = sandbox.listener_managers()[1]
+            airflow_components.listener(_Listener(), task=task_manager is not None)
             airflow_components.secrets_backend(_SecretsBackend)
             airflow_components.executor(_Executor, alias="pytester_isolation_exec")
             airflow_components.policy(get_dagbag_import_timeout=lambda dag_file_path: 30)
+
+            # Simulate the template-render path that integrates plugin macros: it both
+            # installs a per-plugin module into sys.modules AND setattrs it onto the
+            # macros parent -- the second half is the leak `restore_macros_module_keys`
+            # exists for. The CORE half's integrate function exists on every certified
+            # release (a plain function on 3.1.x, functools.cache'd on 3.2+) and both
+            # target the same parent module.
+            from airflow import plugins_manager as core_plugins_manager
+            from airflow.sdk.execution_time import macros
+
+            core_plugins_manager.integrate_macros_plugins()
+            assert hasattr(macros, "pytester_isolation_plugin")
 
 
         def test_nothing_leaked(airflow_components):
@@ -518,7 +823,8 @@ def test_registrations_leave_no_trace_across_tests(
 
             core_module, sdk_module = sandbox._plugins_manager_modules()
             plugin_names = {
-                type(candidate).__name__ for candidate in core_module._get_plugins()[0]
+                type(candidate).__name__
+                for candidate in sandbox._live_plugin_list(core_module)
             }
             assert "_Plugin" not in plugin_names
 
@@ -547,6 +853,15 @@ def test_registrations_leave_no_trace_across_tests(
             pm = sandbox.policy_plugin_manager()
             plugin_class_names = {type(plugin).__name__ for plugin in pm.get_plugins()}
             assert "ComponentRegistryPolicy" not in plugin_class_names
+
+            import sys as _sys
+            from airflow.sdk.execution_time import macros
+
+            assert not hasattr(macros, "pytester_isolation_plugin")
+            assert (
+                "airflow.sdk.execution_time.macros.pytester_isolation_plugin"
+                not in _sys.modules
+            )
         """
     )
 

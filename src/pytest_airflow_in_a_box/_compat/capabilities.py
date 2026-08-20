@@ -621,15 +621,42 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 1): _SerializedDagLocation.DEFINITIONS,
 }
+
+
+@dataclass(frozen=True)
+class CertifiedCaches:
+    """Certified cache-clearable names for one shape: always-present plus release-optional.
+
+    A two-frozenset certification, not a bare set: keying the certified tables by
+    capability enum rather than by release means one row spans several point releases,
+    and upstream adds cache functions mid-line (`get_deadline_references_plugins` in
+    3.2.2, `get_windows_plugins` in 3.3.0). `required` names must all be present on
+    every release the row covers; `optional` names are certified-but-absent-on-some
+    releases -- tolerated when missing, verified and cleared when present. Any observed
+    name outside `required | optional` is still a hard failure, so the under-clear
+    guarantee (an uncertified upstream cache can never slip past verification silently)
+    survives the relaxation.
+
+    Parameters:
+        required: frozenset[str] containing names present on every covered release.
+        optional: frozenset[str] containing names certified for the shape but absent on
+            some covered releases.
+    """
+
+    required: frozenset[str]
+    optional: frozenset[str] = frozenset()
+
+
 # Certified `functools.cache`-decorated callable names in `airflow.plugins_manager`
 # (core) and `airflow.sdk.plugins_manager` (Task SDK), keyed by `PluginsManagerShape`
 # rather than by release -- two rows cover every certified 3.x release, mirroring
 # `_CERTIFIED_SERIALIZED_DAG_LOCATIONS` above. `pytest_airflow_in_a_box._compat.components`
 # enumerates the *observed* set on the installed release by introspection (any attribute
-# exposing `.cache_clear`) and hard-fails on a symmetric difference against the
-# CACHED_FUNCTIONS row -- the check that actually matters going forward, since 3.2+ is
-# still under active development and upstream can add an twelfth cache function in a
-# release this plugin has not certified yet.
+# exposing `.cache_clear`) and hard-fails unless the observed set is a superset of the
+# row's `required` names and a subset of `required | optional` -- the check that
+# actually matters going forward, since 3.2+ is still under active development and
+# upstream can add another cache function in a release this plugin has not certified
+# yet.
 #
 # The MODULE_GLOBALS row cannot be verified the same way: a plain module-level global
 # carries no structural marker distinguishing "lazily-cached plugin state" from any other
@@ -643,50 +670,68 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
 # empty SDK-side set. Verification for this row is PRESENCE-only (every certified name
 # must exist), not symmetric-difference: there is no future 3.1.x release that could add
 # an uncertified name for this check to catch.
-CERTIFIED_CORE_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, frozenset[str]] = {
-    PluginsManagerShape.MODULE_GLOBALS: frozenset(
-        {
-            "plugins",
-            "loaded_plugins",
-            "import_errors",
-            "macros_modules",
-            "admin_views",
-            "flask_blueprints",
-            "fastapi_apps",
-            "fastapi_root_middlewares",
-            "external_views",
-            "react_apps",
-            "menu_links",
-            "flask_appbuilder_views",
-            "flask_appbuilder_menu_links",
-            "global_operator_extra_links",
-            "operator_extra_links",
-            "registered_operator_link_classes",
-            "timetable_classes",
-            "hook_lineage_reader_classes",
-            "priority_weight_strategy_classes",
-        }
+CERTIFIED_CORE_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, CertifiedCaches] = {
+    PluginsManagerShape.MODULE_GLOBALS: CertifiedCaches(
+        required=frozenset(
+            {
+                "plugins",
+                "loaded_plugins",
+                "import_errors",
+                "macros_modules",
+                "admin_views",
+                "flask_blueprints",
+                "fastapi_apps",
+                "fastapi_root_middlewares",
+                "external_views",
+                "react_apps",
+                "menu_links",
+                "flask_appbuilder_views",
+                "flask_appbuilder_menu_links",
+                "global_operator_extra_links",
+                "operator_extra_links",
+                "registered_operator_link_classes",
+                "timetable_classes",
+                "hook_lineage_reader_classes",
+                "priority_weight_strategy_classes",
+            }
+        )
     ),
-    PluginsManagerShape.CACHED_FUNCTIONS: frozenset(
-        {
-            "_get_plugins",
-            "_get_ui_plugins",
-            "get_flask_plugins",
-            "get_fastapi_plugins",
-            "_get_extra_operators_links_plugins",
-            "get_timetables_plugins",
-            "get_partition_mapper_plugins",
-            "get_windows_plugins",
-            "get_deadline_references_plugins",
-            "integrate_macros_plugins",
-            "get_priority_weight_strategy_plugins",
-        }
+    PluginsManagerShape.CACHED_FUNCTIONS: CertifiedCaches(
+        # The nine names present on every CACHED_FUNCTIONS release, transcribed from the
+        # `apache-airflow-core==3.2.0` wheel's `airflow/plugins_manager.py` and
+        # re-verified against the installed 3.3.0; see PROVENANCE.md.
+        required=frozenset(
+            {
+                "_get_plugins",
+                "_get_ui_plugins",
+                "get_flask_plugins",
+                "get_fastapi_plugins",
+                "_get_extra_operators_links_plugins",
+                "get_timetables_plugins",
+                "get_partition_mapper_plugins",
+                "integrate_macros_plugins",
+                "get_priority_weight_strategy_plugins",
+            }
+        ),
+        # Certified mid-line additions: absent on the earlier CACHED_FUNCTIONS releases,
+        # present (and cleared) from the release named beside each.
+        optional=frozenset(
+            {
+                "get_deadline_references_plugins",  # added in 3.2.2
+                "get_windows_plugins",  # added in 3.3.0
+            }
+        ),
     ),
 }
-CERTIFIED_SDK_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, frozenset[str]] = {
-    PluginsManagerShape.MODULE_GLOBALS: frozenset(),
-    PluginsManagerShape.CACHED_FUNCTIONS: frozenset(
-        {"_get_plugins", "integrate_macros_plugins", "get_hook_lineage_readers_plugins"}
+CERTIFIED_SDK_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, CertifiedCaches] = {
+    PluginsManagerShape.MODULE_GLOBALS: CertifiedCaches(required=frozenset()),
+    # All three names are present from `apache-airflow-task-sdk==1.2.0` (the wheel
+    # paired with core 3.2.0, the first CACHED_FUNCTIONS release) onward; verified by
+    # reading that wheel's `airflow/sdk/plugins_manager.py` directly. See PROVENANCE.md.
+    PluginsManagerShape.CACHED_FUNCTIONS: CertifiedCaches(
+        required=frozenset(
+            {"_get_plugins", "integrate_macros_plugins", "get_hook_lineage_readers_plugins"}
+        )
     ),
 }
 # `_get_grouped_entry_points` itself is byte-for-byte identical on every certified
@@ -699,9 +744,11 @@ CERTIFIED_SDK_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, frozenset[str]] 
 # there is nothing to duplicate). `pytest_airflow_in_a_box._compat.components`'s
 # `_shared_module_loading_modules()` seam returns one module for SINGLE and two for
 # DUPLICATED; this table certifies the one function name common to both.
-CERTIFIED_SHARED_MODULE_LOADING_CACHES: dict[SharedModuleLoading, frozenset[str]] = {
-    SharedModuleLoading.SINGLE: frozenset({"_get_grouped_entry_points"}),
-    SharedModuleLoading.DUPLICATED: frozenset({"_get_grouped_entry_points"}),
+CERTIFIED_SHARED_MODULE_LOADING_CACHES: dict[SharedModuleLoading, CertifiedCaches] = {
+    SharedModuleLoading.SINGLE: CertifiedCaches(required=frozenset({"_get_grouped_entry_points"})),
+    SharedModuleLoading.DUPLICATED: CertifiedCaches(
+        required=frozenset({"_get_grouped_entry_points"})
+    ),
 }
 _COMMON_REQUIRED_SYMBOLS = (
     ("airflow.utils.db", "initdb"),
