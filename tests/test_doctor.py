@@ -649,6 +649,27 @@ def test_migration_strict_section_flags_noop_off_v2(tmp_path: Path) -> None:
     assert "Airflow 2.x" in lines[0]
 
 
+def test_overrides_section_reports_an_empty_declaration() -> None:
+    """State plainly that no repo-wide overrides are declared."""
+
+    lines = doctor._overrides_section({})
+
+    assert lines == ["- No `airflow_config` overrides are declared"]
+
+
+def test_overrides_section_lists_declared_overrides() -> None:
+    """List every declared override, sorted, so the report is stable across runs."""
+
+    lines = doctor._overrides_section(
+        {("core", "plugins_folder"): "/plugins", ("core", "dagbag_import_timeout"): "12.5"}
+    )
+
+    assert lines == [
+        "- `core.dagbag_import_timeout` = `12.5`",
+        "- `core.plugins_folder` = `/plugins`",
+    ]
+
+
 def test_render_doctor_report_combines_every_section(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -668,16 +689,20 @@ def test_render_doctor_report_combines_every_section(
 
     monkeypatch.setattr(doctor, "get_bootstrap_state", _fake_get_bootstrap_state)
 
+    stash = pytest.Stash()
+    stash[doctor.INI_OVERRIDES_KEY] = {("core", "dagbag_import_timeout"): "12.5"}
     fake_config: Any = SimpleNamespace(
         getoption=lambda _name, default=None: default,
         getini=lambda _name: False,
-        stash=pytest.Stash(),
+        stash=stash,
     )
     report = doctor.render_doctor_report(config=fake_config)
 
     assert report.startswith(doctor.REPORT_TITLE)
     assert "## Storage" in report
     assert "## AIRFLOW_HOME and database" in report
+    assert "## Airflow config overrides" in report
+    assert "- `core.dagbag_import_timeout` = `12.5`" in report
     assert "## Executor" in report
     assert "## Migration-strict" in report
     assert "## Dag coverage" in report

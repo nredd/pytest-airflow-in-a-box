@@ -164,7 +164,9 @@ marker because Airflow 2.x never supported 3.13 -- on newer interpreters the ext
 nothing and the plugin's runtime check names the fix) installs the certified Airflow 2.x
 compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)):
 `dag_maker` (including whole-DagRun execution through `dag_maker.run()`), `run_ti`,
-`full_dag_bag`, `run_dag`, `clear_db`, seeding, and the bundled smoke checks run against 2.7.3, 2.8.4,
+`full_dag_bag`, `run_dag`, `clear_db`, seeding, the configuration surface
+(`airflow_config`, `airflow_configure`, `airflow_home_path`, `airflow_dags_folder_path`),
+and the bundled smoke checks run against 2.7.3, 2.8.4,
 2.9.3, 2.10.5, and 2.11.2. The marker is the family-wide cap; 2.7.3 and 2.8.4 cap lower still,
 at 3.11, and the plugin's runtime check names the offending release. Requesting both Airflow
 extras together fails at resolution for pip and uv alike, since the `apache-airflow` version

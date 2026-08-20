@@ -8,7 +8,10 @@ pytest --airflow-doctor
 ```
 
 The report covers the storage ladder decision and its reason, the resolved `AIRFLOW_HOME`,
-database URL scheme, and backend tier, plugin/pytest/Python/Airflow versions plus the resolved
+database URL scheme, and backend tier, every override declared through the
+[`airflow_config` ini option](../guide/configuration.md) (the environment is the only channel
+those travel on, so the generated `airflow.cfg` never shows them),
+plugin/pytest/Python/Airflow versions plus the resolved
 capability table, the resolved `core.executor` (flagging a 2.x SQLite run whose configuration
 overrides the plugin's `SequentialExecutor` default with a multi-threaded executor, which
 Airflow's `ready_to_reschedule` dependency rejects), whether

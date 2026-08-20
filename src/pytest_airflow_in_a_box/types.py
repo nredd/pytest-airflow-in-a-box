@@ -12,6 +12,7 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT
+from pytest_airflow_in_a_box.config import ConfigOverrides, EnvOverrides
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -37,6 +38,31 @@ class AirflowVariables(Protocol):
             TypeError: The batch, a key, or a value has the wrong type.
             ValueError: A key is malformed, already present in the metadata
                 database, or shadowed by an ``AIRFLOW_VAR_*`` variable.
+        """
+
+
+class AirflowConfigure(Protocol):
+    """Apply Airflow configuration overrides for the remainder of the test session."""
+
+    def __call__(
+        self,
+        overrides: ConfigOverrides | None = None,
+        *,
+        env: EnvOverrides | None = None,
+        refresh_settings: bool = False,
+    ) -> None:
+        """Apply one batch of overrides, restored at session teardown.
+
+        Parameters:
+            overrides: ConfigOverrides | None mapping ``(section, key)`` pairs to
+                replacement values, where ``None`` requests the option's absence.
+            env: EnvOverrides | None mapping plain variable names to replacement
+                values, where ``None`` requests the variable's absence.
+            refresh_settings: bool recomputing the ``airflow.settings``
+                configuration globals after applying and after restoring.
+
+        Raises:
+            pytest.UsageError: An argument, name, or value is malformed.
         """
 
 
@@ -447,6 +473,7 @@ class RunTask(Protocol):
 
 
 __all__ = (
+    "AirflowConfigure",
     "AirflowConnections",
     "AirflowVariables",
     "DagMaker",
