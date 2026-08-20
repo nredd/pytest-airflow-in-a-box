@@ -63,6 +63,7 @@ def _capabilities() -> AirflowCapabilities:
         asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
         executor_contract=ExecutorContract.V3_3,
         sdk_listener_manager_available=True,
+        task_instance_mutation_hook_supports_dag_run=True,
     )
 
 

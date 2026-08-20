@@ -28,8 +28,15 @@ The repository's `tests/enduser/` suite is a sanitized consumer-style catalog ru
 certified matrix leg. It covers custom operators, TaskFlow and mapping, hooks and connections,
 SQLite provider SQL, sensors, deferral, callbacks and retries, assets, provider-shaped packages,
 DagBag/collection, logging, xdist, and REST API CRUD. The provider-shaped corpus verifies user
-package composition and execution; registering a real provider distribution entry point remains
-out of scope because that is Airflow's packaging surface rather than this plugin's test surface.
+package composition and execution; actually registering and discovering a provider distribution's
+entry point at runtime inside this suite remains out of scope, since exercising real distribution
+discovery needs a separately installable package and this suite runs one process against one
+distribution. `check_component`'s `ComponentKind.PROVIDER` checks close part of that gap
+statically instead: given an already-installed provider's `get_provider_info` callable, they
+validate its return value against the shipped `provider_info.schema.json`, cross-check its
+declared `package-name` against the owning distribution's real name, and confirm that distribution
+actually registers an `apache_airflow_provider` entry point -- the three ways a provider silently
+fails discovery, all catchable without a live scheduler or webserver.
 
 ## Concurrent local runs
 

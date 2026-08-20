@@ -1,11 +1,13 @@
-"""Static conformance checks for custom timetables, listeners, and executors.
+"""Static conformance checks for custom Airflow components.
 
-`Timetable` is a `typing.Protocol` and `BaseExecutor` is not an ABC, and a listener
-carries no base class at all, so nothing about these three shapes is enforced at
-class-creation time -- a bug ships and only fails once a scheduler exercises it. Every
-checker here is a pure function over a class or instance: no Airflow bootstrap, metadata
-database, or cache is touched, and Airflow itself is imported only inside a checker body,
-never at module scope.
+Covers timetables, listeners, executors, XCom backends, weight strategies, notifiers,
+secrets backends, policies, plugins, and providers. Most of these carry no enforcement
+at class-creation time at all -- `Timetable` is a `typing.Protocol`, `BaseExecutor` is
+not an ABC, a listener or policy hookimpl carries no base class whatsoever -- so a bug
+ships and only fails once a scheduler, worker, or the Dag processor actually exercises
+it. Every checker here is a pure function over a class, an instance, or (for providers) a
+plain callable: no Airflow bootstrap, metadata database, or cache is touched, and Airflow
+itself is imported only inside a checker body, never at module scope.
 
 The registry is a flat, appendable list of `(kind, check_name, checker)` rows.
 `pytest_airflow_in_a_box.components.check_component` iterates it generically -- filtering
@@ -15,6 +17,12 @@ adds more checks purely by appending rows here, never by touching the dispatch l
 References:
     https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html
     https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/listeners.html
+    https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/xcoms.html
+    https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/notifications.html
+    https://airflow.apache.org/docs/apache-airflow/stable/security/secrets/secrets-backend/index.html
+    https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/cluster-policies.html
+    https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/plugins.html
+    https://airflow.apache.org/docs/apache-airflow-providers/index.html
     https://pluggy.readthedocs.io/en/stable/
 """
 
@@ -22,9 +30,13 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 from dataclasses import dataclass
-from importlib import import_module
-from typing import TYPE_CHECKING
+from importlib import import_module, metadata
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+from packaging.utils import canonicalize_name
 
 from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowCompatibilityError,
@@ -43,6 +55,13 @@ if TYPE_CHECKING:
 TIMETABLE = "timetable"
 LISTENER = "listener"
 EXECUTOR = "executor"
+XCOM = "xcom"
+WEIGHT_STRATEGY = "weight-strategy"
+NOTIFIER = "notifier"
+SECRETS_BACKEND = "secrets-backend"
+POLICY = "policy"
+PLUGIN = "plugin"
+PROVIDER = "provider"
 
 
 @dataclass(frozen=True)
@@ -807,6 +826,861 @@ def _check_executor_flag_wrong_type(component: object) -> Iterable[ComponentProb
 
 
 # ---------------------------------------------------------------------------
+# XCom backend checks
+# ---------------------------------------------------------------------------
+
+XCOM_ORM_DESERIALIZE_REMOVED = "xcom-orm-deserialize-removed"
+XCOM_BACKEND_SIGNATURE = "xcom-backend-signature"
+
+# The real call shape `airflow.sdk.bases.xcom.BaseXCom.set()` uses against
+# `cls.serialize_value(...)`: every argument by keyword, `value` included.
+# `deserialize_value` is called as `cls.deserialize_value(result)`, one positional
+# argument. Both are `@staticmethod` on the real base, called unbound as
+# `cls.serialize_value(...)`/`cls.deserialize_value(...)` -- a user override that drops
+# the decorator silently shifts every argument by one position, since the class-bound
+# access then yields a plain function with `self` as its first parameter. Verified
+# against the installed 3.3.0, plus 3.1.0 and 3.2.0 in isolated environments; see
+# `PROVENANCE.md`.
+_XCOM_SERIALIZE_VALUE_PROBE_KWARGS: dict[str, object] = {
+    "value": None,
+    "key": None,
+    "task_id": None,
+    "dag_id": None,
+    "run_id": None,
+    "map_index": None,
+}
+
+
+def _check_xcom_orm_deserialize_removed(component: object) -> Iterable[ComponentProblem]:
+    """Flag a custom XCom backend still defining the removed `orm_deserialize_value`.
+
+    `orm_deserialize_value` does not exist anywhere on `BaseXCom` in Airflow 3 -- no
+    caller looks it up on any certified 3.1-3.3 release -- so a backend carrying one
+    ships silently inert.
+
+    Parameters:
+        component: object containing the XCom backend class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    component_type = _as_type(component)
+    if not hasattr(component_type, "orm_deserialize_value"):
+        return
+    yield ComponentProblem(
+        code=XCOM_ORM_DESERIALIZE_REMOVED,
+        message=f"`{component_type.__name__}` defines `orm_deserialize_value`.",
+        hint=(
+            "`orm_deserialize_value` was removed in Airflow 3 -- nothing calls it, on "
+            "any certified 3.1-3.3 release. Delete it, or fold whatever it does into "
+            "`deserialize_value`."
+        ),
+    )
+
+
+def _check_xcom_backend_signature(component: object) -> Iterable[ComponentProblem]:
+    """Flag an XCom backend that is not a real `BaseXCom` subclass, or a broken override.
+
+    `resolve_xcom_backend` runs `issubclass(cls, BaseXCom)` only once, at import time
+    when a worker starts. `BaseXCom.set()`/`get_one()` call `serialize_value`/
+    `deserialize_value` with a fixed call shape; an override that does not accept it
+    raises `TypeError` on the very first XCom push or pull. `Signature.bind()` checks
+    that shape without ever calling the override.
+
+    Parameters:
+        component: object containing the XCom backend class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem per broken shape.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    from airflow.sdk.bases.xcom import BaseXCom
+
+    component_type = _as_type(component)
+    if not issubclass(component_type, BaseXCom):
+        yield ComponentProblem(
+            code=XCOM_BACKEND_SIGNATURE,
+            message=f"`{component_type.__name__}` is not a subclass of `BaseXCom`.",
+            hint=(
+                "`resolve_xcom_backend` raises `TypeError` at worker startup if "
+                "`core.xcom_backend` names a class that is not "
+                "`issubclass(cls, airflow.sdk.bases.xcom.BaseXCom)`. Subclass `BaseXCom`."
+            ),
+        )
+        return
+
+    def _user_overridden(name: str) -> bool:
+        defining = _defining_class(component_type, name)
+        if defining is None or defining is BaseXCom:
+            return False
+        return not defining.__module__.startswith("airflow.")
+
+    if _user_overridden("serialize_value"):
+        try:
+            inspect.signature(component_type.serialize_value).bind(
+                **_XCOM_SERIALIZE_VALUE_PROBE_KWARGS
+            )
+        except TypeError as error:
+            yield ComponentProblem(
+                code=XCOM_BACKEND_SIGNATURE,
+                message=(
+                    f"`{component_type.__name__}.serialize_value` does not accept "
+                    f"`BaseXCom.set()`'s real call shape ({error})."
+                ),
+                hint=(
+                    "`set()` calls `cls.serialize_value(value=..., key=..., "
+                    "task_id=..., dag_id=..., run_id=..., map_index=...)` -- every "
+                    "argument by keyword. Accept all six (directly or via `**kwargs`), "
+                    "and keep the method a `@staticmethod` or `@classmethod`: a plain "
+                    "instance method silently shifts every keyword argument, since "
+                    "`set()` calls it unbound as `cls.serialize_value(...)`."
+                ),
+            )
+    if _user_overridden("deserialize_value"):
+        try:
+            inspect.signature(component_type.deserialize_value).bind(None)
+        except TypeError as error:
+            yield ComponentProblem(
+                code=XCOM_BACKEND_SIGNATURE,
+                message=(
+                    f"`{component_type.__name__}.deserialize_value` does not accept "
+                    f"`BaseXCom.get_one()`'s real call shape ({error})."
+                ),
+                hint=(
+                    "`get_one()`/`get_all()` call `cls.deserialize_value(result)` with "
+                    "exactly one positional argument. Keep the method a `@staticmethod` "
+                    "or `@classmethod` accepting one required positional parameter."
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Weight strategy checks
+# ---------------------------------------------------------------------------
+
+WEIGHT_STRATEGY_ABSTRACT = "weight-strategy-abstract"
+WEIGHT_STRATEGY_HASH_OF_NONE = "weight-strategy-hash-of-none"
+
+
+def _check_weight_strategy_abstract(component: object) -> Iterable[ComponentProblem]:
+    """Flag a weight strategy that still carries unresolved abstract methods.
+
+    `PriorityWeightStrategy` is a real `abc.ABC`, so Python itself refuses to
+    instantiate an incomplete subclass -- but only at instantiation time, which for a
+    `weight_rule` class reference can be far downstream of Dag parsing, inside a
+    scheduler run. This surfaces the same `TypeError` statically instead, without ever
+    instantiating anything itself.
+
+    Parameters:
+        component: object containing the weight strategy class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    component_type = _as_type(component)
+    remaining = getattr(component_type, "__abstractmethods__", frozenset())
+    if not remaining:
+        return
+    yield ComponentProblem(
+        code=WEIGHT_STRATEGY_ABSTRACT,
+        message=(
+            f"`{component_type.__name__}` still has unimplemented abstract method(s): "
+            f"{sorted(remaining)}."
+        ),
+        hint=(
+            "`PriorityWeightStrategy` is an `abc.ABC`; Python raises `TypeError` the "
+            "moment anything tries to construct this class, which can be long after "
+            "Dag parsing, inside a scheduler run. Implement the missing method(s)."
+        ),
+    )
+
+
+def _check_weight_strategy_hash_of_none(component: object) -> Iterable[ComponentProblem]:
+    """Flag a weight strategy that does not override `__hash__`.
+
+    `PriorityWeightStrategy` defines `__eq__` without a matching `__hash__`. Python sets
+    a class's own `__hash__` to `None` whenever a class body defines `__eq__` without
+    `__hash__`, which is exactly what the certified 3.1.x base does -- making every
+    instance unhashable (`TypeError` from `hash()`). The certified 3.2+ base instead
+    defines `__hash__` explicitly as `return hash(None)`, making every instance hash
+    *equal* instead, so a `set` or `dict` keyed on strategy instances silently
+    collapses distinct strategies together. Either way, relying on the inherited
+    behavior breaks deduplication. This reads the real installed base's own `__hash__`
+    to describe which of the two applies, rather than hardcoding a per-release table,
+    so the message stays accurate even if a future release changes which failure mode
+    applies.
+
+    Parameters:
+        component: object containing the weight strategy class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    from airflow.task.priority_strategy import PriorityWeightStrategy
+
+    component_type = _as_type(component)
+
+    def _user_overridden(name: str) -> bool:
+        defining = _defining_class(component_type, name)
+        if defining is None or defining is PriorityWeightStrategy:
+            return False
+        return not defining.__module__.startswith("airflow.")
+
+    if _user_overridden("__hash__"):
+        return
+    if PriorityWeightStrategy.__hash__ is None:
+        observed = "raises `TypeError: unhashable type` on the installed Airflow release"
+    else:
+        observed = (
+            "returns `hash(None)` on the installed Airflow release, so every instance hashes equal"
+        )
+    yield ComponentProblem(
+        code=WEIGHT_STRATEGY_HASH_OF_NONE,
+        message=f"`{component_type.__name__}` does not override `__hash__`.",
+        hint=(
+            f"`PriorityWeightStrategy` defines `__eq__` without `__hash__`; the "
+            f"inherited `__hash__` {observed}, so a `set` or `dict` cannot dedupe or "
+            f"key on instances correctly. Override `__hash__` too, for example by "
+            f"hashing `tuple(sorted(self.serialize().items()))`."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Notifier checks
+# ---------------------------------------------------------------------------
+
+NOTIFIER_MISSING_NOTIFY = "notifier-missing-notify"
+NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE = "notifier-template-fields-unresolvable"
+
+
+def _check_notifier_missing_notify(component: object) -> Iterable[ComponentProblem]:
+    """Flag a notifier that never overrides `notify`.
+
+    `BaseNotifier.notify`'s default body raises `NotImplementedError` unconditionally.
+    `on_success_callback`/`on_failure_callback` run on the Dag processor, sync-only, and
+    call `notify` directly -- implementing only `async_notify` does not help there.
+    Covers apache/airflow#64649, where a minimal `BaseNotifier` used as a callback
+    crashed under `airflow dags test`.
+
+    Parameters:
+        component: object containing the notifier class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    from airflow.sdk.bases.notifier import BaseNotifier
+
+    component_type = _as_type(component)
+    defining = _defining_class(component_type, "notify")
+    if defining is not None and defining is not BaseNotifier:
+        return
+    yield ComponentProblem(
+        code=NOTIFIER_MISSING_NOTIFY,
+        message=f"`{component_type.__name__}` does not override `notify`.",
+        hint=(
+            "`BaseNotifier.notify`'s default implementation raises "
+            "`NotImplementedError()`. `on_success_callback`/`on_failure_callback` run "
+            "on the Dag processor and call `notify` synchronously -- implementing only "
+            "`async_notify` does not help there."
+        ),
+    )
+
+
+def _check_notifier_template_fields_unresolvable(component: object) -> Iterable[ComponentProblem]:
+    """Flag a notifier instance naming a `template_fields` entry it does not carry.
+
+    Only runs against an already-built instance: an attribute a `__init__` assigns is
+    invisible on the bare class, so a class-only check would false-positive on the
+    common, correct case. `BaseNotifier._update_context` does a plain `getattr(self, f)`
+    for every name in `template_fields`, raising `AttributeError` the first time the
+    notifier actually fires.
+
+    Parameters:
+        component: object containing the notifier class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem per unresolvable name.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    if isinstance(component, type):
+        return
+    for name in getattr(component, "template_fields", ()):
+        if hasattr(component, name):
+            continue
+        yield ComponentProblem(
+            code=NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
+            message=(
+                f"`{type(component).__name__}.template_fields` names `{name}`, which "
+                f"this instance does not carry."
+            ),
+            hint=(
+                "`_update_context` does `getattr(self, f)` for every `template_fields` "
+                "entry, raising `AttributeError` the first time this notifier actually "
+                "runs. Set the attribute, or remove it from `template_fields`."
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Secrets backend checks
+# ---------------------------------------------------------------------------
+
+SECRETS_BACKEND_RAISES_ON_MISS = "secrets-backend-raises-on-miss"
+
+# The three public getters a secrets backend author overrides; `get_conn_value` is the
+# lower-level protocol hook `get_connection` composes internally and is not itself part
+# of this public contract. Verified against the installed 3.3.0, plus 3.1.0 and 3.2.0
+# in isolated environments; see `PROVENANCE.md`.
+_SECRETS_BACKEND_GETTERS = ("get_connection", "get_variable", "get_config")
+
+
+def _check_secrets_backend_raises_on_miss(component: object) -> Iterable[ComponentProblem]:
+    """Flag a secrets backend getter annotated to never return `None`.
+
+    All three getters must return `None`, not raise, on a miss -- a very common bug is
+    raising the backing client's own not-found error instead. `check_component` never
+    calls a secrets backend for real (a genuine miss needs real credentials and a real
+    backend this module cannot fabricate safely), so this reads the override's own
+    declared return annotation instead: one that is present but does not mention `None`
+    is a strong static signal the author did not design for the miss case. An
+    unannotated override is not flagged -- silence, not a false positive, on code this
+    cannot judge.
+
+    Parameters:
+        component: object containing the secrets backend class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem per offending getter.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    from airflow.secrets.base_secrets import BaseSecretsBackend
+
+    component_type = _as_type(component)
+    for name in _SECRETS_BACKEND_GETTERS:
+        defining = _defining_class(component_type, name)
+        if defining is None or defining is BaseSecretsBackend:
+            continue
+        if defining.__module__.startswith("airflow."):
+            continue
+        return_annotation = inspect.signature(getattr(component_type, name)).return_annotation
+        if return_annotation is inspect.Signature.empty:
+            continue
+        if "None" in str(return_annotation):
+            continue
+        yield ComponentProblem(
+            code=SECRETS_BACKEND_RAISES_ON_MISS,
+            message=(
+                f"`{component_type.__name__}.{name}` is annotated to return "
+                f"`{return_annotation}`, which does not mention `None`."
+            ),
+            hint=(
+                f"`{name}` must return `None` on a miss, not raise. If it genuinely "
+                f"always returns a value, ignore this; if it can miss, annotate the "
+                f"return type accordingly (for example `str | None`) and return `None` "
+                f"there instead of raising."
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Policy checks
+# ---------------------------------------------------------------------------
+
+POLICY_UNKNOWN_HOOKSPEC = "policy-unknown-hookspec"
+POLICY_ARGUMENT_NAME_MISMATCH = "policy-argument-name-mismatch"
+
+_POLICY_HOOKSPEC_MODULES = ("airflow.policies",)
+
+
+def _policy_marker_attribute(name: str) -> str:
+    """Build the pluggy marker attribute name pluggy stamps onto a decorated function.
+
+    Mirrors `_listener_marker_attribute` for `airflow.policies`, whose `hookimpl`/
+    `local_settings_hookspec` markers are built from a
+    `pluggy.HookimplMarker("airflow.policy")`/`pluggy.HookspecMarker("airflow.policy")`
+    pair -- a different pluggy project name than the listener markers use. Derived from
+    the real `hookimpl` rather than hardcoded, so a future rename changes this too
+    instead of silently going stale.
+
+    Parameters:
+        name: str containing `"impl"` or `"spec"`.
+
+    Returns:
+        str containing the attribute name pluggy stamps for that marker kind.
+    """
+
+    from airflow.policies import hookimpl
+
+    return f"{hookimpl.project_name}_{name}"
+
+
+def _policy_hookspecs(module_names: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    """Map each `@local_settings_hookspec` function name to its validated parameters.
+
+    Mirrors `_listener_hookspecs` for `airflow.policies`; a module that fails to import
+    is skipped rather than raised, the same conservative-degradation precedent.
+
+    Parameters:
+        module_names: tuple[str, ...] containing hookspec module import paths.
+
+    Returns:
+        dict[str, tuple[str, ...]] mapping hookspec function name to the parameter names
+        pluggy would validate, in declaration order.
+    """
+
+    marker = _policy_marker_attribute("spec")
+    specs: dict[str, tuple[str, ...]] = {}
+    for module_name in module_names:
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            continue
+        for name, value in vars(module).items():
+            if callable(value) and hasattr(value, marker):
+                specs[name] = _pluggy_argnames(value)
+    return specs
+
+
+def _policy_hookimpls(component_type: type) -> tuple[_HookimplInfo, ...]:
+    """Collect every `@hookimpl`-decorated policy method's name and validated parameters.
+
+    Mirrors `_listener_hookimpls` for `airflow.policies.hookimpl`.
+
+    Parameters:
+        component_type: type containing the policy class under check.
+
+    Returns:
+        tuple[_HookimplInfo, ...] containing one entry per hookimpl-marked method, in
+        `inspect.getmembers` order (alphabetical by method name).
+    """
+
+    marker = _policy_marker_attribute("impl")
+    infos: list[_HookimplInfo] = []
+    for name, value in inspect.getmembers(component_type, callable):
+        opts = getattr(value, marker, None)
+        if opts is None:
+            continue
+        hookspec_name = opts.get("specname") or name
+        infos.append(
+            _HookimplInfo(
+                method_name=name, hookspec_name=hookspec_name, params=_pluggy_argnames(value)
+            )
+        )
+    return tuple(infos)
+
+
+def _check_policy_unknown_hookspec(component: object) -> Iterable[ComponentProblem]:
+    """Flag a policy hookimpl method whose name matches no real `airflow.policies` hookspec.
+
+    Mirrors `_check_listener_no_matching_hookspec` for policies.
+
+    Parameters:
+        component: object containing the policy class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem per unmatched method.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    component_type = _as_type(component)
+    impls = _policy_hookimpls(component_type)
+    if not impls:
+        return
+    known = _policy_hookspecs(_POLICY_HOOKSPEC_MODULES)
+    for info in sorted(impls, key=lambda item: item.method_name):
+        if info.hookspec_name in known:
+            continue
+        yield ComponentProblem(
+            code=POLICY_UNKNOWN_HOOKSPEC,
+            message=(
+                f"`{component_type.__name__}.{info.method_name}` matches no hookspec "
+                f"registered by `airflow.policies`."
+            ),
+            hint=(
+                "pluggy silently ignores a hookimpl matching no hookspec -- this "
+                "method never fires, with no warning. Check the method name (or "
+                "`specname=`) against `task_policy`, `dag_policy`, "
+                "`task_instance_mutation_hook`, `pod_mutation_hook`, "
+                "`get_airflow_context_vars`, and `get_dagbag_import_timeout`."
+            ),
+        )
+
+
+def _check_policy_argument_name_mismatch(component: object) -> Iterable[ComponentProblem]:
+    """Flag a policy hookimpl method declaring an argument its hookspec does not have.
+
+    `task_instance_mutation_hook` gained a `dag_run` parameter in Airflow 3.3; pluggy
+    hard-errors at registration time on an unknown hookimpl argument name, so a hook
+    written for -- or copied from -- a newer release breaks registration entirely on an
+    older one. Reads the live, installed hookspec rather than a hardcoded per-release
+    table, so this reflects whatever the resolved Airflow actually declares.
+
+    Parameters:
+        component: object containing the policy class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem per offending method.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    component_type = _as_type(component)
+    impls = _policy_hookimpls(component_type)
+    if not impls:
+        return
+    specs = _policy_hookspecs(_POLICY_HOOKSPEC_MODULES)
+    for info in sorted(impls, key=lambda item: item.method_name):
+        hookspec_params = specs.get(info.hookspec_name)
+        if hookspec_params is None:
+            continue
+        unknown = [param for param in info.params if param not in hookspec_params]
+        if not unknown:
+            continue
+        yield ComponentProblem(
+            code=POLICY_ARGUMENT_NAME_MISMATCH,
+            message=(
+                f"`{component_type.__name__}.{info.method_name}` declares argument(s) "
+                f"{unknown} that `{info.hookspec_name}`'s hookspec does not accept on "
+                f"the installed Airflow release."
+            ),
+            hint=(
+                f"pluggy hard-errors at registration time on an unknown hookimpl "
+                f"argument name. `{info.hookspec_name}` accepts: {list(hookspec_params)}."
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Plugin checks
+# ---------------------------------------------------------------------------
+
+PLUGIN_NAME_MISSING = "plugin-name-missing"
+
+
+def _check_plugin_name_missing(component: object) -> Iterable[ComponentProblem]:
+    """Flag a plugin that does not set `name`.
+
+    `AirflowPlugin.validate()` raises `AirflowPluginException` for exactly this, but
+    only when Airflow's own `is_valid_plugin` calls it during real plugin discovery.
+    This checker never calls `validate()` -- doing so risks raising out of
+    `check_component`, which must never happen -- and reports the same condition
+    instead, safely.
+
+    Parameters:
+        component: object containing the plugin class or instance under check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    component_type = _as_type(component)
+    if getattr(component_type, "name", None):
+        return
+    yield ComponentProblem(
+        code=PLUGIN_NAME_MISSING,
+        message=f"`{component_type.__name__}` does not set `name`.",
+        hint=(
+            "`AirflowPlugin.validate()` raises "
+            '`AirflowPluginException("Your plugin needs a name.")` for exactly this, '
+            "the moment real discovery reaches it. Set a `name` class attribute."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Provider checks
+# ---------------------------------------------------------------------------
+
+PROVIDER_INFO_SCHEMA = "provider-info-schema"
+PROVIDER_PACKAGE_NAME_MISMATCH = "provider-package-name-mismatch"
+PROVIDER_NO_ENTRY_POINT = "provider-no-entry-point"
+
+_PROVIDER_ENTRY_POINT_GROUP = "apache_airflow_provider"
+
+
+def _call_provider_info(component: object) -> object:
+    """Call an already-verified-callable `get_provider_info`-shaped component.
+
+    Every caller has already checked `callable(component) and not
+    isinstance(component, type)` before reaching this; the checked type stays the
+    generic `object` every checker in this module accepts, so the runtime-justified cast
+    lives in this one place rather than at each of the three call sites.
+
+    Parameters:
+        component: object already known to be a non-class callable.
+
+    Returns:
+        object containing whatever the callable returns.
+    """
+
+    return cast("Callable[[], object]", component)()
+
+
+def _distribution_editable_root(dist: metadata.Distribution) -> Path | None:
+    """Resolve an editable-installed distribution's real source root, if any.
+
+    A `pip install -e .` / `uv pip install -e .` install -- the standard way a provider
+    author develops their own package -- records no real file paths in its RECORD at
+    all: only its `.dist-info` metadata and a `.pth`/import-hook redirect are actually
+    installed into `site-packages`. `_provider_owning_distribution`'s file-manifest match
+    can never find such a distribution, so this reads PEP 610's `direct_url.json`
+    instead, which every editable install writes.
+
+    Parameters:
+        dist: importlib.metadata.Distribution to inspect.
+
+    Returns:
+        Path | None containing the resolved local source root, or None when this
+        distribution carries no editable `direct_url.json`.
+    """
+
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
+
+    raw = dist.read_text("direct_url.json")
+    if raw is None:
+        return None
+    try:
+        info = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(info, dict) or not info.get("dir_info", {}).get("editable"):
+        return None
+    url = info.get("url")
+    if not isinstance(url, str):
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "file":
+        return None
+    try:
+        return Path(url2pathname(parsed.path)).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def _provider_owning_distribution(component: object) -> str | None:
+    """Resolve the installed distribution that owns a callable's module.
+
+    Every real Airflow provider lives under the shared `airflow.providers.*` namespace
+    package, so `importlib.metadata.packages_distributions()` -- which maps by top-level
+    import name -- resolves the top-level name `airflow` to every provider distribution
+    installed at once, never to exactly one; it is unusable here. Matching each
+    distribution's own recorded file list against the callable's actual module file
+    instead correctly attributes a namespace-packaged module to its one real owner, for
+    a normally (non-editable) installed provider. A provider under active development is
+    typically installed editable instead, whose RECORD contains no real file paths at
+    all -- `_distribution_editable_root` is the fallback for that case.
+
+    Parameters:
+        component: object containing the `get_provider_info`-shaped callable to trace.
+
+    Returns:
+        str | None containing the owning distribution's name, or None when the
+        callable carries no resolvable module file, or no installed distribution can be
+        attributed to it either way.
+    """
+
+    module_name = getattr(component, "__module__", None)
+    if not module_name:
+        return None
+    module = sys.modules.get(module_name)
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        return None
+    module_path = Path(module_file).resolve()
+
+    editable_candidate: str | None = None
+    for dist in metadata.distributions():
+        for recorded_file in dist.files or ():
+            try:
+                located = Path(str(dist.locate_file(recorded_file))).resolve()
+            except Exception:
+                continue
+            if located == module_path:
+                return dist.name
+        if editable_candidate is None:
+            editable_root = _distribution_editable_root(dist)
+            if editable_root is not None and module_path.is_relative_to(editable_root):
+                editable_candidate = dist.name
+    return editable_candidate
+
+
+def _check_provider_info_schema(component: object) -> Iterable[ComponentProblem]:
+    """Flag a `get_provider_info()` callable whose return value fails the shipped schema.
+
+    Calls `component()`, mirroring how `ProvidersManager` calls the real entry point
+    (`entry_point.load()()`) at discovery time; a call that raises is reported here
+    too, since a provider whose info cannot even be produced can never be schema
+    validated.
+
+    Parameters:
+        component: object containing the `get_provider_info`-shaped callable to check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem per schema violation,
+        or one problem when the callable itself raises.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    if not callable(component) or isinstance(component, type):
+        return
+    from importlib.resources import files
+
+    import jsonschema
+
+    name = getattr(component, "__name__", type(component).__name__)
+    try:
+        schema = json.loads(files("airflow").joinpath("provider_info.schema.json").read_text())
+        validator = jsonschema.validators.validator_for(schema)(schema)
+    except (OSError, ValueError, jsonschema.exceptions.SchemaError):
+        return
+    try:
+        provider_info = _call_provider_info(component)
+    except Exception as error:
+        yield ComponentProblem(
+            code=PROVIDER_INFO_SCHEMA,
+            message=(
+                f"`{name}()` raised {type(error).__name__} instead of returning a "
+                f"provider-info dict: {error}."
+            ),
+            hint=(
+                "`ProvidersManager` calls the registered entry point directly as "
+                "`entry_point.load()()` -- `get_provider_info` must be a plain, "
+                "side-effect-free function returning a dict."
+            ),
+        )
+        return
+    for schema_error in validator.iter_errors(provider_info):
+        path = "/".join(str(part) for part in schema_error.absolute_path) or "<root>"
+        yield ComponentProblem(
+            code=PROVIDER_INFO_SCHEMA,
+            message=(
+                f"`{name}()` does not conform to `provider_info.schema.json` at "
+                f"`{path}`: {schema_error.message}."
+            ),
+            hint=(
+                "Validate against the shipped `airflow/provider_info.schema.json`; "
+                "`ProvidersManager` rejects a non-conforming dict at discovery time."
+            ),
+        )
+
+
+def _check_provider_package_name_mismatch(component: object) -> Iterable[ComponentProblem]:
+    """Flag a `package-name` that disagrees with the owning distribution's own name.
+
+    `_discover_all_providers_from_packages` (moved to
+    `airflow._shared.providers_discovery.providers_discovery
+    .discover_all_providers_from_packages` from 3.2 onward; inline on `ProvidersManager`
+    on 3.1.x) raises `ValueError` -- not a warning -- when these disagree.
+
+    Parameters:
+        component: object containing the `get_provider_info`-shaped callable to check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    if not callable(component) or isinstance(component, type):
+        return
+    distribution_name = _provider_owning_distribution(component)
+    if distribution_name is None:
+        return
+    try:
+        provider_info = _call_provider_info(component)
+    except Exception:
+        return
+    if not isinstance(provider_info, dict):
+        return
+    package_name = provider_info.get("package-name")
+    if not isinstance(package_name, str):
+        return
+    canonical_distribution_name = canonicalize_name(distribution_name)
+    if canonical_distribution_name == package_name:
+        return
+    name = getattr(component, "__name__", type(component).__name__)
+    yield ComponentProblem(
+        code=PROVIDER_PACKAGE_NAME_MISMATCH,
+        message=(
+            f"`{name}()['package-name']` is {package_name!r}, but the installed "
+            f"distribution canonicalizes to {canonical_distribution_name!r}."
+        ),
+        hint=(
+            "`ProvidersManager` raises `ValueError` at discovery when these disagree "
+            "-- not a warning. Make `package-name` match the distribution's own "
+            "canonical (PEP 503) name."
+        ),
+    )
+
+
+def _check_provider_no_entry_point(component: object) -> Iterable[ComponentProblem]:
+    """Flag a provider whose owning distribution registers no discovery entry point.
+
+    Without an `apache_airflow_provider` entry point, `ProvidersManager` never calls
+    this function at all -- the provider is not discovered, silently.
+
+    Parameters:
+        component: object containing the `get_provider_info`-shaped callable to check.
+
+    Returns:
+        Iterable[ComponentProblem] containing at most one problem.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return
+    if not callable(component) or isinstance(component, type):
+        return
+    distribution_name = _provider_owning_distribution(component)
+    if distribution_name is None:
+        return
+    canonical_distribution_name = canonicalize_name(distribution_name)
+    registered = {
+        canonicalize_name(entry_point.dist.name)
+        for entry_point in metadata.entry_points(group=_PROVIDER_ENTRY_POINT_GROUP)
+        if entry_point.dist is not None
+    }
+    if canonical_distribution_name in registered:
+        return
+    name = getattr(component, "__name__", type(component).__name__)
+    yield ComponentProblem(
+        code=PROVIDER_NO_ENTRY_POINT,
+        message=(
+            f"The distribution providing `{name}` ({distribution_name!r}) registers no "
+            f"`{_PROVIDER_ENTRY_POINT_GROUP}` entry point."
+        ),
+        hint=(
+            f"Add an `[project.entry-points.{_PROVIDER_ENTRY_POINT_GROUP}]` table "
+            f"pointing at `{name}`; without it, `ProvidersManager` never calls this "
+            f"function and the provider is not discovered at all."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Kind classification and the flat, appendable check registry
 # ---------------------------------------------------------------------------
 
@@ -863,10 +1737,165 @@ def _is_executor(component: object) -> bool:
     return issubclass(_as_type(component), BaseExecutor)
 
 
+def _is_xcom(component: object) -> bool:
+    """Report whether a component is a `BaseXCom` subclass.
+
+    Gated on `installed_family()` first, before importing anything from `airflow.sdk`:
+    that namespace does not exist at all on 2.x, and every classifier here is called
+    unconditionally by `check_component`'s auto-detect path regardless of what kind of
+    component it is actually looking at, so an unguarded import would turn a 2.x
+    environment's classification of an unrelated component (a timetable, say) into a
+    hard crash instead of a clean non-match.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether the component's type subclasses `BaseXCom`.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    from airflow.sdk.bases.xcom import BaseXCom
+
+    return issubclass(_as_type(component), BaseXCom)
+
+
+def _is_weight_strategy(component: object) -> bool:
+    """Report whether a component is a `PriorityWeightStrategy` subclass.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether the component's type subclasses `PriorityWeightStrategy`.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    from airflow.task.priority_strategy import PriorityWeightStrategy
+
+    return issubclass(_as_type(component), PriorityWeightStrategy)
+
+
+def _is_notifier(component: object) -> bool:
+    """Report whether a component is a `BaseNotifier` subclass.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether the component's type subclasses `BaseNotifier`.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    from airflow.sdk.bases.notifier import BaseNotifier
+
+    return issubclass(_as_type(component), BaseNotifier)
+
+
+def _is_secrets_backend(component: object) -> bool:
+    """Report whether a component is a `BaseSecretsBackend` subclass.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether the component's type subclasses `BaseSecretsBackend`.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    from airflow.secrets.base_secrets import BaseSecretsBackend
+
+    return issubclass(_as_type(component), BaseSecretsBackend)
+
+
+def _is_policy(component: object) -> bool:
+    """Report whether a component defines at least one `airflow.policies` hookimpl method.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether any callable member carries the policy hookimpl marker.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    marker = _policy_marker_attribute("impl")
+    component_type = _as_type(component)
+    return any(hasattr(value, marker) for _, value in inspect.getmembers(component_type, callable))
+
+
+def _is_plugin(component: object) -> bool:
+    """Report whether a component duck-types as a valid Airflow plugin.
+
+    Matches Airflow's own `is_valid_plugin` exactly, minus the `.validate()` call it
+    makes on a match: `validate()` raises `AirflowPluginException` when `name` is unset,
+    and a classifier used unconditionally by `check_component`'s auto-detect path must
+    never raise. `plugin-name-missing` reports that same condition safely instead. Real
+    Airflow matches by MRO member name and module substring rather than `issubclass`
+    on purpose (see the real function's own comment): the shared plugin base is
+    accessed via different symlinked paths from core and the Task SDK, which Python
+    treats as distinct classes, so a provider's plugin genuinely inheriting the SDK's
+    `AirflowPlugin` would wrongly fail an `issubclass` check against the core one.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether the component duck-types as an `AirflowPlugin` subclass.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    component_type = _as_type(component)
+    if component_type.__name__ == "AirflowPlugin":
+        return False
+    return any(
+        base.__name__ == "AirflowPlugin" and "plugins_manager" in base.__module__
+        for base in component_type.__mro__
+    )
+
+
+def _is_provider(component: object) -> bool:
+    """Report whether a component looks like a `get_provider_info`-shaped callable.
+
+    Every real Airflow provider names this function `get_provider_info` by convention
+    -- it is how `ProvidersManager` looks it up once loaded, and how a human reading the
+    package finds it. A bare class is excluded even though classes are callable, since
+    `AirflowPlugin`, `BaseExecutor`, and friends would otherwise all match.
+
+    Parameters:
+        component: object containing the class or instance under check.
+
+    Returns:
+        bool indicating whether the component is a non-class callable named
+        `get_provider_info`.
+    """
+
+    if installed_family() is not AirflowFamily.V3:
+        return False
+    return (
+        callable(component)
+        and not isinstance(component, type)
+        and getattr(component, "__name__", None) == "get_provider_info"
+    )
+
+
 KIND_CLASSIFIERS: dict[str, Callable[[object], bool]] = {
     TIMETABLE: _is_timetable,
     LISTENER: _is_listener,
     EXECUTOR: _is_executor,
+    XCOM: _is_xcom,
+    WEIGHT_STRATEGY: _is_weight_strategy,
+    NOTIFIER: _is_notifier,
+    SECRETS_BACKEND: _is_secrets_backend,
+    POLICY: _is_policy,
+    PLUGIN: _is_plugin,
+    PROVIDER: _is_provider,
 }
 
 # Flat and appendable by design: a follow-up phase adds more checks purely by appending
@@ -883,6 +1912,23 @@ CHECK_REGISTRY: tuple[tuple[str, str, Callable[[object], Iterable[ComponentProbl
     (EXECUTOR, EXECUTOR_MISSING_OVERRIDE, _check_executor_missing_override),
     (EXECUTOR, EXECUTOR_STALE_ATTRIBUTE, _check_executor_stale_attribute),
     (EXECUTOR, EXECUTOR_FLAG_WRONG_TYPE, _check_executor_flag_wrong_type),
+    (XCOM, XCOM_ORM_DESERIALIZE_REMOVED, _check_xcom_orm_deserialize_removed),
+    (XCOM, XCOM_BACKEND_SIGNATURE, _check_xcom_backend_signature),
+    (WEIGHT_STRATEGY, WEIGHT_STRATEGY_ABSTRACT, _check_weight_strategy_abstract),
+    (WEIGHT_STRATEGY, WEIGHT_STRATEGY_HASH_OF_NONE, _check_weight_strategy_hash_of_none),
+    (NOTIFIER, NOTIFIER_MISSING_NOTIFY, _check_notifier_missing_notify),
+    (
+        NOTIFIER,
+        NOTIFIER_TEMPLATE_FIELDS_UNRESOLVABLE,
+        _check_notifier_template_fields_unresolvable,
+    ),
+    (SECRETS_BACKEND, SECRETS_BACKEND_RAISES_ON_MISS, _check_secrets_backend_raises_on_miss),
+    (POLICY, POLICY_UNKNOWN_HOOKSPEC, _check_policy_unknown_hookspec),
+    (POLICY, POLICY_ARGUMENT_NAME_MISMATCH, _check_policy_argument_name_mismatch),
+    (PLUGIN, PLUGIN_NAME_MISSING, _check_plugin_name_missing),
+    (PROVIDER, PROVIDER_INFO_SCHEMA, _check_provider_info_schema),
+    (PROVIDER, PROVIDER_PACKAGE_NAME_MISMATCH, _check_provider_package_name_mismatch),
+    (PROVIDER, PROVIDER_NO_ENTRY_POINT, _check_provider_no_entry_point),
 )
 
 __all__ = (
@@ -890,6 +1936,13 @@ __all__ = (
     "EXECUTOR",
     "KIND_CLASSIFIERS",
     "LISTENER",
+    "NOTIFIER",
+    "PLUGIN",
+    "POLICY",
+    "PROVIDER",
+    "SECRETS_BACKEND",
     "TIMETABLE",
+    "WEIGHT_STRATEGY",
+    "XCOM",
     "ComponentProblem",
 )

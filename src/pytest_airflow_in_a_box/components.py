@@ -1,12 +1,15 @@
-"""Static conformance checks for custom timetables, listeners, and executors.
+"""Static conformance checks for custom Airflow components.
 
-`BaseExecutor` is not an ABC and `Timetable` is a `typing.Protocol`, so nothing about
-either class -- nor a listener, which carries no base class at all -- is enforced at
-class-creation time. A shape bug in any of the three ships silently and only fails once a
-scheduler actually exercises it. `check_component` runs a battery of pure, additive
-checks against a class or an already-built instance and reports every problem found; a
-wrong or overly strict check can report a false problem, but it can never raise on the
-component itself or break an otherwise-passing suite.
+Covers timetables, listeners, executors, XCom backends, weight strategies, notifiers,
+secrets backends, policies, plugins, and providers. Most of these carry no base class
+enforcement at all -- `BaseExecutor` is not an ABC, `Timetable` is a `typing.Protocol`, a
+listener or a policy hookimpl carries no base class whatsoever -- so a shape bug in any
+of them ships silently and only fails once a scheduler, worker, or the Dag processor
+actually exercises it. `check_component` runs a battery of pure, additive checks against
+a class, an already-built instance, or (for providers) a `get_provider_info`-shaped
+callable, and reports every problem found; a wrong or overly strict check can report a
+false problem, but it can never raise on the component itself or break an
+otherwise-passing suite.
 
 No Airflow bootstrap, metadata database, or cache is touched, and this module -- like its
 private registry in `pytest_airflow_in_a_box._compat.components` -- never imports Airflow
@@ -16,6 +19,13 @@ References:
     https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/timetable.html
     https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/listeners.html
     https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/index.html
+    https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/xcoms.html
+    https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/priority-weight.html
+    https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/notifications.html
+    https://airflow.apache.org/docs/apache-airflow/stable/security/secrets/secrets-backend/index.html
+    https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/cluster-policies.html
+    https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/plugins.html
+    https://airflow.apache.org/docs/apache-airflow-providers/index.html
 """
 
 from __future__ import annotations
@@ -41,6 +51,13 @@ class ComponentKind(str, Enum):
     TIMETABLE = "timetable"
     LISTENER = "listener"
     EXECUTOR = "executor"
+    XCOM = "xcom"
+    WEIGHT_STRATEGY = "weight-strategy"
+    NOTIFIER = "notifier"
+    SECRETS_BACKEND = "secrets-backend"
+    POLICY = "policy"
+    PLUGIN = "plugin"
+    PROVIDER = "provider"
 
 
 class ComponentContractError(Exception):
