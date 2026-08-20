@@ -336,6 +336,50 @@ class _ComponentSandbox:
         raise failures[0][1]
 
 
+# The one conformance problem that makes transparent registration FUTILE rather than
+# merely suspect: a `<locals>` class can never resolve by qualname, so registering it
+# only defers the failure to a raw `TimetableNotRegistered` deep inside persist.
+_SCHEDULE_REGISTRATION_BLOCKING = (sandbox.TIMETABLE_LOCAL_QUALNAME,)
+
+
+def register_schedule_timetable(timetable: object) -> None:
+    """Register a `dag_maker` schedule timetable behind a registration-scoped gate.
+
+    Deliberately more lenient than `ComponentRegistry.timetable`'s full conformance
+    gate: the transparent path's job is to make Airflow's own serialization succeed,
+    not to enforce conformance on a Dag the user merely scheduled -- and the full gate
+    is stricter than Airflow itself (`timetable-serialize-pair-incomplete` hard-fails
+    a stateless serialize-only timetable that upstream's default `deserialize`, a bare
+    `return cls()`, handles fine). Only the problem that makes registration futile
+    raises (`timetable-local-qualname`); everything else is logged as a warning so the
+    signal survives without turning a previously-working Dag into a hard failure. The
+    explicit `airflow_components.timetable()` call keeps the full gate.
+
+    Parameters:
+        timetable: object containing the custom timetable instance to register.
+
+    Raises:
+        ComponentContractError: The class can never resolve by qualname
+            (`timetable-local-qualname`).
+    """
+
+    report = check_component(timetable, kind=ComponentKind.TIMETABLE)
+    for problem in report.problems:
+        if problem.code not in _SCHEDULE_REGISTRATION_BLOCKING:
+            LOGGER.warning(
+                f"`{report.component_name}` [{problem.code}]: {problem.message} {problem.hint}"
+            )
+    ComponentReport(
+        component_name=report.component_name,
+        problems=tuple(
+            problem
+            for problem in report.problems
+            if problem.code in _SCHEDULE_REGISTRATION_BLOCKING
+        ),
+    ).raise_for_problems()
+    sandbox.register_timetable(timetable)
+
+
 @pytest.fixture
 def airflow_components(pytestconfig: pytest.Config) -> Iterator[ComponentRegistry]:
     """Register a custom plugin, listener, policy, secrets backend, executor, or timetable.
@@ -368,4 +412,4 @@ def airflow_components(pytestconfig: pytest.Config) -> Iterator[ComponentRegistr
         registry.finalize()
 
 
-__all__ = ("airflow_components",)
+__all__ = ("airflow_components", "register_schedule_timetable")

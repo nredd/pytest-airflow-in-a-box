@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from importlib import import_module
@@ -19,11 +20,13 @@ from airflow.models.dag_version import DagVersion
 from airflow.models.dagbundle import DagBundleModel
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.timetables.base import Timetable
 from airflow.utils.session import create_session
 from sqlalchemy import func, select
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
 from pytest_airflow_in_a_box._compat.dag import DagCleanupError, DagPersistenceError
+from pytest_airflow_in_a_box.components import ComponentContractError
 from pytest_airflow_in_a_box.fixtures import dag as dag_fixture
 from pytest_airflow_in_a_box.fixtures.dag import (
     DAG_ID_MAX_LENGTH,
@@ -32,7 +35,7 @@ from pytest_airflow_in_a_box.fixtures.dag import (
     _DagRunner,
     _default_dag_id,
 )
-from pytest_airflow_in_a_box.types import DagMaker, RunDag
+from pytest_airflow_in_a_box.types import ComponentRegistry, DagMaker, RunDag
 
 pytestmark = pytest.mark.db_test
 
@@ -687,7 +690,7 @@ def test_dag_factory_hook_fires_only_for_custom_timetable_instances(
     )
 
     factory("hook_none_schedule")
-    factory("hook_string_schedule", schedule=None)
+    factory("hook_string_schedule", schedule="@daily")
     timetable = ExampleTimetable(hours=6)
     factory("hook_custom_schedule", schedule=timetable)
 
@@ -707,3 +710,136 @@ def test_dag_factory_without_the_hook_skips_registration() -> None:
     factory("no_hook_schedule", schedule=_InlineTimetable())
 
     assert type(factory.dag.timetable) is _InlineTimetable
+
+
+@pytest.mark.need_serialized_dag
+def test_dag_maker_registers_a_timetable_nested_in_asset_or_time_schedule(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serialize an `AssetOrTimeSchedule` wrapping a custom timetable transparently.
+
+    The wrapper lives under `airflow.timetables.assets`, but its `serialize()`
+    encodes the INNER custom timetable -- the exact shape that raised
+    `TimetableNotRegistered` before the collector descended one level.
+    """
+
+    from airflow.sdk import Asset
+    from airflow.timetables.assets import AssetOrTimeSchedule
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose; see the transparent-registration test above.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+    # `cast` because `AssetOrTimeSchedule` annotates `assets` with the serialized
+    # asset type; the authoring-time SDK `Asset` is converted at runtime.
+    schedule = AssetOrTimeSchedule(
+        timetable=ExampleTimetable(hours=3),
+        assets=cast("Any", [Asset("dag_maker_wrapped_asset")]),
+    )
+
+    with dag_maker(schedule=schedule) as dag:
+        EmptyOperator(task_id="wrapped")
+
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert serialized_dag.dag_id == dag.dag_id
+    inner = cast("Any", serialized_dag).timetable.timetable
+    assert type(inner) is ExampleTimetable
+    assert inner.hours == 3
+
+
+def test_dag_maker_rejects_a_custom_timetable_class_as_schedule(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Name the class-instead-of-instance mistake before Airflow's late `KeyError`."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose; see the transparent-registration test above.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+
+    with pytest.raises(TypeError, match=r"pass `ExampleTimetable\(\.\.\.\)` instead of the class"):
+        dag_maker(schedule=ExampleTimetable)
+
+
+class _SerializeOnlyTimetable(Timetable):
+    """Override only `serialize`, the shape upstream accepts but the full gate flags.
+
+    Upstream's base `deserialize` defaults to `return cls()`, so a stateless
+    serialize-only timetable is fully functional -- `dag_maker`'s transparent
+    registration must warn, not hard-fail, on `timetable-serialize-pair-incomplete`
+    (and on the missing protocol methods, equally irrelevant to serialization).
+    """
+
+    def serialize(self) -> dict[str, Any]:
+        """Emit an empty payload.
+
+        Returns:
+            dict[str, Any] containing nothing.
+        """
+
+        return {}
+
+
+@pytest.mark.need_serialized_dag
+def test_dag_maker_warns_but_registers_a_gate_flagged_timetable(
+    dag_maker: DagMaker,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Serialize a serialize-only timetable that the full conformance gate would refuse.
+
+    The registration-scoped gate downgrades every non-futile problem to a warning:
+    a Dag that persisted fine before the transparent hook existed must keep
+    persisting, with the conformance signal surviving in the log.
+    """
+
+    with (
+        caplog.at_level(logging.WARNING, logger="pytest_airflow_in_a_box.fixtures.components"),
+        dag_maker(schedule=_SerializeOnlyTimetable()),
+    ):
+        EmptyOperator(task_id="lenient")
+
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert type(cast("Any", serialized_dag).timetable) is _SerializeOnlyTimetable
+    assert "timetable-serialize-pair-incomplete" in caplog.text
+
+
+def test_dag_maker_rejects_a_local_scope_timetable(dag_maker: DagMaker) -> None:
+    """Keep the one futile-registration problem a hard failure on the transparent path."""
+
+    from airflow.timetables.base import Timetable
+
+    class _LocalTimetable(Timetable):
+        """Fail `timetable-local-qualname` by construction."""
+
+    with pytest.raises(ComponentContractError, match="timetable-local-qualname"):
+        dag_maker(schedule=_LocalTimetable())
+
+
+@pytest.mark.need_serialized_dag
+def test_dag_maker_skips_registration_for_an_already_registered_timetable(
+    dag_maker: DagMaker,
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Leave a class the registered lookup already resolves entirely alone.
+
+    Simulates the deployed-the-supported-way setup (plugins folder / entry point) with
+    an explicit prior registration: the transparent hook's lookup probe hits, so the
+    lenient gate never runs and no second registration happens.
+    """
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose; see the transparent-registration test above.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+    airflow_components.timetable(ExampleTimetable)
+
+    with dag_maker(schedule=ExampleTimetable(hours=8)):
+        EmptyOperator(task_id="pre_registered")
+
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    timetable = cast("Any", serialized_dag).timetable
+    assert type(timetable) is ExampleTimetable
+    assert timetable.hours == 8

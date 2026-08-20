@@ -72,9 +72,29 @@ def test_dag_scheduled_by_my_timetable(dag_maker):
     assert dag_maker.serialized_dag.timetable.hours == 2
 ```
 
-Built-in timetables (`CronTriggerTimetable`, asset-triggered schedules, and everything
-else defined under the `airflow.` namespace) never trigger registration -- they decode
-without it, and a test passing one pays no sandbox cost at all.
+Core timetables -- everything under `airflow.timetables.`, which is exactly the set
+Airflow's own serializer imports directly -- never trigger registration, and a test
+passing one pays no sandbox cost at all. Everything else registers, including
+airflow-namespaced classes OUTSIDE that prefix (Airflow's shipped example
+`AfterWorkdayTimetable` lives in `airflow.example_dags.plugins.workday`, and provider
+timetables resolve through the same registered lookup). The one core wrapper that
+CARRIES a custom timetable is handled too: `AssetOrTimeSchedule(timetable=MyTimetable(),
+assets=[...])` serializes its inner timetable through the registry lookup, so
+`dag_maker` registers the nested instance. Passing a custom timetable CLASS instead of
+an instance raises a `TypeError` naming the fix up front -- Airflow itself would accept
+it and only fail much later, inside metadata sync, with a bare `KeyError`.
+
+Two scope notes. A class the registered lookup ALREADY resolves -- deployed the
+supported way, through the run's plugins folder or a venv entry point -- is left
+entirely alone. And the transparent path's conformance gate is registration-scoped:
+only `timetable-local-qualname` (registration would be futile) hard-fails; every other
+[timetable check](custom-components.md#timetable-checks) finding is logged as a warning,
+since upstream's own default `deserialize` handles a stateless serialize-only timetable
+fine. The explicit `airflow_components.timetable()` call keeps the full gate.
+
+Transparent registration is a `dag_maker` feature. `run_dag` and `full_dag_bag` persist
+externally-authored Dags through the same serializer without it -- for those, call
+`airflow_components.timetable(MyTimetable)` yourself before persisting.
 
 ## Priority weight strategies
 

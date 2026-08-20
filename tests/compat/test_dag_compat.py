@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -646,3 +646,119 @@ def test_custom_timetable_predicate_short_circuits_on_the_2x_family(
     )
 
     assert not dag_compat.is_custom_timetable_instance(instance)
+
+
+def test_custom_schedule_timetables_collects_a_direct_custom_instance() -> None:
+    """Collect a custom timetable passed as `schedule` directly."""
+
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable; only its MRO and module matter here."""
+
+    instance = _CustomTimetable()
+
+    assert dag_compat.custom_schedule_timetables(instance) == (instance,)
+
+
+def test_custom_schedule_timetables_collects_a_nested_custom_instance() -> None:
+    """Collect the custom timetable inside a built-in wrapper's `timetable` attribute.
+
+    `AssetOrTimeSchedule` lives under `airflow.timetables.assets` itself, but its
+    `serialize()` encodes the INNER timetable, which fails unregistered exactly like
+    the direct case -- the shape this collector exists for.
+    """
+
+    from airflow.sdk import Asset
+    from airflow.timetables.assets import AssetOrTimeSchedule
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable; only its MRO and module matter here."""
+
+    inner = _CustomTimetable()
+    # `cast` because `AssetOrTimeSchedule` annotates `assets` with the serialized
+    # asset type; the authoring-time SDK `Asset` is converted at runtime.
+    wrapper = AssetOrTimeSchedule(
+        timetable=inner, assets=cast("Any", [Asset("compat_wrapped_asset")])
+    )
+
+    assert dag_compat.custom_schedule_timetables(wrapper) == (inner,)
+
+
+def test_custom_schedule_timetables_ignores_ordinary_schedules() -> None:
+    """Collect nothing from every schedule spelling that needs no registration."""
+
+    from datetime import timedelta
+
+    from airflow.sdk import Asset
+    from airflow.timetables.assets import AssetOrTimeSchedule
+    from airflow.timetables.trigger import CronTriggerTimetable
+
+    # `cast` because `AssetOrTimeSchedule` annotates `assets` with the serialized
+    # asset type; the authoring-time SDK `Asset` is converted at runtime.
+    builtin_wrapper = AssetOrTimeSchedule(
+        timetable=CronTriggerTimetable("@daily", timezone="UTC"),
+        assets=cast("Any", [Asset("compat_builtin_asset")]),
+    )
+
+    assert dag_compat.custom_schedule_timetables(None) == ()
+    assert dag_compat.custom_schedule_timetables("@daily") == ()
+    assert dag_compat.custom_schedule_timetables(timedelta(days=1)) == ()
+    assert dag_compat.custom_schedule_timetables(CronTriggerTimetable) == ()
+    assert (
+        dag_compat.custom_schedule_timetables(CronTriggerTimetable("@daily", timezone="UTC")) == ()
+    )
+    assert dag_compat.custom_schedule_timetables(builtin_wrapper) == ()
+
+
+def test_custom_schedule_timetables_rejects_a_custom_timetable_class() -> None:
+    """Name the class-instead-of-instance mistake instead of a later bare `KeyError`."""
+
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable; only its MRO and module matter here."""
+
+    with pytest.raises(TypeError, match="instead of the class"):
+        dag_compat.custom_schedule_timetables(_CustomTimetable)
+
+
+def test_custom_schedule_timetables_short_circuits_on_the_2x_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Collect nothing on 2.x, even for the class shape the 3.x guard rejects."""
+
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable; would raise or collect on the 3.x family."""
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V2),
+    )
+
+    assert dag_compat.custom_schedule_timetables(_CustomTimetable) == ()
+    assert dag_compat.custom_schedule_timetables(_CustomTimetable()) == ()
+
+
+def test_custom_timetable_predicate_matches_upstream_exemption_exactly() -> None:
+    """Exempt only `airflow.timetables.`, mirroring `is_core_timetable_import_path`.
+
+    Airflow's own shipped example timetable (`airflow.example_dags.plugins.workday`)
+    and provider timetables resolve through the registered lookup like any custom
+    class -- a broader `airflow.` exemption would silently skip their registration
+    and reintroduce the raw `TimetableNotRegistered` failure.
+    """
+
+    from airflow.timetables.base import Timetable
+
+    class _ExampleDagsShapedTimetable(Timetable):
+        """Impersonate an airflow-namespaced, non-core-timetables module."""
+
+    _ExampleDagsShapedTimetable.__module__ = "airflow.example_dags.plugins.workday"
+
+    assert dag_compat.is_custom_timetable_instance(_ExampleDagsShapedTimetable())
+    assert dag_compat.custom_schedule_timetables(_ExampleDagsShapedTimetable()) != ()

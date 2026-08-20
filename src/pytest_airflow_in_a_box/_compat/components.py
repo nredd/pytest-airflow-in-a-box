@@ -2768,6 +2768,14 @@ def build_component_plugin(component_type: type, list_attribute: str) -> type:
     )
 
 
+# The derived-lookup caches `invalidate_component_lookup_caches` drops, per
+# `PluginsManagerShape`, expressed as data so the "never clear `_get_plugins`"
+# invariant is pinnable against `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES` (a compat test
+# asserts each set is a strict subset of the matching certified `required` row).
+DERIVED_LOOKUP_CACHE_FUNCTIONS = ("get_timetables_plugins", "get_priority_weight_strategy_plugins")
+DERIVED_LOOKUP_MODULE_GLOBALS = ("timetable_classes", "priority_weight_strategy_classes")
+
+
 def invalidate_component_lookup_caches() -> None:
     """Invalidate only the derived timetable and weight-strategy lookup caches.
 
@@ -2785,17 +2793,83 @@ def invalidate_component_lookup_caches() -> None:
     Branches on the same structural fact `_live_plugin_list` probes -- the 3.2+
     CACHED_FUNCTIONS shape exposes `functools.cache` getters, while the 3.1.x
     MODULE_GLOBALS shape keeps plain module globals whose `None` state is what makes
-    `initialize_timetables_plugins()`-style loaders recompute (both names certified in
-    `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES`; see PROVENANCE.md).
+    `initialize_timetables_plugins()`-style loaders recompute (both name sets certified
+    in `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES`; see PROVENANCE.md).
     """
 
     core_module, _sdk_module = _plugins_manager_modules()
     if hasattr(core_module, "get_timetables_plugins"):
-        core_module.get_timetables_plugins.cache_clear()
-        core_module.get_priority_weight_strategy_plugins.cache_clear()
+        for name in DERIVED_LOOKUP_CACHE_FUNCTIONS:
+            getattr(core_module, name).cache_clear()
         return
-    core_module.timetable_classes = None
-    core_module.priority_weight_strategy_classes = None
+    for name in DERIVED_LOOKUP_MODULE_GLOBALS:
+        setattr(core_module, name, None)
+
+
+def lookup_key(component_type: type) -> str:
+    """Build the key Airflow's registered-component lookups map a class under.
+
+    Upstream's `qualname()` helper keys a class by `__module__.__name__`, NOT
+    `__qualname__` -- identical for the module-level classes real registrations
+    require (see PROVENANCE.md).
+
+    Parameters:
+        component_type: type containing the component class.
+
+    Returns:
+        str containing the `module.name` lookup key.
+    """
+
+    return f"{component_type.__module__}.{component_type.__name__}"
+
+
+def timetable_lookup_resolves(component_type: type) -> bool:
+    """Report whether the registered-timetable lookup already resolves one class.
+
+    True means the class is reachable the deployed way -- an `AirflowPlugin` loaded
+    from the run's plugins folder or a venv entry point -- and needs no sandbox
+    registration at all. Probes the same structural fact `_live_plugin_list` does: the
+    3.2+ shape asks the cached getter, while the 3.1.x shape loads the
+    `timetable_classes` module global through its own `initialize_timetables_plugins()`
+    (a no-op when already populated).
+
+    Parameters:
+        component_type: type containing the timetable class to look up.
+
+    Returns:
+        bool marking the class as already resolvable by qualname.
+    """
+
+    core_module, _sdk_module = _plugins_manager_modules()
+    key = lookup_key(component_type)
+    if hasattr(core_module, "get_timetables_plugins"):
+        return key in core_module.get_timetables_plugins()
+    core_module.initialize_timetables_plugins()
+    return key in (core_module.timetable_classes or {})
+
+
+def _register_component(component: object, list_attribute: str) -> type:
+    """Register one plugin-list-resolved component class through a throwaway plugin.
+
+    The shared registration sequence behind `register_timetable` and
+    `register_weight_strategy`, kept in one place so a change to it (a dedupe, an
+    ordering constraint, a third cache to invalidate) cannot land in one kind and
+    drift from the other. Appends unconditionally -- a repeated registration of the
+    same class is harmless, since the derived lookup mapping is keyed by qualname and
+    the sandbox teardown discards every appended plugin anyway.
+
+    Parameters:
+        component: object containing the component class or instance to register.
+        list_attribute: str naming the `AirflowPlugin` list attribute to expose it on.
+
+    Returns:
+        type containing the class that was registered.
+    """
+
+    component_type = _as_type(component)
+    register_plugin(build_component_plugin(component_type, list_attribute))
+    invalidate_component_lookup_caches()
+    return component_type
 
 
 def register_timetable(component: object) -> type:
@@ -2804,10 +2878,7 @@ def register_timetable(component: object) -> type:
     Registration is what makes Airflow's serialization round trip resolve the class by
     qualname: `encode_timetable` refuses an unregistered custom timetable outright on
     3.1.x, and `decode_timetable` resolves through the plugins manager's
-    qualname-to-class mapping on every certified 3.x release. Appends unconditionally --
-    a repeated registration of the same class is harmless, since the derived lookup
-    mapping is keyed by qualname and the sandbox teardown discards every appended
-    plugin anyway.
+    qualname-to-class mapping on every certified 3.x release.
 
     Parameters:
         component: object containing the timetable class or instance to register.
@@ -2816,10 +2887,7 @@ def register_timetable(component: object) -> type:
         type containing the class that was registered.
     """
 
-    component_type = _as_type(component)
-    register_plugin(build_component_plugin(component_type, "timetables"))
-    invalidate_component_lookup_caches()
-    return component_type
+    return _register_component(component, "timetables")
 
 
 def register_weight_strategy(component: object) -> type:
@@ -2836,10 +2904,7 @@ def register_weight_strategy(component: object) -> type:
         type containing the class that was registered.
     """
 
-    component_type = _as_type(component)
-    register_plugin(build_component_plugin(component_type, "priority_weight_strategies"))
-    invalidate_component_lookup_caches()
-    return component_type
+    return _register_component(component, "priority_weight_strategies")
 
 
 TIMETABLE_ROUND_TRIP_MISMATCH = "timetable-round-trip-mismatch"
@@ -3484,6 +3549,8 @@ def restore_settings_keys(before: frozenset[str]) -> None:
 
 __all__ = (
     "CHECK_REGISTRY",
+    "DERIVED_LOOKUP_CACHE_FUNCTIONS",
+    "DERIVED_LOOKUP_MODULE_GLOBALS",
     "EXECUTOR",
     "KIND_CLASSIFIERS",
     "LISTENER",
@@ -3508,6 +3575,7 @@ __all__ = (
     "listener_manager_restore",
     "listener_manager_snapshot",
     "listener_managers",
+    "lookup_key",
     "mark_task_instance_mutation_hook_active",
     "policy_plugin_manager",
     "register_executor",
@@ -3530,5 +3598,6 @@ __all__ = (
     "snapshot_settings_keys",
     "snapshot_sys_modules",
     "snapshot_task_instance_mutation_hook_is_noop",
+    "timetable_lookup_resolves",
     "timetable_round_trip",
 )
