@@ -6,11 +6,18 @@ References:
 
 from __future__ import annotations
 
+import os
+import re
+from pathlib import Path
 from typing import Any
 
+import pytest
 from airflow.sdk import DAG, BaseOperator
 
+from pytest_airflow_in_a_box.fixtures.dag import _default_dag_id
 from pytest_airflow_in_a_box.types import RenderTask
+
+DERIVED_DAG_ID_PATTERN = re.compile(r"^[\w.-]+-[0-9a-f]{16}$")
 
 
 class TemplatedOperator(BaseOperator):
@@ -99,6 +106,47 @@ def test_render_task_does_not_execute_the_operator(render_task: RenderTask) -> N
 
     assert rendered_operator.executed is False
     assert operator.executed is False
+
+
+def test_render_task_renders_unbound_operator_with_derived_dag_id(
+    render_task: RenderTask, request: pytest.FixtureRequest
+) -> None:
+    """Bind an unbound operator to a synthetic Dag with the derived per-test id."""
+
+    operator = TemplatedOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    rendered_operator = render_task(operator)
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    expected = _default_dag_id(f"{request.node.nodeid}::render_task", worker, 1)
+    assert rendered_operator.expression == expected
+    assert operator.dag.dag_id == expected
+    assert DERIVED_DAG_ID_PATTERN.fullmatch(expected) is not None
+    assert operator.executed is False
+    assert operator.dag.fileloc == str(Path(str(request.node.path)).resolve())
+
+
+def test_render_task_explicit_dag_id_binds_unbound_operator(render_task: RenderTask) -> None:
+    """Name the synthetic Dag with the call's explicit ``dag_id``."""
+
+    operator = TemplatedOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    rendered_operator = render_task(operator, dag_id="explicit_render_id")
+
+    assert rendered_operator.expression == "explicit_render_id"
+    assert operator.dag.dag_id == "explicit_render_id"
+
+
+def test_render_task_bound_operator_keeps_its_dag(render_task: RenderTask) -> None:
+    """Leave a bound operator's Dag untouched, deriving nothing."""
+
+    operator = _build(TemplatedOperator, "render_task_bound", expression="{{ dag.dag_id }}")
+    original_dag = operator.dag
+
+    rendered_operator = render_task(operator)
+
+    assert rendered_operator.expression == "render_task_bound"
+    assert operator.dag is original_dag
 
 
 def test_render_task_serves_seeded_variables_and_connections(render_task: RenderTask) -> None:
