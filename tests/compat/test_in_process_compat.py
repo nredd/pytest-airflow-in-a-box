@@ -30,6 +30,7 @@ from pytest_airflow_in_a_box._compat.in_process import (
     _dag_run_payload_extras,
     _fill_declared_nones,
     _task_runner_module,
+    bound_dag_or_none,
     render_task_in_process,
     run_task_in_process,
     task_context_in_process,
@@ -277,6 +278,118 @@ def test_requires_dag_id_for_unbound_task() -> None:
 
     with pytest.raises(ValueError, match="`dag_id` is required"):
         run_task_in_process(operator)
+
+
+def test_binds_unbound_task_to_synthetic_dag() -> None:
+    """Bind an unbound task in place to a synthetic Dag named by ``dag_id``."""
+
+    operator = ReturnOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    result = run_task_in_process(operator, dag_id="synthetic_bind")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert result.xcoms["return_value"] == "synthetic_bind"
+    assert operator.dag.dag_id == "synthetic_bind"
+
+
+def test_bound_task_is_not_rebound_by_dag_id_override() -> None:
+    """Keep the original Dag binding when ``dag_id`` overrides a bound task's id."""
+
+    operator = _build(ReturnOperator, "in_process_bound", expression="x")
+    original_dag = operator.dag
+
+    result = run_task_in_process(operator, dag_id="other")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag is original_dag
+    assert operator.dag.dag_id == "in_process_bound"
+
+
+def test_render_binds_unbound_task_to_synthetic_dag() -> None:
+    """Render an unbound task against the synthetic Dag named by ``dag_id``."""
+
+    operator = ReturnOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    rendered_operator = render_task_in_process(operator, dag_id="render_bind")
+
+    assert rendered_operator.expression == "render_bind"
+    assert operator.dag.dag_id == "render_bind"
+
+
+class SqlReturnOperator(ReturnOperator):
+    """Resolve ``.sql`` template-extension files into ``expression``."""
+
+    template_ext = (".sql",)
+
+
+def test_synthetic_dag_fileloc_resolves_template_ext_files(tmp_path: Any) -> None:
+    """Search ``template_ext`` files next to the stamped ``fileloc``."""
+
+    (tmp_path / "query.sql").write_text("SELECT {{ 21 * 2 }}", encoding="utf-8")
+    operator = SqlReturnOperator(task_id="floating", expression="query.sql")
+    fileloc = str(tmp_path / "test_module.py")
+
+    rendered_operator = render_task_in_process(operator, dag_id="fileloc_bind", fileloc=fileloc)
+
+    assert rendered_operator.expression == "SELECT 42"
+    assert operator.dag.fileloc == fileloc
+
+
+def test_conflicting_dag_id_on_synthetic_binding_fails_loudly() -> None:
+    """Reject a second explicit ``dag_id`` once a synthetic Dag is bound."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+    run_task_in_process(operator, dag_id="first_bind")
+
+    with pytest.raises(ValueError, match="already bound to the synthetic Dag 'first_bind'"):
+        run_task_in_process(operator, dag_id="second_bind")
+
+
+def test_synthetic_binding_ignores_an_active_task_group_context() -> None:
+    """Keep the synthetic binding out of an unrelated active TaskGroup context."""
+
+    from airflow.sdk import TaskGroup
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+    with DAG(dag_id="in_process_outer", schedule=None) as outer, TaskGroup("grp"):
+        result = run_task_in_process(operator, dag_id="context_bind")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag.dag_id == "context_bind"
+    assert list(operator.dag.task_dict) == ["floating"]
+    assert list(outer.task_dict) == []
+
+
+def test_rejects_explicit_empty_dag_id() -> None:
+    """Reject an explicitly passed empty ``dag_id`` with a direct message."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+
+    with pytest.raises(ValueError, match="`dag_id` must be a non-empty string"):
+        run_task_in_process(operator, dag_id="")
+
+
+def test_failed_construction_leaves_the_task_unbound() -> None:
+    """Leave the caller's task unbound when validation fails before binding."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+
+    with pytest.raises(ValueError, match="`run_id` must be a non-empty run identifier"):
+        run_task_in_process(operator, dag_id="never_bound", run_id="")
+
+    assert bound_dag_or_none(operator) is None
+
+
+def test_matching_dag_id_on_synthetic_binding_reruns() -> None:
+    """Accept the same explicit ``dag_id`` on repeated synthetic-bound runs."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+    run_task_in_process(operator, dag_id="repeat_bind")
+
+    result = run_task_in_process(operator, dag_id="repeat_bind")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag.dag_id == "repeat_bind"
 
 
 def test_rejects_empty_run_id() -> None:

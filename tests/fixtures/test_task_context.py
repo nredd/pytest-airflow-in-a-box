@@ -6,10 +6,14 @@ References:
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
+import pytest
 from airflow.sdk import DAG, BaseOperator, get_current_context
 
+from pytest_airflow_in_a_box.fixtures.dag import _default_dag_id
 from pytest_airflow_in_a_box.types import TaskContext
 
 
@@ -258,3 +262,48 @@ def test_task_context_applies_params_and_context_overrides(
     ) as handle:
         assert handle.context["params"]["left"] == "overridden"
         assert handle.context["custom"] == "extra"
+
+
+def test_task_context_opens_for_an_unbound_operator_with_derived_dag_id(
+    task_context: TaskContext, request: pytest.FixtureRequest
+) -> None:
+    """Bind an unbound operator to a synthetic Dag with the derived per-test id."""
+
+    operator = TemplatedReturnOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    with task_context(operator) as handle:
+        result = handle.task.execute(handle.context)
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    expected = _default_dag_id(f"{request.node.nodeid}::task_context", worker, 1)
+    assert result == expected
+    assert operator.dag.dag_id == expected
+    assert operator.dag.fileloc == str(Path(str(request.node.path)).resolve())
+
+
+def test_task_context_explicit_dag_id_binds_unbound_operator(
+    task_context: TaskContext,
+) -> None:
+    """Name the synthetic Dag with the call's explicit ``dag_id``."""
+
+    operator = TemplatedReturnOperator(task_id="floating", expression="{{ dag.dag_id }}")
+
+    with task_context(operator, dag_id="explicit_context_id") as handle:
+        result = handle.task.execute(handle.context)
+
+    assert result == "explicit_context_id"
+    assert operator.dag.dag_id == "explicit_context_id"
+
+
+def test_task_context_bound_operator_keeps_its_dag(task_context: TaskContext) -> None:
+    """Leave a bound operator's Dag untouched, deriving nothing."""
+
+    with DAG(dag_id="task_context_bound", schedule=None) as dag:
+        TemplatedReturnOperator(task_id="probe", expression="{{ dag.dag_id }}")
+    operator: Any = dag.get_task("probe")
+
+    with task_context(operator) as handle:
+        result = handle.task.execute(handle.context)
+
+    assert result == "task_context_bound"
+    assert operator.dag is dag
