@@ -30,6 +30,7 @@ from pytest_airflow_in_a_box._compat.in_process import (
     _dag_run_payload_extras,
     _fill_declared_nones,
     _task_runner_module,
+    bound_dag_or_none,
     render_task_in_process,
     run_task_in_process,
     task_context_in_process,
@@ -342,6 +343,41 @@ def test_conflicting_dag_id_on_synthetic_binding_fails_loudly() -> None:
 
     with pytest.raises(ValueError, match="already bound to the synthetic Dag 'first_bind'"):
         run_task_in_process(operator, dag_id="second_bind")
+
+
+def test_synthetic_binding_ignores_an_active_task_group_context() -> None:
+    """Keep the synthetic binding out of an unrelated active TaskGroup context."""
+
+    from airflow.sdk import TaskGroup
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+    with DAG(dag_id="in_process_outer", schedule=None) as outer, TaskGroup("grp"):
+        result = run_task_in_process(operator, dag_id="context_bind")
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert operator.dag.dag_id == "context_bind"
+    assert list(operator.dag.task_dict) == ["floating"]
+    assert list(outer.task_dict) == []
+
+
+def test_rejects_explicit_empty_dag_id() -> None:
+    """Reject an explicitly passed empty ``dag_id`` with a direct message."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+
+    with pytest.raises(ValueError, match="`dag_id` must be a non-empty string"):
+        run_task_in_process(operator, dag_id="")
+
+
+def test_failed_construction_leaves_the_task_unbound() -> None:
+    """Leave the caller's task unbound when validation fails before binding."""
+
+    operator = ReturnOperator(task_id="floating", expression="x")
+
+    with pytest.raises(ValueError, match="`run_id` must be a non-empty run identifier"):
+        run_task_in_process(operator, dag_id="never_bound", run_id="")
+
+    assert bound_dag_or_none(operator) is None
 
 
 def test_matching_dag_id_on_synthetic_binding_reruns() -> None:

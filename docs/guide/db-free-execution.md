@@ -47,7 +47,10 @@ synthetic Dag is stamped with the test module's location, so `template_ext` file
 (`.sql`, `.sh`, ...) resolve next to the test, same as an explicit `with DAG(...)` in the
 test file. A bound operator is never rebound (the SDK forbids it) -- repeated calls with
 the same operator reuse the first binding, and a later call passing a *different*
-explicit `dag_id` for a synthetic binding fails loudly instead of half-applying.
+explicit `dag_id` for a synthetic binding fails loudly instead of half-applying. Because
+the binding persists on the operator, build unbound operators inside the test body -- a
+module-level operator shared across tests would carry the first test's binding into the
+others.
 
 ## Rendering template fields without running
 

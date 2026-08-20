@@ -235,6 +235,21 @@ def test_run_task_executes_operator_without_a_dag(run_task: RunTask) -> None:
 
 
 @pytest.mark.requires_airflow3
+def test_run_task_without_a_dag_ignores_an_active_task_group(run_task: RunTask) -> None:
+    """Keep an auto-bound task out of an unrelated Dag's open TaskGroup context."""
+
+    from airflow.sdk import TaskGroup
+
+    operator = TemplateOperator(task_id="my_task", payload="{{ dag.dag_id }}", query="SELECT 1")
+    with DAG(dag_id="compat_outer_group", schedule=None) as outer, TaskGroup("grp"):
+        result = run_task(operator)
+
+    assert result.state == TaskInstanceState.SUCCESS
+    assert list(operator.dag.task_dict) == ["my_task"]
+    assert list(outer.task_dict) == []
+
+
+@pytest.mark.requires_airflow3
 def test_operator_lifecycle_hooks_run_in_order(run_task: RunTask) -> None:
     """Invoke pre-execute, execute, and post-execute in author order."""
 
