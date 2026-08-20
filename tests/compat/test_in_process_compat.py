@@ -32,6 +32,7 @@ from pytest_airflow_in_a_box._compat.in_process import (
     _task_runner_module,
     render_task_in_process,
     run_task_in_process,
+    task_context_in_process,
 )
 
 try:
@@ -422,6 +423,111 @@ def test_render_task_rejects_task_without_task_id() -> None:
 
     with pytest.raises(TypeError, match="must be an Airflow operator"):
         render_task_in_process(object())
+
+
+def test_task_context_prerenders_and_leaves_the_original_untouched() -> None:
+    """Pre-render onto the execution copy by default, never the caller's operator."""
+
+    operator = _build(ReturnOperator, "in_process_context", expression="{{ 21 * 2 }}")
+
+    with task_context_in_process(operator) as handle:
+        assert handle.task is not operator
+        assert handle.task.expression == "42"
+
+    assert operator.expression == "{{ 21 * 2 }}"
+
+
+def test_task_context_render_false_leaves_fields_raw() -> None:
+    """Skip pre-rendering so ``execute`` can render through ``context["ti"]`` itself."""
+
+    operator = _build(ReturnOperator, "in_process_context_raw", expression="{{ 21 * 2 }}")
+
+    with task_context_in_process(operator, render=False) as handle:
+        assert handle.task.expression == "{{ 21 * 2 }}"
+        handle.ti.render_templates(handle.context)
+        assert handle.task.expression == "42"
+
+
+def test_task_context_merges_context_overrides() -> None:
+    """Merge caller-supplied context keys before rendering."""
+
+    operator = _build(ReturnOperator, "in_process_context_overrides", expression="{{ custom }}")
+
+    with task_context_in_process(operator, context_overrides={"custom": "override"}) as handle:
+        assert handle.task.expression == "override"
+
+
+def test_task_context_tracks_a_mapped_operator_through_its_task_property() -> None:
+    """Track Airflow's swap to the concrete unmapped instance through ``handle.task``."""
+
+    with DAG(dag_id="in_process_context_mapped", schedule=None) as dag:
+        ReturnOperator.partial(task_id="probe").expand(expression=["{{ 1 + 1 }}", "{{ 2 + 2 }}"])
+    mapped_operator = dag.get_task("probe")
+
+    with task_context_in_process(mapped_operator, map_index=1) as handle:
+        assert handle.task is not mapped_operator
+        assert handle.task.expression == "4"
+        assert handle.task is handle.ti.task
+        assert handle.ti.is_mapped is True
+
+
+def test_task_context_rejects_render_false_for_a_mapped_operator() -> None:
+    """Reject the combination that would yield a ``MappedOperator`` without ``execute``."""
+
+    with DAG(dag_id="in_process_context_mapped_raw", schedule=None) as dag:
+        ReturnOperator.partial(task_id="probe").expand(expression=["{{ 1 + 1 }}"])
+    mapped_operator = dag.get_task("probe")
+
+    with (
+        pytest.raises(ValueError, match="`render=False` is unsupported for a mapped operator"),
+        task_context_in_process(mapped_operator, render=False),
+    ):
+        pytest.fail("the guard must raise before the block runs")
+
+
+def test_task_context_supervisor_comms_deleted_when_previously_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remove the installed fake when no supervisor was registered before."""
+
+    task_runner = _task_runner_module()
+    monkeypatch.delattr(task_runner, "SUPERVISOR_COMMS", raising=False)
+    operator = _build(ReturnOperator, "in_process_context_absent", expression="x")
+
+    with task_context_in_process(operator) as handle:
+        assert task_runner.SUPERVISOR_COMMS is not None
+        del handle
+
+    assert not hasattr(task_runner, "SUPERVISOR_COMMS")
+
+
+def test_task_context_supervisor_comms_restored_after_an_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reinstall the prior supervisor even when the caller's block raises."""
+
+    task_runner = _task_runner_module()
+    sentinel = object()
+    monkeypatch.setattr(task_runner, "SUPERVISOR_COMMS", sentinel, raising=False)
+    operator = _build(RaiseOperator, "in_process_context_raise")
+
+    with (
+        pytest.raises(ValueError, match="representative task failure"),
+        task_context_in_process(operator) as handle,
+    ):
+        handle.task.execute(handle.context)
+
+    assert task_runner.SUPERVISOR_COMMS is sentinel
+
+
+def test_task_context_rejects_task_without_task_id() -> None:
+    """Reject objects that are not operators, same guard as ``run_task_in_process``."""
+
+    with (
+        pytest.raises(TypeError, match="must be an Airflow operator"),
+        task_context_in_process(object()),
+    ):
+        pytest.fail("the guard must raise before the block runs")
 
 
 def test_fake_comms_answers_xcom_traffic() -> None:

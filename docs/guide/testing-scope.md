@@ -15,8 +15,10 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
   through the DB-free [`run_task`](db-free-execution.md) fixture
 - Your custom components -- a `BaseOperator` subclass you wrote, a custom hook, a sensor's
   `poke`, a `@task`-style decorator, a custom connection type. `execute()` and `poke()` are
-  your code; drive them through `run_task` for the DB-free path or `dag_maker` + `run_ti` when
-  the component needs real context, xcom, or a connection
+  your code; drive them through `run_task` for the DB-free path, hand-drive `execute()`
+  against a real Task SDK context via
+  [`task_context`](db-free-execution.md#hand-driving-execute-with-a-real-task-context), or
+  use `dag_maker` + `run_ti` when the component needs persisted state
 - Wiring and task relations -- trigger rules, branching, mapped fan-out, and the data flowing
   between your tasks. See
   [Task relations](cookbook.md#task-relations-trigger-rules-branching-and-cross-task-xcom)

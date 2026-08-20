@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 from pytest_airflow_in_a_box.fixtures.api import api_base_url, api_client, api_server_url
+from pytest_airflow_in_a_box.fixtures.context import task_context
 from pytest_airflow_in_a_box.fixtures.dag import dag_maker, run_dag
 from pytest_airflow_in_a_box.fixtures.dagbag import full_dag_bag
 from pytest_airflow_in_a_box.fixtures.logging import cap_structlog
@@ -47,4 +48,5 @@ __all__ = (
     "run_dag",
     "run_task",
     "session",
+    "task_context",
 )

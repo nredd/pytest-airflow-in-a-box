@@ -54,6 +54,7 @@ from pytest_airflow_in_a_box.fixtures import (
     run_dag,
     run_task,
     session,
+    task_context,
 )
 from pytest_airflow_in_a_box.fixtures.dagbag import (
     FULL_DAG_BAG_FIXTURE_NAME,
@@ -95,6 +96,7 @@ __all__ = (
     "run_dag",
     "run_task",
     "session",
+    "task_context",
 )
 
 

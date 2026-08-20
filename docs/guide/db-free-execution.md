@@ -50,3 +50,56 @@ def test_operator_renders_its_query(render_task):
 `context_overrides` merges extra keys into the synthesized template context before rendering,
 for fields that reference something `run_task`'s usual `params`/`variables`/`connections`
 seeding does not cover.
+
+## Hand-driving execute() with a real task context
+
+`task_context` covers the gap between the two: it prepares the same Task SDK machinery and
+then hands control to the test, so `execute()` and `post_execute()` can be driven by hand.
+`context["ti"]` is a real `RuntimeTaskInstance` -- the exact class Airflow uses at runtime --
+so `task_id`, `log_url`, `render_templates()`, and `airflow.sdk.get_current_context()` all
+behave like a supervised run, with no hand-rolled `ti` stand-in to drift. `xcom_push` and
+`xcom_pull` resolve too, against the same seeded store `run_task` uses -- keyed by XCom key
+alone, so `task_ids`/`run_id`/`map_index` scoping is not enforced the way a real supervisor
+would. Use it when a test needs the raw
+return value of `execute()`, an operator renders its templates from *inside* `execute()`, or
+application code reads incidental attributes off `context["ti"]`:
+
+```python
+def test_operator_execute_result(task_context):
+    with task_context(my_operator, params={"value": 42}) as tc:
+        result = tc.task.execute(tc.context)
+
+    assert result.exit_code == 0
+    assert tc.ti.log_url.startswith("http")
+```
+
+Because the test drives `execute()` itself, nothing pushes the return value to XCom for
+you -- that is `run_task`'s job. `tc.xcoms` reflects only what the operator pushed
+explicitly through `context["ti"].xcom_push(...)`; assert on `result` for the return
+value.
+
+Always drive `tc.task`, not the operator you passed in: preparation happens on a
+`prepare_for_execution()` copy (the original is never mutated), and an in-execute
+`render_templates()` renders `ti.task`, which must be the object whose `execute()` is
+running. For a mapped operator, `tc.task` is the concrete unmapped instance for `map_index`
+-- with the default `render=True` only: Airflow unmaps inside `render_template_fields`, so
+combining a mapped operator with `render=False` raises `ValueError`.
+
+Template fields are pre-rendered like a real run by default. Pass `render=False` for the
+deferred-rendering pattern, where the operator calls `context["ti"].render_templates()`
+itself mid-execution:
+
+```python
+def test_deferred_rendering(task_context):
+    with task_context(my_operator, render=False) as tc:
+        result = tc.task.execute(tc.context)  # execute() renders via context["ti"]
+```
+
+The fake supervisor is installed only inside the `with` block; the handle's `xcoms` and
+`sent` snapshots stay readable after exit, but `tc.ti` and `tc.context` do not outlive it --
+their lazy accessors (`var`, `conn`, the XCom methods) resolve through the installed
+supervisor, so post-exit reads surface as not-found errors or hit whatever supervisor was
+restored. Comms-backed `RuntimeTaskInstance` statics the
+fake supervisor does not answer (e.g. `get_dagrun_state`, `get_dr_count`) are answered with
+`None`, which the SDK then dereferences -- expect an `AttributeError`, not a clean `None`.
+Stick to the XCom/Variable/Connection surface and `render_templates()`.
