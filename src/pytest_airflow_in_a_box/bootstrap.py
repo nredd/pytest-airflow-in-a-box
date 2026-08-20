@@ -44,6 +44,7 @@ XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
 PASSWORDS = '{"admin": "admin"}\n'
 SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
 SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED"
+EXECUTOR_ENVIRONMENT_VARIABLE = "AIRFLOW__CORE__EXECUTOR"
 
 JsonPrimitive = str | int | bool
 StatePayload = dict[str, JsonPrimitive]
@@ -442,8 +443,8 @@ def _environment(state: BootstrapState) -> dict[str, str]:
         # An ambient `AIRFLOW__CORE__EXECUTOR` is deliberate consumer configuration and
         # wins over the pin (`--airflow-doctor` flags an incompatible choice);
         # `airflow_config` overrides win over both for a single test.
-        if "AIRFLOW__CORE__EXECUTOR" not in os.environ:
-            variables["AIRFLOW__CORE__EXECUTOR"] = "SequentialExecutor"
+        if EXECUTOR_ENVIRONMENT_VARIABLE not in os.environ:
+            variables[EXECUTOR_ENVIRONMENT_VARIABLE] = "SequentialExecutor"
     else:
         variables["AIRFLOW__CORE__AUTH_MANAGER"] = SIMPLE_AUTH_MANAGER
         variables["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] = "admin:admin"
@@ -456,13 +457,17 @@ def _environment(state: BootstrapState) -> dict[str, str]:
     # and (via `_install_environment`'s unconditional `os.environ.update`) any ambient
     # value, unlike the ambient-wins carve-out the default itself respects.
     if state.executor:
-        variables["AIRFLOW__CORE__EXECUTOR"] = state.executor
+        variables[EXECUTOR_ENVIRONMENT_VARIABLE] = state.executor
     if state.xcom_backend:
         variables["AIRFLOW__CORE__XCOM_BACKEND"] = state.xcom_backend
     if state.secrets_backend:
         variables["AIRFLOW__SECRETS__BACKEND"] = state.secrets_backend
-    if state.secrets_backend_kwargs:
-        variables["AIRFLOW__SECRETS__BACKEND_KWARGS"] = state.secrets_backend_kwargs
+        # Nested, not independent: matches `write_airflow_config`'s own `[secrets]`
+        # section, which is written only when a backend is configured. A stray kwargs
+        # value with no backend must not leak here either, or the env-var channel (which
+        # outranks the config file) would contradict the file it is meant to agree with.
+        if state.secrets_backend_kwargs:
+            variables["AIRFLOW__SECRETS__BACKEND_KWARGS"] = state.secrets_backend_kwargs
     return variables
 
 
@@ -594,8 +599,8 @@ def _local_settings_module(config: pytest.Config) -> str | None:
         pytest.UsageError: The configured value is not shaped like a dotted module path.
     """
 
-    value: object = config.getini("airflow_local_settings")
-    if not isinstance(value, str) or not value:
+    value = _ini_string(config, "airflow_local_settings")
+    if not value:
         return None
     validate_local_settings_module_shape(value)
     return value
@@ -607,8 +612,8 @@ def _ini_string(config: pytest.Config, name: str) -> str:
     Every ini this reads is declared with `addini(..., default="")` and no `type=`, so
     a `.ini`/`setup.cfg`/`tox.ini` source always yields a string; a `pyproject.toml`
     `[tool.pytest.ini_options]` table can still supply a non-string value directly, so
-    the malformed case is real and, like ``_local_settings_module``'s own ini read, is
-    treated as unset rather than rejected.
+    the malformed case is real and, matching ``_local_settings_module``'s own use of
+    this helper, is treated as unset rather than rejected.
 
     Parameters:
         config: pytest.Config containing parsed ini values.
@@ -625,6 +630,14 @@ def _ini_string(config: pytest.Config, name: str) -> str:
 def _plugins_source(config: pytest.Config) -> Path | None:
     """Resolve the ini-configured user plugins directory, if any.
 
+    A relative value is anchored to ``config.rootpath``, matching normal pytest
+    configuration-file semantics and the same convention already used by
+    ``airflow_dags_folder``, ``airflow_collect_dags_folder``, ``airflow_environments``,
+    and ``airflow_dag_snapshot_dir`` -- not to the process's current working directory,
+    which would otherwise silently vary with the invocation directory and, since a
+    relative symlink target resolves relative to the symlink's own directory rather than
+    the CWD, would create dangling links pointing nowhere near the configured source.
+
     Parameters:
         config: pytest.Config containing parsed startup options.
 
@@ -633,7 +646,10 @@ def _plugins_source(config: pytest.Config) -> Path | None:
     """
 
     value = _ini_string(config, "airflow_plugins_folder")
-    return Path(value) if value else None
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.is_absolute() else config.rootpath / path
 
 
 def _populate_plugins_folder(plugins_folder: Path, source: Path | None) -> None:
@@ -710,8 +726,16 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         raise pytest.UsageError(f"Could not create isolated Airflow storage: {error}") from error
 
     root = location.path
+    # `AIRFLOW__CORE__EXECUTOR` is deliberately absent from `_environment_names()` (see
+    # that function's docstring) so an ambient value survives bootstrap unscrubbed -- but
+    # an ini-configured `state.executor` above still overwrites it via
+    # `_install_environment`'s unconditional `os.environ.update`. Its pre-bootstrap value
+    # must be snapshotted here regardless, or `cleanup()` below has nothing to restore it
+    # from, even though the name stays out of the scrub set.
     environment_names = set(_environment_names())
-    original_environment = {name: os.environ.get(name) for name in environment_names}
+    original_environment = {
+        name: os.environ.get(name) for name in (*environment_names, EXECUTOR_ENVIRONMENT_VARIABLE)
+    }
     cleaned = False
 
     def cleanup(retain: bool | None = None) -> None:

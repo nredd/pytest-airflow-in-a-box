@@ -496,25 +496,92 @@ def test_configured_executor_overrides_the_v2_default_and_ambient_value(
     assert variables["AIRFLOW__CORE__EXECUTOR"] == "ConfiguredExecutor"
 
 
+def test_cleanup_restores_an_ambient_executor_a_configured_value_overwrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restore an ambient `AIRFLOW__CORE__EXECUTOR` that a configured executor overwrote.
+
+    `AIRFLOW__CORE__EXECUTOR` is deliberately excluded from `_environment_names()`'s scrub
+    set so an ambient 3.x choice survives bootstrap unscrubbed, but a configured
+    `state.executor` still overwrites it via `_install_environment`'s unconditional
+    `os.environ.update`. Regression test: `_owner_state`'s `original_environment` snapshot
+    must capture this name too, even though it stays out of the scrub set, or `cleanup()`
+    has no pre-bootstrap value to restore it from.
+    """
+
+    monkeypatch.setenv("AIRFLOW__CORE__EXECUTOR", "AmbientExecutor")
+    base = tmp_path / "base"
+    base.mkdir()
+    ini_values = {
+        "airflow_home": str(base),
+        "allow_network_airflow_home": False,
+        "airflow_db_backend": "sqlite",
+        "airflow_local_settings": "",
+        "airflow_plugins_folder": "",
+        "airflow_executor": "ConfiguredExecutor",
+        "airflow_xcom_backend": "",
+        "airflow_secrets_backend": "",
+        "airflow_secrets_backend_kwargs": "",
+    }
+    cleanups: list[Any] = []
+    config: Any = SimpleNamespace(
+        getini=lambda name: ini_values[name], add_cleanup=cleanups.append
+    )
+
+    bootstrap._owner_state(config, [])
+
+    assert os.environ["AIRFLOW__CORE__EXECUTOR"] == "ConfiguredExecutor"
+    assert len(cleanups) == 1
+
+    cleanups[0](retain=False)
+
+    assert os.environ["AIRFLOW__CORE__EXECUTOR"] == "AmbientExecutor"
+
+
 @pytest.mark.parametrize(
-    ("field", "env_name"),
+    ("replacements", "env_name"),
     [
-        ("executor", "AIRFLOW__CORE__EXECUTOR"),
-        ("xcom_backend", "AIRFLOW__CORE__XCOM_BACKEND"),
-        ("secrets_backend", "AIRFLOW__SECRETS__BACKEND"),
-        ("secrets_backend_kwargs", "AIRFLOW__SECRETS__BACKEND_KWARGS"),
+        ({"executor": "configured-value"}, "AIRFLOW__CORE__EXECUTOR"),
+        ({"xcom_backend": "configured-value"}, "AIRFLOW__CORE__XCOM_BACKEND"),
+        ({"secrets_backend": "configured-value"}, "AIRFLOW__SECRETS__BACKEND"),
+        (
+            {"secrets_backend": "backend-value", "secrets_backend_kwargs": "configured-value"},
+            "AIRFLOW__SECRETS__BACKEND_KWARGS",
+        ),
     ],
 )
 def test_environment_sets_each_optional_value_when_configured(
-    tmp_path: Path, field: str, env_name: str
+    tmp_path: Path, replacements: dict[str, str], env_name: str
 ) -> None:
-    """Env-pin each optional field's variable when its state field is configured."""
+    """Env-pin each optional field's variable when its state field is configured.
 
-    state = replace(_artifact_state(tmp_path / "run"), **{field: "configured-value"})
+    `secrets_backend_kwargs` also configures `secrets_backend`: the two are nested (see
+    `test_environment_drops_kwargs_without_a_configured_backend`), so kwargs alone would
+    not reach the environment at all.
+    """
+
+    state = replace(_artifact_state(tmp_path / "run"), **replacements)
 
     variables = bootstrap._environment(state)
 
     assert variables[env_name] == "configured-value"
+
+
+def test_environment_drops_kwargs_without_a_configured_backend(tmp_path: Path) -> None:
+    """Omit `AIRFLOW__SECRETS__BACKEND_KWARGS` when no backend is configured.
+
+    Regression test: nested under `state.secrets_backend`, matching
+    `write_airflow_config`'s own `[secrets]` section, which is written only when a
+    backend is configured -- a stray kwargs value with no backend must not leak into the
+    environment either, since that channel outranks the config file.
+    """
+
+    state = replace(_artifact_state(tmp_path / "run"), secrets_backend_kwargs="stray-value")
+
+    variables = bootstrap._environment(state)
+
+    assert "AIRFLOW__SECRETS__BACKEND_KWARGS" not in variables
+    assert "AIRFLOW__SECRETS__BACKEND" not in variables
 
 
 @pytest.mark.parametrize(
@@ -582,11 +649,28 @@ def test_plugins_source_returns_none_when_unconfigured() -> None:
 
 
 def test_plugins_source_resolves_a_configured_path(tmp_path: Path) -> None:
-    """Resolve the configured ini value as a path."""
+    """Resolve an absolute configured ini value as-is."""
 
     config: Any = SimpleNamespace(getini=lambda _name: str(tmp_path / "shared-plugins"))
 
     assert bootstrap._plugins_source(config) == tmp_path / "shared-plugins"
+
+
+def test_plugins_source_resolves_a_relative_path_against_the_rootpath(tmp_path: Path) -> None:
+    """Anchor a relative ini value to `config.rootpath`, not the process CWD.
+
+    Matches the convention already used by `airflow_dags_folder`,
+    `airflow_collect_dags_folder`, `airflow_environments`, and `airflow_dag_snapshot_dir`.
+    A CWD-relative resolution would silently vary with the invocation directory and,
+    since a relative symlink target resolves relative to the symlink's own directory
+    rather than the CWD, would create dangling links pointing nowhere near the source.
+    """
+
+    config: Any = SimpleNamespace(
+        getini=lambda _name: "shared-plugins", rootpath=tmp_path / "project"
+    )
+
+    assert bootstrap._plugins_source(config) == tmp_path / "project" / "shared-plugins"
 
 
 def test_populate_plugins_folder_with_no_source_creates_an_empty_directory(
@@ -892,6 +976,24 @@ def test_state_from_payload_skips_file_validation_when_asked(tmp_path: Path) -> 
     rebuilt = bootstrap._state_from_payload(state.to_payload(), validate_files=False)
 
     assert rebuilt == state
+
+
+def test_state_from_payload_rejects_a_missing_plugins_folder_in_isolation(
+    tmp_path: Path,
+) -> None:
+    """Reject a payload whose plugins folder alone is missing.
+
+    Every other staleness test trips an earlier condition in the `or` chain first (a
+    missing root, dags folder, or logs folder), so this isolates `plugins_folder`'s own
+    `.is_dir()` check -- otherwise a future refactor that drops or miscopies it could
+    pass the existing suite silently.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    shutil.rmtree(state.plugins_folder)
+
+    with pytest.raises(ValueError, match="Bootstrap state is stale"):
+        bootstrap._state_from_payload(state.to_payload(), validate_files=True)
 
 
 def test_state_from_payload_round_trips_a_postgres_backend(tmp_path: Path) -> None:

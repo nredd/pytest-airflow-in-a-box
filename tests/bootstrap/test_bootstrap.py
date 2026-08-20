@@ -89,6 +89,48 @@ def test_airflow_plugins_folder_ini_symlinks_source_entries(pytester: pytest.Pyt
     result.assert_outcomes(passed=1)
 
 
+def test_airflow_plugins_folder_ini_resolves_relative_to_the_rootdir(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anchor a relative `airflow_plugins_folder` to the rootdir, not the invocation CWD.
+
+    Regression test: without rootpath-anchoring, invoking pytest from a subdirectory of
+    the project made a relative, genuinely-existing source directory look missing (a
+    CWD-relative `is_dir()` check raised a usage error), while invoking from the rootdir
+    itself created dangling symlinks instead (a CWD-relative source, but `symlink_to`
+    resolves a relative target against the *link's own* directory, not the CWD) --
+    silently dropping every plugin either way.
+
+    Parameters:
+        pytester: pytest.Pytester running the assertion in a real bootstrapped subprocess.
+        monkeypatch: pytest.MonkeyPatch changing the invocation directory.
+    """
+
+    source = pytester.path / "shared-plugins"
+    source.mkdir()
+    (source / "my_plugin.py").write_text("VALUE = 1\n", encoding="utf-8")
+    pytester.makeini("[pytest]\nairflow_plugins_folder = shared-plugins\n")
+    pytester.makepyfile(
+        """
+        from pytest_airflow_in_a_box.plugin import get_bootstrap_state
+
+        def test_plugins_are_linked(pytestconfig):
+            state = get_bootstrap_state(pytestconfig)
+            linked = state.plugins_folder / "my_plugin.py"
+            assert linked.is_symlink()
+            assert linked.read_text(encoding="utf-8") == "VALUE = 1\\n"
+        """
+    )
+    subdir = pytester.path / "subdir"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+
+    result = pytester.runpytest_subprocess("-q", str(pytester.path))
+
+    result.assert_outcomes(passed=1)
+
+
 def test_airflow_plugins_folder_ini_rejects_a_missing_source(pytester: pytest.Pytester) -> None:
     """Give an actionable error when the configured plugins source does not exist."""
 

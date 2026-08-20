@@ -230,3 +230,41 @@ a workspace) is not attributed to it. A callable that cannot be attributed to an
 installed distribution this way (for example one defined directly in a test file, not
 part of an installed package) is silently skipped by both checks. The underlying
 distribution index is built once per process and reused, not rescanned on every call.
+
+## Making a component reachable
+
+A clean `check_component` report only proves the component's own shape is sound -- it
+says nothing about whether a run can actually load it. Five ini options, resolved and
+applied before the first Airflow import, wire a checked component into the generated
+`AIRFLOW_HOME` itself:
+
+- `airflow_plugins_folder` -- a directory whose entries are symlinked individually into
+  the run's `plugins/` directory, so an `AirflowPlugin` (and, through it, a bundled
+  timetable, listener, or macro) is discoverable. Symlinking per entry, not the directory
+  itself, means an edit to an existing file stays live and adding or removing a plugin
+  source between runs never leaves a stale copy behind. `plugins/` is always created,
+  even when this is left unconfigured -- an empty directory makes Airflow's own plugin
+  load a genuine no-op, not an error
+- `airflow_executor` -- written to `[core] executor`, overriding this plugin's own 2.x
+  `SequentialExecutor` default when configured
+- `airflow_xcom_backend` -- written to `[core] xcom_backend`
+- `airflow_secrets_backend` / `airflow_secrets_backend_kwargs` -- written to
+  `[secrets] backend` / `backend_kwargs`; the kwargs entry (and the whole `[secrets]`
+  section) is dropped unless a backend is also configured
+
+```ini
+[pytest]
+airflow_plugins_folder = plugins
+airflow_executor = tests.support.executors.FakeExecutor
+airflow_xcom_backend = tests.support.xcom.RecordingXCom
+airflow_secrets_backend = tests.support.secrets.FakeSecretsBackend
+```
+
+All five are ini-only, with no command-line flag: they are project facts, not
+per-invocation knobs. That matters beyond plumbing for `airflow_xcom_backend`
+specifically -- Airflow's Task SDK resolves the configured XCom backend at MODULE IMPORT
+TIME (`airflow.sdk.execution_time.xcom`, imported transitively by every Dag through
+`airflow.sdk.definitions.xcom_arg`), so a per-test override would be a lie. A run-wide
+ini applied before Airflow imports at all is the only honest version, and the same
+before-first-import guarantee is why all five live in `bootstrap.py`/`airflow_cfg.py`
+rather than a fixture.
