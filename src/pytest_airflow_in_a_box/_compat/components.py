@@ -2737,6 +2737,192 @@ def register_plugin(component: object) -> object:
     return instance
 
 
+def build_component_plugin(component_type: type, list_attribute: str) -> type:
+    """Build a throwaway `AirflowPlugin` subclass carrying one component class.
+
+    Subclasses the live plugins-manager module's own `AirflowPlugin` rather than
+    `type(...)`-ing a bare class the way `build_policy_plugin` does: the plugins-manager
+    cache functions iterate EVERY list attribute of EVERY registered plugin
+    (`get_timetables_plugins` reads `plugin.timetables`, `_get_ui_plugins` reads
+    `plugin.external_views`, and so on), so every one of `PLUGIN_LIST_ATTRIBUTES` must
+    resolve on the synthesized plugin -- the base class's own class-level defaults
+    provide exactly that.
+
+    Parameters:
+        component_type: type containing the component class to expose.
+        list_attribute: str naming the `AirflowPlugin` list attribute to expose it on
+            (`timetables` or `priority_weight_strategies`).
+
+    Returns:
+        type containing the unregistered `AirflowPlugin` subclass.
+    """
+
+    core_module, _sdk_module = _plugins_manager_modules()
+    return type(
+        "ComponentRegistryPlugin",
+        (core_module.AirflowPlugin,),
+        {
+            "name": f"pytest-airflow-in-a-box-{list_attribute}-{component_type.__qualname__}",
+            list_attribute: [component_type],
+        },
+    )
+
+
+def invalidate_component_lookup_caches() -> None:
+    """Invalidate only the derived timetable and weight-strategy lookup caches.
+
+    Deliberately NOT `clear_plugins_manager_caches()`: that clear also empties
+    `_get_plugins` (3.2+) or resets the `plugins` module global (3.1.x), which would
+    discard the throwaway plugin `register_plugin` just appended to the live plugin
+    list -- exactly the registration this invalidation exists to expose. Only the two
+    caches DERIVED from the plugin list are dropped, so the next
+    `find_registered_custom_timetable` / `_get_registered_priority_weight_strategy`
+    lookup rebuilds its qualname-keyed mapping from the live list, appended plugin
+    included, even when an earlier lookup in the same test already populated the cache.
+
+    Core module only: the Task SDK plugins-manager half certifies neither cache (see
+    `CERTIFIED_SDK_PLUGINS_MANAGER_CACHES`), and both lookup paths live core-side.
+    Branches on the same structural fact `_live_plugin_list` probes -- the 3.2+
+    CACHED_FUNCTIONS shape exposes `functools.cache` getters, while the 3.1.x
+    MODULE_GLOBALS shape keeps plain module globals whose `None` state is what makes
+    `initialize_timetables_plugins()`-style loaders recompute (both names certified in
+    `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES`; see PROVENANCE.md).
+    """
+
+    core_module, _sdk_module = _plugins_manager_modules()
+    if hasattr(core_module, "get_timetables_plugins"):
+        core_module.get_timetables_plugins.cache_clear()
+        core_module.get_priority_weight_strategy_plugins.cache_clear()
+        return
+    core_module.timetable_classes = None
+    core_module.priority_weight_strategy_classes = None
+
+
+def register_timetable(component: object) -> type:
+    """Register one timetable class through a synthesized throwaway plugin.
+
+    Registration is what makes Airflow's serialization round trip resolve the class by
+    qualname: `encode_timetable` refuses an unregistered custom timetable outright on
+    3.1.x, and `decode_timetable` resolves through the plugins manager's
+    qualname-to-class mapping on every certified 3.x release. Appends unconditionally --
+    a repeated registration of the same class is harmless, since the derived lookup
+    mapping is keyed by qualname and the sandbox teardown discards every appended
+    plugin anyway.
+
+    Parameters:
+        component: object containing the timetable class or instance to register.
+
+    Returns:
+        type containing the class that was registered.
+    """
+
+    component_type = _as_type(component)
+    register_plugin(build_component_plugin(component_type, "timetables"))
+    invalidate_component_lookup_caches()
+    return component_type
+
+
+def register_weight_strategy(component: object) -> type:
+    """Register one priority weight strategy class through a synthesized throwaway plugin.
+
+    Registration is what lets `_encode_priority_weight_strategy` accept the class at
+    Dag serialization time on every certified 3.x release -- it refuses any custom
+    strategy `_get_registered_priority_weight_strategy` cannot resolve by qualname.
+
+    Parameters:
+        component: object containing the weight strategy class or instance to register.
+
+    Returns:
+        type containing the class that was registered.
+    """
+
+    component_type = _as_type(component)
+    register_plugin(build_component_plugin(component_type, "priority_weight_strategies"))
+    invalidate_component_lookup_caches()
+    return component_type
+
+
+TIMETABLE_ROUND_TRIP_MISMATCH = "timetable-round-trip-mismatch"
+
+
+def timetable_round_trip(component: object) -> tuple[ComponentProblem, ...]:
+    """Run one timetable instance through `decode_timetable(encode_timetable(...))`.
+
+    The caller registers the timetable first (`register_timetable`), so an exception
+    out of either half is a genuine defect and propagates as-is -- an unregistered
+    class raises Airflow's own not-registered error, which is precisely the loud
+    failure this assertion exists to surface. What returns as problems instead of
+    raising is serialize/deserialize ASYMMETRY: the decoded instance reconstructing as
+    a different class, or reconstructing with a different `serialize()` payload than
+    the original produced. Payloads are compared rather than instances because a
+    timetable has no `__eq__` contract; when the class does define its own `__eq__`,
+    the instances are additionally compared with it.
+
+    Parameters:
+        component: object containing the timetable instance to round-trip.
+
+    Returns:
+        tuple[ComponentProblem, ...] containing every asymmetry found, empty on success.
+    """
+
+    # Deferred to preserve pre-bootstrap import safety, like every Airflow import in
+    # this module.
+    from airflow.serialization.serialized_objects import decode_timetable, encode_timetable
+
+    # `encode_timetable` is annotated against Airflow's `Timetable` Protocol, which
+    # `component` satisfies only dynamically here -- same rationale as
+    # `register_secrets_backend`'s cast: the caller's conformance gate already ran.
+    timetable = cast("Any", component)
+    decoded = decode_timetable(encode_timetable(timetable))
+    if type(decoded) is not type(component):
+        return (
+            ComponentProblem(
+                code=TIMETABLE_ROUND_TRIP_MISMATCH,
+                message=(
+                    f"`decode_timetable(encode_timetable(...))` reconstructed "
+                    f"`{type(decoded).__name__}`, not `{type(component).__name__}`."
+                ),
+                hint=(
+                    "Make `deserialize` a classmethod returning `cls(...)` so the "
+                    "round trip reconstructs the class that serialized."
+                ),
+            ),
+        )
+    problems: list[ComponentProblem] = []
+    original_payload = timetable.serialize()
+    decoded_payload = decoded.serialize()
+    if decoded_payload != original_payload:
+        problems.append(
+            ComponentProblem(
+                code=TIMETABLE_ROUND_TRIP_MISMATCH,
+                message=(
+                    f"the reconstructed `{type(component).__name__}` serializes to "
+                    f"{decoded_payload!r}, but the original serialized to "
+                    f"{original_payload!r}."
+                ),
+                hint=(
+                    "Make `serialize` and `deserialize` a symmetric pair: every key "
+                    "`serialize` emits must survive `deserialize` and be emitted again."
+                ),
+            )
+        )
+    if _defining_class(type(component), "__eq__") is not object and decoded != component:
+        problems.append(
+            ComponentProblem(
+                code=TIMETABLE_ROUND_TRIP_MISMATCH,
+                message=(
+                    f"the reconstructed `{type(component).__name__}` compares unequal "
+                    f"to the original under the class's own `__eq__`."
+                ),
+                hint=(
+                    "Make `__eq__` agree with the `serialize`/`deserialize` pair: two "
+                    "instances carrying the same serialized payload should be equal."
+                ),
+            )
+        )
+    return tuple(problems)
+
+
 def build_policy_plugin(hooks: dict[str, Callable[..., object]]) -> type:
     """Build an unregistered, hookimpl-decorated policy plugin class.
 
@@ -3308,14 +3494,17 @@ __all__ = (
     "PROVIDER",
     "SECRETS_BACKEND",
     "TIMETABLE",
+    "TIMETABLE_ROUND_TRIP_MISMATCH",
     "WEIGHT_STRATEGY",
     "XCOM",
     "ComponentProblem",
     "ComponentSandboxError",
     "ExecutorLoaderSnapshot",
     "ExecutorLoaderSnapshotV31",
+    "build_component_plugin",
     "build_policy_plugin",
     "clear_plugins_manager_caches",
+    "invalidate_component_lookup_caches",
     "listener_manager_restore",
     "listener_manager_snapshot",
     "listener_managers",
@@ -3326,6 +3515,8 @@ __all__ = (
     "register_plugin",
     "register_policy",
     "register_secrets_backend",
+    "register_timetable",
+    "register_weight_strategy",
     "restore_executor_loader",
     "restore_macros_module_keys",
     "restore_policy_plugins",
@@ -3339,4 +3530,5 @@ __all__ = (
     "snapshot_settings_keys",
     "snapshot_sys_modules",
     "snapshot_task_instance_mutation_hook_is_noop",
+    "timetable_round_trip",
 )

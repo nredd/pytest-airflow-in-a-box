@@ -55,6 +55,7 @@ nav:
       - Airflow configuration: guide/configuration.md
       - Smoke tests: guide/smoke-tests.md
       - Custom components: guide/custom-components.md
+      - Custom timetables: guide/custom-timetables.md
       - Report artifacts: guide/reports.md
       - Migration-strict mode: guide/migration-strict.md
       - Database: guide/database.md

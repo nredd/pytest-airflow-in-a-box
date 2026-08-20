@@ -11,6 +11,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 from airflow.executors.base_executor import BaseExecutor
+from airflow.timetables.base import Timetable
 
 from pytest_airflow_in_a_box._compat import components as compat_components
 from pytest_airflow_in_a_box._compat.capabilities import (
@@ -1424,3 +1425,286 @@ def test_restore_settings_keys_preserves_bootstrap_time_attributes() -> None:
     # `task_instance_mutation_hook`, not `get_policy_plugin_manager`: the latter is
     # 3.2+-only, while this dispatch function exists on every certified 3.x release.
     assert hasattr(settings, "task_instance_mutation_hook")
+
+
+# ---------------------------------------------------------------------------
+# Timetable and weight-strategy registration (#114)
+# ---------------------------------------------------------------------------
+
+
+class _SymmetricTimetable(Timetable):
+    """Round-trip cleanly: symmetric `serialize`/`deserialize`, no `__eq__` of its own."""
+
+    def __init__(self, hours: int = 1) -> None:
+        self.hours = hours
+
+    def serialize(self) -> dict[str, Any]:
+        return {"hours": self.hours}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _SymmetricTimetable:
+        return cls(hours=data["hours"])
+
+
+class _EqualityTimetable(Timetable):
+    """Round-trip cleanly AND define a real `__eq__`, driving the equality comparison."""
+
+    def __init__(self, hours: int = 1) -> None:
+        self.hours = hours
+
+    def serialize(self) -> dict[str, Any]:
+        return {"hours": self.hours}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _EqualityTimetable:
+        return cls(hours=data["hours"])
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is type(self) and other.hours == self.hours
+
+    def __hash__(self) -> int:
+        return hash(self.hours)
+
+
+class _AsymmetricTimetable(Timetable):
+    """Drop state in `deserialize`, so the reconstructed payload differs."""
+
+    def __init__(self, hours: int = 1) -> None:
+        self.hours = hours
+
+    def serialize(self) -> dict[str, Any]:
+        return {"hours": self.hours}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _AsymmetricTimetable:
+        del data
+        return cls()
+
+
+class _WrongClassTimetable(Timetable):
+    """Reconstruct as a different class entirely, the worst asymmetry."""
+
+    def serialize(self) -> dict[str, Any]:
+        return {}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _SymmetricTimetable:
+        return _SymmetricTimetable(hours=data.get("hours", 1))
+
+
+class _NeverEqualTimetable(Timetable):
+    """Round-trip a symmetric payload while `__eq__` still refuses every comparison."""
+
+    def serialize(self) -> dict[str, Any]:
+        return {}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _NeverEqualTimetable:
+        del data
+        return cls()
+
+    def __eq__(self, other: object) -> bool:
+        del other
+        return False
+
+    def __hash__(self) -> int:
+        return hash(type(self).__qualname__)
+
+
+def _lookup_qualname(component_type: type) -> str:
+    """Build the qualname key Airflow's registered-component lookups are keyed by.
+
+    Upstream's `qualname()` helper keys a class by `__module__.__name__`, NOT
+    `__qualname__` -- identical for the module-level classes real registrations
+    require, but a function-local class would key without its `<locals>` segment.
+
+    Parameters:
+        component_type: type containing the registered component class.
+
+    Returns:
+        str containing the `module.name` lookup key.
+    """
+
+    return f"{component_type.__module__}.{component_type.__name__}"
+
+
+def test_build_component_plugin_subclasses_the_core_airflow_plugin() -> None:
+    """Synthesize a real `AirflowPlugin` subclass carrying the class on one attribute.
+
+    Subclassing matters: the plugins-manager cache functions iterate EVERY list
+    attribute of EVERY plugin, so all of `PLUGIN_LIST_ATTRIBUTES` must resolve on the
+    synthesized plugin through the base class's own defaults.
+    """
+
+    from airflow.plugins_manager import AirflowPlugin
+
+    plugin_class = compat_components.build_component_plugin(_SymmetricTimetable, "timetables")
+
+    assert issubclass(plugin_class, AirflowPlugin)
+    assert plugin_class.timetables == [_SymmetricTimetable]
+    assert plugin_class.name == "pytest-airflow-in-a-box-timetables-_SymmetricTimetable"
+    for attribute in compat_components.PLUGIN_LIST_ATTRIBUTES:
+        assert hasattr(plugin_class, attribute)
+
+
+@pytest.mark.skipif(
+    resolve_capabilities().plugins_manager is not PluginsManagerShape.CACHED_FUNCTIONS,
+    reason="the cached lookup getters exist only on the 3.2+ CACHED_FUNCTIONS shape",
+)
+def test_register_timetable_resolves_through_a_prewarmed_lookup() -> None:
+    """Register a timetable and resolve it by qualname through a PRE-WARMED cache.
+
+    Warming `get_timetables_plugins()` first is the point: it proves
+    `invalidate_component_lookup_caches` really drops the derived mapping, rather than
+    the registration merely winning because nothing had populated the cache yet.
+    """
+
+    core_module, _sdk_module = compat_components._plugins_manager_modules()
+    key = _lookup_qualname(_SymmetricTimetable)
+    assert key not in core_module.get_timetables_plugins()
+
+    returned = compat_components.register_timetable(_SymmetricTimetable(hours=2))
+
+    assert returned is _SymmetricTimetable
+    assert core_module.get_timetables_plugins()[key] is _SymmetricTimetable
+
+    compat_components.clear_plugins_manager_caches()
+
+    assert key not in core_module.get_timetables_plugins()
+
+
+@pytest.mark.skipif(
+    resolve_capabilities().plugins_manager is not PluginsManagerShape.CACHED_FUNCTIONS,
+    reason="the cached lookup getters exist only on the 3.2+ CACHED_FUNCTIONS shape",
+)
+def test_register_weight_strategy_resolves_through_a_prewarmed_lookup() -> None:
+    """Register a weight strategy and resolve it by qualname through a pre-warmed cache."""
+
+    from airflow.task.priority_strategy import PriorityWeightStrategy
+
+    class _Strategy(PriorityWeightStrategy):
+        def get_weight(self, ti: Any) -> int:
+            del ti
+            return 1
+
+    core_module, _sdk_module = compat_components._plugins_manager_modules()
+    key = _lookup_qualname(_Strategy)
+    assert key not in core_module.get_priority_weight_strategy_plugins()
+
+    returned = compat_components.register_weight_strategy(_Strategy)
+
+    assert returned is _Strategy
+    assert core_module.get_priority_weight_strategy_plugins()[key] is _Strategy
+
+    compat_components.clear_plugins_manager_caches()
+
+    assert key not in core_module.get_priority_weight_strategy_plugins()
+
+
+def test_invalidate_component_lookup_caches_module_globals_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reset only the two derived lookup globals on a faked 3.1.x-shaped core half."""
+
+    fake_core = _fake_globals_module(
+        {
+            "plugins": ["kept"],
+            "timetable_classes": {"stale": object},
+            "priority_weight_strategy_classes": {"stale": object},
+        },
+        module_name="fake_31_lookup_core",
+    )
+    monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (fake_core, None))
+
+    compat_components.invalidate_component_lookup_caches()
+
+    assert fake_core.timetable_classes is None
+    assert fake_core.priority_weight_strategy_classes is None
+    # The live plugin list survives -- the whole reason this is not
+    # `clear_plugins_manager_caches`.
+    assert fake_core.plugins == ["kept"]
+
+
+def test_register_timetable_module_globals_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register a timetable end-to-end against a faked 3.1.x `MODULE_GLOBALS` core half."""
+
+    fake_core = _fake_globals_module(
+        {
+            "plugins": [],
+            "timetable_classes": {"stale": object},
+            "priority_weight_strategy_classes": None,
+        },
+        module_name="fake_31_timetable_core",
+    )
+    fake_core.ensure_plugins_loaded = lambda: None
+    from airflow.plugins_manager import AirflowPlugin
+
+    fake_core.AirflowPlugin = AirflowPlugin
+    monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (fake_core, None))
+
+    compat_components.register_timetable(_SymmetricTimetable)
+
+    assert fake_core.timetable_classes is None
+    registered = [type(plugin).__name__ for plugin in fake_core.plugins]
+    assert registered == ["ComponentRegistryPlugin"]
+    assert fake_core.plugins[0].timetables == [_SymmetricTimetable]
+
+
+def test_timetable_round_trip_returns_no_problems_for_a_symmetric_pair() -> None:
+    """Return zero problems for a registered, symmetric timetable without `__eq__`."""
+
+    compat_components.register_timetable(_SymmetricTimetable)
+
+    assert compat_components.timetable_round_trip(_SymmetricTimetable(hours=2)) == ()
+
+
+def test_timetable_round_trip_compares_equal_under_a_real_dunder_eq() -> None:
+    """Return zero problems when the class's own `__eq__` also agrees."""
+
+    compat_components.register_timetable(_EqualityTimetable)
+
+    assert compat_components.timetable_round_trip(_EqualityTimetable(hours=3)) == ()
+
+
+def test_timetable_round_trip_flags_a_payload_mismatch() -> None:
+    """Flag a `deserialize` that drops state the original `serialize` emitted."""
+
+    compat_components.register_timetable(_AsymmetricTimetable)
+
+    problems = compat_components.timetable_round_trip(_AsymmetricTimetable(hours=5))
+
+    assert [problem.code for problem in problems] == [
+        compat_components.TIMETABLE_ROUND_TRIP_MISMATCH
+    ]
+    assert "serializes to" in problems[0].message
+
+
+def test_timetable_round_trip_flags_a_wrong_class_reconstruction() -> None:
+    """Flag a `deserialize` reconstructing a different class, and stop there."""
+
+    compat_components.register_timetable(_WrongClassTimetable)
+    compat_components.register_timetable(_SymmetricTimetable)
+
+    problems = compat_components.timetable_round_trip(_WrongClassTimetable())
+
+    assert [problem.code for problem in problems] == [
+        compat_components.TIMETABLE_ROUND_TRIP_MISMATCH
+    ]
+    assert "reconstructed `_SymmetricTimetable`" in problems[0].message
+
+
+def test_timetable_round_trip_flags_an_eq_disagreement() -> None:
+    """Flag a class whose own `__eq__` refuses the reconstructed twin.
+
+    The payload comparison passes (both serialize to `{}`), isolating the equality
+    problem as the only finding.
+    """
+
+    compat_components.register_timetable(_NeverEqualTimetable)
+
+    problems = compat_components.timetable_round_trip(_NeverEqualTimetable())
+
+    assert [problem.code for problem in problems] == [
+        compat_components.TIMETABLE_ROUND_TRIP_MISMATCH
+    ]
+    assert "compares unequal" in problems[0].message

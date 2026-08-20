@@ -576,3 +576,73 @@ def test_mapped_expansion_commits_scheduler_instances(
 
     assert calls == [(task, "mapped_run", session)]
     assert session.commits == 1
+
+
+# ---------------------------------------------------------------------------
+# is_custom_timetable_instance (#114)
+# ---------------------------------------------------------------------------
+
+
+def test_custom_timetable_predicate_accepts_a_custom_instance() -> None:
+    """Mark a live custom `Timetable` instance as needing registration."""
+
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable; only its MRO and module matter here."""
+
+    assert dag_compat.is_custom_timetable_instance(_CustomTimetable())
+
+
+def test_custom_timetable_predicate_rejects_non_timetable_schedules() -> None:
+    """Pass every ordinary `schedule` spelling through untouched."""
+
+    from datetime import timedelta
+
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable, rejected here because it arrives as a CLASS."""
+
+    assert not dag_compat.is_custom_timetable_instance(None)
+    assert not dag_compat.is_custom_timetable_instance("@daily")
+    assert not dag_compat.is_custom_timetable_instance(timedelta(days=1))
+    assert not dag_compat.is_custom_timetable_instance(_CustomTimetable)
+    assert not dag_compat.is_custom_timetable_instance(object())
+
+
+def test_custom_timetable_predicate_rejects_airflow_builtin_timetables() -> None:
+    """Leave built-in timetables alone; they decode without plugin registration."""
+
+    from airflow.timetables.trigger import CronTriggerTimetable
+
+    assert not dag_compat.is_custom_timetable_instance(
+        CronTriggerTimetable("@daily", timezone="UTC")
+    )
+
+
+def test_custom_timetable_predicate_short_circuits_on_the_2x_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Return False on 2.x before touching anything else.
+
+    The component sandbox this predicate feeds is 3.x-only; its own gate would
+    `pytest.fail` the test, so the 2.x family must exit first. The custom instance
+    that would return True on 3.x proves the family gate is what decided.
+    """
+
+    from airflow.timetables.base import Timetable
+
+    class _CustomTimetable(Timetable):
+        """Minimal custom timetable; would register on the 3.x family."""
+
+    instance = _CustomTimetable()
+    assert dag_compat.is_custom_timetable_instance(instance)
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V2),
+    )
+
+    assert not dag_compat.is_custom_timetable_instance(instance)

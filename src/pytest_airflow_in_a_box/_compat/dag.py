@@ -127,6 +127,39 @@ def _needs_implicit_start_date(schedule: Any, dag_kwargs: dict[str, Any]) -> boo
     return default_args.get("start_date") is None
 
 
+def is_custom_timetable_instance(schedule: Any) -> bool:
+    """Report whether a `schedule` value is a live custom-timetable instance.
+
+    The predicate behind `dag_maker`'s transparent timetable registration, so its
+    gates are ordered to keep every other `schedule` spelling exactly as cheap and as
+    2.x-safe as before: the 2.x family exits first (the component sandbox this feeds
+    is 3.x-only, and its own gate would `pytest.fail` the test), then `None` and bare
+    classes (Airflow itself rejects a class as `schedule`), then anything whose MRO
+    does not carry `airflow.timetables.base.Timetable` -- an MRO check rather than
+    `issubclass`, since `Timetable` is a data-carrying Protocol `issubclass` refuses
+    outright (same rationale as `_compat.components._is_timetable`). What survives is
+    a timetable instance, and only the ones defined OUTSIDE the `airflow.` namespace
+    are custom: every built-in (`CronTriggerTimetable`, `AssetTriggeredTimetable`,
+    provider timetables) already decodes without plugin registration.
+
+    Parameters:
+        schedule: Any containing the `schedule` value handed to `dag_maker`.
+
+    Returns:
+        bool marking `schedule` as an instance needing registration before
+        serialization.
+    """
+
+    if _is_v2() or schedule is None or isinstance(schedule, type):
+        return False
+    # Deferred to preserve pre-bootstrap plugin import safety.
+    from airflow.timetables.base import Timetable
+
+    if Timetable not in type(schedule).__mro__:
+        return False
+    return not type(schedule).__module__.startswith("airflow.")
+
+
 def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
     """Construct one public authoring Dag while keeping the Airflow import deferred.
 
@@ -861,6 +894,7 @@ __all__ = (
     "create_dag_run",
     "ensure_dag_absent",
     "expand_mapped_task_instances",
+    "is_custom_timetable_instance",
     "open_dag_session",
     "persist_dag",
     "select_task_instance",

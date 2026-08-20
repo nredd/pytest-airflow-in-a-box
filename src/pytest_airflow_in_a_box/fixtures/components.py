@@ -34,20 +34,23 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
-# The four kinds `round_trip()` can classify unambiguously: each takes a bare component
+# The kinds `round_trip()` can classify unambiguously: each takes a bare component
 # positionally and nothing else structurally identifies it. `POLICY` is excluded on
 # purpose -- it has no bare-component form, only `**hookname_to_callable` -- and so are
-# every static-check-only kind `check_component` supports (`TIMETABLE`, `XCOM`,
-# `WEIGHT_STRATEGY`, `NOTIFIER`, `PROVIDER`), which `ComponentRegistry` never registers
-# at all: a Timetable is passed directly to a Dag's `schedule=`, an XCom backend is
-# configured once for the whole run via the `airflow_xcom_backend` ini (#112), and a
-# weight strategy/notifier/provider is referenced directly in Dag code, never through a
-# process-global registry a sandbox would need to revert.
+# the remaining static-check-only kinds (`XCOM`, `NOTIFIER`, `PROVIDER`), which
+# `ComponentRegistry` never registers at all: an XCom backend is configured once for
+# the whole run via the `airflow_xcom_backend` ini (#112), and a notifier/provider is
+# referenced directly in Dag code, never through a process-global registry a sandbox
+# would need to revert. `TIMETABLE` and `WEIGHT_STRATEGY` joined in #114: Dag
+# serialization resolves both by qualname through the plugins manager, so both have a
+# real registration for the sandbox to make and revert.
 _ROUND_TRIP_KINDS = (
     ComponentKind.PLUGIN,
     ComponentKind.LISTENER,
     ComponentKind.EXECUTOR,
     ComponentKind.SECRETS_BACKEND,
+    ComponentKind.TIMETABLE,
+    ComponentKind.WEIGHT_STRATEGY,
 )
 
 
@@ -184,6 +187,33 @@ class _ComponentSandbox:
         check_component(component, kind=ComponentKind.EXECUTOR).raise_for_problems()
         return sandbox.register_executor(component, alias=alias)
 
+    def timetable(self, component: object) -> None:
+        """See `pytest_airflow_in_a_box.types.ComponentRegistry.timetable`."""
+
+        check_component(component, kind=ComponentKind.TIMETABLE).raise_for_problems()
+        sandbox.register_timetable(component)
+
+    def priority_weight_strategy(self, component: object) -> None:
+        """See `pytest_airflow_in_a_box.types.ComponentRegistry.priority_weight_strategy`."""
+
+        check_component(component, kind=ComponentKind.WEIGHT_STRATEGY).raise_for_problems()
+        sandbox.register_weight_strategy(component)
+
+    def serialization_round_trip(self, component: object) -> None:
+        """See `pytest_airflow_in_a_box.types.ComponentRegistry.serialization_round_trip`."""
+
+        if isinstance(component, type):
+            raise sandbox.ComponentSandboxError(
+                f"serialization_round_trip() needs a live `{component.__name__}` "
+                f"instance -- encoding a timetable requires one; pass "
+                f"`{component.__name__}(...)` instead of the class."
+            )
+        self.timetable(component)
+        ComponentReport(
+            component_name=type(component).__name__,
+            problems=sandbox.timetable_round_trip(component),
+        ).raise_for_problems()
+
     def round_trip(self, component: object) -> None:
         """See `pytest_airflow_in_a_box.types.ComponentRegistry.round_trip`."""
 
@@ -191,7 +221,8 @@ class _ComponentSandbox:
         if len(matched) != 1:
             raise sandbox.ComponentSandboxError(
                 f"round_trip() could not classify `{_as_type(component).__name__}` as "
-                f"exactly one of plugin/listener/executor/secrets_backend (matched "
+                f"exactly one of plugin/listener/executor/secrets_backend/timetable/"
+                f"priority_weight_strategy (matched "
                 f"{[kind.value for kind in matched]}); call the specific method instead."
             )
         kind = matched[0]
@@ -204,6 +235,10 @@ class _ComponentSandbox:
             self.listener(component, task=self._task_listener is not None)
         elif kind is ComponentKind.EXECUTOR:
             self.executor(component)
+        elif kind is ComponentKind.TIMETABLE:
+            self.timetable(component)
+        elif kind is ComponentKind.WEIGHT_STRATEGY:
+            self.priority_weight_strategy(component)
         else:
             self.secrets_backend(component)
 
@@ -303,7 +338,7 @@ class _ComponentSandbox:
 
 @pytest.fixture
 def airflow_components(pytestconfig: pytest.Config) -> Iterator[ComponentRegistry]:
-    """Register a custom plugin, listener, policy, secrets backend, or executor.
+    """Register a custom plugin, listener, policy, secrets backend, executor, or timetable.
 
     Every registration method runs `check_component` first and raises on any
     conformance problem -- see `pytest_airflow_in_a_box.types.ComponentRegistry` and the

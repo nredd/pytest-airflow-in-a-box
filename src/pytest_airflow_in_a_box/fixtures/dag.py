@@ -29,6 +29,7 @@ from pytest_airflow_in_a_box._compat.dag import (
     create_dag_run,
     ensure_dag_absent,
     expand_mapped_task_instances,
+    is_custom_timetable_instance,
     open_dag_session,
     persist_dag,
     select_task_instance,
@@ -43,7 +44,7 @@ from pytest_airflow_in_a_box.markers import read_bool_marker
 from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from datetime import datetime
     from types import TracebackType
 
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from pytest_airflow_in_a_box.results import DagRunResult
+    from pytest_airflow_in_a_box.types import ComponentRegistry
 
 DAG_ID_MAX_LENGTH = 250
 RUN_ID_MAX_LENGTH = 250
@@ -255,7 +257,15 @@ class _DagContext(AbstractContextManager["DAG"]):
 class _DagFactory:
     """Implement the public ``DagMaker`` protocol without importing Airflow eagerly."""
 
-    def __init__(self, nodeid: str, fileloc: str, worker: str, *, serialized: bool) -> None:
+    def __init__(
+        self,
+        nodeid: str,
+        fileloc: str,
+        worker: str,
+        *,
+        serialized: bool,
+        register_timetable: Callable[[Any], None] | None = None,
+    ) -> None:
         """Store deterministic identity inputs and marker defaults.
 
         Parameters:
@@ -263,8 +273,12 @@ class _DagFactory:
             fileloc: str naming the consumer test module.
             worker: str containing the xdist worker identity.
             serialized: bool containing the marker-derived default.
+            register_timetable: Callable[[Any], None] | None registering one custom
+                timetable instance before its Dag is built, or None to skip
+                registration entirely (direct construction in unit tests).
         """
 
+        self._register_timetable = register_timetable
         self._nodeid = nodeid
         self._fileloc = fileloc
         self._worker = worker
@@ -348,6 +362,11 @@ class _DagFactory:
             if dag_id is None
             else _validate_dag_id(dag_id)
         )
+        # Before `build_dag`, not at context exit: Airflow 3.1's `encode_timetable`
+        # already refuses an unregistered custom timetable when `persist_dag` runs.
+        schedule = dag_kwargs.get("schedule")
+        if self._register_timetable is not None and is_custom_timetable_instance(schedule):
+            self._register_timetable(schedule)
         dag = build_dag(resolved_dag_id, self._fileloc, dag_kwargs)
         self._dag = dag
         self._serialized_dag = None
@@ -693,7 +712,31 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
     marker_default = read_bool_marker(request.node, "need_serialized_dag", default=False)
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
     fileloc = str(Path(str(request.node.path)).resolve())
-    factory = _DagFactory(request.node.nodeid, fileloc, worker, serialized=marker_default)
+
+    def register_timetable(timetable: Any) -> None:
+        """Register one custom timetable through the lazily-pulled component sandbox.
+
+        `getfixturevalue` on purpose, not a fixture parameter: pytest caches the
+        resolved fixture, so every `dag_maker` call in one test shares a single
+        sandbox (and its snapshot/finalize cleanup), while tests passing no custom
+        timetable -- the overwhelming majority -- never construct the sandbox at all.
+        Registering the instance rather than its class lets the conformance gate run
+        the instance-only checks (`timetable-serialize-not-json`) too.
+
+        Parameters:
+            timetable: Any containing the custom `Timetable` instance to register.
+        """
+
+        registry: ComponentRegistry = request.getfixturevalue("airflow_components")
+        registry.timetable(timetable)
+
+    factory = _DagFactory(
+        request.node.nodeid,
+        fileloc,
+        worker,
+        serialized=marker_default,
+        register_timetable=register_timetable,
+    )
     try:
         yield factory
     finally:

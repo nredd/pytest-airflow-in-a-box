@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any
+from importlib import import_module
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from airflow.models.dag import DagModel
@@ -33,6 +35,12 @@ from pytest_airflow_in_a_box.fixtures.dag import (
 from pytest_airflow_in_a_box.types import DagMaker, RunDag
 
 pytestmark = pytest.mark.db_test
+
+# `provider_package` (in this corpus) supplies `ExampleTimetable`, an already-conformant,
+# module-level `Timetable` -- registration resolves it by dotted import path later, so a
+# corpus class is the correct fit; see `tests/fixtures/test_component_sandbox.py`'s
+# identical `monkeypatch.syspath_prepend` idiom.
+CORPUS = Path(__file__).parents[1] / "dags"
 
 
 def _require_count(value: int | None) -> int:
@@ -588,3 +596,114 @@ def test_run_dag_cleanup_continues_after_one_failure(monkeypatch: pytest.MonkeyP
 
     assert attempted == ["second", "first"]
     assert isinstance(caught.value.__cause__, OSError)
+
+
+# ---------------------------------------------------------------------------
+# Transparent custom-timetable registration (#114)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.need_serialized_dag
+def test_dag_maker_registers_a_custom_timetable_transparently(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serialize a Dag scheduled by a custom timetable with zero plugin wiring.
+
+    The user's whole surface here is `schedule=`: `dag_maker` pulls the component
+    sandbox lazily, registers the timetable's class, and Airflow's own persist/load
+    round trip reconstructs it -- the exact flow that raises `TimetableNotRegistered`
+    without the registration.
+    """
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose, not a static `from provider_package import ...`:
+    # `provider_package` resolves only after `monkeypatch.syspath_prepend` above, a
+    # runtime-only fact `ty` cannot see.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+
+    with dag_maker(schedule=ExampleTimetable(hours=2)) as dag:
+        EmptyOperator(task_id="scheduled")
+
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert serialized_dag.dag_id == dag.dag_id
+    timetable = cast("Any", serialized_dag).timetable
+    assert type(timetable) is ExampleTimetable
+    assert timetable.hours == 2
+
+
+@pytest.mark.need_serialized_dag
+def test_dag_maker_leaves_builtin_timetables_alone(dag_maker: DagMaker) -> None:
+    """Serialize a built-in-timetable Dag without ever constructing the sandbox."""
+
+    from airflow.timetables.trigger import CronTriggerTimetable
+
+    with dag_maker(schedule=CronTriggerTimetable("@daily", timezone="UTC")):
+        EmptyOperator(task_id="builtin")
+
+    from pytest_airflow_in_a_box._compat import components as sandbox_compat
+
+    core_module, _sdk_module = sandbox_compat._plugins_manager_modules()
+    plugin_names = {
+        type(candidate).__name__ for candidate in sandbox_compat._live_plugin_list(core_module)
+    }
+    assert "ComponentRegistryPlugin" not in plugin_names
+
+
+def test_dag_maker_registers_even_for_an_unserialized_dag(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register at Dag construction regardless of serialization semantics.
+
+    Registration happens at `__call__` because Airflow 3.1's `encode_timetable`
+    already needs it when `persist_dag` runs; with `serialized=False` the persist
+    still encodes, so the registration is load-bearing there too.
+    """
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose; see the transparent-registration test above.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+
+    with dag_maker(schedule=ExampleTimetable(hours=5), serialized=False) as dag:
+        EmptyOperator(task_id="unserialized")
+
+    assert dag_maker.serialized_dag is None
+    assert type(dag.timetable) is ExampleTimetable
+
+
+def test_dag_factory_hook_fires_only_for_custom_timetable_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invoke the registration hook exactly once, for exactly the custom instance."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose; see the transparent-registration test above.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+    registered: list[Any] = []
+    factory = _DagFactory(
+        "node", __file__, "master", serialized=False, register_timetable=registered.append
+    )
+
+    factory("hook_none_schedule")
+    factory("hook_string_schedule", schedule=None)
+    timetable = ExampleTimetable(hours=6)
+    factory("hook_custom_schedule", schedule=timetable)
+
+    assert registered == [timetable]
+
+
+def test_dag_factory_without_the_hook_skips_registration() -> None:
+    """Build a custom-timetable Dag with no hook wired, for direct factory users."""
+
+    factory = _DagFactory("node", __file__, "master", serialized=False)
+
+    from airflow.timetables.base import Timetable
+
+    class _InlineTimetable(Timetable):
+        """Reach `build_dag` untouched; the None hook must short-circuit first."""
+
+    factory("no_hook_schedule", schedule=_InlineTimetable())
+
+    assert type(factory.dag.timetable) is _InlineTimetable

@@ -29,6 +29,7 @@ from airflow.listeners import hookimpl
 from airflow.plugins_manager import AirflowPlugin
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.secrets.base_secrets import BaseSecretsBackend
+from airflow.timetables.base import Timetable
 
 from pytest_airflow_in_a_box._compat import components as sandbox
 from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
@@ -567,9 +568,243 @@ def test_executor_defaults_the_alias_to_test(
     assert returned == "test"
 
 
+class _AsymmetricTimetable(Timetable):
+    """Drop state in `deserialize`, so the serialization round trip must be flagged."""
+
+    def __init__(self, hours: int = 1) -> None:
+        """Carry the one piece of state `deserialize` deliberately drops.
+
+        Parameters:
+            hours: int containing the interval length `serialize` emits.
+        """
+
+        self.hours = hours
+
+    def infer_manual_data_interval(self, *, run_after: Any) -> Any:
+        """Never actually fire; only the conformance gate reads this.
+
+        Parameters:
+            run_after: Any containing the manual trigger moment.
+
+        Returns:
+            Any; unreachable in these tests.
+        """
+
+        raise NotImplementedError
+
+    def next_dagrun_info(self, *, last_automated_data_interval: Any, restriction: Any) -> Any:
+        """Never actually fire; only the conformance gate reads this.
+
+        Parameters:
+            last_automated_data_interval: Any containing the prior automated interval.
+            restriction: Any containing the schedule's time restriction.
+
+        Returns:
+            Any; unreachable in these tests.
+        """
+
+        del last_automated_data_interval, restriction
+        return None
+
+    def serialize(self) -> dict[str, Any]:
+        """Emit the state `deserialize` will drop.
+
+        Returns:
+            dict[str, Any] containing the interval length.
+        """
+
+        return {"hours": self.hours}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _AsymmetricTimetable:
+        """Reconstruct with the default interval, discarding the payload.
+
+        Parameters:
+            data: dict[str, Any] containing the ignored serialized payload.
+
+        Returns:
+            _AsymmetricTimetable reconstructed with default state.
+        """
+
+        del data
+        return cls()
+
+
+# ---------------------------------------------------------------------------
+# timetable()
+# ---------------------------------------------------------------------------
+
+
+def test_timetable_registers_and_survives_the_serialization_round_trip(
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register a corpus timetable and watch Airflow's own encode/decode resolve it."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose, not a static `from provider_package import ...`:
+    # `provider_package` resolves only after `monkeypatch.syspath_prepend` above, a
+    # runtime-only fact `ty` cannot see -- matching `_shared_module_loading_modules`'s
+    # own dynamic-import precedent for the same "not statically resolvable" shape.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+
+    airflow_components.timetable(ExampleTimetable)
+
+    from airflow.serialization.serialized_objects import decode_timetable, encode_timetable
+
+    decoded = cast("Any", decode_timetable(encode_timetable(ExampleTimetable(hours=2))))
+    assert type(decoded) is ExampleTimetable
+    assert decoded.hours == 2
+
+
+def test_timetable_rejects_a_local_scope_class(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Refuse a timetable class Airflow could never resolve by dotted import path."""
+
+    class _LocalTimetable(Timetable):
+        """Fail `timetable-local-qualname` by construction."""
+
+    with pytest.raises(ComponentContractError, match="timetable-local-qualname"):
+        airflow_components.timetable(_LocalTimetable)
+
+
+# ---------------------------------------------------------------------------
+# priority_weight_strategy()
+# ---------------------------------------------------------------------------
+
+
+def test_priority_weight_strategy_registers_into_the_live_plugin_list(
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register a corpus weight strategy through a synthesized throwaway plugin."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose, not a static `from provider_package import ...`:
+    # `provider_package._weight_strategy` resolves only after the syspath prepend, and
+    # is deliberately NOT re-exported from the package `__init__`:
+    # `airflow.task.priority_strategy` is 3.x-only, and the package must stay
+    # importable on the 2.x family.
+    weight_strategy_module = import_module("provider_package._weight_strategy")
+    ExampleWeightStrategy = weight_strategy_module.ExampleWeightStrategy
+
+    airflow_components.priority_weight_strategy(ExampleWeightStrategy)
+
+    core_module, _sdk_module = sandbox._plugins_manager_modules()
+    registered = [
+        strategy
+        for candidate in sandbox._live_plugin_list(core_module)
+        for strategy in getattr(candidate, "priority_weight_strategies", [])
+    ]
+    assert ExampleWeightStrategy in registered
+
+
+def test_priority_weight_strategy_rejects_a_broken_hash(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Refuse a strategy whose effective `__hash__` is the base's unusable one."""
+
+    from airflow.task.priority_strategy import PriorityWeightStrategy
+
+    class _NoHashStrategy(PriorityWeightStrategy):
+        """Fail `weight-strategy-hash-of-none`: `get_weight` without a real `__hash__`."""
+
+        def get_weight(self, ti: Any) -> int:
+            del ti
+            return 1
+
+    with pytest.raises(ComponentContractError, match="weight-strategy-hash-of-none"):
+        airflow_components.priority_weight_strategy(_NoHashStrategy)
+
+
+# ---------------------------------------------------------------------------
+# serialization_round_trip()
+# ---------------------------------------------------------------------------
+
+
+def test_serialization_round_trip_accepts_a_symmetric_corpus_timetable(
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register and round-trip a conformant timetable in one call."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose, not a static `from provider_package import ...`:
+    # `provider_package` resolves only after `monkeypatch.syspath_prepend` above, a
+    # runtime-only fact `ty` cannot see -- matching `_shared_module_loading_modules`'s
+    # own dynamic-import precedent for the same "not statically resolvable" shape.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+
+    airflow_components.serialization_round_trip(ExampleTimetable(hours=3))
+
+
+def test_serialization_round_trip_rejects_a_class(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Refuse a bare class; encoding a timetable requires a live instance."""
+
+    with pytest.raises(ComponentSandboxError, match="needs a live"):
+        airflow_components.serialization_round_trip(_AsymmetricTimetable)
+
+
+def test_serialization_round_trip_flags_an_asymmetric_pair(
+    airflow_components: ComponentRegistry,
+) -> None:
+    """Surface a `deserialize` that drops state as a loud contract failure."""
+
+    with pytest.raises(ComponentContractError, match="timetable-round-trip-mismatch"):
+        airflow_components.serialization_round_trip(_AsymmetricTimetable(hours=7))
+
+
 # ---------------------------------------------------------------------------
 # round_trip()
 # ---------------------------------------------------------------------------
+
+
+def test_round_trip_classifies_and_registers_a_timetable(
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify a `Timetable` instance as a timetable and register its class."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose, not a static `from provider_package import ...`:
+    # `provider_package` resolves only after `monkeypatch.syspath_prepend` above, a
+    # runtime-only fact `ty` cannot see -- matching `_shared_module_loading_modules`'s
+    # own dynamic-import precedent for the same "not statically resolvable" shape.
+    ExampleTimetable = import_module("provider_package").ExampleTimetable
+
+    airflow_components.round_trip(ExampleTimetable(hours=4))
+
+    from airflow.serialization.serialized_objects import decode_timetable, encode_timetable
+
+    decoded = decode_timetable(encode_timetable(ExampleTimetable(hours=4)))
+    assert type(decoded) is ExampleTimetable
+
+
+def test_round_trip_classifies_and_registers_a_weight_strategy(
+    airflow_components: ComponentRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify a `PriorityWeightStrategy` subclass and register it."""
+
+    monkeypatch.syspath_prepend(str(CORPUS))
+    # `import_module` on purpose; see
+    # `test_priority_weight_strategy_registers_into_the_live_plugin_list` for why the
+    # module is reached directly rather than through the package `__init__`.
+    weight_strategy_module = import_module("provider_package._weight_strategy")
+    ExampleWeightStrategy = weight_strategy_module.ExampleWeightStrategy
+
+    airflow_components.round_trip(ExampleWeightStrategy)
+
+    core_module, _sdk_module = sandbox._plugins_manager_modules()
+    registered = [
+        strategy
+        for candidate in sandbox._live_plugin_list(core_module)
+        for strategy in getattr(candidate, "priority_weight_strategies", [])
+    ]
+    assert ExampleWeightStrategy in registered
 
 
 def test_round_trip_classifies_and_registers_a_plugin(
@@ -652,7 +887,7 @@ def test_round_trip_listener_registers_core_only_when_no_task_manager(
 def test_round_trip_rejects_an_unclassifiable_component(
     airflow_components: ComponentRegistry,
 ) -> None:
-    """Refuse a bare object matching none of the four registrable kinds."""
+    """Refuse a bare object matching none of the registrable kinds."""
 
     with pytest.raises(ComponentSandboxError, match="could not classify"):
         airflow_components.round_trip(object())
@@ -763,6 +998,7 @@ def test_registrations_leave_no_trace_across_tests(
         from airflow.listeners import hookimpl
         from airflow.plugins_manager import AirflowPlugin
         from airflow.secrets.base_secrets import BaseSecretsBackend
+        from airflow.timetables.base import Timetable
 
         pytestmark = pytest.mark.db_test
 
@@ -795,6 +1031,21 @@ def test_registrations_leave_no_trace_across_tests(
                 pass
 
 
+        class _IsolationTimetable(Timetable):
+            def infer_manual_data_interval(self, *, run_after):
+                raise NotImplementedError
+
+            def next_dagrun_info(self, *, last_automated_data_interval, restriction):
+                return None
+
+            def serialize(self):
+                return {}
+
+            @classmethod
+            def deserialize(cls, data):
+                return cls()
+
+
         def test_register_everything(airflow_components):
             from pytest_airflow_in_a_box._compat import components as sandbox
 
@@ -804,6 +1055,7 @@ def test_registrations_leave_no_trace_across_tests(
             airflow_components.secrets_backend(_SecretsBackend)
             airflow_components.executor(_Executor, alias="pytester_isolation_exec")
             airflow_components.policy(get_dagbag_import_timeout=lambda dag_file_path: 30)
+            airflow_components.serialization_round_trip(_IsolationTimetable())
 
             # Simulate the template-render path that integrates plugin macros: it both
             # installs a per-plugin module into sys.modules AND setattrs it onto the
@@ -827,6 +1079,10 @@ def test_registrations_leave_no_trace_across_tests(
                 for candidate in sandbox._live_plugin_list(core_module)
             }
             assert "_Plugin" not in plugin_names
+            # The timetable registration's synthesized carrier plugin is always the
+            # class named `ComponentRegistryPlugin` (see `build_component_plugin`);
+            # its absence proves the timetable registration reverted too.
+            assert "ComponentRegistryPlugin" not in plugin_names
 
             core_manager, task_manager = sandbox.listener_managers()
             listener_types = {
