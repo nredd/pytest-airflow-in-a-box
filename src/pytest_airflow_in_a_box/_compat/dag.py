@@ -34,6 +34,11 @@ IMPLICIT_V2_START_DATE = datetime(1970, 1, 1, tzinfo=timezone.utc)
 # The scheduling keywords 2.x's `DAG.__init__` treats as interchangeable with
 # `schedule`, minus `schedule` itself, which `build_dag` pops before probing.
 _V2_SCHEDULING_KEYWORDS = ("schedule_interval", "timetable")
+# Bounded retries for 2.x's non-atomic check-then-insert into `dag_code`, whose rows
+# key on `fileloc` and are therefore shared across xdist workers testing one source
+# file (issue #157). Each retry independently re-checks, so one attempt is consumed
+# only by a genuinely concurrent insert.
+_V2_DAG_CODE_SYNC_ATTEMPTS = 3
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -305,8 +310,53 @@ def _ensure_bundle(record: DagPersistenceRecord) -> None:
     record.bundle_created = True
 
 
+def _sync_dag_model_v2(dag: DAG, record: DagPersistenceRecord) -> None:
+    """Sync the Dag through the 2.x authoring writer, retrying concurrent-writer races.
+
+    2.x's `bulk_write_to_db` performs a non-atomic check-then-insert into `dag_code`,
+    whose rows key on `fileloc` -- shared by every Dag built from one test module. Two
+    xdist workers on one metadata database can both pass the check, and the loser hits
+    a `dag_code.fileloc_hash` UNIQUE violation (issue #157). After the winner's commit
+    the row exists, so a retried sync takes the update path and succeeds. The rollback
+    between attempts is safe because `_ensure_bundle` is a no-op on 2.x, leaving
+    nothing earlier in the record's session to lose.
+
+    Parameters:
+        dag: airflow.sdk.DAG containing the completed task graph.
+        record: DagPersistenceRecord identifying the metadata session.
+
+    Raises:
+        sqlalchemy.exc.IntegrityError: The race recurred on every bounded attempt.
+    """
+
+    from sqlalchemy.exc import IntegrityError
+
+    # 2.x has no bundle arguments; the authoring class carries the writer. The
+    # dynamic access keeps static checking valid against an installed 3.x tree.
+    authoring_class: Any = type(dag)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            authoring_class.bulk_write_to_db([dag], session=record.session)
+            return
+        except IntegrityError as error:
+            record.session.rollback()
+            if attempt == _V2_DAG_CODE_SYNC_ATTEMPTS:
+                raise
+            LOGGER.warning(
+                f"Retrying the 2.x Dag metadata sync for '{record.dag_id}' after a "
+                f"concurrent-writer IntegrityError (attempt {attempt} of "
+                f"{_V2_DAG_CODE_SYNC_ATTEMPTS}): {error}"
+            )
+
+
 def _sync_dag_model(dag: DAG, record: DagPersistenceRecord) -> None:
     """Sync the Dag and its scheduler metadata through Airflow's canonical writer.
+
+    Only the 2.x path retries `IntegrityError` (see `_sync_dag_model_v2`): 3.x keys
+    `dag_code` on the per-Dag `dag_version_id`, so no row is shared across workers
+    and a constraint violation there is a real failure, not a race to tolerate.
 
     Parameters:
         dag: airflow.sdk.DAG containing the completed task graph.
@@ -314,10 +364,7 @@ def _sync_dag_model(dag: DAG, record: DagPersistenceRecord) -> None:
     """
 
     if _is_v2():
-        # 2.x has no bundle arguments; the authoring class carries the writer. The
-        # dynamic access keeps static checking valid against an installed 3.x tree.
-        authoring_class: Any = type(dag)
-        authoring_class.bulk_write_to_db([dag], session=record.session)
+        _sync_dag_model_v2(dag, record)
         return
     serialized_dag_class = _get_serialized_dag_class()
     serialized_dag_class.bulk_write_to_db(
@@ -713,6 +760,10 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 
         # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id` and
         # `dag_code` rows key on `fileloc`, shared by every Dag in one source file.
+        # The `still_used` check below races another xdist worker's insert of the same
+        # `fileloc` (issue #157). That is tolerated as-is: `_sync_dag_model_v2` retries
+        # the insert side, and a `dag_code` row lost to this delete is never read back
+        # by the plugin.
         session.execute(
             delete(SerializedDagModel).where(SerializedDagModel.dag_id == record.dag_id)
         )

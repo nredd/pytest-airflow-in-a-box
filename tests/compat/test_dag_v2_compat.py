@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from pytest_airflow_in_a_box._compat import dag as dag_module
 from pytest_airflow_in_a_box._compat.capabilities import (
@@ -194,6 +195,119 @@ def test_sync_dag_model_uses_the_authoring_writer_on_v2() -> None:
     dag_module._sync_dag_model(dag, record)
 
     assert calls == [((dag,), "session-token")]
+
+
+class _RollbackRecordingSession:
+    """Count `rollback` calls between retried sync attempts."""
+
+    def __init__(self) -> None:
+        self.rollbacks = 0
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def _dag_code_integrity_error() -> IntegrityError:
+    """Build the UNIQUE-violation shape issue #157's CI leg observed.
+
+    Returns:
+        sqlalchemy.exc.IntegrityError carrying a `dag_code.fileloc_hash` cause.
+    """
+
+    return IntegrityError(
+        "INSERT INTO dag_code",
+        None,
+        Exception("UNIQUE constraint failed: dag_code.fileloc_hash"),
+    )
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_retries_a_concurrent_dag_code_insert(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Roll back and retry once another worker wins the `dag_code` insert race.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the retry diagnostic.
+    """
+
+    calls: list[Any] = []
+
+    class FakeAuthoringDag:
+        """Lose the `dag_code` race exactly once, then succeed."""
+
+        @classmethod
+        def bulk_write_to_db(cls, dags: list[Any], session: Any = None) -> None:
+            calls.append((tuple(dags), session))
+            if len(calls) == 1:
+                raise _dag_code_integrity_error()
+
+    session = _RollbackRecordingSession()
+    dag: Any = FakeAuthoringDag()
+    record = _record(session=session)
+
+    with caplog.at_level("WARNING", logger=dag_module.__name__):
+        dag_module._sync_dag_model(dag, record)
+
+    assert calls == [((dag,), session), ((dag,), session)]
+    assert session.rollbacks == 1
+    assert any("attempt 1" in message for message in caplog.messages)
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_raises_after_exhausted_retries() -> None:
+    """Surface the `IntegrityError` once every bounded attempt loses the race."""
+
+    calls: list[Any] = []
+
+    class FakeAuthoringDag:
+        """Lose the `dag_code` race on every attempt."""
+
+        @classmethod
+        def bulk_write_to_db(cls, dags: list[Any], session: Any = None) -> None:
+            del session
+            calls.append(tuple(dags))
+            raise _dag_code_integrity_error()
+
+    session = _RollbackRecordingSession()
+    dag: Any = FakeAuthoringDag()
+    record = _record(session=session)
+
+    with pytest.raises(IntegrityError, match="fileloc_hash"):
+        dag_module._sync_dag_model(dag, record)
+
+    assert len(calls) == dag_module._V2_DAG_CODE_SYNC_ATTEMPTS
+    assert session.rollbacks == dag_module._V2_DAG_CODE_SYNC_ATTEMPTS
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_persist_dag_reports_exhausted_dag_code_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report the exhausted race through the existing sync-labelled persistence error.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch disarming the cleanup path.
+    """
+
+    class FakeAuthoringDag:
+        """Lose the `dag_code` race on every attempt."""
+
+        @classmethod
+        def bulk_write_to_db(cls, dags: list[Any], session: Any = None) -> None:
+            del dags, session
+            raise _dag_code_integrity_error()
+
+    monkeypatch.setattr(dag_module, "_cleanup_dag", lambda _record: None)
+    session = _RollbackRecordingSession()
+    dag: Any = FakeAuthoringDag()
+
+    with pytest.raises(
+        dag_module.DagPersistenceError, match="syncing DagModel metadata"
+    ) as caught:
+        dag_module.persist_dag(dag, _record(session=session))
+
+    assert isinstance(caught.value.__cause__, IntegrityError)
 
 
 @pytest.mark.usefixtures("v2_capabilities")

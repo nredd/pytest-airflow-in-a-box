@@ -158,6 +158,45 @@ def test_serialized_dag_location_branching(
     assert imported == [expected_module]
 
 
+def test_sync_dag_model_does_not_retry_on_v3(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Propagate a 3.x `IntegrityError` after exactly one write, never retrying.
+
+    3.x keys `dag_code` on the per-Dag `dag_version_id`, so no row is shared across
+    xdist workers and issue #157's retry stays scoped to the 2.x branch. Extending it
+    to 3.x must be a deliberate decision, not a refactor side effect.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch pinning the 3.x family and faking the writer.
+    """
+
+    from sqlalchemy.exc import IntegrityError
+
+    calls: list[Any] = []
+
+    class FakeSerializedDag:
+        """Raise the constraint violation the 2.x branch would retry."""
+
+        @classmethod
+        def bulk_write_to_db(cls, *args: Any, **kwargs: Any) -> None:
+            calls.append((args, kwargs))
+            raise IntegrityError("INSERT INTO dag_code", None, Exception("boom"))
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V3),
+    )
+    monkeypatch.setattr(dag_compat, "_get_serialized_dag_class", lambda: FakeSerializedDag)
+    session = _Session()
+    dag: Any = object()
+
+    with pytest.raises(IntegrityError):
+        dag_compat._sync_dag_model(dag, _record(session))
+
+    assert len(calls) == 1
+    assert session.rollbacks == 0
+
+
 def test_persistence_reports_cleanup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Retain the persistence cause while reporting a secondary cleanup failure."""
 
