@@ -268,3 +268,57 @@ TIME (`airflow.sdk.execution_time.xcom`, imported transitively by every Dag thro
 ini applied before Airflow imports at all is the only honest version, and the same
 before-first-import guarantee is why all five live in `bootstrap.py`/`airflow_cfg.py`
 rather than a fixture.
+
+## Runtime component registration
+
+The five ini options above are run-wide, fixed before the first Airflow import -- right
+for a component every test needs, wrong for one only a single test wants. The
+`airflow_components` fixture yields a `ComponentRegistry` that registers a plugin,
+listener, policy, secrets backend, or executor directly into Airflow's live,
+process-global registries for the duration of one test, then reverts every one of them:
+
+```python
+def test_my_listener_fires(airflow_components, dag_maker):
+    airflow_components.listener(MyListener)
+    with dag_maker() as dag:
+        ...
+    dag_maker.run()
+    assert MyListener.calls
+```
+
+Every method runs `check_component` first and raises `ComponentContractError` on any
+conformance problem, so a broken component is never silently registered and left to be
+wondered about later -- you cannot register a listener with an unmatched hookspec and
+then be surprised it never fires. A problem with the registration itself, rather than the
+component, raises `ComponentSandboxError` instead: an unsupported dual-registration
+request, an executor class with no importable module-level path, an unknown policy
+hookspec name, or an installed Apache Airflow release whose live cache-clearable names no
+longer match what this plugin has certified.
+
+- `plugin(component)` -- registers into every plugins-manager half the installed release
+  has (both core and Task SDK from 3.2 on; core only on 3.1.x, which carries no Task SDK
+  plugin-loading surface at all)
+- `listener(component, *, core=True, task=True)` -- registers with the core and/or Task
+  SDK listener manager. Requesting `task=True` on 3.1.x (no Task SDK listener manager at
+  all) raises rather than silently registering core-only; pass `task=False` explicitly on
+  a test that intentionally spans both families
+- `policy(**hookname_to_callable)` -- builds a policy plugin from hookspec-named
+  callables (`task_policy`, `dag_policy`, `task_instance_mutation_hook`,
+  `pod_mutation_hook`, `get_airflow_context_vars`, `get_dagbag_import_timeout`) and
+  registers it directly with Airflow's policy plugin manager. Never writes an
+  `airflow_local_settings.py` file, so per-test policies are fully decoupled from the
+  `airflow_local_settings` collision guard above
+- `secrets_backend(component, *, first=True)` -- inserts into the secrets backend search
+  path, at the front (checked before every other configured backend) by default
+- `executor(component, *, alias="test") -> str` -- registers an executor class under
+  `alias`, returning it for use with `airflow_config(executor=...)` or the
+  `airflow_executor` ini. `component` must be defined at module scope somewhere
+  importable -- Airflow resolves it later by dotted import path, and a class defined
+  inside a test function has none
+- `round_trip(component)` -- classifies `component` as exactly one of plugin, listener,
+  executor, or secrets backend (the same classification `check_component`'s own
+  auto-detection uses) and calls that method with its defaults. Not a substitute for
+  `policy()`, which has no bare-component form to classify
+
+`airflow_components` is unavailable on the Airflow 2.x family, which predates the Task
+SDK's own plugin and listener managers entirely.

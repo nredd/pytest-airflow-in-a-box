@@ -37,6 +37,7 @@ from pytest_airflow_in_a_box._compat.components import (
     CHECK_REGISTRY,
     KIND_CLASSIFIERS,
     ComponentProblem,
+    ComponentSandboxError,
     _as_type,
 )
 
@@ -167,5 +168,6 @@ __all__ = (
     "ComponentKind",
     "ComponentProblem",
     "ComponentReport",
+    "ComponentSandboxError",
     "check_component",
 )

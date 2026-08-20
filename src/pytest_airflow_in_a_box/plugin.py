@@ -41,6 +41,7 @@ from pytest_airflow_in_a_box.defaults import (
 from pytest_airflow_in_a_box.doctor import render_doctor_report
 from pytest_airflow_in_a_box.fixtures import (
     DATABASE_FIXTURE_NAMES,
+    airflow_components,
     airflow_configure,
     airflow_connections,
     airflow_dags_folder_path,
@@ -86,6 +87,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 __all__ = (
+    "airflow_components",
     "airflow_configure",
     "airflow_connections",
     "airflow_dags_folder_path",

@@ -18,7 +18,9 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     DagRunInterface,
     ExecutorContract,
     ParamsLocation,
+    PluginsManagerShape,
     SecretsResolution,
+    SharedModuleLoading,
     TaskInstanceRunner,
     TimezoneLocation,
 )
@@ -64,6 +66,8 @@ def _capabilities() -> AirflowCapabilities:
         executor_contract=ExecutorContract.V3_3,
         sdk_listener_manager_available=True,
         task_instance_mutation_hook_supports_dag_run=True,
+        plugins_manager=PluginsManagerShape.CACHED_FUNCTIONS,
+        shared_module_loading=SharedModuleLoading.DUPLICATED,
     )
 
 

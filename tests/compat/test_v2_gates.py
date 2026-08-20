@@ -12,6 +12,7 @@ from pytest_airflow_in_a_box import markers
 from pytest_airflow_in_a_box._compat import capabilities as capability_module
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
 from pytest_airflow_in_a_box.fixtures import api as api_module
+from pytest_airflow_in_a_box.fixtures import components as components_module
 from pytest_airflow_in_a_box.fixtures import context as context_module
 from pytest_airflow_in_a_box.fixtures import logging as logging_module
 from pytest_airflow_in_a_box.fixtures import render as render_module
@@ -55,6 +56,7 @@ def _drive_fixture(raw: Any, arguments: tuple[Any, ...]) -> None:
         (context_module, "task_context"),
         (logging_module, "cap_structlog"),
         (api_module, "api_server_url"),
+        (components_module, "airflow_components"),
     ],
 )
 def test_fixtures_fail_loud_when_gated(
@@ -76,7 +78,16 @@ def test_fixtures_fail_loud_when_gated(
 
     monkeypatch.setattr(module, "v2_gate_message", fake_gate)
     raw = getattr(module, fixture_name).__wrapped__
-    needs_request = {"api_server_url", "run_task", "render_task", "task_context"}
+    # Every fixture named here takes one positional fixture argument (`request` or
+    # `pytestconfig`); the gate check runs before that argument is ever touched, so a
+    # bare stand-in is enough to drive the raw function up to its `fail`.
+    needs_request = {
+        "airflow_components",
+        "api_server_url",
+        "render_task",
+        "run_task",
+        "task_context",
+    }
     arguments = (SimpleNamespace(),) if fixture_name in needs_request else ()
 
     with pytest.raises(pytest.fail.Exception, match=f"gated `{fixture_name}`"):

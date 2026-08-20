@@ -194,6 +194,42 @@ class ExecutorContract(str, Enum):
     V3_3 = "3.3"
 
 
+class PluginsManagerShape(str, Enum):
+    """Closed set of certified `airflow.plugins_manager` cache mechanisms.
+
+    Names the total 3.1 -> 3.2 API break in which the module-global cache Airflow's
+    plugin loading used through 3.1.x (`plugins`, `loaded_plugins`, and sixteen sibling
+    globals in `airflow.plugins_manager`, each `None`/empty until first load, reset by
+    hand rather than by any cache primitive) was deleted outright and replaced by eleven
+    independent `functools.cache`-decorated functions, plus a second, structurally
+    identical split on `airflow.sdk.plugins_manager` -- a module that does not exist at
+    all on 3.1.x, since the Task SDK carries no plugin-loading surface of its own before
+    3.2. `pytest_airflow_in_a_box._compat.components` certifies the exact clearable-name
+    set for each shape and hard-fails on a mismatch; see that module's docstring for why
+    the check resolves lazily rather than inside `resolve_capabilities()`.
+    """
+
+    MODULE_GLOBALS = "module-globals"
+    CACHED_FUNCTIONS = "cached-functions"
+
+
+class SharedModuleLoading(str, Enum):
+    """Closed set of certified `_get_grouped_entry_points` vendoring shapes.
+
+    Names the 3.2+ double-vendoring of Airflow's entry-point discovery cache. Through
+    3.1.x, `_get_grouped_entry_points` (`functools.cache`-decorated) lives once, at
+    `airflow.utils.entry_points`. 3.2 moved it to `airflow._shared.module_loading` and
+    gave the Task SDK its own independently-cached, identically-named copy at
+    `airflow.sdk._shared.module_loading` -- confirmed distinct module objects on the
+    installed 3.3.0, so clearing one never clears the other. This field makes "clear it
+    twice on 3.2+" structural (the seam function returns one or two modules to walk)
+    rather than a fact `pytest_airflow_in_a_box._compat.components` has to remember.
+    """
+
+    SINGLE = "single"
+    DUPLICATED = "duplicated"
+
+
 @dataclass(frozen=True)
 class AirflowCapabilities:
     """Immutable metadata describing a validated Airflow private interface.
@@ -248,6 +284,18 @@ class AirflowCapabilities:
             way `sdk_listener_manager_available` does, so a future release silently
             reverting the parameter is caught at `resolve_capabilities()` time rather
             than only inside a user's own conformance check output.
+        plugins_manager: PluginsManagerShape | None naming the certified
+            `airflow.plugins_manager` cache mechanism; None on 2.x. Derived from
+            `release` alone (the 3.1 -> 3.2 break applies uniformly), not independently
+            probed: probing it for real means importing `airflow.plugins_manager` and
+            `airflow.sdk.plugins_manager`, which `resolve_capabilities()` must not do
+            for every session regardless of whether a test ever touches a custom
+            component. `pytest_airflow_in_a_box._compat.components` verifies the live
+            shape lazily, on first `airflow_components` use; see its module docstring.
+        shared_module_loading: SharedModuleLoading | None naming the certified
+            `_get_grouped_entry_points` vendoring shape; None on 2.x. Derived from
+            `release` alone, for the same reason `plugins_manager` is: the real
+            verification is deferred and lazy, not eager here.
     """
 
     release: Release
@@ -272,6 +320,8 @@ class AirflowCapabilities:
     executor_contract: ExecutorContract | None
     sdk_listener_manager_available: bool
     task_instance_mutation_hook_supports_dag_run: bool
+    plugins_manager: PluginsManagerShape | None
+    shared_module_loading: SharedModuleLoading | None
 
 
 # Airflow below 2.8 raises `DAG is missing the start_date parameter` from
@@ -298,6 +348,52 @@ def _dag_requires_start_date(family: AirflowFamily, release: Release) -> bool:
     """
 
     return family is AirflowFamily.V2 and release < V2_START_DATE_REQUIRED_BELOW
+
+
+# The 3.1 -> 3.2 plugins-manager and shared-module-loading break shares one boundary;
+# see `PluginsManagerShape` and `SharedModuleLoading`. Both fields are derived from
+# `release` alone, on both the certified and the observed side (`_certify_v3` and
+# `_resolve_uncached` both call these), rather than independently probed: verifying the
+# live shape means importing `airflow.plugins_manager` and `airflow.sdk.plugins_manager`,
+# a cost `resolve_capabilities()` must not pay for every session. The real verification
+# happens lazily in `pytest_airflow_in_a_box._compat.components`, on first
+# `airflow_components` use -- see that module's docstring for the full rationale. Unlike
+# the independently-probed 3.x-varying fields (`executor_contract`,
+# `sdk_listener_manager_available`, ...), a mismatch here is therefore a
+# self-consistency guard against a typo in this file, not a real runtime observation --
+# the same honesty distinction `_verify_contract` already draws for `max_python` and
+# `dag_requires_start_date`.
+PLUGINS_MANAGER_BREAK: Release = (3, 2, 0)
+
+
+def _plugins_manager_shape(release: Release) -> PluginsManagerShape:
+    """Derive the certified `plugins_manager` shape for one 3.x release.
+
+    Parameters:
+        release: tuple[int, int, int] containing the certified base release.
+
+    Returns:
+        PluginsManagerShape naming the release's cache mechanism.
+    """
+
+    if release < PLUGINS_MANAGER_BREAK:
+        return PluginsManagerShape.MODULE_GLOBALS
+    return PluginsManagerShape.CACHED_FUNCTIONS
+
+
+def _shared_module_loading(release: Release) -> SharedModuleLoading:
+    """Derive the certified `shared_module_loading` shape for one 3.x release.
+
+    Parameters:
+        release: tuple[int, int, int] containing the certified base release.
+
+    Returns:
+        SharedModuleLoading naming the release's entry-point cache vendoring.
+    """
+
+    if release < PLUGINS_MANAGER_BREAK:
+        return SharedModuleLoading.SINGLE
+    return SharedModuleLoading.DUPLICATED
 
 
 def _certify_v3(
@@ -367,6 +463,8 @@ def _certify_v3(
         task_instance_mutation_hook_supports_dag_run=(
             task_instance_mutation_hook_supports_dag_run
         ),
+        plugins_manager=_plugins_manager_shape(release),
+        shared_module_loading=_shared_module_loading(release),
     )
 
 
@@ -411,6 +509,8 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         executor_contract=None,
         sdk_listener_manager_available=False,
         task_instance_mutation_hook_supports_dag_run=False,
+        plugins_manager=None,
+        shared_module_loading=None,
     )
 
 
@@ -520,6 +620,88 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 2, 2): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 1): _SerializedDagLocation.DEFINITIONS,
+}
+# Certified `functools.cache`-decorated callable names in `airflow.plugins_manager`
+# (core) and `airflow.sdk.plugins_manager` (Task SDK), keyed by `PluginsManagerShape`
+# rather than by release -- two rows cover every certified 3.x release, mirroring
+# `_CERTIFIED_SERIALIZED_DAG_LOCATIONS` above. `pytest_airflow_in_a_box._compat.components`
+# enumerates the *observed* set on the installed release by introspection (any attribute
+# exposing `.cache_clear`) and hard-fails on a symmetric difference against the
+# CACHED_FUNCTIONS row -- the check that actually matters going forward, since 3.2+ is
+# still under active development and upstream can add an twelfth cache function in a
+# release this plugin has not certified yet.
+#
+# The MODULE_GLOBALS row cannot be verified the same way: a plain module-level global
+# carries no structural marker distinguishing "lazily-cached plugin state" from any other
+# module attribute, so there is no safe way to *discover* it by introspection the way
+# `.cache_clear` discovers a `functools.cache` function. It exists purely as a permanently
+# fixed, hand-verified fact about a release line Airflow will never again modify (3.1.x
+# is fully released and closed), transcribed by reading the installed
+# `apache-airflow-core==3.1.0` wheel's `airflow/plugins_manager.py` directly (see
+# PROVENANCE.md) -- `airflow.sdk.plugins_manager` does not exist at all on 3.1.x (the
+# paired `apache-airflow-task-sdk==1.1.0` wheel ships no `plugins_manager.py`), hence the
+# empty SDK-side set. Verification for this row is PRESENCE-only (every certified name
+# must exist), not symmetric-difference: there is no future 3.1.x release that could add
+# an uncertified name for this check to catch.
+CERTIFIED_CORE_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, frozenset[str]] = {
+    PluginsManagerShape.MODULE_GLOBALS: frozenset(
+        {
+            "plugins",
+            "loaded_plugins",
+            "import_errors",
+            "macros_modules",
+            "admin_views",
+            "flask_blueprints",
+            "fastapi_apps",
+            "fastapi_root_middlewares",
+            "external_views",
+            "react_apps",
+            "menu_links",
+            "flask_appbuilder_views",
+            "flask_appbuilder_menu_links",
+            "global_operator_extra_links",
+            "operator_extra_links",
+            "registered_operator_link_classes",
+            "timetable_classes",
+            "hook_lineage_reader_classes",
+            "priority_weight_strategy_classes",
+        }
+    ),
+    PluginsManagerShape.CACHED_FUNCTIONS: frozenset(
+        {
+            "_get_plugins",
+            "_get_ui_plugins",
+            "get_flask_plugins",
+            "get_fastapi_plugins",
+            "_get_extra_operators_links_plugins",
+            "get_timetables_plugins",
+            "get_partition_mapper_plugins",
+            "get_windows_plugins",
+            "get_deadline_references_plugins",
+            "integrate_macros_plugins",
+            "get_priority_weight_strategy_plugins",
+        }
+    ),
+}
+CERTIFIED_SDK_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, frozenset[str]] = {
+    PluginsManagerShape.MODULE_GLOBALS: frozenset(),
+    PluginsManagerShape.CACHED_FUNCTIONS: frozenset(
+        {"_get_plugins", "integrate_macros_plugins", "get_hook_lineage_readers_plugins"}
+    ),
+}
+# `_get_grouped_entry_points` itself is byte-for-byte identical on every certified
+# release -- only its module location (and, on 3.2+, its duplication into a second,
+# independently-`functools.cache`d Task SDK copy) changes. Verified against the
+# installed 3.3.0 (`airflow._shared.module_loading` and
+# `airflow.sdk._shared.module_loading`, confirmed distinct module objects) and against
+# the installed `apache-airflow-core==3.1.0` wheel (`airflow.utils.entry_points`, the
+# SINGLE-shape module -- 3.1.x's Task SDK has no plugin or listener surface at all, so
+# there is nothing to duplicate). `pytest_airflow_in_a_box._compat.components`'s
+# `_shared_module_loading_modules()` seam returns one module for SINGLE and two for
+# DUPLICATED; this table certifies the one function name common to both.
+CERTIFIED_SHARED_MODULE_LOADING_CACHES: dict[SharedModuleLoading, frozenset[str]] = {
+    SharedModuleLoading.SINGLE: frozenset({"_get_grouped_entry_points"}),
+    SharedModuleLoading.DUPLICATED: frozenset({"_get_grouped_entry_points"}),
 }
 _COMMON_REQUIRED_SYMBOLS = (
     ("airflow.utils.db", "initdb"),
@@ -1394,6 +1576,8 @@ def _resolve_uncached(
         task_instance_mutation_hook_supports_dag_run=(
             task_instance_mutation_hook_supports_dag_run
         ),
+        plugins_manager=_plugins_manager_shape(release) if is_v3 else None,
+        shared_module_loading=_shared_module_loading(release) if is_v3 else None,
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:
@@ -1440,7 +1624,9 @@ __all__ = (
     "DagRunInterface",
     "ExecutorContract",
     "ParamsLocation",
+    "PluginsManagerShape",
     "SecretsResolution",
+    "SharedModuleLoading",
     "TaskInstanceRunner",
     "TimezoneLocation",
     "installed_family",

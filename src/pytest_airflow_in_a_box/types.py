@@ -7,7 +7,7 @@ References:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -472,10 +472,104 @@ class RunTask(Protocol):
         """
 
 
+class ComponentRegistry(Protocol):
+    """Register a custom Airflow component for one test, reverting it afterward.
+
+    Every method runs ``pytest_airflow_in_a_box.components.check_component`` first and
+    raises ``ComponentContractError`` on any conformance problem, so a broken component
+    is never silently registered and left to be wondered about later. A problem with the
+    registration itself rather than the component -- an unsupported dual-registration
+    request, an executor class with no importable module path, an unknown policy
+    hookspec name, or similar -- raises
+    ``pytest_airflow_in_a_box.components.ComponentSandboxError`` instead.
+    """
+
+    def plugin(self, component: object) -> None:
+        """Register one Airflow plugin into every plugins-manager half this release has.
+
+        Parameters:
+            component: object containing an ``AirflowPlugin`` subclass or instance.
+        """
+
+    def listener(self, component: object, *, core: bool = True, task: bool = True) -> None:
+        """Register one listener with the core and/or Task SDK listener manager.
+
+        Parameters:
+            component: object containing a listener class or instance carrying at least
+                one ``@hookimpl``-decorated method.
+            core: bool registering with the core ``ListenerManager``.
+            task: bool registering with the Task SDK ``ListenerManager``.
+
+        Raises:
+            ComponentSandboxError: Neither ``core`` nor ``task`` is True, or ``task=True``
+                on a release with no Task SDK listener manager (Airflow 3.1.x).
+        """
+
+    def policy(self, **hooks: Callable[..., object]) -> None:
+        """Build and register one cluster-policy plugin from hookspec-named callables.
+
+        Registers directly with Airflow's policy plugin manager and never writes an
+        ``airflow_local_settings.py`` file, so per-test policies are fully decoupled
+        from the ``airflow_local_settings`` collision guard.
+
+        Parameters:
+            hooks: Callable[..., object] values keyed by hookspec name (``task_policy``,
+                ``dag_policy``, ``task_instance_mutation_hook``, ``pod_mutation_hook``,
+                ``get_airflow_context_vars``, ``get_dagbag_import_timeout``).
+
+        Raises:
+            ComponentSandboxError: ``hooks`` is empty.
+        """
+
+    def secrets_backend(self, component: object, *, first: bool = True) -> None:
+        """Insert one secrets backend into the search path.
+
+        Parameters:
+            component: object containing a ``BaseSecretsBackend`` subclass or instance.
+            first: bool inserting at the front of the search path when True (checked
+                before every other configured backend), the back when False.
+        """
+
+    def executor(self, component: object, *, alias: str = "test") -> str:
+        """Register one executor class under an alias, resolvable by name.
+
+        Parameters:
+            component: object containing a ``BaseExecutor`` subclass, defined at module
+                scope somewhere importable -- Airflow resolves it later by dotted import
+                path.
+            alias: str naming the alias to register the executor under.
+
+        Returns:
+            str containing ``alias``, unchanged, for passing into whichever Airflow
+            configuration surface selects an executor by name.
+
+        Raises:
+            ComponentSandboxError: ``component`` is not defined at module scope.
+        """
+
+    def round_trip(self, component: object) -> None:
+        """Classify one component and register it with the matching method's defaults.
+
+        Classifies ``component`` as exactly one of plugin, listener, executor, or
+        secrets backend -- the same classification
+        ``pytest_airflow_in_a_box.components.check_component`` uses for auto-detection
+        -- and calls that method with its default keyword arguments. Not a substitute
+        for ``policy()``, which has no bare-component form to classify.
+
+        Parameters:
+            component: object containing the component to classify and register.
+
+        Raises:
+            ComponentSandboxError: ``component`` matches zero or more than one
+                registrable kind.
+        """
+
+
 __all__ = (
     "AirflowConfigure",
     "AirflowConnections",
     "AirflowVariables",
+    "ComponentRegistry",
     "DagMaker",
     "RenderTask",
     "RunDag",
