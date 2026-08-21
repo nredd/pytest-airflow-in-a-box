@@ -138,6 +138,135 @@ a `src/`-layout package (this project included) is editable-exposed only under `
 sibling directory sharing the same project root (`tests/`, another package in a workspace) is not
 actually reachable through the installed `.pth` redirect at all.
 
+`src/pytest_airflow_in_a_box/_compat/components.py`'s runtime component sandbox (the seam
+functions, cache-enumeration certification, and every snapshot/restore function backing
+`pytest_airflow_in_a_box.fixtures.components.airflow_components`) is independently authored --
+no Apache Airflow function body is copied or adapted, except `build_policy_plugin`'s
+`staticmethod(hookimpl(fn, specname=name))` line, which reproduces one line of
+`airflow.policies.make_plugin_from_local_settings` verbatim because it is the only correct way
+to turn a bare callable into a pluggy hookimpl matching an arbitrary hookspec name; the
+surrounding function is otherwise independently authored (it deliberately drops that upstream
+function's silent per-name `hasattr(pm.hook, name)` tolerance and its automatic argument-mismatch
+shimming, both traded for a loud `check_component` failure instead). Every embedded fact below
+was transcribed by reading Apache Airflow source directly, or by running the real installed
+code, not derived from documentation, the same methodology the timetable/listener/executor/
+plugin/policy/secrets-backend checks above used. Verified against
+`airflow-core/src/airflow/plugins_manager.py`, `task-sdk/src/airflow/sdk/plugins_manager.py`,
+`shared/plugins_manager/src/airflow_shared/plugins_manager/plugins_manager.py`,
+`shared/module_loading/src/airflow_shared/module_loading/__init__.py` (symlinked unchanged into
+both `airflow-core/src/airflow/_shared/module_loading` and
+`task-sdk/src/airflow/sdk/_shared/module_loading`), `airflow-core/src/airflow/listeners/listener.py`,
+`task-sdk/src/airflow/sdk/listener.py`, `airflow-core/src/airflow/settings.py`,
+`airflow-core/src/airflow/policies.py`, `airflow-core/src/airflow/configuration.py`, and
+`airflow-core/src/airflow/executors/executor_loader.py`, all at commit
+`1438ea3587031417cc85d74323235cf087a058fb` (tag `3.3.0`), cross-checked against the installed
+`apache-airflow-core==3.1.0` wheel's `airflow/plugins_manager.py` and `airflow/utils/entry_points.py`,
+and the paired installed `apache-airflow-task-sdk==1.1.0` wheel (the exact `apache-airflow-task-sdk`
+range `apache-airflow-core==3.1.0`'s own `METADATA` declares:
+`Requires-Dist: apache-airflow-task-sdk<1.2.0,>=1.1.0`), both downloaded and introspected directly
+rather than assumed, the same wheel-introspection methodology the capability probes above used.
+
+`airflow.plugins_manager` exposes exactly eleven `functools.cache`-decorated functions and
+`airflow.sdk.plugins_manager` exposes exactly three on the installed 3.3.0, matching issue #113's
+own verified list exactly; `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES` and
+`CERTIFIED_SDK_PLUGINS_MANAGER_CACHES` in `_compat/capabilities.py` encode both sets keyed by
+`PluginsManagerShape.CACHED_FUNCTIONS`. The eleven are NOT release-invariant across the
+`CACHED_FUNCTIONS` bucket: the `apache-airflow-core==3.2.0` and `==3.2.1` wheels' `airflow/plugins_manager.py`
+each carry exactly nine (`get_deadline_references_plugins` and `get_windows_plugins` absent), the
+`==3.2.2` wheel carries ten (`get_deadline_references_plugins` added, `get_windows_plugins` still
+absent), and the `==3.3.0`/`==3.3.1` wheels carry all eleven -- every count read directly from
+the downloaded wheels' `@cache`-decorated definitions, never assumed. `CertifiedCaches` encodes
+that as nine `required` names plus two `optional` ones (each commented with its introduction
+release), and `_verify_and_clear_cache_functions` verifies superset-of-required /
+subset-of-required-plus-optional rather than strict symmetric difference. The Task SDK's three
+names are all present from the `apache-airflow-task-sdk==1.2.0` wheel (the release paired with
+core 3.2.0, the first `CACHED_FUNCTIONS` release) onward, confirmed by reading that wheel's
+`airflow/sdk/plugins_manager.py` directly, so the SDK row carries no optional names. The installed `apache-airflow-core==3.1.0` wheel's
+`airflow/plugins_manager.py` instead carries the entire plugin cache as nineteen plain
+module-level globals (`plugins`, `loaded_plugins`, `import_errors`, `macros_modules`,
+`admin_views`, `flask_blueprints`, `fastapi_apps`, `fastapi_root_middlewares`, `external_views`,
+`react_apps`, `menu_links`, `flask_appbuilder_views`, `flask_appbuilder_menu_links`,
+`global_operator_extra_links`, `operator_extra_links`, `registered_operator_link_classes`,
+`timetable_classes`, `hook_lineage_reader_classes`, `priority_weight_strategy_classes`), each
+`None`-sentineled except `loaded_plugins` (`set()`) and `import_errors` (`{}`), gated by
+`ensure_plugins_loaded`'s own `if plugins is not None: return` short-circuit -- confirmed absent
+any `@cache`/`@functools.cache` decorator anywhere in that file, and confirmed the paired
+`apache-airflow-task-sdk==1.1.0` wheel ships no `plugins_manager.py` or `listener.py` at all
+(consistent with PROVENANCE's existing `sdk_listener_manager_available` finding for 3.1.x), so
+`CERTIFIED_SDK_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]` is the empty set. These
+nineteen names populate `CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]`.
+`_verify_and_reset_module_globals` verifies this row by presence only, never by symmetric
+difference like the `CACHED_FUNCTIONS` row does -- see that function's own docstring for why a
+plain module global carries no structural marker a bare `.cache_clear()` probe can discover, and
+why 3.1.x being a permanently closed release line makes presence-only verification complete
+rather than merely weaker.
+
+`_get_grouped_entry_points` (`functools.cache`-decorated, identical body on every certified
+release) lives once, at `airflow.utils.entry_points`, on the installed `apache-airflow-core==3.1.0`
+wheel; 3.2 moved it to `airflow._shared.module_loading` and gave the Task SDK its own
+independently-`functools.cache`d copy at `airflow.sdk._shared.module_loading`, confirmed distinct
+module objects (`is` identity) on the installed 3.3.0. `SharedModuleLoading.SINGLE`/`DUPLICATED`
+and `CERTIFIED_SHARED_MODULE_LOADING_CACHES` encode this; `_shared_module_loading_modules` returns
+one module for `SINGLE` and two for `DUPLICATED`.
+
+`airflow.executors.executor_loader` declares exactly five module-level globals holding executor
+lookup state (`_alias_to_executors_per_team`, `_module_to_executors_per_team`,
+`_classname_to_executors_per_team`, `_team_name_to_executors`, `_executor_names`), confirmed by
+`vars()` introspection against the installed 3.3.0 -- matching issue #113's own count exactly --
+alongside the class-level `ExecutorLoader.executors` dict upstream's own test reset leaks between
+runs. `register_executor` injects a constructed `ExecutorName` directly into all five rather than
+going through `ExecutorLoader._get_executor_names()`'s `core.executor` config-string parsing,
+confirmed live by actually registering an alias this way and resolving it through
+`ExecutorLoader.lookup_executor_name_by_str`/`load_executor` end to end against the installed
+3.3.0, not merely by reading the source. The `_per_team` split is a 3.2.0 change: the
+`apache-airflow-core==3.1.0` and `==3.1.8` wheels' `airflow/executors/executor_loader.py` (identical
+shape on both, read directly) instead declare the flat `_alias_to_executors`, `_module_to_executors`,
+`_classname_to_executors` (each `dict[str, ExecutorName]`, the classname key derived upstream as
+`module_path.split(".")[-1]`), a SCALAR-valued `_team_name_to_executors: dict[str | None, ExecutorName]`
+(upstream's own `_get_executor_names` population loop assigns per team, never appends), and the
+same `_executor_names` list -- `ExecutorLoaderSnapshotV31` and `register_executor`'s flat branch
+transcribe exactly that, and `_executor_loader_is_per_team` probes the live module for the
+`_alias_to_executors_per_team` name rather than consulting a release table. `ExecutorName`'s
+constructor signature (`module_path`, `alias=None`, `team_name=None`) is identical on the 3.1.0,
+3.1.8, and installed 3.3.0 `executor_utils.py`, so no per-release construction branch exists.
+`airflow.settings` on the 3.1.0/3.1.8 wheels has no `get_policy_plugin_manager` at all; the policy
+manager lives in the module global `POLICY_PLUGIN_MANAGER` (`None` until
+`configure_policy_plugin_manager()` runs during `settings.initialize()`), which
+`policy_plugin_manager()`'s `ImportError` fallback reads. The 3.1.x plugin list is reached via
+`ensure_plugins_loaded()` populating the `plugins` module global, both already certified in the
+`MODULE_GLOBALS` row; `_live_plugin_list` branches on `hasattr(module, "_get_plugins")` for the same
+structural-probe reason. `integrate_macros_plugins` attaches per-plugin macros modules to the SAME
+parent on every certified 3.x release -- 3.1.x's core implementation imports
+`airflow.sdk.execution_time.macros` directly and both 3.2+ halves pass it as
+`target_macros_module` to the shared implementation, all with the
+`airflow.sdk.execution_time.macros.` `sys.modules` prefix (lowercased by `make_module`) plus a raw
+`plugin.name` `setattr` on the parent, confirmed by reading the 3.1.0, 3.1.8, and 3.2.0 core wheels
+and the `apache-airflow-task-sdk==1.2.0` wheel -- `snapshot_macros_module_keys` /
+`restore_macros_module_keys` revert the `setattr` half, which upstream never removes.
+
+`airflow.configuration.secrets_backend_list` is a plain module-level list `initialize_secrets_backends()`
+builds once; `restore_secrets_backend_list` restores it by slice assignment (`secrets_backend_list[:] = before`)
+rather than rebinding the module attribute, so any other code holding a reference to the same list
+object (a real, if currently unconfirmed-elsewhere, risk `airflow.configuration.ensure_secrets_loaded`'s
+own `len(...) == 2` reload heuristic exists to paper over) keeps seeing the same object with restored
+contents. `ensure_secrets_loaded` is deliberately never called by this plugin's restore path for exactly
+that heuristic's own reason: it belongs to upstream and may change.
+
+`airflow.listeners.listener.get_listener_manager` and `airflow.sdk.listener.get_listener_manager` are
+BOTH `functools.cache`-decorated on the installed 3.3.0 (confirmed by `hasattr(get_listener_manager,
+"cache_clear")`), exactly like `airflow.settings.get_policy_plugin_manager` is -- yet none of the three
+is ever cleared by `clear_plugins_manager_caches`, which is scoped narrowly to
+`airflow.plugins_manager`/`airflow.sdk.plugins_manager`/the shared module-loading modules only.
+Clearing any of the three getters would force the next call to construct a brand-new manager and
+(for the two listener getters) re-run `integrate_listener_plugins` against whatever the plugins-manager
+cache holds at that later moment -- losing the manager's identity and already-registered hookspecs for
+no reason `ListenerManager.clear()` (confirmed to exist and to unregister every currently-registered
+pluggy plugin without touching hookspecs, by reading `airflow._shared.listeners.listener.ListenerManager`
+directly) does not already serve better. `airflow.settings.get_policy_plugin_manager` returns a bare
+`pluggy.PluginManager`, which (unlike `ListenerManager`) exposes `unregister()` directly, confirmed by
+reading `pluggy`'s own `PluginManager` and by round-tripping `register`/`unregister` against the
+installed 3.3.0's real policy plugin manager end to end.
+
 No proprietary source code, credentials, hostnames, internal paths, or private repository history
 may be included in this project.
 
@@ -170,5 +299,18 @@ may be included in this project.
 - Provider discovery, package-name validation and schema (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/shared/providers_discovery/src/airflow_shared/providers_discovery/providers_discovery.py
 - Provider discovery, inline on `ProvidersManager` (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/providers_manager.py
 - Provider info schema (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/provider_info.schema.json
+- Plugins manager, core cache functions (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/plugins_manager.py
+- Plugins manager, Task SDK cache functions (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/task-sdk/src/airflow/sdk/plugins_manager.py
+- Plugins manager, nine core cache functions (3.2.0): https://github.com/apache/airflow/blob/3bc3ccfacc3dec9f359a3b153bfd4fc706c661ba/airflow-core/src/airflow/plugins_manager.py
+- Executor loader, flat pre-per-team globals (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/executors/executor_loader.py
+- ExecutorName (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/executors/executor_utils.py
+- Settings, `POLICY_PLUGIN_MANAGER` module global (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/settings.py
+- Plugins manager, `ensure_plugins_loaded`/`integrate_macros_plugins` (3.1.0): https://github.com/apache/airflow/blob/54bd5d8cd9f6f477cc83445737614dec81c4323c/airflow-core/src/airflow/plugins_manager.py
+- Shared module loading, `_get_grouped_entry_points` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/shared/module_loading/src/airflow_shared/module_loading/__init__.py
+- Settings, `get_policy_plugin_manager` and `task_instance_mutation_hook.is_noop` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/settings.py
+- Configuration, `secrets_backend_list` and `ensure_secrets_loaded` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/configuration.py
+- Executor loader, the five module globals and `ExecutorLoader.executors` (3.3.0): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/executors/executor_loader.py
 - apache/airflow#64649 (notifier crash running Dags locally through tests): https://github.com/apache/airflow/issues/64649
 - pytest plugin documentation: https://docs.pytest.org/en/stable/how-to/writing_plugins.html
+- `apache-airflow-core` 3.1.0 wheel (module-globals plugins-manager shape; downloaded and introspected directly, not browsed on GitHub): https://pypi.org/project/apache-airflow-core/3.1.0/#files
+- `apache-airflow-task-sdk` 1.1.0 wheel (no `plugins_manager.py`/`listener.py` at all, paired with `apache-airflow-core` 3.1.0 per its own `Requires-Dist`; downloaded and introspected directly): https://pypi.org/project/apache-airflow-task-sdk/1.1.0/#files

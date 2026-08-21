@@ -80,6 +80,7 @@ def test_public_surface_is_explicit() -> None:
         "ComponentKind",
         "ComponentProblem",
         "ComponentReport",
+        "ComponentSandboxError",
         "check_component",
     )
     assert config.__all__ == (
@@ -99,6 +100,7 @@ def test_public_surface_is_explicit() -> None:
         "register_ini_defaults",
     )
     assert fixtures.__all__ == (
+        "airflow_components",
         "airflow_configure",
         "airflow_connections",
         "airflow_dags_folder_path",
@@ -157,6 +159,7 @@ def test_public_surface_is_explicit() -> None:
         "render_terminal_summary",
     )
     assert plugin.__all__ == (
+        "airflow_components",
         "airflow_configure",
         "airflow_connections",
         "airflow_dags_folder_path",
@@ -221,6 +224,7 @@ def test_public_surface_is_explicit() -> None:
         "AirflowConfigure",
         "AirflowConnections",
         "AirflowVariables",
+        "ComponentRegistry",
         "DagMaker",
         "RenderTask",
         "RunDag",

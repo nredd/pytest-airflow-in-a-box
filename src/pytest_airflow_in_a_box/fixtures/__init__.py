@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 from pytest_airflow_in_a_box.fixtures.api import api_base_url, api_client, api_server_url
+from pytest_airflow_in_a_box.fixtures.components import airflow_components
 from pytest_airflow_in_a_box.fixtures.configure import airflow_configure
 from pytest_airflow_in_a_box.fixtures.context import task_context
 from pytest_airflow_in_a_box.fixtures.dag import dag_maker, run_dag
@@ -40,6 +41,7 @@ DATABASE_FIXTURE_NAMES = frozenset(
 )
 
 __all__ = (
+    "airflow_components",
     "airflow_configure",
     "airflow_connections",
     "airflow_dags_folder_path",
