@@ -582,7 +582,7 @@ def test_clear_plugins_manager_caches_raises_on_a_2x_style_capabilities(
 ) -> None:
     """Raise a clear, attributable error rather than a bare `KeyError` on 2.x.
 
-    `airflow_components` itself never reaches this call on 2.x -- `v2_gate_message`
+    `airflow_components` itself never reaches this call on 2.x -- `require_v3`
     fails the fixture first -- so this is a self-consistency guard against direct
     misuse of `clear_plugins_manager_caches()`, not a real path through the fixture.
     Faking a 2.x-shaped `AirflowCapabilities` (`plugins_manager`/`shared_module_loading`

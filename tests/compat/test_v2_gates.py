@@ -50,6 +50,8 @@ def test_require_v3_fails_on_v2(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "`run_task`" in str(caught.value)
     assert "use `run_ti` instead." in str(caught.value)
     assert "issues/25" in str(caught.value)
+    # The whole point of deepening the gate: no caller can forget `pytrace=False`.
+    assert caught.value.pytrace is False
 
 
 def test_require_v3_noop_on_v3(monkeypatch: pytest.MonkeyPatch) -> None:

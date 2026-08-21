@@ -186,13 +186,13 @@ def test_legacy_listener_installation_is_idempotent_and_ignores_other_dbapi_conn
     """Install one Engine listener for an unreliable release and ignore non-SQLite connections."""
 
     database_path = tmp_path / "metadata.db"
-    classifier_calls: list[None] = []
+    classifier_answers: list[bool] = []
 
     def classified_unreliable() -> bool:
         """Record the classifier call and select the fallback path."""
 
-        classifier_calls.append(None)
-        return False
+        classifier_answers.append(False)
+        return classifier_answers[-1]
 
     monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", classified_unreliable)
     monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
@@ -201,7 +201,7 @@ def test_legacy_listener_installation_is_idempotent_and_ignores_other_dbapi_conn
     listener = sqlite._LEGACY_SQLITE_LISTENER
     install_legacy_sqlite_listener()
 
-    assert len(classifier_calls) == 2
+    assert classifier_answers == [False, False]
     assert listener is not None
     assert sqlite._LEGACY_SQLITE_LISTENER is listener
     assert event.contains(Engine, "connect", listener)

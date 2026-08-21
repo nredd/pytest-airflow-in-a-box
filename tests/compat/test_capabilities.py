@@ -967,6 +967,7 @@ def test_classify_installed_certification_survives_racing_metadata_mutations(
         ("3.2.0", False),
         ("3.2.1", True),
         ("3.4.0", True),
+        ("3.10.0", True),
         ("garbage", None),
     ],
 )
@@ -977,8 +978,10 @@ def test_sqlite_engine_override_reliable_pins_the_release_boundary(
 ) -> None:
     """Pin `SQLITE_ENGINE_OVERRIDE_RELIABLE_SINCE` on both sides of the 3.2.1 boundary.
 
-    "3.4.0" proves the comparison extrapolates forward to uncertified releases, and an
-    unparseable core version classifies as None rather than raising.
+    "3.4.0" proves the comparison extrapolates forward to uncertified releases,
+    "3.10.0" pins the fix for the old string predicate (`startswith("3.1.")` matched
+    "3.10.x" as unreliable), and an unparseable core version classifies as None
+    rather than raising.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch installing the fake environment.
