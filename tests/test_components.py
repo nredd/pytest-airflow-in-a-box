@@ -114,6 +114,12 @@ class _CleanExecutor(BaseExecutor):
     def _process_workloads(self, workload_items: Any) -> None:
         del workload_items
 
+    def end(self) -> None:
+        pass
+
+    def terminate(self) -> None:
+        pass
+
 
 class _BrokenExecutor(BaseExecutor):
     """Executor exercising every executor check at once."""

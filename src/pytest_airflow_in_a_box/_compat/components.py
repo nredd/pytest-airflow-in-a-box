@@ -702,12 +702,12 @@ EXECUTOR_MISSING_OVERRIDE = "executor-missing-override"
 EXECUTOR_STALE_ATTRIBUTE = "executor-stale-attribute"
 EXECUTOR_FLAG_WRONG_TYPE = "executor-flag-wrong-type"
 
-# `sync` and `_process_workloads` exist on `BaseExecutor` across the whole certified
-# 3.1-3.3 range with a body that is either a silent no-op (`sync`) or a
-# `raise NotImplementedError` (`_process_workloads`); neither is abstract, so nothing
-# forces a subclass to override them. Verified against the installed 3.3.0, plus 3.1.0
-# and 3.2.0 in isolated environments; see `PROVENANCE.md`.
-_EXECUTOR_REQUIRED_OVERRIDES = ("sync", "_process_workloads")
+# `sync`, `_process_workloads`, `end`, and `terminate` all exist on `BaseExecutor` across
+# the whole certified 3.1-3.3 range with a body that is either a silent no-op (`sync`) or
+# a `raise NotImplementedError` (the other three); none is abstract, so nothing forces a
+# subclass to override them. Verified against the installed 3.3.0, plus 3.1.0 and 3.2.0
+# in isolated environments; see `PROVENANCE.md`.
+_EXECUTOR_REQUIRED_OVERRIDES = ("sync", "_process_workloads", "end", "terminate")
 _OVERRIDE_HINTS: dict[str, str] = {
     "sync": (
         "`BaseExecutor.sync`'s default body does nothing; the heartbeat loop calls it "
@@ -716,6 +716,14 @@ _OVERRIDE_HINTS: dict[str, str] = {
     "_process_workloads": (
         "`BaseExecutor._process_workloads`'s default body raises `NotImplementedError`; "
         "the scheduler calls it for every batch of queued work."
+    ),
+    "end": (
+        "`BaseExecutor.end`'s default body raises `NotImplementedError`; it is called "
+        "once as a run winds down, to wait for outstanding work."
+    ),
+    "terminate": (
+        "`BaseExecutor.terminate`'s default body raises `NotImplementedError`; it is "
+        "called on SIGTERM, to kill outstanding work."
     ),
 }
 
