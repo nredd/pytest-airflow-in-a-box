@@ -60,10 +60,21 @@ different payload, or the same payload in a different module, gets its own child
 
 The child is a full pytest session: your conftests load, fixtures resolve, the family
 and environment gates apply, and the shared metadata database is reused (its
-initialization sentinel is inherited). `addopts` is deliberately cleared in the child,
-so flags configured there -- `-n`, coverage plugins, report destinations -- do not
-apply inside it. A child that crashes, times out, or writes an unreadable report fails
-every batched test with the child's log tail in the failure message.
+initialization sentinel is inherited). `addopts` and an ambient `PYTEST_ADDOPTS` are
+deliberately cleared in the child, so flags configured there -- `-n`, coverage
+plugins, report destinations -- do not apply inside it. The same holds for options
+passed only on the parent's command line (`--airflow-record`, `--airflow-baseline*`,
+`-k`, ...): the child sees the ini configuration, not the parent's argv, though
+replayed outcomes still land in the parent's own record and baseline accounting. A
+child that crashes, times out, or writes an unreadable report fails every batched
+test with the child's log tail in the failure message.
+
+One caveat cuts the other way: the child's environment -- including the plugin's
+bootstrap-state and isolation variables -- is inherited by any process your test
+spawns. A test that itself launches pytest must scrub the
+`PYTEST_AIRFLOW_IN_A_BOX_*` variables first, or the grandchild will silently reuse
+the outer run's `AIRFLOW_HOME` and metadata database (the same care an xdist worker
+already demands).
 
 Two refusals keep the process tree honest: the marker is rejected under pytest-xdist
 (run marked tests without `-n`), and inside a child the marker is inert, so a

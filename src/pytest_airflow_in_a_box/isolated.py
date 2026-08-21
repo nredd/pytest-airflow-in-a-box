@@ -26,20 +26,24 @@ References:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
+from pytest_airflow_in_a_box import record
 from pytest_airflow_in_a_box.bootstrap import (
     ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
     XDIST_WORKER_ENVIRONMENT_VARIABLE,
@@ -59,6 +63,9 @@ LOGGER = logging.getLogger(__name__)
 # PEP 508 distribution-name shape, validated before PEP 503 normalization.
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
 _NAME_NORMALIZE_PATTERN = re.compile(r"[-_.]+")
+# Entry-point group shape: dotted words, per the entry-points specification. Anything
+# looser could corrupt the generated `entry_points.txt` INI section headers.
+_GROUP_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 ISOLATED_MARKER_NAME = "airflow_isolated"
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -178,10 +185,10 @@ def _validated_entry_points(value: object) -> tuple[tuple[str, tuple[str, ...]],
         )
     groups: list[tuple[str, tuple[str, ...]]] = []
     for group, raw_lines in value.items():
-        if not isinstance(group, str) or not group:
+        if not isinstance(group, str) or _GROUP_PATTERN.fullmatch(group) is None:
             raise pytest.UsageError(
-                f"Marker `{ISOLATED_MARKER_NAME}` entry-point group names must be non-empty "
-                f"strings: '{group}'"
+                f"Marker `{ISOLATED_MARKER_NAME}` entry-point group names must match "
+                f"`{_GROUP_PATTERN.pattern}`: '{group}'"
             )
         lines: tuple[object, ...]
         if isinstance(raw_lines, str):
@@ -201,10 +208,13 @@ def _validated_entry_points(value: object) -> tuple[tuple[str, tuple[str, ...]],
                     f"must be a string: '{line}'"
                 )
             name, separator, target = (part.strip() for part in line.partition("="))
-            if not separator or not name or not target:
+            malformed = not separator or not name or not target
+            # Internal whitespace covers newline injection into the generated
+            # `entry_points.txt`, which would smuggle an unvalidated second line.
+            if malformed or any(ch.isspace() for ch in f"{name}{target}"):
                 raise pytest.UsageError(
                     f"Marker `{ISOLATED_MARKER_NAME}` entry-point line in group `{group}` "
-                    f"must be `name = module:attr`: '{line}'"
+                    f"must be `name = module:attr` with no internal whitespace: '{line}'"
                 )
             validated.append(f"{name} = {target}")
         groups.append((group, tuple(sorted(validated))))
@@ -385,12 +395,34 @@ def build_dist_info(payload: IsolatedPayload, site_dir: Path) -> Path:
     return site_dir
 
 
+def store_batches(session: pytest.Session) -> None:
+    """Validate every `airflow_isolated` marker and stash the session's batch map.
+
+    Called from ``pytest_collection_finish``, after deselection, for two reasons: the
+    final item list has every deselection (`-m`, `-k`, `--airflow-baseline-select`)
+    already applied, so a deselected marked test never drags its module-mates into a
+    child run; and a malformed marker payload aborts here, before any test runs, as a
+    single clean usage error -- a ``pytest.UsageError`` escaping the runtest-protocol
+    hook mid-run would strand the already-run part of the session instead. Skipped
+    inside an isolated child and on xdist workers, where the marker is inert or
+    refused and the batch map would go unread.
+
+    Parameters:
+        session: pytest.Session whose deselected item list is final.
+
+    Raises:
+        pytest.UsageError: Some marked item carries a malformed marker payload.
+    """
+
+    if os.environ.get(ISOLATED_WORKER_ENVIRONMENT_VARIABLE) or os.environ.get(
+        XDIST_WORKER_ENVIRONMENT_VARIABLE
+    ):
+        return
+    session.config.stash[_BATCHES_KEY] = _compute_batches(session)
+
+
 def _compute_batches(session: pytest.Session) -> dict[str, IsolatedBatch]:
     """Group every collected `airflow_isolated` item into per-payload batches.
-
-    Computed from ``session.items`` at run time, not collection time: the final item
-    list has every deselection (`-m`, `-k`, `--airflow-baseline-select`) already
-    applied, so a deselected marked test never drags its module-mates into a child run.
 
     Parameters:
         session: pytest.Session whose final item list is being batched.
@@ -507,28 +539,58 @@ def _decode_envelope(path: Path) -> dict[str, list[pytest.TestReport]]:
     return reports
 
 
-def _synthesized_failure(item: pytest.Item, message: str) -> pytest.TestReport:
-    """Build one failed call-phase report carrying a whole-batch failure message.
+def _synthesized_report(
+    item: pytest.Item,
+    *,
+    outcome: Literal["passed", "failed"],
+    longrepr: str | None,
+    when: Literal["setup", "call", "teardown"],
+) -> pytest.TestReport:
+    """Build one phase report attributed to an item the child never reported on.
 
     Parameters:
-        item: pytest.Item the failure is attributed to.
-        message: str describing the child-process failure.
+        item: pytest.Item the report is attributed to.
+        outcome: str naming the reported outcome.
+        longrepr: str | None describing the failure, when there is one.
+        when: str naming the reported phase.
 
     Returns:
-        pytest.TestReport containing a failed call-phase outcome.
+        pytest.TestReport containing the synthesized phase outcome.
     """
 
     return pytest.TestReport(
         nodeid=item.nodeid,
         location=item.location,
         keywords=dict.fromkeys(item.keywords, 1),
-        outcome="failed",
-        longrepr=message,
-        when="call",
+        outcome=outcome,
+        longrepr=longrepr,
+        when=when,
         sections=[],
         duration=0.0,
         user_properties=[],
     )
+
+
+def _synthesized_failure(item: pytest.Item, message: str) -> list[pytest.TestReport]:
+    """Build a failed call report plus a passed teardown report for one item.
+
+    The trailing teardown report is load-bearing, not decoration: the
+    ``--airflow-record`` accumulator only finalizes a nodeid on a terminal report, so
+    a lone ``call`` failure would dangle forever and silently vanish from an artifact
+    stamped complete. The pair mirrors the report shape of a genuinely failed run.
+
+    Parameters:
+        item: pytest.Item the failure is attributed to.
+        message: str describing the child-process failure.
+
+    Returns:
+        list[pytest.TestReport] containing the failed call and passed teardown pair.
+    """
+
+    return [
+        _synthesized_report(item, outcome="failed", longrepr=message, when="call"),
+        _synthesized_report(item, outcome="passed", longrepr=None, when="teardown"),
+    ]
 
 
 def _run_batch(batch: IsolatedBatch, item: pytest.Item, state: BootstrapState) -> None:
@@ -538,20 +600,23 @@ def _run_batch(batch: IsolatedBatch, item: pytest.Item, state: BootstrapState) -
         batch: IsolatedBatch naming the payload and batched nodeids.
         item: pytest.Item leading the batch (the first member in run order).
         state: BootstrapState providing the run root and log directory.
-
-    Raises:
-        pytest.UsageError: The synthetic distribution scratch directory cannot be
-            written.
     """
 
     batch.started = True
     scratch = state.root / "isolated" / batch.digest
-    site_dir = build_dist_info(batch.payload, scratch / "site")
+    try:
+        site_dir = build_dist_info(batch.payload, scratch / "site")
+    except pytest.UsageError as error:
+        batch.failure = str(error)
+        return
     report_path = scratch / "report.json"
     env = os.environ.copy()
     # The child is an isolated worker, never an xdist worker: a leaked outer worker
-    # identity would misroute its report artifacts and record accumulation.
+    # identity would misroute its report artifacts and record accumulation. Ambient
+    # `PYTEST_ADDOPTS` is scrubbed for the same reason `-o addopts=` clears the ini
+    # value: an inherited `-n`/`--cov`/`-k` must not reshape the child session.
     env.pop(XDIST_WORKER_ENVIRONMENT_VARIABLE, None)
+    env.pop("PYTEST_ADDOPTS", None)
     env[ISOLATED_WORKER_ENVIRONMENT_VARIABLE] = f"iso-{batch.digest}"
     env[ISOLATED_REPORT_PATH_ENVIRONMENT_VARIABLE] = str(report_path)
     ambient = env.get("PYTHONPATH", "")
@@ -578,26 +643,31 @@ def _run_batch(batch: IsolatedBatch, item: pytest.Item, state: BootstrapState) -
         f"distribution `{batch.payload.distribution_name}`"
     )
     with log_path.open("wb") as log_stream:
+        # A fresh session makes the child a process-group leader, so a timeout kill
+        # reaps grandchildren too (the REST API server fixture spawns one).
+        process = subprocess.Popen(
+            command,
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=item.config.rootpath,
+            start_new_session=True,
+        )
         try:
-            completed = subprocess.run(
-                command,
-                stdout=log_stream,
-                stderr=subprocess.STDOUT,
-                env=env,
-                cwd=item.config.rootpath,
-                timeout=batch.payload.timeout,
-                check=False,
-            )
+            process.wait(timeout=batch.payload.timeout)
         except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
             batch.failure = (
                 f"The isolated child exceeded its {batch.payload.timeout}s timeout and "
                 f"was killed; child log: '{log_path}'"
             )
             return
-    batch.exit_status = completed.returncode
-    if completed.returncode not in _NORMAL_EXIT_STATUSES:
+    batch.exit_status = process.returncode
+    if process.returncode not in _NORMAL_EXIT_STATUSES:
         batch.failure = (
-            f"The isolated child exited with status {completed.returncode} before "
+            f"The isolated child exited with status {process.returncode} before "
             f"completing its run ({shlex.join(command)}); last child output:\n"
             f"{_log_tail(log_path)}"
         )
@@ -621,34 +691,56 @@ def _run_batch(batch: IsolatedBatch, item: pytest.Item, state: BootstrapState) -
         )
 
 
-def _replay_item(item: pytest.Item, batch: IsolatedBatch) -> None:
+def _replay_item(item: pytest.Item, batch: IsolatedBatch, nextitem: pytest.Item | None) -> None:
     """Re-emit one batched item's child reports through the parent's hooks.
 
     Every report goes through ``pytest_runtest_logstart``/``logreport``/``logfinish``,
     so the terminal reporter, junitxml, session exit status, and the migration-diff
-    accumulator all observe the child outcome exactly as they would a local one.
+    accumulator all observe the child outcome exactly as they would a local one. Every
+    replayed and synthesized report gets the migration-diff `gated` user property
+    stashed parent-side: the child never receives the CLI-only recording options, so
+    its own `pytest_runtest_makereport` wrapper stashed nothing.
+
+    Claiming the protocol also claims its teardown duty: pytest's own protocol would
+    end with ``teardown_exact(nextitem)``, unwinding setup-stack entries the next item
+    does not need (or everything, at session end). Skipping that leaves a predecessor's
+    collectors on the stack, and the next item's setup asserts against exactly that.
+    No setup ran for this item itself, so only inherited stack entries unwind; a
+    finalizer failure is replayed as this item's teardown error.
 
     Parameters:
         item: pytest.Item whose protocol slot is being filled.
         batch: IsolatedBatch carrying the child outcome for this item.
+        nextitem: pytest.Item | None scheduled after this one, bounding the teardown.
     """
 
     ihook = item.ihook
     ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
     reports = batch.reports.get(item.nodeid, [])
     if batch.failure is not None:
-        ihook.pytest_runtest_logreport(report=_synthesized_failure(item, batch.failure))
+        replayed = _synthesized_failure(item, batch.failure)
     elif not reports:
-        ihook.pytest_runtest_logreport(
-            report=_synthesized_failure(
-                item,
-                f"The isolated child produced no report for this test (child exit "
-                f"status {batch.exit_status})",
-            )
+        replayed = _synthesized_failure(
+            item,
+            f"The isolated child produced no report for this test (child exit "
+            f"status {batch.exit_status})",
         )
     else:
-        for report in reports:
-            ihook.pytest_runtest_logreport(report=report)
+        replayed = reports
+    for report in replayed:
+        record.stash_gated_property(item, report)
+        ihook.pytest_runtest_logreport(report=report)
+    try:
+        item.session._setupstate.teardown_exact(nextitem)
+    except Exception as error:
+        failure = _synthesized_report(
+            item,
+            outcome="failed",
+            longrepr=f"A predecessor's teardown failed: {error!r}",
+            when="teardown",
+        )
+        record.stash_gated_property(item, failure)
+        ihook.pytest_runtest_logreport(report=failure)
     ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
 
 
@@ -683,19 +775,18 @@ def apply_xdist_refusal(item: pytest.Item) -> None:
         )
 
 
-def runtest_protocol(item: pytest.Item) -> bool | None:
+def runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool | None:
     """Run one `airflow_isolated` item through its batch's child process.
 
     Parameters:
         item: pytest.Item about to enter its runtest protocol.
+        nextitem: pytest.Item | None scheduled after this one, bounding the claimed
+            protocol's setup-stack teardown.
 
     Returns:
         bool | None containing ``True`` when the item was replayed from a child run,
         or ``None`` to let pytest run an unmarked item (or a marked item inside the
         child itself) in process.
-
-    Raises:
-        pytest.UsageError: Some marked item carries a malformed marker payload.
     """
 
     if item.get_closest_marker(ISOLATED_MARKER_NAME) is None:
@@ -709,12 +800,10 @@ def runtest_protocol(item: pytest.Item) -> bool | None:
         # explicit refusal from the setup phase, where a worker renders it cleanly.
         return None
     config = item.config
-    if _BATCHES_KEY not in config.stash:
-        config.stash[_BATCHES_KEY] = _compute_batches(item.session)
     batch = config.stash[_BATCHES_KEY][item.nodeid]
     if not batch.started:
         _run_batch(batch, item, get_bootstrap_state(config))
-    _replay_item(item, batch)
+    _replay_item(item, batch, nextitem)
     return True
 
 
@@ -727,4 +816,5 @@ __all__ = (
     "build_dist_info",
     "read_isolated_marker",
     "runtest_protocol",
+    "store_batches",
 )
