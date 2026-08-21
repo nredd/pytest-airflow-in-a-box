@@ -187,9 +187,11 @@ def test_paths(airflow_home, airflow_dags_folder):
 
 Both are session-scoped and touch neither Airflow nor the metadata database, so asking where a
 directory is never triggers an import or a migration. The names deliberately match the
-`airflow_home` and `airflow_dags_folder` ini options these fixtures resolve -- fixtures and
-ini options live in separate pytest registries, so the same name can (and here does) mean the
-option in `pytest.ini` context and the resolved `Path` in a test signature.
+`airflow_home` and `airflow_dags_folder` ini options -- fixtures and ini options live in
+separate pytest registries, so the same name works in both contexts. One nuance: the
+`airflow_home` *ini option* names the base directory to provision under, while the fixture
+returns the disposable per-run root created below it; `airflow_dags_folder` returns exactly
+the directory its option configures.
 
 `airflow_dags_folder` follows the same ladder `dag_bag` does -- `--dag-folder`, then
 the `airflow_dags_folder` ini option, then the empty `dags/` directory inside the run's

@@ -4,8 +4,8 @@
 `airflow.models` (2.x) to `airflow.sdk` (3.x), and TaskFlow's `task` decorator
 moved from `airflow.decorators` (2.x, still importable on 3.x) to `airflow.sdk`.
 `ordered_task_instances`/`run_task_instance` are family-branched in
-`_compat.taskrun`, so only the DB-free multiple-outputs test needs the Task SDK's
-`run_task` runner and carries `requires_airflow3`.
+`_compat.taskrun`, so only the DB-free tests need the Task SDK's `run_task` runner
+and carry `requires_airflow3`.
 """
 
 from __future__ import annotations

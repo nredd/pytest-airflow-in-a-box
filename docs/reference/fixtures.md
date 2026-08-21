@@ -10,7 +10,7 @@ the 2.x alternative.
 
 | Fixture | Scope | DB | Airflow | Returns |
 | ------- | ----- | -- | ------- | ------- |
-| `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Dag-file collection](../guide/dag-collection.md)) |
+| `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Task execution](../guide/task-execution.md#testing-a-dag-defined-elsewhere)) |
 | `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution ([Task execution](../guide/task-execution.md)) |
 | `run_dag` | function | yes | 2.x + 3.x | A runner for externally-authored Dags, e.g. ones pulled from `dag_bag` ([Task execution](../guide/task-execution.md)) |
 | `run_task` | function | no | 3.x only | A DB-free in-process Task SDK runner for a single operator or standalone `@task` ([DB-free task execution](../guide/db-free-execution.md)) |
@@ -35,8 +35,10 @@ the 2.x alternative.
 | `airflow_home` | session | no | 2.x + 3.x | This run's isolated `AIRFLOW_HOME` as a `pathlib.Path` ([The isolated AIRFLOW_HOME](../guide/airflow-home.md)) |
 | `airflow_dags_folder` | session | no | 2.x + 3.x | The Dag directory `dag_bag` parses, as a `pathlib.Path` ([Airflow configuration](../guide/configuration.md)) |
 
-`airflow_home` and `airflow_dags_folder` deliberately share their names with the ini options
-they resolve -- fixtures and ini options live in separate pytest registries.
+`airflow_home` and `airflow_dags_folder` deliberately share their names with ini options --
+fixtures and ini options live in separate pytest registries. Note the `airflow_home` ini
+option names the *base* directory to provision under; the fixture returns the disposable
+per-run root created below it.
 
 ## REST API and logging
 
@@ -44,7 +46,7 @@ they resolve -- fixtures and ini options live in separate pytest registries.
 | ------- | ----- | -- | ------- | ------- |
 | `api_server_url` | session | yes | 3.x only | The base URL of one isolated Airflow API server started for this process's session ([Live REST API](../guide/rest-api.md)) |
 | `api_client` | session | yes | 3.x only | An authenticated client bound to the isolated API server ([Live REST API](../guide/rest-api.md)) |
-| `api_base_url` | function (autouse) | no | 3.x only | The live server URL, published through Airflow configuration for tests marked `api_test` ([Live REST API](../guide/rest-api.md)) |
+| `api_base_url` | function (autouse) | no | 3.x only when active | The live server URL, published through Airflow configuration for tests marked `api_test`; inert (`None`) everywhere else, so its 2.x failure only reaches `api_test`-marked tests ([Live REST API](../guide/rest-api.md)) |
 | `cap_structlog` | function | no | 3.x only | A capture recording structlog events emitted during the test ([Structlog capture](../guide/structlog.md)) |
 
 Return types are the typed contracts in `pytest_airflow_in_a_box.types` (`DagMaker`,

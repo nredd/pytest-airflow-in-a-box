@@ -5,11 +5,12 @@ fixture meant importing ``bootstrap.get_bootstrap_state`` -- an internal -- and 
 import into the fixture body to avoid tripping bootstrap too early. These two fixtures are the
 supported way to ask.
 
-Both fixture names deliberately mirror the ini options they resolve -- fixtures and ini
-options live in separate pytest registries, so the shared name is legal and keeps the two
-spellings of one concept identical. The package module formerly named ``airflow_home`` is
-private (``_airflow_home``) precisely so the fixture name stays available; see
-``test_no_fixture_name_shadows_a_package_module``.
+Both fixture names deliberately mirror ini options -- fixtures and ini options live in
+separate pytest registries, so the shared name is legal. ``airflow_dags_folder`` returns
+exactly what its ini option configures; the ``airflow_home`` *ini* names the base directory
+while the fixture returns the disposable run root created below it. The package module
+formerly named ``airflow_home`` is private (``_airflow_home``) precisely so the fixture name
+stays available; see ``test_no_fixture_name_shadows_a_package_module``.
 
 Neither fixture touches the metadata database, so neither belongs in
 ``fixtures.DATABASE_FIXTURE_NAMES``: asking where a directory is must not import Airflow or
