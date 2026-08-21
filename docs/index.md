@@ -46,8 +46,10 @@ Airflow's published constraints files) can install the plugin bare. The `airflow
 `run_dag`, `clear_db`, seeding, the configuration surface (`airflow_config`,
 `airflow_configure`, `airflow_home`, `airflow_dags_folder`), and the bundled
 smoke checks run on both families, while
-`run_task`, `render_task`, `task_context`, `cap_structlog`, and the REST API fixtures fail
-on 2.x with actionable errors naming the 2.x alternative.
+`run_task`, `render_task`, `task_context`, `cap_structlog`, the REST API fixtures, and
+`run_dag(executor=...)` fail on 2.x with actionable errors naming the 2.x alternative.
+Driving a DagRun through an executor is AIP-72 machinery -- workloads, the Task Execution
+API -- that Airflow 2.x simply does not have.
 
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.

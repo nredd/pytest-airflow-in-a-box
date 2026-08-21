@@ -116,6 +116,63 @@ architecture predates the Task SDK's separate manager entirely.
 
 Executor checks also require Airflow 3.x and report no problems on 2.x.
 
+A clean report says the class shape is sound. To find out whether the executor actually
+*runs* anything, drive a real DagRun through it with
+[`run_dag(dag, executor=...)`](task-execution.md#executor-driven-runs).
+
+## A worked executor
+
+Airflow 3 removed `SequentialExecutor` from core, so "run my tasks one at a time" is a
+real reason to write an executor today. The whole thing:
+
+```python
+from airflow.executors.base_executor import BaseExecutor
+
+
+class SerialExecutor(BaseExecutor):
+    """Run one workload at a time, to completion, in the calling process."""
+
+    is_local = True
+
+    def sync(self) -> None:
+        """Nothing async to reconcile: `_process_workloads` already settled it."""
+
+    def _process_workloads(self, workload_items) -> None:
+        for workload in workload_items:
+            key = workload.ti.key
+            self.queued_tasks.pop(key, None)
+            try:
+                BaseExecutor.run_workload(workload)
+            except Exception as error:
+                self.fail(key, error)
+            else:
+                self.success(key)
+
+    def end(self) -> None:
+        """No workload is ever left in flight to wait for."""
+
+    def terminate(self) -> None:
+        """No workload is ever left in flight to kill."""
+```
+
+Two things that are easy to get wrong, and that this plugin will tell you about:
+
+- **`end` and `terminate` are not optional.** `BaseExecutor` implements both as
+  `raise NotImplementedError`, so an executor that skips them blows up at teardown, after
+  an otherwise successful run. An executor-driven `run_dag` names the missing method.
+- **Do not set `is_single_threaded`.** It reads like the right knob for a serial executor
+  and `BaseExecutor` no longer looks at it, which is exactly what `executor-stale-attribute`
+  is for.
+- **Key on `workload.ti.key`, not `workload.key`.** `ExecuteTask` grew a `key` property
+  after 3.1, and the task-instance key underneath it is both portable and what
+  `BaseExecutor.queue_workload` keys `queued_tasks` on.
+
+`BaseExecutor.run_workload` is Airflow 3.3 and newer. On 3.1 and 3.2, call
+`airflow.sdk.execution_time.supervisor.supervise(ti=workload.ti,
+dag_rel_path=workload.dag_rel_path, bundle_info=workload.bundle_info, token=workload.token,
+server=..., log_path=workload.log_path)` instead, resolving `server` from
+`[core] execution_api_server_url`.
+
 ## XCom backend checks
 
 - `xcom-orm-deserialize-removed` -- the backend defines `orm_deserialize_value`, which
@@ -334,14 +391,16 @@ Airflow's internals. The degraded tier is surfaced three ways: one
   path, at the front (checked before every other configured backend) by default
 - `executor(component, *, alias="test") -> str` -- registers an executor class under
   `alias`, returning it for use with `ExecutorLoader.load_executor(alias)` /
-  `ExecutorLoader.lookup_executor_name_by_str(alias)` within the same test. No
-  configuration surface can select the alias: the `airflow_executor` ini is resolved
-  before the first Airflow import, when no alias exists yet, and takes a real dotted
-  class path -- and a `core.executor` override is silently ignored too, because
-  `ExecutorLoader._get_executor_names()` memoizes its config parse into
-  `_executor_names` (which the sandbox itself already forced while snapshotting the
-  loader), and a bare single-part value resolves against Airflow's built-in core
-  executor names, never the alias map. `component` must be defined at module scope
+  `ExecutorLoader.lookup_executor_name_by_str(alias)`, and with
+  [`run_dag(dag, executor=alias)`](task-execution.md#executor-driven-runs), within the
+  same test. No *Airflow configuration* surface can select the alias: the
+  `airflow_executor` ini is resolved before the first Airflow import, when no alias
+  exists yet, and takes a real dotted class path -- and a `core.executor` override is
+  silently ignored too, because `ExecutorLoader._get_executor_names()` memoizes its
+  config parse into `_executor_names` (which the sandbox itself already forced while
+  snapshotting the loader), and a bare single-part value resolves against Airflow's
+  built-in core executor names, never the alias map. `run_dag` sidesteps all of that by
+  asking the alias registry directly. `component` must be defined at module scope
   somewhere importable -- Airflow resolves it later by dotted import path, and a
   class defined inside a test function has none
 - `timetable(component)` -- registers a custom timetable class through a synthesized

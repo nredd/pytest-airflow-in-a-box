@@ -246,6 +246,7 @@ class RunDag(Protocol):
         run_after: datetime | None = None,
         start_date: datetime | None = None,
         dag_run_kwargs: dict[str, Any] | None = None,
+        executor: str | type | object | None = None,
         run_triggerer: bool = False,
         trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
     ) -> DagRunResult:
@@ -265,15 +266,41 @@ class RunDag(Protocol):
             start_date: datetime.datetime | None overriding the current UTC start date.
             dag_run_kwargs: dict[str, Any] | None forwarded to Airflow's scheduler Dag
                 creation method.
+            executor: str | type | object | None selecting an executor to run the tasks
+                through, instead of running them in this process. Accepts an alias
+                registered via ``airflow_components.executor``, a dotted import path, a
+                ``BaseExecutor`` subclass, or an instance. Airflow 3.x only, and it
+                changes three things worth knowing about, all inherent to tasks running
+                in another process:
+
+                * ``dag`` must be defined in a file inside the folder ``dag_bag``
+                  parses, because each task is re-imported from that file in a worker
+                  subprocess. A ``dag_maker`` Dag lives in a test body and cannot
+                  qualify.
+                * ``result.errors`` carries only what the executor itself attached to a
+                  failure. The task's traceback is in the worker's log under the run's
+                  logs folder; ``result.states`` stays authoritative either way.
+                * Instances are dispatched one at a time, in dependency-safe order, so
+                  an executor's own concurrency is not exercised.
+
+                Starting the live api-server the workers report to happens lazily on the
+                first executor-driven call, exactly as ``api_client`` starts it.
             run_triggerer: bool running persisted trigger events and resuming deferrals.
+                Cannot be combined with ``executor``.
             trigger_timeout: float seconds allowed for each trigger's first event.
 
         Returns:
             pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
 
         Raises:
-            ValueError: ``dag.dag_id`` already has persisted metadata, or ``run_after``
-                was passed on the Airflow 2.x family.
+            ValueError: ``dag.dag_id`` already has persisted metadata, ``run_after`` was
+                passed on the Airflow 2.x family, or ``run_triggerer`` was combined with
+                ``executor``.
+            ExecutorRunError: ``executor`` cannot be resolved, started, or driven to a
+                result within ``--airflow-executor-timeout``, or ``dag`` is not defined
+                in a file inside the Dag folder.
+            ComponentContractError: ``executor``'s class shape is broken in a way that
+                would fail mid-run.
         """
 
 

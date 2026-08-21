@@ -573,13 +573,21 @@ def test_run_dag_passes_through_run_id_logical_date_and_dag_run_kwargs(
     assert result.dag_run.conf == {"probe": 1}
 
 
-def test_run_dag_cleanup_continues_after_one_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Attempt every owned cleanup before reporting aggregated finalizer failures."""
+def test_run_dag_cleanup_continues_after_one_failure(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Attempt every owned cleanup before reporting aggregated finalizer failures.
+
+    Parameters:
+        request: pytest.FixtureRequest the runner holds for executor-driven runs; this
+            one never takes that path, so nothing is looked up through it.
+        monkeypatch: pytest.MonkeyPatch replacing the cleanup entry point.
+    """
 
     session: Any = object()
     first = dag_compat.DagPersistenceRecord("first", "first_bundle", session)
     second = dag_compat.DagPersistenceRecord("second", "second_bundle", session)
-    runner = _DagRunner()
+    runner = _DagRunner(request)
     runner._records.extend([first, second])
     attempted: list[str] = []
 

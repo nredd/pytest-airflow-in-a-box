@@ -186,6 +186,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default="",
     )
     parser.addini(
+        "airflow_executor_timeout",
+        "Seconds one task instance may take to settle during an executor-driven "
+        "`run_dag`, before the run fails naming the stuck instance.",
+        default="300",
+    )
+    parser.addini(
         "airflow_xcom_backend",
         "XCom backend written to `[core] xcom_backend` before the first Airflow import.",
         default="",
@@ -199,6 +205,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "airflow_secrets_backend_kwargs",
         "Secrets backend kwargs written to `[secrets] backend_kwargs`.",
         default="",
+    )
+    group.addoption(
+        "--airflow-executor-timeout",
+        action="store",
+        default=None,
+        dest="airflow_executor_timeout",
+        metavar="SECONDS",
+        help="Seconds one task instance may take to settle during an executor-driven run.",
     )
     group.addoption(
         "--collect-dag-folder",

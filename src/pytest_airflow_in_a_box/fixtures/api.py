@@ -3,7 +3,9 @@
 The server is a lazy, session-scoped, per-process concern: it starts when the
 first ``api_test``-marked test runs or a test requests ``api_client`` or
 ``api_server_url``, binds a loopback ephemeral port, and serves Airflow's
-``core`` API app against the shared isolated metadata database. For each such
+``core`` and ``execution`` API apps against the shared isolated metadata
+database -- the latter is the Task Execution API that executor-driven runs
+point supervised task workers at. For each such
 test the selected URL is published as ``AIRFLOW__API__BASE_URL`` so
 application code can discover the endpoint through active Airflow
 configuration. Under xdist each worker owns its own server process; they share
@@ -341,7 +343,11 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
             "--port",
             str(port),
             "--apps",
-            "core",
+            # `core` alone leaves `/execution` unmounted, and the Task Execution API is
+            # what a real executor's supervised workers talk to (`app.py` mounts the
+            # sub-app only for `all` or `execution`). Both apps share one `create_dag_bag`
+            # call inside the same process, so serving both costs no extra worker.
+            "core,execution",
             "--workers",
             "1",
         ]

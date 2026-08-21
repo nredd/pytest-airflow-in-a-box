@@ -195,10 +195,14 @@ def test_public_surface_is_explicit() -> None:
         "worker_suffixed_path",
     )
     assert taskinstance.__all__ == (
+        "DEFAULT_EXECUTOR_TIMEOUT",
         "DEFAULT_TRIGGER_TIMEOUT",
+        "DagRunDriveError",
+        "ExecutorRunError",
         "TaskResolutionError",
         "TriggerExecutionError",
         "execute_dag_run",
+        "execute_dag_run_via_executor",
         "ordered_task_instances",
         "run_task_instance",
         "run_trigger",

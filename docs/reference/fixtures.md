@@ -12,7 +12,7 @@ the 2.x alternative.
 | ------- | ----- | -- | ------- | ------- |
 | `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Task execution](../guide/task-execution.md#testing-a-dag-defined-elsewhere)) |
 | `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution ([Task execution](../guide/task-execution.md)) |
-| `run_dag` | function | yes | 2.x + 3.x | A runner for externally-authored Dags, e.g. ones pulled from `dag_bag` ([Task execution](../guide/task-execution.md)) |
+| `run_dag` | function | yes | 2.x + 3.x | A runner for externally-authored Dags, e.g. ones pulled from `dag_bag`. `executor=` drives the run through a real executor instead of in-process, 3.x only ([Task execution](../guide/task-execution.md#executor-driven-runs)) |
 | `run_task` | function | no | 3.x only | A DB-free in-process Task SDK runner for a single operator or standalone `@task` ([DB-free task execution](../guide/db-free-execution.md)) |
 | `render_task` | function | no | 3.x only | A DB-free in-process renderer for an operator's `template_fields`, without calling `execute()` ([DB-free task execution](../guide/db-free-execution.md)) |
 | `task_context` | function | no | 3.x only | A DB-free in-process Task SDK template-context factory for hand-driven `execute()` calls ([DB-free task execution](../guide/db-free-execution.md)) |
