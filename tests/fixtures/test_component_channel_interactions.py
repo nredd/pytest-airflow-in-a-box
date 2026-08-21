@@ -58,6 +58,9 @@ class IniExecutor(BaseExecutor):
     def _process_workloads(self, workload_items):
         pass
 
+    def end(self):
+        pass
+
 
 class OverrideExecutor(BaseExecutor):
     def sync(self):
@@ -66,12 +69,18 @@ class OverrideExecutor(BaseExecutor):
     def _process_workloads(self, workload_items):
         pass
 
+    def end(self):
+        pass
+
 
 class SandboxExecutor(BaseExecutor):
     def sync(self):
         pass
 
     def _process_workloads(self, workload_items):
+        pass
+
+    def end(self):
         pass
 '''
 

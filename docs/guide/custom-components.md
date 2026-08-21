@@ -104,9 +104,11 @@ architecture predates the Task SDK's separate manager entirely.
 
 ## Executor checks
 
-- `executor-missing-override` -- `sync` or `_process_workloads` is not overridden. Neither
-  is abstract: `sync`'s default silently does nothing, and `_process_workloads`'s default
-  raises `NotImplementedError`
+- `executor-missing-override` -- `sync`, `_process_workloads`, or `end` is not
+  overridden. None is abstract: `sync`'s default silently does nothing, and the other
+  two's defaults raise `NotImplementedError`. `terminate` shares that same raising
+  default but is not checked: no certified 3.x scheduler path ever calls it, SIGTERM
+  included
 - `executor-stale-attribute` -- the executor sets `is_single_threaded`, `supports_pickling`,
   `change_sensitivity`, or `execute_async`. All four are still documented in older material
   but do not exist on `BaseExecutor` in Airflow 3.1-3.3, so Airflow silently ignores them
@@ -157,9 +159,6 @@ class SerialExecutor(BaseExecutor):
 
 Two things that are easy to get wrong, and that this plugin will tell you about:
 
-- **`end` and `terminate` are not optional.** `BaseExecutor` implements both as
-  `raise NotImplementedError`, so an executor that skips them blows up at teardown, after
-  an otherwise successful run. An executor-driven `run_dag` names the missing method.
 - **Do not set `is_single_threaded`.** It reads like the right knob for a serial executor
   and `BaseExecutor` no longer looks at it, which is exactly what `executor-stale-attribute`
   is for.

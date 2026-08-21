@@ -114,6 +114,9 @@ class _CleanExecutor(BaseExecutor):
     def _process_workloads(self, workload_items: Any) -> None:
         del workload_items
 
+    def end(self) -> None:
+        pass
+
 
 class _BrokenExecutor(BaseExecutor):
     """Executor exercising every executor check at once."""
@@ -332,7 +335,7 @@ def test_check_component_flags_every_listener_problem() -> None:
 
 
 def test_check_component_reports_no_problems_for_a_clean_executor() -> None:
-    """Accept an executor overriding both required methods with no stale attributes."""
+    """Accept an executor overriding every required method with no stale attributes."""
 
     report = check_component(_CleanExecutor)
 
@@ -350,7 +353,38 @@ def test_check_component_flags_every_executor_problem() -> None:
         "executor-stale-attribute",
         "executor-flag-wrong-type",
     }
+    missing = {
+        problem.message
+        for problem in report.problems
+        if problem.code == "executor-missing-override"
+    }
+    assert missing == {
+        "`_BrokenExecutor` does not override `sync`.",
+        "`_BrokenExecutor` does not override `_process_workloads`.",
+        "`_BrokenExecutor` does not override `end`.",
+    }
     assert report.ok is False
+
+
+def test_check_component_flags_an_executor_missing_only_end() -> None:
+    """Catch an executor that overrides `sync`/`_process_workloads` but not `end`.
+
+    The exact class shape reported in #231: a "clean-looking" executor that overrides
+    every method `BaseExecutor` used to require, which used to pass `check_component`
+    clean and only blew up at teardown.
+    """
+
+    class _MissingEnd(BaseExecutor):
+        def sync(self) -> None:
+            pass
+
+        def _process_workloads(self, workload_items: Any) -> None:
+            del workload_items
+
+    report = check_component(_MissingEnd, kind=ComponentKind.EXECUTOR)
+
+    assert [problem.code for problem in report.problems] == ["executor-missing-override"]
+    assert report.problems[0].message == "`_MissingEnd` does not override `end`."
 
 
 def test_check_component_reports_no_problems_for_a_clean_xcom_backend() -> None:

@@ -316,8 +316,9 @@ def test_import_dotted_reports_a_path_that_does_not_name_a_class() -> None:
 def test_lifecycle_names_a_method_the_executor_did_not_override() -> None:
     """Turn `BaseExecutor`'s raising default into a message naming the missing method.
 
-    `end` and `terminate` raise `NotImplementedError` on `BaseExecutor` itself, so an
-    executor that skipped them fails at teardown, after an otherwise successful run.
+    `check_component`'s preflight already refuses an executor that never overrode `end`
+    at all (`_EXECUTOR_REQUIRED_OVERRIDES`); this is the residual case where an override
+    exists but calls the same raising default itself.
     """
 
     class _Unfinished:
