@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pytest_airflow_in_a_box._compat import ensure_database
+from pytest_airflow_in_a_box._compat.db import create_session
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 
 if TYPE_CHECKING:
@@ -31,9 +32,6 @@ def session(pytestconfig: pytest.Config) -> Iterator[Session]:
     """
 
     ensure_database(get_bootstrap_state(pytestconfig).root)
-
-    # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
-    from airflow.utils.session import create_session
 
     with create_session() as database_session:
         try:

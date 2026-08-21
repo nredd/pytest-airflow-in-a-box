@@ -383,6 +383,26 @@ def _get_dag_serializer() -> Any:
     return module.SerializedDAG if release < (3, 2, 0) else module.DagSerialization
 
 
+def time_restriction_type() -> Any:
+    """Resolve Airflow's ``TimeRestriction`` timetable boundary type.
+
+    A plain deferred-import seam, not a capability probe: the type's location is
+    stable across every certified release, and this wrapper only centralizes the
+    runtime Airflow import behind ``_compat``.
+
+    Returns:
+        Any containing the ``airflow.timetables.base.TimeRestriction`` class.
+
+    Raises:
+        ImportError: Airflow is not importable in this environment.
+    """
+
+    # Deferred to preserve pre-bootstrap plugin import safety.
+    from airflow.timetables.base import TimeRestriction
+
+    return TimeRestriction
+
+
 def _ensure_bundle(record: DagPersistenceRecord) -> None:
     """Create the fixture's isolated Dag bundle when absent.
 
@@ -962,4 +982,5 @@ __all__ = (
     "persist_dag",
     "select_task_instance",
     "task_is_mapped",
+    "time_restriction_type",
 )

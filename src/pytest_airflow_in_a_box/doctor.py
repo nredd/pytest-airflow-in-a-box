@@ -27,6 +27,7 @@ from pytest_airflow_in_a_box._compat import (
     resolve_capabilities,
 )
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
+from pytest_airflow_in_a_box._compat.settings import airflow_conf
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
 from pytest_airflow_in_a_box.collection import collection_folder
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
@@ -106,10 +107,7 @@ def _resolve_executor() -> str:
             distinguishing them.
     """
 
-    # Deferred to keep this module importable before Airflow bootstrap completes.
-    from airflow.configuration import conf
-
-    return conf.get("core", "executor")
+    return airflow_conf().get("core", "executor")
 
 
 def _executor_section(state: BootstrapState) -> list[str]:

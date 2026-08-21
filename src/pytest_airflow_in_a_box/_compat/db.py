@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Any
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, resolve_capabilities
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     from sqlalchemy.orm import Session
 
 ModelSpec = tuple[str, str]
@@ -230,6 +232,48 @@ class DatabaseCleanupError(RuntimeError):
     """Report failure to clear the isolated Airflow metadata database."""
 
 
+def create_session() -> AbstractContextManager[Session]:
+    """Open Airflow's transactional metadata session context manager.
+
+    A plain deferred-import seam, not a capability probe: ``create_session`` is
+    stable across every certified release, and this wrapper only centralizes
+    the runtime Airflow import behind ``_compat``.
+
+    Returns:
+        contextlib.AbstractContextManager[sqlalchemy.orm.Session] yielding a
+        session that commits on clean exit and rolls back on error, exactly as
+        upstream's ``create_session`` does.
+
+    Raises:
+        ImportError: Airflow is not importable in this environment.
+    """
+
+    # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
+    from airflow.utils.session import create_session as airflow_create_session
+
+    return airflow_create_session()
+
+
+def get_pool_model() -> Any:
+    """Resolve Airflow's ``Pool`` ORM model.
+
+    A plain deferred-import seam, not a capability probe: the model's location
+    is stable across every certified release, and this wrapper only
+    centralizes the runtime Airflow import behind ``_compat``.
+
+    Returns:
+        Any containing the ``airflow.models.pool.Pool`` mapped class.
+
+    Raises:
+        ImportError: Airflow is not importable in this environment.
+    """
+
+    # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
+    from airflow.models.pool import Pool
+
+    return Pool
+
+
 def implied_groups(groups: Collection[str]) -> tuple[str, ...]:
     """Expand requested groups with every transitively implied group.
 
@@ -299,13 +343,16 @@ def clear_tables(groups: Collection[str]) -> None:
         raise ValueError(f"Unknown table groups: {names}")
 
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
-    from airflow.utils.session import create_session
     from sqlalchemy import delete
 
     requested = set(groups)
     registry, optional_specs = _active_registry()
+    # Opened before the `try` so a failed Airflow import surfaces raw, exactly as the
+    # previous in-function `airflow.utils.session` import did, rather than wrapped as
+    # a cleanup failure.
+    session_context = create_session()
     try:
-        with create_session() as session:
+        with session_context as session:
             for group, specs in registry:
                 if group not in requested:
                     continue
@@ -346,5 +393,7 @@ __all__ = (
     "REGISTRY_GROUPS",
     "DatabaseCleanupError",
     "clear_tables",
+    "create_session",
+    "get_pool_model",
     "implied_groups",
 )
