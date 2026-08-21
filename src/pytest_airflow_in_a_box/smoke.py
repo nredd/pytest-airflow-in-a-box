@@ -15,11 +15,9 @@ References:
 
 from __future__ import annotations
 
-import contextlib
 import copy
 import difflib
 import hashlib
-import io
 import json
 import logging
 import os
@@ -57,7 +55,7 @@ from pytest_airflow_in_a_box.fixtures.dagbag import (
 from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Iterable, Iterator, Mapping, Sequence
 
     from _pytest._code.code import TerminalRepr
 
@@ -1336,6 +1334,37 @@ def _validate_smoke_options(config: pytest.Config) -> None:
         )
 
 
+def _render_table(headers: Sequence[str], rows: Sequence[Mapping[str, str]]) -> str:
+    """Render a plain-text table with fixed-width, left-justified columns.
+
+    Owned replacement for ``airflow.cli.simple_table.AirflowConsole`` -- an unstable CLI
+    internal this plugin only ever used for report rendering. The header row and its dash
+    separator render even when ``rows`` is empty, so an empty report still names its columns.
+    Each column is as wide as its widest content (header or cell); lines carry no trailing
+    padding.
+
+    Parameters:
+        headers: Sequence[str] naming the columns, in render order. Each header doubles as
+            the key that looks its cell up in every row mapping.
+        rows: Sequence[Mapping[str, str]] containing one mapping per table row, keyed by
+            header name.
+
+    Returns:
+        str containing the rendered table text, terminated by a newline.
+    """
+
+    widths = [max(len(header), *(len(row[header]) for row in rows), 0) for header in headers]
+
+    def _line(cells: Iterable[str]) -> str:
+        return " | ".join(
+            cell.ljust(width) for cell, width in zip(cells, widths, strict=True)
+        ).rstrip()
+
+    lines = [_line(headers), "-+-".join("-" * width for width in widths)]
+    lines.extend(_line(row[header] for header in headers) for row in rows)
+    return "\n".join(lines) + "\n"
+
+
 def _log_stats_table(dag_bag: Any, *, timeout: float, ratio: float) -> str:
     """Render and log a slowest-first table of every parsed Dag file.
 
@@ -1348,8 +1377,6 @@ def _log_stats_table(dag_bag: Any, *, timeout: float, ratio: float) -> str:
         str containing the rendered table text.
     """
 
-    from airflow.cli.simple_table import AirflowConsole
-
     threshold = ratio * timeout
 
     def _status(seconds: float) -> str:
@@ -1359,20 +1386,17 @@ def _log_stats_table(dag_bag: Any, *, timeout: float, ratio: float) -> str:
             return f"SLOWPOKE (>{ratio:.0%} of {timeout:.1f}s)"
         return "ok"
 
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        AirflowConsole(width=100).print_as(
-            data=dag_bag.dagbag_stats,
-            output="table",
-            mapper=lambda stat: {
-                "file": stat.file,
-                "dags": stat.dag_num,
-                "tasks": stat.task_num,
-                "duration": f"{stat.duration.total_seconds():.3f}s",
-                "status": _status(stat.duration.total_seconds()),
-            },
-        )
-    text = buffer.getvalue()
+    rows = [
+        {
+            "file": stat.file,
+            "dags": str(stat.dag_num),
+            "tasks": str(stat.task_num),
+            "duration": f"{stat.duration.total_seconds():.3f}s",
+            "status": _status(stat.duration.total_seconds()),
+        }
+        for stat in dag_bag.dagbag_stats
+    ]
+    text = _render_table(("file", "dags", "tasks", "duration", "status"), rows)
     LOGGER.info(f"Dag bag parse report:\n{text}")
     return text
 
@@ -1396,12 +1420,8 @@ def _log_serialization_table(
         str containing the rendered table text.
     """
 
-    from airflow.cli.simple_table import AirflowConsole
-
     def _total(dag_id: str) -> float:
         return entries[dag_id].seconds + deserialize_seconds.get(dag_id, 0.0)
-
-    rows = sorted(entries, key=_total, reverse=True)
 
     def _mapper(dag_id: str) -> dict[str, str]:
         entry = entries[dag_id]
@@ -1414,10 +1434,8 @@ def _log_serialization_table(
             "status": "FAILED" if dag_id in failed_ids else "ok",
         }
 
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        AirflowConsole(width=100).print_as(data=rows, output="table", mapper=_mapper)
-    text = buffer.getvalue()
+    rows = [_mapper(dag_id) for dag_id in sorted(entries, key=_total, reverse=True)]
+    text = _render_table(("dag_id", "serialize", "deserialize", "total", "status"), rows)
     LOGGER.info(f"Dag serialization report:\n{text}")
     return text
 

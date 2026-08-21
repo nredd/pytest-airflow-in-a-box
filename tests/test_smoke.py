@@ -772,6 +772,41 @@ def test_log_stats_table_marks_ok_and_slowpoke_rows(caplog: pytest.LogCaptureFix
     assert "Dag bag parse report" in caplog.text
 
 
+def test_render_table_pads_columns_to_the_widest_cell() -> None:
+    """Pad every column to its widest cell and strip trailing padding per line."""
+
+    text = smoke._render_table(
+        ("file", "status"),
+        [
+            {"file": "a_long_dag_file.py", "status": "ok"},
+            {"file": "b.py", "status": "SLOWPOKE"},
+        ],
+    )
+
+    assert text == (
+        "file               | status\n"
+        "-------------------+---------\n"
+        "a_long_dag_file.py | ok\n"
+        "b.py               | SLOWPOKE\n"
+    )
+
+
+def test_render_table_pads_cells_to_a_wider_header() -> None:
+    """Pad cells out to the header width when the header is the widest content."""
+
+    text = smoke._render_table(("dag_id", "s"), [{"dag_id": "a", "s": "ok"}])
+
+    assert text == "dag_id | s\n-------+---\na      | ok\n"
+
+
+def test_render_table_renders_header_and_separator_with_zero_rows() -> None:
+    """Render the header row and its separator even when there are no data rows."""
+
+    text = smoke._render_table(("file", "status"), [])
+
+    assert text == "file | status\n-----+-------\n"
+
+
 def test_smoke_check_failure_requires_a_message() -> None:
     """Reject construction without a failure body."""
 
