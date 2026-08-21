@@ -16,6 +16,7 @@ from pytest_airflow_in_a_box import (
     artifact,
     baseline,
     collection,
+    components,
     config,
     db,
     defaults,
@@ -73,6 +74,13 @@ def test_public_surface_is_explicit() -> None:
         "format_import_errors",
         "prune_duplicate_items",
         "read_declared_cases",
+    )
+    assert components.__all__ == (
+        "ComponentContractError",
+        "ComponentKind",
+        "ComponentProblem",
+        "ComponentReport",
+        "check_component",
     )
     assert config.__all__ == (
         "ENV_VAR_PREFIX",
@@ -294,6 +302,17 @@ def test_config_helpers_do_not_import_airflow() -> None:
 
     script = (
         "import sys; import pytest_airflow_in_a_box.config; "
+        "raise SystemExit('airflow' in sys.modules)"
+    )
+
+    subprocess.check_output([sys.executable, "-c", script], text=True)
+
+
+def test_component_helpers_do_not_import_airflow() -> None:
+    """Keep the component conformance checks safe before Airflow bootstrap."""
+
+    script = (
+        "import sys; import pytest_airflow_in_a_box.components; "
         "raise SystemExit('airflow' in sys.modules)"
     )
 

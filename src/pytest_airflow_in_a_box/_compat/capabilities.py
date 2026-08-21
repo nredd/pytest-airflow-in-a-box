@@ -179,6 +179,21 @@ class SecretsResolution(str, Enum):
     SUPERVISOR_COMMS = "airflow.sdk.execution_time.task_runner.SUPERVISOR_COMMS"
 
 
+class ExecutorContract(str, Enum):
+    """Closed set of certified `BaseExecutor` attribute contracts.
+
+    Names the certified attribute table `pytest_airflow_in_a_box.components.check_component`
+    matches a custom executor against. 3.2 renamed 3.1's `supports_sentry: bool` flag to
+    `sentry_integration: str` and added `supports_callbacks`/`supports_multi_team`; 3.3 added
+    `supports_connection_test` on top of the 3.2 shape. The three certified releases are
+    otherwise attribute-compatible for the fields this plugin checks.
+    """
+
+    V3_1 = "3.1"
+    V3_2 = "3.2"
+    V3_3 = "3.3"
+
+
 @dataclass(frozen=True)
 class AirflowCapabilities:
     """Immutable metadata describing a validated Airflow private interface.
@@ -211,6 +226,18 @@ class AirflowCapabilities:
         asset_unique_key_location: AssetUniqueKeyLocation | None naming the module
             asset-condition evaluation imports its unique-key type from; None on 2.x,
             which evaluates dataset conditions by URI string with no unique-key type.
+        executor_contract: ExecutorContract | None naming the certified `BaseExecutor`
+            attribute contract `check_component` matches a custom executor against;
+            None on 2.x, whose executor interface predates the certified 3.x table.
+        sdk_listener_manager_available: bool indicating whether `airflow.sdk.listener`
+            exposes its own listener manager, separate from the core one at
+            `airflow.listeners.listener`. Constant True on every certified 3.x release
+            and False on 2.x, which has no Task SDK and so no second manager to split
+            hookspecs across; kept as a probed tripwire rather than a bare family
+            constant because the dual-manager split is the single most common
+            real-world listener bug (register in the wrong manager and half the hooks
+            silently never fire), so a future release silently collapsing back to one
+            manager must fail loudly here instead of going unnoticed.
     """
 
     release: Release
@@ -232,6 +259,8 @@ class AirflowCapabilities:
     max_python: tuple[int, int] | None
     dag_requires_start_date: bool
     asset_unique_key_location: AssetUniqueKeyLocation | None
+    executor_contract: ExecutorContract | None
+    sdk_listener_manager_available: bool
 
 
 # Airflow below 2.8 raises `DAG is missing the start_date parameter` from
@@ -270,6 +299,8 @@ def _certify_v3(
     startup_details_supports_sentry: bool,
     runtime_task_instance_supports_queue: bool,
     asset_unique_key_location: AssetUniqueKeyLocation,
+    executor_contract: ExecutorContract,
+    sdk_listener_manager_available: bool,
 ) -> AirflowCapabilities:
     """Build one certified 3.x contract row with the family-static fields filled.
 
@@ -283,6 +314,14 @@ def _certify_v3(
         runtime_task_instance_supports_queue: bool indicating the runtime DTO queue field.
         asset_unique_key_location: AssetUniqueKeyLocation naming the canonical import
             location for asset-condition evaluation's unique-key type.
+        executor_contract: ExecutorContract naming the certified `BaseExecutor`
+            attribute contract for this release.
+        sdk_listener_manager_available: bool indicating whether `airflow.sdk.listener`
+            exists and exposes a listener manager on this release. False on 3.1.x, whose
+            `airflow.sdk` carries no listener manager module at all; True from 3.2
+            onward, alongside the rest of that release's Task SDK listener-architecture
+            changes (`dag_bag_location`, `task_instance_runner`,
+            `asset_unique_key_location`).
 
     Returns:
         AirflowCapabilities containing the complete certified contract.
@@ -308,6 +347,8 @@ def _certify_v3(
         max_python=None,
         dag_requires_start_date=False,
         asset_unique_key_location=asset_unique_key_location,
+        executor_contract=executor_contract,
+        sdk_listener_manager_available=sdk_listener_manager_available,
     )
 
 
@@ -349,6 +390,8 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         max_python=V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(AirflowFamily.V2, release),
         asset_unique_key_location=None,
+        executor_contract=None,
+        sdk_listener_manager_available=False,
     )
 
 
@@ -364,6 +407,8 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=False,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+            executor_contract=ExecutorContract.V3_1,
+            sdk_listener_manager_available=False,
         )
         for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
         if release < (3, 2, 0)
@@ -378,6 +423,8 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
         ),
         (3, 2, 1): _certify_v3(
             (3, 2, 1),
@@ -388,6 +435,8 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
         ),
         (3, 2, 2): _certify_v3(
             (3, 2, 2),
@@ -398,6 +447,8 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
         ),
         (3, 3, 0): _certify_v3(
             (3, 3, 0),
@@ -408,6 +459,8 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_3,
+            sdk_listener_manager_available=True,
         ),
         (3, 3, 1): _certify_v3(
             (3, 3, 1),
@@ -418,6 +471,8 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_3,
+            sdk_listener_manager_available=True,
         ),
     }
 )
@@ -1004,6 +1059,77 @@ def _probe_asset_unique_key_location(version: str) -> AssetUniqueKeyLocation:
     return AssetUniqueKeyLocation.SERIALIZATION
 
 
+def _probe_executor_contract(version: str) -> ExecutorContract:
+    """Resolve the certified `BaseExecutor` attribute contract by capability.
+
+    Distinguishes the three certified 3.x executor shapes by attributes Airflow itself
+    added or renamed: 3.1 exposes `supports_sentry: bool`; 3.2 renamed it to
+    `sentry_integration: str` and added `supports_callbacks`/`supports_multi_team`; 3.3
+    additionally added `supports_connection_test`. This is a genuine runtime
+    observation of the installed `BaseExecutor`, not a release-keyed lookup, so a
+    maintainer certifying a new release with the wrong contract is caught here rather
+    than trusted silently.
+
+    Parameters:
+        version: str reported by package metadata.
+
+    Returns:
+        ExecutorContract naming the resolved certified attribute contract.
+
+    Raises:
+        AirflowCompatibilityError: Neither certified sentry flag is present.
+    """
+
+    base_executor = _resolve_symbol("airflow.executors.base_executor", "BaseExecutor", version)
+    if hasattr(base_executor, "supports_sentry"):
+        return ExecutorContract.V3_1
+    if not hasattr(base_executor, "sentry_integration"):
+        error = ValueError("neither `sentry_integration` nor `supports_sentry` is present")
+        _raise_compatibility_error(
+            version,
+            "probing canonical Airflow symbol",
+            "airflow.executors.base_executor.BaseExecutor.sentry_integration",
+            error,
+        )
+    if hasattr(base_executor, "supports_connection_test"):
+        return ExecutorContract.V3_3
+    return ExecutorContract.V3_2
+
+
+def _probe_sdk_listener_manager_available(version: str) -> bool:
+    """Probe whether `airflow.sdk.listener` exposes its own listener manager.
+
+    A missing module or callable observes as False rather than raising: the certified
+    3.x value is True, so `_verify_contract` is what turns a real removal into a loud
+    `AirflowCompatibilityError` instead of this probe raising directly, mirroring how
+    `_probe_dag_bag` falls back instead of raising when the newer location is absent.
+
+    Parameters:
+        version: str reported by package metadata.
+
+    Returns:
+        bool indicating whether a callable `get_listener_manager` was observed.
+
+    Raises:
+        AirflowCompatibilityError: Resolving the module raises something other than
+            an import or attribute failure.
+    """
+
+    try:
+        module = import_module("airflow.sdk.listener")
+        get_listener_manager = module.get_listener_manager
+    except (ImportError, AttributeError):
+        return False
+    except Exception as error:
+        _raise_compatibility_error(
+            version,
+            "probing canonical Airflow symbol",
+            "airflow.sdk.listener.get_listener_manager",
+            error,
+        )
+    return callable(get_listener_manager)
+
+
 def _probe_task_instance_runner(task_instance: object, version: str) -> TaskInstanceRunner:
     """Resolve legacy or Task SDK task execution behavior.
 
@@ -1069,6 +1195,8 @@ _PROBED_FIELD_LABELS: dict[str, str] = {
     "startup_details_supports_sentry": "StartupDetails.sentry_integration",
     "runtime_task_instance_supports_queue": "TaskInstance DTO queue",
     "asset_unique_key_location": "Asset unique-key canonical location",
+    "executor_contract": "BaseExecutor attribute contract",
+    "sdk_listener_manager_available": "airflow.sdk.listener manager",
 }
 
 
@@ -1151,6 +1279,8 @@ def _resolve_uncached(
     startup_details_supports_sentry: bool | None = None
     runtime_task_instance_supports_queue: bool | None = None
     asset_unique_key_location: AssetUniqueKeyLocation | None = None
+    executor_contract: ExecutorContract | None = None
+    sdk_listener_manager_available = False
     if is_v3:
         asset_unique_key_location = _probe_asset_unique_key_location(installed_version)
         startup_details = _resolve_symbol(
@@ -1171,6 +1301,8 @@ def _resolve_uncached(
             "queue",
             installed_version,
         )
+        executor_contract = _probe_executor_contract(installed_version)
+        sdk_listener_manager_available = _probe_sdk_listener_manager_available(installed_version)
     serialized_dag_location = _probe_serialized_dag(installed_version)
 
     observed = AirflowCapabilities(
@@ -1204,6 +1336,8 @@ def _resolve_uncached(
         max_python=None if is_v3 else V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(family, release),
         asset_unique_key_location=asset_unique_key_location,
+        executor_contract=executor_contract,
+        sdk_listener_manager_available=sdk_listener_manager_available,
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:
@@ -1248,6 +1382,7 @@ __all__ = (
     "AssetUniqueKeyLocation",
     "DagBagLocation",
     "DagRunInterface",
+    "ExecutorContract",
     "ParamsLocation",
     "SecretsResolution",
     "TaskInstanceRunner",
