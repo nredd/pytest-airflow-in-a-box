@@ -35,6 +35,21 @@ class AirflowFamily(str, Enum):
     V3 = "apache-airflow-core"
 
 
+class CertificationTier(str, Enum):
+    """How the resolved capability contract was established.
+
+    `CERTIFIED` means the installed release has a row in `_CERTIFIED_CAPABILITIES` and
+    every probe was byte-verified against it. `PROBED` means the release is a 3.x newer
+    than (or in a gap of) the certified set: every capability is a live runtime
+    observation, the structural floor (`_REQUIRED_SYMBOLS_BY_FAMILY`) still holds, but
+    no certified row exists to verify the observations against. See issue #212 for the
+    probe-and-degrade contract.
+    """
+
+    CERTIFIED = "certified"
+    PROBED = "probed"
+
+
 # The certified 2.x releases, each carrying its own Python ceiling. Ordering is the
 # certified order, so this mapping is also the family's `SUPPORTED_RELEASES` source and
 # the two cannot drift. Certified per issue #41 (the final 2.x release, Composer 3's
@@ -73,6 +88,14 @@ SUPPORTED_RELEASES_BY_FAMILY: dict[AirflowFamily, tuple[Release, ...]] = {
     AirflowFamily.V2: tuple(V2_MAX_PYTHON_BY_RELEASE),
 }
 SUPPORTED_RELEASES = SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
+# The probe-and-degrade floor: a 3.x release at or above this that lacks a certified
+# row resolves by pure probing (`CertificationTier.PROBED`) instead of hard-failing,
+# so a fresh upstream release degrades the assurance tier rather than bricking the
+# plugin until re-certification ships. Releases below the floor, and majors outside 3,
+# keep hard-failing -- they are known-unsupported, not unknown. `min()`, not `[0]`:
+# the certified tuple is hand-maintained and a backport row appended out of order must
+# not silently move a user-facing policy boundary. See issue #212.
+MIN_V3_RELEASE: Release = min(SUPPORTED_RELEASES)
 SUPPORTED_VERSIONS = tuple(
     ".".join(str(part) for part in release) for release in SUPPORTED_RELEASES
 )
@@ -296,6 +319,11 @@ class AirflowCapabilities:
             `_get_grouped_entry_points` vendoring shape; None on 2.x. Derived from
             `release` alone, for the same reason `plugins_manager` is: the real
             verification is deferred and lazy, not eager here.
+        certification: CertificationTier recording how this contract was established.
+            `CERTIFIED` rows are byte-verified against `_CERTIFIED_CAPABILITIES`;
+            `PROBED` contracts are pure runtime observations on an uncertified 3.x
+            release, with `_verify_contract` skipped. Defaulted (and declared last) so
+            the certified row constructors and their tests stay untouched.
     """
 
     release: Release
@@ -322,6 +350,7 @@ class AirflowCapabilities:
     task_instance_mutation_hook_supports_dag_run: bool
     plugins_manager: PluginsManagerShape | None
     shared_module_loading: SharedModuleLoading | None
+    certification: CertificationTier = CertificationTier.CERTIFIED
 
 
 # Airflow below 2.8 raises `DAG is missing the start_date parameter` from
@@ -817,6 +846,10 @@ _REQUIRED_SYMBOLS_BY_FAMILY = {
 }
 
 _CAPABILITIES: AirflowCapabilities | None = None
+# `installed_certification()`'s process-lifetime cache; the flag distinguishes a cached
+# None (unclassifiable environment) from not-yet-classified.
+_CERTIFICATION: CertificationTier | None = None
+_CERTIFICATION_CACHED = False
 
 
 def _raise_compatibility_error(
@@ -972,6 +1005,117 @@ def installed_family() -> AirflowFamily | None:
     return AirflowFamily.V3
 
 
+def _parse_release(version: str) -> Release | None:
+    """Parse one metadata version string into a base release tuple.
+
+    Parameters:
+        version: str reported by package metadata.
+
+    Returns:
+        tuple[int, int, int] | None containing the base release, or None when the
+        version is not a standard final, development, or local release.
+    """
+
+    match = VERSION_PATTERN.fullmatch(version)
+    if match is None:
+        return None
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+    )
+
+
+def _classify_v3_release(release: Release) -> CertificationTier | None:
+    """Classify one 3.x-family base release into its certification tier.
+
+    Parameters:
+        release: tuple[int, int, int] containing the parsed base release.
+
+    Returns:
+        CertificationTier | None -- `CERTIFIED` for a release with a certified row,
+        `PROBED` for an uncertified release inside the supported 3.x major at or above
+        `MIN_V3_RELEASE`, or None for a release resolution must reject (below the
+        certified floor, or outside the 3.x major).
+    """
+
+    if release in SUPPORTED_RELEASES:
+        return CertificationTier.CERTIFIED
+    if release[0] == 3 and release >= MIN_V3_RELEASE:
+        return CertificationTier.PROBED
+    return None
+
+
+def installed_certification() -> CertificationTier | None:
+    """Classify the installed release's certification tier from metadata alone.
+
+    The never-raising sibling of `installed_family()`, callable from pre-import
+    bootstrap: a corrupt, Airflow-free, or resolution-rejected environment classifies
+    as None, and `resolve_capabilities()` remains the authority that turns those into
+    actionable errors once a test actually needs Airflow.
+
+    Cached for the process lifetime, "classify once, trust forever": the tier is
+    process-constant, callers run per `check_component` report and per configure hook,
+    and a mid-session metadata mutation must not let reports disagree with the tier
+    the resolved capabilities already carry.
+    `_reset_capabilities_for_testing()` clears this cache too.
+
+    Returns:
+        CertificationTier | None naming the tier `resolve_capabilities()` would resolve
+        at, or None when no tier is classifiable (including environments resolution
+        would reject outright).
+    """
+
+    global _CERTIFICATION, _CERTIFICATION_CACHED
+    if _CERTIFICATION_CACHED:
+        return _CERTIFICATION
+    _CERTIFICATION = _classify_installed_certification()
+    _CERTIFICATION_CACHED = True
+    return _CERTIFICATION
+
+
+def _classify_installed_certification() -> CertificationTier | None:
+    """Perform the uncached tier classification behind `installed_certification`.
+
+    Returns:
+        CertificationTier | None as documented on the caching wrapper.
+    """
+
+    family = installed_family()
+    if family is AirflowFamily.V2:
+        meta = _meta_distribution()
+        if meta.version is None:
+            return None
+        release = _parse_release(meta.version)
+        if release is None or release not in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]:
+            return None
+        if _running_python() > V2_MAX_PYTHON_BY_RELEASE[release]:
+            # `_installed_v2_release` rejects the over-cap combination outright, so
+            # no tier is classifiable -- mirroring resolution keeps the degraded-tier
+            # warning from suggesting a version pin where the real remedy differs.
+            return None
+        return CertificationTier.CERTIFIED
+    if family is not AirflowFamily.V3:
+        return None
+    try:
+        _reject_corrupt_environment()
+    except AirflowCompatibilityError:
+        # Resolution rejects a dual-family install before ever classifying it; a
+        # `PROBED` answer here would aim the degraded-tier warning's pin-or-upgrade
+        # remedy at an environment whose real remedy is recreation.
+        return None
+    try:
+        installed_version = metadata.version(AIRFLOW_DISTRIBUTION)
+    except Exception:
+        # `installed_family()` just classified V3 from this same read, but the
+        # environment can mutate between calls; stay never-raising like the sibling.
+        return None
+    release = _parse_release(installed_version)
+    if release is None:
+        return None
+    return _classify_v3_release(release)
+
+
 def v2_gate_message(surface: str, detail: str) -> str | None:
     """Build the unavailable-on-2.x message for a 3.x-only fixture surface.
 
@@ -1035,15 +1179,19 @@ def max_v2_python(version: str) -> tuple[int, int]:
 
 def _installed_v2_release(
     error: metadata.PackageNotFoundError,
-) -> tuple[str, Release, AirflowFamily]:
+) -> tuple[str, Release, AirflowFamily, CertificationTier]:
     """Accept a certified Airflow 2.x monolith when the 3.x core is absent.
+
+    The 2.x family stays a closed certified set with no `PROBED` tier: the family is
+    EOL, so an unknown 2.x release is known-unsupported rather than not-yet-certified.
 
     Parameters:
         error: importlib.metadata.PackageNotFoundError raised for the core distribution.
 
     Returns:
-        tuple[str, Release, AirflowFamily] containing the metadata version, parsed base
-        release, and `AirflowFamily.V2`.
+        tuple[str, Release, AirflowFamily, CertificationTier] containing the metadata
+        version, parsed base release, `AirflowFamily.V2`, and
+        `CertificationTier.CERTIFIED`.
 
     Raises:
         AirflowCompatibilityError: No usable Airflow family is installed, the running
@@ -1075,17 +1223,12 @@ def _installed_v2_release(
             f"`pytest-airflow-in-a-box[airflow2]` extra for a coherent installation."
         ) from error
 
-    match = VERSION_PATTERN.fullmatch(meta.version)
-    if match is None:
+    release = _parse_release(meta.version)
+    if release is None:
         parse_error = ValueError("version is not a standard final, development, or local release")
         _raise_compatibility_error(
             meta.version, "parsing installed version for", AIRFLOW_META_DISTRIBUTION, parse_error
         )
-    release = (
-        int(match.group("major")),
-        int(match.group("minor")),
-        int(match.group("patch")),
-    )
     if release not in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]:
         certified_error = ValueError("base release is not certified")
         _raise_compatibility_error(
@@ -1107,23 +1250,26 @@ def _installed_v2_release(
             f"is why this check exists at all. Use Python {minimum}-{maximum} for "
             f"Airflow '{meta.version}', or upgrade to Airflow 3."
         ) from error
-    return meta.version, release, AirflowFamily.V2
+    return meta.version, release, AirflowFamily.V2, CertificationTier.CERTIFIED
 
 
-def _installed_release() -> tuple[str, Release, AirflowFamily]:
-    """Read and validate the installed Airflow base release without importing Airflow.
+def _installed_release() -> tuple[str, Release, AirflowFamily, CertificationTier]:
+    """Read and classify the installed Airflow base release without importing Airflow.
 
-    The 3.x core distribution decides the family: when present it must certify against
-    the 3.x contract table (after the corrupt-environment check), and when absent the
-    2.x monolith is accepted through `_installed_v2_release`.
+    The 3.x core distribution decides the family: when present it classifies against
+    the certified set (after the corrupt-environment check), and when absent the 2.x
+    monolith is accepted through `_installed_v2_release`. A valid 3.x release without
+    a certified row classifies as `CertificationTier.PROBED` rather than failing --
+    only releases below `MIN_V3_RELEASE` or outside the 3.x major are rejected.
 
     Returns:
-        tuple[str, Release, AirflowFamily] containing the metadata version, parsed base
-        release, and distribution family.
+        tuple[str, Release, AirflowFamily, CertificationTier] containing the metadata
+        version, parsed base release, distribution family, and certification tier.
 
     Raises:
-        AirflowCompatibilityError: The environment is corrupt or Airflow-free, or the
-            package metadata is absent, malformed, or unsupported.
+        AirflowCompatibilityError: The environment is corrupt or Airflow-free, the
+            package metadata is absent or malformed, or the release is below the
+            certified floor or outside the supported 3.x major.
     """
 
     try:
@@ -1136,24 +1282,24 @@ def _installed_release() -> tuple[str, Release, AirflowFamily]:
         )
     _reject_corrupt_environment()
 
-    match = VERSION_PATTERN.fullmatch(installed_version)
-    if match is None:
+    release = _parse_release(installed_version)
+    if release is None:
         error = ValueError("version is not a standard final, development, or local release")
         _raise_compatibility_error(
             installed_version, "parsing installed version for", AIRFLOW_DISTRIBUTION, error
         )
-
-    release = (
-        int(match.group("major")),
-        int(match.group("minor")),
-        int(match.group("patch")),
-    )
-    if release not in SUPPORTED_RELEASES:
-        error = ValueError("base release is not certified")
+    tier = _classify_v3_release(release)
+    if tier is None:
+        detail = (
+            "base release is below the certified floor"
+            if release[0] == 3
+            else "major is outside the supported 3.x family"
+        )
+        error = ValueError(detail)
         _raise_compatibility_error(
             installed_version, "validating installed version for", AIRFLOW_DISTRIBUTION, error
         )
-    return installed_version, release, AirflowFamily.V3
+    return installed_version, release, AirflowFamily.V3, tier
 
 
 def _resolve_symbol(module_name: str, symbol_name: str, installed_version: str) -> object:
@@ -1501,7 +1647,9 @@ def _verify_contract(
     sides, so their comparison is a self-consistency guard, not a probe. `max_python`
     and `dag_requires_start_date` are release-derived rather than family-derived, but
     both sides read them from the same declaration (`V2_MAX_PYTHON_BY_RELEASE` and
-    `_dag_requires_start_date`), so they are guards of the same kind. The real
+    `_dag_requires_start_date`), so they are guards of the same kind. `certification`
+    is trivially `CERTIFIED` on both sides: this function only runs on the certified
+    tier, and every `_CERTIFIED_CAPABILITIES` row carries the field's default. The real
     enforcement for the module-valued fields is `_REQUIRED_SYMBOLS_BY_FAMILY`, which
     imports each named module and fails resolution when upstream moves it;
     `api_surface` is exercised only when the API fixtures actually launch the server.
@@ -1532,7 +1680,10 @@ def _verify_contract(
 
 
 def _resolve_uncached(
-    installed_version: str, release: Release, family: AirflowFamily
+    installed_version: str,
+    release: Release,
+    family: AirflowFamily,
+    tier: CertificationTier,
 ) -> AirflowCapabilities:
     """Import, probe, and validate every Airflow dependency used by eventual fixtures.
 
@@ -1542,16 +1693,25 @@ def _resolve_uncached(
     SDK presence, structlog, DAG versioning, interface selections) come from the family
     itself; see `_verify_contract` for what their comparison does and does not prove.
 
+    On the `PROBED` tier every probe and required-symbol resolution still runs and
+    still hard-fails on a missing symbol -- that structural floor is a genuine runtime
+    observation and stays load-bearing on unknown releases -- but `_verify_contract`
+    is skipped: there is no certified row to verify against, and the release-derived
+    fields (`plugins_manager`, `shared_module_loading`) extrapolate forward through
+    their single `PLUGINS_MANAGER_BREAK` boundary.
+
     Parameters:
         installed_version: str reported by package metadata.
-        release: tuple[int, int, int] containing the certified base release.
+        release: tuple[int, int, int] containing the parsed base release.
         family: AirflowFamily naming the installed distribution family.
+        tier: CertificationTier selecting whether probes verify against a certified row.
 
     Returns:
         AirflowCapabilities containing validated metadata only.
 
     Raises:
-        AirflowCompatibilityError: A symbol is unavailable or a probe violates the contract.
+        AirflowCompatibilityError: A symbol is unavailable, or (on the `CERTIFIED`
+            tier) a probe violates the certified contract.
     """
 
     is_v3 = family is AirflowFamily.V3
@@ -1630,12 +1790,14 @@ def _resolve_uncached(
         ),
         plugins_manager=_plugins_manager_shape(release) if is_v3 else None,
         shared_module_loading=_shared_module_loading(release) if is_v3 else None,
+        certification=tier,
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:
         _resolve_symbol(module_name, symbol_name, installed_version)
 
-    _verify_contract(observed, serialized_dag_location, installed_version)
+    if tier is CertificationTier.CERTIFIED:
+        _verify_contract(observed, serialized_dag_location, installed_version)
     return observed
 
 
@@ -1653,17 +1815,19 @@ def resolve_capabilities() -> AirflowCapabilities:
     if _CAPABILITIES is not None:
         return _CAPABILITIES
 
-    installed_version, release, family = _installed_release()
-    capabilities = _resolve_uncached(installed_version, release, family)
+    installed_version, release, family, tier = _installed_release()
+    capabilities = _resolve_uncached(installed_version, release, family, tier)
     _CAPABILITIES = capabilities
     return capabilities
 
 
 def _reset_capabilities_for_testing() -> None:
-    """Clear the successful-resolution cache for isolated compatibility tests."""
+    """Clear the resolution and certification caches for isolated compatibility tests."""
 
-    global _CAPABILITIES
+    global _CAPABILITIES, _CERTIFICATION, _CERTIFICATION_CACHED
     _CAPABILITIES = None
+    _CERTIFICATION = None
+    _CERTIFICATION_CACHED = False
 
 
 __all__ = (
@@ -1672,6 +1836,7 @@ __all__ = (
     "AirflowFamily",
     "ApiSurface",
     "AssetUniqueKeyLocation",
+    "CertificationTier",
     "DagBagLocation",
     "DagRunInterface",
     "ExecutorContract",
@@ -1681,6 +1846,7 @@ __all__ = (
     "SharedModuleLoading",
     "TaskInstanceRunner",
     "TimezoneLocation",
+    "installed_certification",
     "installed_family",
     "resolve_capabilities",
 )

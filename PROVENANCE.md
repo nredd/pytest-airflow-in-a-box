@@ -201,6 +201,22 @@ plain module global carries no structural marker a bare `.cache_clear()` probe c
 why 3.1.x being a permanently closed release line makes presence-only verification complete
 rather than merely weaker.
 
+Since issue #212 these certified tables are an assurance tier, not the interface: they
+hard-fail only on the `CertificationTier.CERTIFIED` tier (a release with a row in
+`_CERTIFIED_CAPABILITIES`). An uncertified 3.x release at or above the certified floor
+resolves on the `PROBED` tier -- `_verify_contract` is skipped, capabilities are pure runtime
+observations, and the sandbox clears every *observed* cache-clearable name generically
+(introspection discovers uncertified upstream caches exactly as reliably as certified ones)
+while logging drift from the last certified tables instead of raising. The degraded tier's
+exact guarantee boundary: `functools.cache` state is still snapshot/cleared byte-for-byte
+because `.cache_clear` is structurally discoverable; an uncertified plain module global is
+structurally invisible, so on the `MODULE_GLOBALS` shape only the certified names reset --
+that undiscoverability is precisely the semantic vetting the `PROBED` tier gives up. The
+weekly canary runs `pytest_airflow_in_a_box.certification.certification_probe_report` against
+the newest upstream release and fails on either an uncertified release or cache-name drift, so
+re-certification (extending `SUPPORTED_RELEASES`, `_CERTIFIED_CAPABILITIES`, and these cache
+tables by wheel introspection) is filed before users ever rely on the degraded tier.
+
 `_get_grouped_entry_points` (`functools.cache`-decorated, identical body on every certified
 release) lives once, at `airflow.utils.entry_points`, on the installed `apache-airflow-core==3.1.0`
 wheel; 3.2 moved it to `airflow._shared.module_loading` and gave the Task SDK its own

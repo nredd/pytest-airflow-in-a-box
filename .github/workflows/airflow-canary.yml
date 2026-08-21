@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       airflow-version: ${{ steps.resolve.outputs.airflow-version }}
+      certify-complete: ${{ steps.certify.outputs.complete }}
       constraints-complete: ${{ steps.constraints.outputs.complete }}
       environment-complete: ${{ steps.environment.outputs.complete }}
       install-complete: ${{ steps.install.outputs.complete }}
@@ -93,6 +94,23 @@ jobs:
           .venv-ci/bin/python -m pytest -v -m compat \
             --airflow-report-dir="${GITHUB_WORKSPACE}/reports"
           printf 'complete=true\n' >> "$GITHUB_OUTPUT"
+      - name: Probe certification tier and cache-name drift
+        id: certify
+        # Deliberately red on every uncertified upstream release: since #212 users on
+        # a new release degrade gracefully instead of failing, so this probe -- not
+        # the compat suite -- is what turns "new Airflow shipped" into a filed issue
+        # before any user hits the degraded tier. Do not soften it. Runs AFTER the
+        # compat suite on purpose: a new release is uncertified by definition, and
+        # aborting before the suite would file an issue that says nothing about what
+        # the release actually broke.
+        run: |
+          .venv-ci/bin/python -c '
+          from pytest_airflow_in_a_box.certification import certification_probe_report
+          text, code = certification_probe_report()
+          print(text)
+          raise SystemExit(code)
+          '
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
       - name: Upload compatibility suite reports
         # The canary's whole job is telling us what a new Airflow broke, so the
         # `pytest.log`/`pytest.xml` pair matters most on the failing run.
@@ -125,6 +143,7 @@ jobs:
         id: diagnostics
         env:
           AIRFLOW_VERSION: ${{ needs.compat.outputs.airflow-version || 'unresolved' }}
+          CERTIFY_COMPLETE: ${{ needs.compat.outputs.certify-complete }}
           CONSTRAINTS_COMPLETE: ${{ needs.compat.outputs.constraints-complete }}
           ENVIRONMENT_COMPLETE: ${{ needs.compat.outputs.environment-complete }}
           INSTALL_COMPLETE: ${{ needs.compat.outputs.install-complete }}
@@ -146,6 +165,8 @@ jobs:
             failure_stage=environment-capture
           elif [ "$TEST_COMPLETE" != true ]; then
             failure_stage=compatibility-suite
+          elif [ "$CERTIFY_COMPLETE" != true ]; then
+            failure_stage=certification-probe
           else
             failure_stage=workflow-infrastructure
           fi

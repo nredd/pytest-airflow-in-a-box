@@ -76,6 +76,7 @@ def test_public_surface_is_explicit() -> None:
         "read_declared_cases",
     )
     assert components.__all__ == (
+        "CertificationTier",
         "ComponentContractError",
         "ComponentKind",
         "ComponentProblem",

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pytest_airflow_in_a_box._compat import components as sandbox
-from pytest_airflow_in_a_box._compat.capabilities import v2_gate_message
+from pytest_airflow_in_a_box._compat.capabilities import installed_certification, v2_gate_message
 from pytest_airflow_in_a_box._compat.components import (
     KIND_CLASSIFIERS,
     LISTENER_CORE_MANAGER_ONLY,
@@ -87,6 +87,7 @@ def _scoped_listener_problems(
     return ComponentReport(
         component_name=report.component_name,
         problems=tuple(problem for problem in report.problems if problem.code not in mooted),
+        certification=report.certification,
     )
 
 
@@ -212,6 +213,7 @@ class _ComponentSandbox:
         ComponentReport(
             component_name=type(component).__name__,
             problems=sandbox.timetable_round_trip(component),
+            certification=installed_certification(),
         ).raise_for_problems()
 
     def round_trip(self, component: object) -> None:
@@ -376,6 +378,7 @@ def register_schedule_timetable(timetable: object) -> None:
             for problem in report.problems
             if problem.code in _SCHEDULE_REGISTRATION_BLOCKING
         ),
+        certification=report.certification,
     ).raise_for_problems()
     sandbox.register_timetable(timetable)
 

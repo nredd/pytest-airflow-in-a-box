@@ -728,9 +728,28 @@ def test_resolves_certified_release_capabilities(
     assert capability_module.resolve_capabilities() == expected
 
 
-@pytest.mark.parametrize("version", ["3.2.3", "3.3.2", "4.0.0"])
-def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
-    """Name the installed and complete supported versions for valid but uncertified releases."""
+@pytest.mark.parametrize(
+    ("version", "detail"),
+    [
+        ("3.0.2", "below the certified floor"),
+        ("4.0.0", "outside the supported 3.x family"),
+        ("5.1.0", "outside the supported 3.x family"),
+    ],
+)
+def test_rejects_release_outside_the_probe_and_degrade_window(
+    monkeypatch: pytest.MonkeyPatch, version: str, detail: str
+) -> None:
+    """Keep hard-failing below the certified floor and outside the 3.x major.
+
+    Since #212 an *uncertified* 3.x release at or above the floor probes instead of
+    failing; these releases are known-unsupported rather than unknown, so the loud
+    rejection (naming the installed and supported versions) survives for them.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        version: str containing the rejected metadata version.
+        detail: str containing the expected rejection reason fragment.
+    """
 
     _install_fake_environment(monkeypatch, version, {})
 
@@ -743,7 +762,225 @@ def test_rejects_uncertified_release(monkeypatch: pytest.MonkeyPatch, version: s
         "3.1.0, 3.1.1, 3.1.2, 3.1.3, 3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0"
         in message
     )
+    assert detail in message
     assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_uncertified_v3_release_resolves_by_probing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve a forward uncertified 3.x release on the `PROBED` tier, skipping verification.
+
+    The fake world deliberately carries the 3.1-era shape under a fake `3.3.2` version:
+    on the certified tier `_verify_contract` would reject the observed
+    `dag_bag_location`/`sdk_listener_manager_available` against any 3.3 row, so a
+    successful resolution here proves verification is skipped and the observations win.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.3.2", _fake_modules((3, 1, 0)))
+
+    capabilities = capability_module.resolve_capabilities()
+
+    assert capabilities.certification is capability_module.CertificationTier.PROBED
+    assert capabilities.release == (3, 3, 2)
+    assert capabilities.dag_bag_location is DagBagLocation.MODELS
+    assert capabilities.sdk_listener_manager_available is False
+    # Release-derived fields still derive from the release, not the observed world.
+    assert capabilities.plugins_manager is PluginsManagerShape.CACHED_FUNCTIONS
+    assert capabilities.shared_module_loading is SharedModuleLoading.DUPLICATED
+
+
+def test_uncertified_gap_release_resolves_by_probing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve a gap release inside the certified range (`3.1.4`) on the `PROBED` tier.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.1.4", _fake_modules((3, 1, 0)))
+
+    capabilities = capability_module.resolve_capabilities()
+
+    assert capabilities.certification is capability_module.CertificationTier.PROBED
+    assert capabilities.release == (3, 1, 4)
+    assert capabilities.plugins_manager is PluginsManagerShape.MODULE_GLOBALS
+
+
+def test_uncertified_release_missing_symbol_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the structural floor on the `PROBED` tier: a missing symbol hard-fails.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.3.2", {})
+
+    with pytest.raises(AirflowCompatibilityError):
+        capability_module.resolve_capabilities()
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("3.3.1", capability_module.CertificationTier.CERTIFIED),
+        ("3.4.0", capability_module.CertificationTier.PROBED),
+        ("3.1.4", capability_module.CertificationTier.PROBED),
+        ("3.0.2", None),
+        ("4.0.0", None),
+        ("garbage", None),
+    ],
+)
+def test_installed_certification_classifies_v3_from_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+    expected: capability_module.CertificationTier | None,
+) -> None:
+    """Classify the 3.x tier from metadata alone, never raising.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        version: str containing the fake core metadata version.
+        expected: CertificationTier | None containing the expected classification.
+    """
+
+    _install_fake_environment(monkeypatch, version, {})
+
+    assert capability_module.installed_certification() is expected
+
+
+@pytest.mark.parametrize(
+    ("meta_version", "expected"),
+    [
+        ("2.10.5", capability_module.CertificationTier.CERTIFIED),
+        ("2.6.0", None),
+    ],
+)
+def test_installed_certification_classifies_v2_from_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    meta_version: str,
+    expected: capability_module.CertificationTier | None,
+) -> None:
+    """Classify the closed 2.x set: certified releases only, no `PROBED` tier.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        meta_version: str containing the fake meta-distribution version.
+        expected: CertificationTier | None containing the expected classification.
+    """
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version=meta_version)
+
+    assert capability_module.installed_certification() is expected
+
+
+def test_installed_certification_is_none_for_a_corrupt_dual_family_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify a dual-family install as None, not `PROBED`.
+
+    Reviewer-found hole: without the corruption rejection, an uncertified core next to
+    a leftover 2.x monolith warned with a pin-or-upgrade remedy where the real remedy
+    is recreating the environment -- `resolve_capabilities()` rejects it outright.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.4.0", {}, meta_version="2.11.2")
+
+    assert capability_module.installed_certification() is None
+
+
+def test_installed_certification_is_none_for_an_over_cap_v2_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify a 2.x release running above its Python ceiling as None, not `CERTIFIED`.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version="2.7.3", python_version=(3, 12))
+
+    assert capability_module.installed_certification() is None
+
+
+def test_installed_certification_is_none_without_airflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify an Airflow-free environment as None instead of raising.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, None, {})
+
+    assert capability_module.installed_certification() is None
+
+
+def test_classify_installed_certification_survives_racing_metadata_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stay never-raising when the environment mutates between classification reads.
+
+    The uncached classifier re-reads metadata after `installed_family` classified the
+    family; both re-read branches (a vanished 2.x meta version and a 3.x core read
+    that starts raising) must degrade to None, not crash. Driven through the private
+    classifier on purpose: the public wrapper caches its first answer, so a second
+    scenario in the same test would never re-classify.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the racing classification reads.
+    """
+
+    monkeypatch.setattr(
+        capability_module, "installed_family", lambda: capability_module.AirflowFamily.V2
+    )
+    monkeypatch.setattr(
+        capability_module,
+        "_meta_distribution",
+        lambda: capability_module._MetaDistribution(version=None, major=None),
+    )
+    assert capability_module._classify_installed_certification() is None
+
+    monkeypatch.setattr(
+        capability_module, "installed_family", lambda: capability_module.AirflowFamily.V3
+    )
+
+    def raising_version(distribution_name: str) -> str:
+        """Raise the representative metadata failure for every distribution."""
+
+        raise OSError(f"unreadable metadata for '{distribution_name}'")
+
+    monkeypatch.setattr(capability_module.metadata, "version", raising_version)
+    assert capability_module._classify_installed_certification() is None
+
+
+def test_installed_certification_caches_its_first_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify once and trust forever, so reports cannot drift from the resolved tier.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing then mutating the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.3.1", {})
+    assert (
+        capability_module.installed_certification()
+        is capability_module.CertificationTier.CERTIFIED
+    )
+
+    _install_fake_environment(monkeypatch, "3.4.0", {})
+
+    assert (
+        capability_module.installed_certification()
+        is capability_module.CertificationTier.CERTIFIED
+    )
 
 
 @pytest.mark.parametrize("version", ["garbage", "3.3", "3.3.0rc1", "3.3.0.post1"])

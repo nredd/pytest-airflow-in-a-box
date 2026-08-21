@@ -26,9 +26,10 @@ from pytest_airflow_in_a_box._compat import (
     AirflowCompatibilityError,
     resolve_capabilities,
 )
-from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, CertificationTier
 from pytest_airflow_in_a_box._compat.settings import airflow_conf
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
+from pytest_airflow_in_a_box.certification import LAST_CERTIFIED_VERSION
 from pytest_airflow_in_a_box.collection import collection_folder
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
 from pytest_airflow_in_a_box.ini_config import INI_OPTION_NAME, INI_OVERRIDES_KEY
@@ -204,6 +205,10 @@ def _capability_lines(capabilities: AirflowCapabilities) -> list[str]:
 def _version_section() -> list[str]:
     """Render plugin, pytest, Python, and Apache Airflow versions plus capabilities.
 
+    A `PROBED` certification tier gets an explanatory `DEGRADED:` bullet spelling out
+    what the tier means and how to leave it; the tier itself already renders as a
+    capability line like every other field.
+
     Returns:
         list[str] containing Markdown bullet lines.
     """
@@ -220,6 +225,16 @@ def _version_section() -> list[str]:
         return lines
     lines.append(f"- Apache Airflow: `{_format_capability_value(capabilities.release)}`")
     lines.extend(_capability_lines(capabilities))
+    if capabilities.certification is CertificationTier.PROBED:
+        lines.append(
+            f"- DEGRADED: Apache Airflow "
+            f"`{_format_capability_value(capabilities.release)}` has no certified "
+            f"contract row (last certified release: `{LAST_CERTIFIED_VERSION}`). "
+            f"Capabilities above are live probe observations, not byte-verified "
+            f"certification, and the component sandbox snapshots/restores unknown "
+            f"caches generically. Upgrade `pytest-airflow-in-a-box` once it certifies "
+            f"this release, or install a certified `apache-airflow-core` release."
+        )
     return lines
 
 
