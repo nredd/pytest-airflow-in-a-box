@@ -42,12 +42,12 @@ def airflow_configure() -> Iterator[AirflowConfigure]:
     Ordering, which is the whole reason consumers hand-rolled this: pytest puts autouse names
     ahead of requested ones in a test's fixture closure and instantiates in that order, so a
     consumer's own ``scope="session", autouse=True`` wrapper around this fixture is applied
-    before a session-scoped ``full_dag_bag`` that the same test requests. Two caveats follow
+    before a session-scoped ``dag_bag`` that the same test requests. Two caveats follow
     from that being a *per-test* guarantee:
 
     - A function-scoped wrapper is instantiated *after* every session-scoped fixture, so it
       cannot precede a Dag parse.
-    - ``full_dag_bag`` parses once per worker process and caches. A test collected earlier and
+    - ``dag_bag`` parses once per worker process and caches. A test collected earlier and
       outside the wrapper's conftest scope can win the parse, after which no override reaches
       it.
 

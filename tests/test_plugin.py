@@ -16,7 +16,7 @@ import pytest
 
 from pytest_airflow_in_a_box import plugin
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError
-from pytest_airflow_in_a_box.fixtures.dagbag import FULL_DAG_BAG_XDIST_GROUP
+from pytest_airflow_in_a_box.fixtures.dagbag import DAG_BAG_XDIST_GROUP
 
 
 def test_database_incompatibility_renders_as_usage_error(
@@ -196,17 +196,17 @@ _COLOCATION_DAG = """
 """
 
 
-def test_smoke_catalog_and_full_dag_bag_consumers_share_one_xdist_group(
+def test_smoke_catalog_and_dag_bag_consumers_share_one_xdist_group(
     pytester: pytest.Pytester,
 ) -> None:
-    """Group the smoke catalog with one `full_dag_bag` consumer, leaving the rest alone.
+    """Group the smoke catalog with one `dag_bag` consumer, leaving the rest alone.
 
     Regression test for issue #163: under `--dist loadgroup`, an ungrouped smoke item
-    could land on a different `pytest-xdist` worker than a `full_dag_bag` consumer, so
+    could land on a different `pytest-xdist` worker than a `dag_bag` consumer, so
     the Dag folder was parsed twice, concurrently.
-    `plugin._colocate_smoke_catalog_with_full_dag_bag` now forces every synthesized
-    smoke item and exactly one `full_dag_bag` consumer onto the shared
-    `FULL_DAG_BAG_XDIST_GROUP` -- not every consumer, so a suite with many of them does
+    `plugin._colocate_smoke_catalog_with_dag_bag` now forces every synthesized
+    smoke item and exactly one `dag_bag` consumer onto the shared
+    `DAG_BAG_XDIST_GROUP` -- not every consumer, so a suite with many of them does
     not have all their execution serialized onto a single worker just to save one
     parse -- and never chooses or overwrites an item that already carries its own
     explicit `xdist_group`.
@@ -225,14 +225,14 @@ def test_smoke_catalog_and_full_dag_bag_consumers_share_one_xdist_group(
         """
         import pytest
 
-        def test_consumer(full_dag_bag):
+        def test_consumer(dag_bag):
             pass
 
-        def test_second_consumer(full_dag_bag):
+        def test_second_consumer(dag_bag):
             pass
 
         @pytest.mark.xdist_group(name="user-group")
-        def test_pre_grouped(full_dag_bag):
+        def test_pre_grouped(dag_bag):
             pass
         """
     )
@@ -245,7 +245,7 @@ def test_smoke_catalog_and_full_dag_bag_consumers_share_one_xdist_group(
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
-    assert all(group == FULL_DAG_BAG_XDIST_GROUP for group in smoke_groups.values())
+    assert all(group == DAG_BAG_XDIST_GROUP for group in smoke_groups.values())
     consumer_group = next(
         group for name, group in groups.items() if name.endswith("::test_consumer")
     )
@@ -255,15 +255,15 @@ def test_smoke_catalog_and_full_dag_bag_consumers_share_one_xdist_group(
     pre_grouped_group = next(
         group for name, group in groups.items() if name.endswith("::test_pre_grouped")
     )
-    assert consumer_group == FULL_DAG_BAG_XDIST_GROUP
+    assert consumer_group == DAG_BAG_XDIST_GROUP
     assert second_consumer_group is None
     assert pre_grouped_group == "user-group"
 
 
-def test_colocation_skips_a_full_dag_bag_consumer_dropped_by_mark_expression(
+def test_colocation_skips_a_dag_bag_consumer_dropped_by_mark_expression(
     pytester: pytest.Pytester,
 ) -> None:
-    """Do not group the catalog with a `full_dag_bag` consumer that `-m` will deselect.
+    """Do not group the catalog with a `dag_bag` consumer that `-m` will deselect.
 
     Regression test for issue #163: this plugin's collection hook is `tryfirst`, so it
     runs before `_pytest.mark`'s own `-m`/`-k` deselection (normal priority). Deciding
@@ -287,7 +287,7 @@ def test_colocation_skips_a_full_dag_bag_consumer_dropped_by_mark_expression(
     pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
     pytester.makepyfile(
         """
-        def test_consumer(full_dag_bag):
+        def test_consumer(dag_bag):
             pass
         """
     )
@@ -327,7 +327,7 @@ def test_colocation_is_a_noop_without_the_xdist_plugin(pytester: pytest.Pytester
     (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
     pytester.makepyfile(
         """
-        def test_consumer(full_dag_bag):
+        def test_consumer(dag_bag):
             pass
         """
     )
@@ -365,7 +365,7 @@ def test_colocation_fails_open_on_an_unparsable_mark_expression(pytester: pytest
     (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
     pytester.makepyfile(
         """
-        def test_consumer(full_dag_bag):
+        def test_consumer(dag_bag):
             pass
         """
     )

@@ -79,7 +79,7 @@ with no argument when you only care that it ran.
 
 A minimal producer Dag -- an `ingest`-shaped `notify` step that emits an outlet asset
 (`asset://warehouse/ingest-report`) instead of just returning a string -- pairs with a second,
-minimal `digest` Dag scheduled on that asset. `full_dag_bag` can already prove a consumer's
+minimal `digest` Dag scheduled on that asset. `dag_bag` can already prove a consumer's
 *schedule* is wired to the right asset (see
 [Assets: outlet/consumer testing](#assets-outletconsumer-testing) below), but neither that check
 nor a callable test ever sees a real `AssetEvent` or the data it carries. Run the producer for
@@ -232,7 +232,7 @@ and are cross-referenced rather than duplicated.
 
 ### Locating files a test needs
 
-The plugin ships `airflow_home_path` and `airflow_dags_folder_path` for the two directories it
+The plugin ships `airflow_home` and `airflow_dags_folder` for the two directories it
 resolves itself (see [Airflow configuration](configuration.md#where-the-run-lives)). It
 deliberately ships nothing for "my repo's `tests/` folder": pytest does not model one --
 `testpaths` is a list, empty by default, and ignored entirely once you pass arguments on the
@@ -375,7 +375,7 @@ def test_outlet_event_is_persisted(dag_maker):
     assert event.extra == {"rows": 3}
 ```
 
-Static schedule assertions (`consumer.timetable.asset_condition`) go through `full_dag_bag`
+Static schedule assertions (`consumer.timetable.asset_condition`) go through `dag_bag`
 against a real Dag folder -- see `test_asset_dags_survive_serialization` in the same file.
 
 To assert the consumer actually gets scheduled, evaluate its condition with

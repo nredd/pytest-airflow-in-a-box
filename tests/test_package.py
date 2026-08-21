@@ -44,8 +44,10 @@ def test_no_fixture_name_shadows_a_package_module() -> None:
 
     `plugin.py` imports both package modules and fixture functions into one namespace, and
     pytest discovers fixtures as attributes of that namespace. A fixture named after an
-    imported module -- `airflow_home` was the near miss -- silently replaces the module and
-    breaks every `module.function()` call site with no import error to point at it.
+    imported module silently replaces the module and breaks every `module.function()` call
+    site with no import error to point at it. The `airflow_home` fixture exists by design;
+    the module of that name is private (`_airflow_home`) exactly so the two cannot collide,
+    and underscore stems are excluded below because private modules are never fixture names.
 
     Raises:
         AssertionError: A fixture name collides with a `pytest_airflow_in_a_box` submodule.
@@ -110,16 +112,16 @@ def test_public_surface_is_explicit() -> None:
         "airflow_components",
         "airflow_configure",
         "airflow_connections",
-        "airflow_dags_folder_path",
-        "airflow_home_path",
+        "airflow_dags_folder",
+        "airflow_home",
         "airflow_parse_secrets",
         "airflow_variables",
         "api_base_url",
         "api_client",
         "api_server_url",
         "cap_structlog",
+        "dag_bag",
         "dag_maker",
-        "full_dag_bag",
         "render_task",
         "run_dag",
         "run_task",
@@ -169,16 +171,16 @@ def test_public_surface_is_explicit() -> None:
         "airflow_components",
         "airflow_configure",
         "airflow_connections",
-        "airflow_dags_folder_path",
-        "airflow_home_path",
+        "airflow_dags_folder",
+        "airflow_home",
         "airflow_parse_secrets",
         "airflow_variables",
         "api_base_url",
         "api_client",
         "api_server_url",
         "cap_structlog",
+        "dag_bag",
         "dag_maker",
-        "full_dag_bag",
         "get_bootstrap_state",
         "render_task",
         "run_dag",

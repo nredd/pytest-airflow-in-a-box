@@ -20,13 +20,13 @@ from typing import Protocol, runtime_checkable
 
 import pytest
 
+from pytest_airflow_in_a_box._airflow_home import announce_retained_root, retain_airflow_home
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 from pytest_airflow_in_a_box.airflow_cfg import (
     SIMPLE_AUTH_MANAGER,
     sqlite_url,
     write_airflow_config,
 )
-from pytest_airflow_in_a_box.airflow_home import announce_retained_root, retain_airflow_home
 from pytest_airflow_in_a_box.storage import (
     check_local_settings_collision,
     local_settings_path,
@@ -753,7 +753,7 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
         The registered ``config.add_cleanup`` callback is invoked with no arguments and
         has no view of the session outcome, so the decision is read back off the config
         stash that ``plugin.pytest_configure`` and ``plugin.pytest_sessionfinish`` wrote
-        (see ``airflow_home.retain_airflow_home``). The provisioning-failure path below
+        (see ``_airflow_home.retain_airflow_home``). The provisioning-failure path below
         passes the decision explicitly instead.
 
         A kept directory is announced on ``stderr`` unless a terminal summary already

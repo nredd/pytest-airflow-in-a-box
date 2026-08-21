@@ -87,10 +87,10 @@ def _dag_folder(pytester: pytest.Pytester) -> Path:
     return folder
 
 
-def test_full_dag_bag_resolves_top_level_lookups(pytester: pytest.Pytester) -> None:
+def test_dag_bag_resolves_top_level_lookups(pytester: pytest.Pytester) -> None:
     """Parse a Dag whose Variable and Connection reads run at module scope.
 
-    Seeding is function-scoped while `full_dag_bag` is session-scoped, so the parse is
+    Seeding is function-scoped while `dag_bag` is session-scoped, so the parse is
     requested through `getfixturevalue` after the rows are committed rather than
     through the signature, which pytest would instantiate first.
 
@@ -109,7 +109,7 @@ def test_full_dag_bag_resolves_top_level_lookups(pytester: pytest.Pytester) -> N
             airflow_connections(
                 {"parse_time_conn": {"conn_type": "http", "host": "metastore-host"}}
             )
-            dag_bag = request.getfixturevalue("full_dag_bag")
+            dag_bag = request.getfixturevalue("dag_bag")
             assert dag_bag.import_errors == {}
             fileloc = dag_bag.dags["parse_time_secrets"].fileloc
             parsed = [m for m in sys.modules.values() if getattr(m, "__file__", None) == fileloc]
@@ -154,7 +154,7 @@ def test_opting_out_reproduces_the_unshimmed_failure(pytester: pytest.Pytester) 
             airflow_connections(
                 {"parse_time_conn": {"conn_type": "http", "host": "metastore-host"}}
             )
-            dag_bag = request.getfixturevalue("full_dag_bag")
+            dag_bag = request.getfixturevalue("dag_bag")
             assert len(dag_bag.import_errors) == 1
             assert next(iter(dag_bag.import_errors)).endswith("toplevel_secrets.py")
         """

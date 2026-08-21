@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from pytest_airflow_in_a_box import airflow_home
-from pytest_airflow_in_a_box.airflow_home import RetentionPolicy
+from pytest_airflow_in_a_box import _airflow_home
+from pytest_airflow_in_a_box._airflow_home import RetentionPolicy
 from pytest_airflow_in_a_box.bootstrap import STATE_VERSION, BootstrapState
 from pytest_airflow_in_a_box.storage.locate import (
     RUN_DIRECTORY_PREFIX,
@@ -171,7 +171,7 @@ def test_resolve_retention_policy_prefers_cli_option() -> None:
 
     config = _config(airflow_home_retention="all", ini_retention="none")
 
-    assert airflow_home.resolve_retention_policy(config) is RetentionPolicy.ALL
+    assert _airflow_home.resolve_retention_policy(config) is RetentionPolicy.ALL
 
 
 def test_resolve_retention_policy_reads_ini_when_cli_absent() -> None:
@@ -179,7 +179,7 @@ def test_resolve_retention_policy_reads_ini_when_cli_absent() -> None:
 
     config = _config(ini_retention="none")
 
-    assert airflow_home.resolve_retention_policy(config) is RetentionPolicy.NONE
+    assert _airflow_home.resolve_retention_policy(config) is RetentionPolicy.NONE
 
 
 def test_resolve_retention_policy_defaults_to_failed() -> None:
@@ -187,8 +187,8 @@ def test_resolve_retention_policy_defaults_to_failed() -> None:
 
     config = _config()
 
-    assert airflow_home.resolve_retention_policy(config) is airflow_home.DEFAULT_RETENTION_POLICY
-    assert airflow_home.DEFAULT_RETENTION_POLICY is RetentionPolicy.FAILED
+    assert _airflow_home.resolve_retention_policy(config) is _airflow_home.DEFAULT_RETENTION_POLICY
+    assert _airflow_home.DEFAULT_RETENTION_POLICY is RetentionPolicy.FAILED
 
 
 def test_resolve_retention_policy_caches_resolution() -> None:
@@ -199,8 +199,8 @@ def test_resolve_retention_policy_caches_resolution() -> None:
     original_getoption = config.getoption
     config.getoption = lambda name: (reads.append(name), original_getoption(name))[1]
 
-    assert airflow_home.resolve_retention_policy(config) is RetentionPolicy.ALL
-    assert airflow_home.resolve_retention_policy(config) is RetentionPolicy.ALL
+    assert _airflow_home.resolve_retention_policy(config) is RetentionPolicy.ALL
+    assert _airflow_home.resolve_retention_policy(config) is RetentionPolicy.ALL
     assert reads == ["airflow_home_retention"]
 
 
@@ -210,7 +210,7 @@ def test_resolve_retention_policy_rejects_an_unknown_value() -> None:
     config = _config(ini_retention="sometimes")
 
     with pytest.raises(pytest.UsageError, match="must be `all`, `failed`, or `none`: 'sometimes'"):
-        airflow_home.resolve_retention_policy(config)
+        _airflow_home.resolve_retention_policy(config)
 
 
 @pytest.mark.parametrize("ini_retention", ["", None], ids=["empty", "non-string"])
@@ -224,7 +224,7 @@ def test_resolve_retention_policy_rejects_a_blank_value(ini_retention: object) -
     config = _config(ini_retention=ini_retention)
 
     with pytest.raises(pytest.UsageError, match="must be `all`, `failed`, or `none`"):
-        airflow_home.resolve_retention_policy(config)
+        _airflow_home.resolve_retention_policy(config)
 
 
 # --- session outcome and the retention decision -----------------------------------
@@ -256,9 +256,9 @@ def test_record_session_outcome_treats_every_unclean_status_as_failure(
 
     config = _config()
 
-    airflow_home.record_session_outcome(config, exitstatus)
+    _airflow_home.record_session_outcome(config, exitstatus)
 
-    assert airflow_home.session_failed(config) is expected
+    assert _airflow_home.session_failed(config) is expected
 
 
 def test_session_failed_reads_an_unmarked_invocation_as_no_session() -> None:
@@ -269,7 +269,7 @@ def test_session_failed_reads_an_unmarked_invocation_as_no_session() -> None:
     them is a failed run, and none of them should keep a directory.
     """
 
-    assert airflow_home.session_failed(_config()) is False
+    assert _airflow_home.session_failed(_config()) is False
 
 
 def test_mark_session_started_records_a_pessimistic_failure() -> None:
@@ -277,9 +277,9 @@ def test_mark_session_started_records_a_pessimistic_failure() -> None:
 
     config = _config()
 
-    airflow_home.mark_session_started(config)
+    _airflow_home.mark_session_started(config)
 
-    assert airflow_home.session_failed(config) is True
+    assert _airflow_home.session_failed(config) is True
 
 
 def test_a_started_session_that_never_finishes_stays_failed() -> None:
@@ -287,10 +287,10 @@ def test_a_started_session_that_never_finishes_stays_failed() -> None:
 
     config = _config()
 
-    airflow_home.mark_session_started(config)
-    airflow_home.record_session_outcome(config, int(pytest.ExitCode.OK))
+    _airflow_home.mark_session_started(config)
+    _airflow_home.record_session_outcome(config, int(pytest.ExitCode.OK))
 
-    assert airflow_home.session_failed(config) is False
+    assert _airflow_home.session_failed(config) is False
 
 
 @pytest.mark.parametrize(
@@ -320,21 +320,21 @@ def test_retain_airflow_home_covers_the_policy_matrix(
     """
 
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = policy
+    stash[_airflow_home.RETENTION_POLICY_KEY] = policy
     if recorded is not None:
-        stash[airflow_home.SESSION_FAILED_KEY] = recorded
+        stash[_airflow_home.SESSION_FAILED_KEY] = recorded
     config = _config(stash=stash)
 
-    assert airflow_home.retain_airflow_home(config) is expected
+    assert _airflow_home.retain_airflow_home(config) is expected
 
 
 def test_retain_airflow_home_falls_back_to_the_default_policy() -> None:
     """Apply the documented default when the session died before `pytest_configure`."""
 
     stash = pytest.Stash()
-    stash[airflow_home.SESSION_FAILED_KEY] = True
+    stash[_airflow_home.SESSION_FAILED_KEY] = True
 
-    assert airflow_home.retain_airflow_home(_config(stash=stash)) is True
+    assert _airflow_home.retain_airflow_home(_config(stash=stash)) is True
 
 
 # --- report_header ----------------------------------------------------------------
@@ -355,7 +355,7 @@ def test_report_header_names_the_root_its_rung_and_its_backend(
     root = Path("/dev/shm/pytest-airflow-in-a-box-8f2a1c")
     state = _state(root=root, storage_reason=reason, db_backend=backend)
 
-    assert airflow_home.report_header(state) == [
+    assert _airflow_home.report_header(state) == [
         f"pytest-airflow-in-a-box: AIRFLOW_HOME={root} (storage: {reason}, db: {backend})"
     ]
 
@@ -363,7 +363,7 @@ def test_report_header_names_the_root_its_rung_and_its_backend(
 def test_report_header_is_silent_on_an_xdist_worker() -> None:
     """Stay silent in a process that inherited the root instead of creating it."""
 
-    assert airflow_home.report_header(_state(owner_pid=1)) == []
+    assert _airflow_home.report_header(_state(owner_pid=1)) == []
 
 
 # --- terminal_summary -------------------------------------------------------------
@@ -374,10 +374,10 @@ def test_terminal_summary_reports_a_retained_root() -> None:
 
     root = Path("/tmp/pytest-airflow-in-a-box-kept")
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
     reporter = _terminal_reporter()
 
-    airflow_home.terminal_summary(reporter, _config(stash=stash), _state(root=root))
+    _airflow_home.terminal_summary(reporter, _config(stash=stash), _state(root=root))
 
     assert reporter.lines == [
         "= airflow-in-a-box",
@@ -389,14 +389,14 @@ def test_terminal_summary_warns_about_a_retained_shared_memory_root() -> None:
     """Flag a retained `/dev/shm` root as RAM the run holds until it is removed."""
 
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
     reporter = _terminal_reporter()
     state = _state(
         root=SHARED_MEMORY_PATH / "pytest-airflow-in-a-box-8f2a1c",
         storage_reason=StorageReason.SHARED_MEMORY,
     )
 
-    airflow_home.terminal_summary(reporter, _config(stash=stash), state)
+    _airflow_home.terminal_summary(reporter, _config(stash=stash), state)
 
     assert f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed" in reporter.lines[-1]
     assert "`--airflow-home=PATH`" in reporter.lines[-1]
@@ -406,10 +406,10 @@ def test_terminal_summary_is_silent_when_the_root_is_discarded() -> None:
     """Render nothing when cleanup is about to remove the directory."""
 
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.NONE
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.NONE
     reporter = _terminal_reporter()
 
-    airflow_home.terminal_summary(reporter, _config(stash=stash), _state())
+    _airflow_home.terminal_summary(reporter, _config(stash=stash), _state())
 
     assert reporter.lines == []
 
@@ -418,21 +418,21 @@ def test_terminal_summary_suppresses_the_stderr_fallback() -> None:
     """Record the announcement so cleanup does not repeat it on `stderr`."""
 
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
 
-    airflow_home.terminal_summary(_terminal_reporter(), _config(stash=stash), _state())
+    _airflow_home.terminal_summary(_terminal_reporter(), _config(stash=stash), _state())
 
-    assert stash[airflow_home.RETENTION_ANNOUNCED_KEY] is True
+    assert stash[_airflow_home.RETENTION_ANNOUNCED_KEY] is True
 
 
 def test_terminal_summary_is_silent_on_an_xdist_worker() -> None:
     """Render nothing in a process that does not own the run directory."""
 
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
     reporter = _terminal_reporter()
 
-    airflow_home.terminal_summary(reporter, _config(stash=stash), _state(owner_pid=1))
+    _airflow_home.terminal_summary(reporter, _config(stash=stash), _state(owner_pid=1))
 
     assert reporter.lines == []
 
@@ -451,10 +451,10 @@ def test_announce_retained_root_names_the_directory_on_stderr(
 
     root = SHARED_MEMORY_PATH / "pytest-airflow-in-a-box-8f2a1c"
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.FAILED
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.FAILED
     config = _config(stash=stash)
 
-    airflow_home.announce_retained_root(config, root, str(StorageReason.SHARED_MEMORY))
+    _airflow_home.announce_retained_root(config, root, str(StorageReason.SHARED_MEMORY))
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -463,7 +463,7 @@ def test_announce_retained_root_names_the_directory_on_stderr(
         f"(retention policy: failed): {root}" in captured.err
     )
     assert f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed" in captured.err
-    assert stash[airflow_home.RETENTION_ANNOUNCED_KEY] is True
+    assert stash[_airflow_home.RETENTION_ANNOUNCED_KEY] is True
 
 
 def test_announce_retained_root_defers_to_an_earlier_announcement(
@@ -476,9 +476,9 @@ def test_announce_retained_root_defers_to_an_earlier_announcement(
     """
 
     stash = pytest.Stash()
-    stash[airflow_home.RETENTION_ANNOUNCED_KEY] = True
+    stash[_airflow_home.RETENTION_ANNOUNCED_KEY] = True
 
-    airflow_home.announce_retained_root(
+    _airflow_home.announce_retained_root(
         _config(stash=stash), Path("/tmp/kept"), str(StorageReason.SYSTEM_TEMP)
     )
 

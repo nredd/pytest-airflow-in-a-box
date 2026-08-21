@@ -14,14 +14,14 @@ def test_dagbag_imports_the_artifact_corpus(pytester: pytest.Pytester) -> None:
 
     pytester.makepyfile(
         """
-        def test_imports(full_dag_bag):
+        def test_imports(dag_bag):
             expected = {
                 "asset_consumer", "asset_outlet", "chained", "happy_path", "mapped",
                 "provider_composition", "sensor",
             }
-            assert set(full_dag_bag.dags) == expected
-            assert len(full_dag_bag.import_errors) == 1
-            assert next(iter(full_dag_bag.import_errors)).endswith("broken.py")
+            assert set(dag_bag.dags) == expected
+            assert len(dag_bag.import_errors) == 1
+            assert next(iter(dag_bag.import_errors)).endswith("broken.py")
         """
     )
 

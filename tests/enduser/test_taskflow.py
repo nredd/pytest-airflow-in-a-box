@@ -65,6 +65,24 @@ def test_multiple_outputs_work_without_metadata(run_task: RunTask) -> None:
     assert result.xcoms["right"] == 22
 
 
+@pytest.mark.requires_airflow3
+def test_standalone_task_runs_without_a_dag(run_task: RunTask) -> None:
+    """Execute a bare `@task` with no Dag, mirroring the README example byte for byte.
+
+    Calling a decorated function outside any Dag returns an XComArg whose `.operator` is
+    unbound; `run_task` binds it to a synthetic per-test Dag and executes DB-free. The
+    README's "Testing a standalone task" snippet must keep working exactly as published.
+    """
+
+    @task
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    result = run_task(add(1, 2).operator)
+
+    assert result.xcoms["return_value"] == 3
+
+
 @pytest.mark.db_test
 def test_branch_task_skips_the_unselected_path(dag_maker: DagMaker) -> None:
     """Apply TaskFlow branch skip state through persisted execution."""

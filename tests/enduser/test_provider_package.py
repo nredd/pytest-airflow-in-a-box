@@ -35,8 +35,8 @@ def test_provider_package_composes_in_a_corpus_dag(pytester: pytest.Pytester) ->
 
     pytester.makepyfile(
         """
-        def test_provider(full_dag_bag):
-            dag = full_dag_bag.dags["provider_composition"]
+        def test_provider(dag_bag):
+            dag = dag_bag.dags["provider_composition"]
             assert {task.task_id for task in dag.tasks} == {"produce", "confirm"}
             assert dag.get_task("confirm").upstream_task_ids == {"produce"}
         """

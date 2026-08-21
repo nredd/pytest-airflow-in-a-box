@@ -130,7 +130,7 @@ Would fix 1 error.
 
 There is no `airflow.sdk` on Airflow 2.x, and the blast radius is wider than the tests you
 marked [`requires_airflow2`](../reference/markers.md). A rewritten Dag file fails its own
-Dag-file import item and poisons `full_dag_bag` for every test that parses the whole corpus; a
+Dag-file import item and poisons `dag_bag` for every test that parses the whole corpus; a
 rewrite that lands in a test module or a shared helper is a plain pytest collection error. The
 family markers gate *execution*, not import -- they cannot rescue a file that no longer parses.
 

@@ -92,7 +92,7 @@ only `timetable-local-qualname` (registration would be futile) hard-fails; every
 since upstream's own default `deserialize` handles a stateless serialize-only timetable
 fine. The explicit `airflow_components.timetable()` call keeps the full gate.
 
-Transparent registration is a `dag_maker` feature. `run_dag` and `full_dag_bag` persist
+Transparent registration is a `dag_maker` feature. `run_dag` and `dag_bag` persist
 externally-authored Dags through the same serializer without it -- for those, call
 `airflow_components.timetable(MyTimetable)` yourself before persisting.
 

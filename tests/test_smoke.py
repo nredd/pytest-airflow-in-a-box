@@ -2338,10 +2338,10 @@ def test_smoke_corpus_build_records_runtime_secrets_lookups(
     assert corpus.runtime_lookups == (lookup,)
 
 
-def test_smoke_corpus_reuses_dag_bag_parsed_by_full_dag_bag(
+def test_smoke_corpus_reuses_dag_bag_parsed_by_dag_bag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reuse a DagBag already parsed by `full_dag_bag` in this process, per issue #85."""
+    """Reuse a DagBag already parsed by `dag_bag` in this process, per issue #85."""
 
     good = SimpleNamespace(
         tags=set(),
@@ -2370,7 +2370,7 @@ def test_smoke_corpus_reuses_dag_bag_parsed_by_full_dag_bag(
     assert corpus.runtime_lookups is None
 
 
-def test_smoke_corpus_reuse_adopts_lookups_recorded_by_full_dag_bag(
+def test_smoke_corpus_reuse_adopts_lookups_recorded_by_dag_bag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Adopt the lookups `_cached_dag_bag` recorded when reusing its DagBag."""
@@ -2398,15 +2398,15 @@ def test_smoke_corpus_reuse_adopts_lookups_recorded_by_full_dag_bag(
     assert corpus.runtime_lookups == (lookup,)
 
 
-def test_smoke_corpus_does_not_pin_dag_bag_when_full_dag_bag_never_ran(
+def test_smoke_corpus_does_not_pin_dag_bag_when_dag_bag_never_ran(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Leave the session's live-DagBag cache empty for a smoke-only run.
 
-    Regression test for issue #85: the shared cache exists so `full_dag_bag` and the
+    Regression test for issue #85: the shared cache exists so `dag_bag` and the
     smoke corpus builder can hand off a parse to each other, not so the smoke builder's
     own fresh parse gets pinned on the session for the rest of a run that never touches
-    `full_dag_bag` -- that would keep a large corpus's live Dag objects alive for nothing.
+    `dag_bag` -- that would keep a large corpus's live Dag objects alive for nothing.
     """
 
     good = SimpleNamespace(tags=set(), tasks=[], timetable=SimpleNamespace(can_be_scheduled=True))
@@ -2562,13 +2562,13 @@ def test_airflow_smoke_option_enables_the_catalog(pytester: pytest.Pytester) -> 
     )
 
 
-def test_smoke_catalog_reuses_full_dag_bag_parse(pytester: pytest.Pytester) -> None:
-    """Parse the Dag folder once when a `full_dag_bag` consumer runs with the catalog.
+def test_smoke_catalog_reuses_dag_bag_parse(pytester: pytest.Pytester) -> None:
+    """Parse the Dag folder once when a `dag_bag` consumer runs with the catalog.
 
     Regression test for issue #85: a Dag module that records every time it is imported
     proves the folder is not parsed independently by the smoke corpus builder and by
-    `full_dag_bag` in the same worker process. The bundled catalog is always collected
-    last (`collection.py`), so in this default ordering `full_dag_bag`'s consumer test
+    `dag_bag` in the same worker process. The bundled catalog is always collected
+    last (`collection.py`), so in this default ordering `dag_bag`'s consumer test
     parses first and the smoke corpus builder is the one reusing that DagBag.
     """
 
@@ -2594,8 +2594,8 @@ with DAG(dag_id="counted_dag", schedule=None, tags=["team-a"]) as dag:
     )
     pytester.makepyfile(
         test_consumer="""
-        def test_consumer(full_dag_bag):
-            assert set(full_dag_bag.dags) == {"counted_dag"}
+        def test_consumer(dag_bag):
+            assert set(dag_bag.dags) == {"counted_dag"}
         """
     )
 
@@ -2605,12 +2605,12 @@ with DAG(dag_id="counted_dag", schedule=None, tags=["team-a"]) as dag:
     assert counter.read_text(encoding="utf-8").count("x") == 1
 
 
-def test_smoke_integrity_enforces_parse_timeout_after_full_dag_bag_parses(
+def test_smoke_integrity_enforces_parse_timeout_after_dag_bag_parses(
     pytester: pytest.Pytester,
 ) -> None:
-    """Honor the configured parse timeout even when `full_dag_bag` parses first.
+    """Honor the configured parse timeout even when `dag_bag` parses first.
 
-    Regression test for issue #85: before the shared-cache fix, a DagBag `full_dag_bag`
+    Regression test for issue #85: before the shared-cache fix, a DagBag `dag_bag`
     parsed never had `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` applied, so a slow Dag file
     reused by the smoke corpus builder would silently escape the configured timeout.
     """
@@ -2618,10 +2618,10 @@ def test_smoke_integrity_enforces_parse_timeout_after_full_dag_bag_parses(
     _write_dags(pytester, slow=SLOW_DAG)
     pytester.makepyfile(
         test_consumer="""
-        def test_consumer(full_dag_bag):
+        def test_consumer(dag_bag):
             # The timeout below is short enough that `slow.py` fails to import
-            # under `full_dag_bag`'s own parse too; only presence is asserted here.
-            assert full_dag_bag is not None
+            # under `dag_bag`'s own parse too; only presence is asserted here.
+            assert dag_bag is not None
         """
     )
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_parse_timeout = 0.05\n")
@@ -2632,7 +2632,7 @@ def test_smoke_integrity_enforces_parse_timeout_after_full_dag_bag_parses(
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
     # Distinguishes "the parse itself was hard-killed by the applied timeout" (this
     # message, only possible if AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT was set before
-    # `full_dag_bag` parsed) from the post-hoc slowpoke/duration check alone, which
+    # `dag_bag` parsed) from the post-hoc slowpoke/duration check alone, which
     # would fail this item on `slow.py`'s 0.3s sleep regardless of whether the fix works.
     result.stdout.fnmatch_lines(["*Dag file import check failed*slow.py*"])
 

@@ -22,8 +22,8 @@ if TYPE_CHECKING:
 
 LIVE_DAG_BAG_KEY = pytest.StashKey["DagBag"]()
 LIVE_DAG_BAG_LOOKUPS_KEY = pytest.StashKey[tuple[SecretsLookup, ...]]()
-FULL_DAG_BAG_FIXTURE_NAME: Final[str] = "full_dag_bag"
-FULL_DAG_BAG_XDIST_GROUP: Final[str] = "pytest-airflow-in-a-box::full-dag-bag"
+DAG_BAG_FIXTURE_NAME: Final[str] = "dag_bag"
+DAG_BAG_XDIST_GROUP: Final[str] = "pytest-airflow-in-a-box::dag-bag"
 
 
 def _dag_folder(config: pytest.Config) -> Path:
@@ -62,7 +62,7 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
     """Parse and process-cache a live DagBag for one worker session.
 
     The bundled smoke catalog's corpus builder (`smoke.py`) reuses this DagBag instead of
-    parsing the Dag folder a second time, if `full_dag_bag` already ran in this process.
+    parsing the Dag folder a second time, if `dag_bag` already ran in this process.
     When the catalog is enabled and in scope for this run, applies its configured per-file
     parse timeout before parsing, so the timeout is honored regardless of which of the two
     parses first -- and records runtime secrets lookups during the parse for the same
@@ -100,21 +100,21 @@ def _cached_dag_bag(session: pytest.Session, config: pytest.Config) -> DagBag:
 
 
 @pytest.fixture(scope="session")
-def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) -> DagBag:
+def dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) -> DagBag:
     """Parse all Dags from the configured Dag directory once per worker process.
 
     Shared with the bundled smoke catalog when `--airflow-smoke` is enabled and in scope for
-    this run: if `full_dag_bag` parses first in this process, the catalog's corpus builder
+    this run: if `dag_bag` parses first in this process, the catalog's corpus builder
     reuses the same live DagBag instead of parsing again (the catalog is always collected
     last, so this is the common case). Treat the returned object as read-only when that
     applies -- mutating it is visible to the smoke catalog's checks too.
 
     Under `--dist loadgroup`, `plugin.py` puts the smoke catalog and one surviving
-    `full_dag_bag` consumer into the same xdist group (`FULL_DAG_BAG_XDIST_GROUP`),
+    `dag_bag` consumer into the same xdist group (`DAG_BAG_XDIST_GROUP`),
     which gives the reuse above a worker to actually happen on instead of the catalog
-    and every `full_dag_bag` consumer independently landing on separate workers and
+    and every `dag_bag` consumer independently landing on separate workers and
     each paying their own parse. That reuse still depends on collection order placing a
-    `full_dag_bag` consumer before the catalog within the shared worker -- true today
+    `dag_bag` consumer before the catalog within the shared worker -- true today
     because the catalog is always collected last -- not on a contract `xdist_group`
     itself makes.
 
@@ -130,4 +130,4 @@ def full_dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) ->
     return _cached_dag_bag(request.session, pytestconfig)
 
 
-__all__ = ("full_dag_bag",)
+__all__ = ("dag_bag",)

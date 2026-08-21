@@ -328,7 +328,7 @@ def test_accumulate_records_call_wasxfail() -> None:
     [
         ("tests/x.py::test_a", "tests/x.py::test_a"),
         (
-            "tests/x.py::test_a@pytest-airflow-in-a-box::full-dag-bag",
+            "tests/x.py::test_a@pytest-airflow-in-a-box::dag-bag",
             "tests/x.py::test_a",
         ),
         ("tests/x.py::test_a[user@example.com]", "tests/x.py::test_a[user@example.com]"),
@@ -356,12 +356,12 @@ def test_accumulate_strips_the_xdist_loadgroup_suffix() -> None:
     """Fold a `--dist loadgroup`-suffixed report under its canonical, unsuffixed nodeid."""
 
     accumulators: dict[str, record._NodeAccumulator] = {}
-    report = _report(nodeid="tests/x.py::test_a@pytest-airflow-in-a-box::full-dag-bag")
+    report = _report(nodeid="tests/x.py::test_a@pytest-airflow-in-a-box::dag-bag")
 
     record._accumulate(accumulators, report)
 
     assert "tests/x.py::test_a" in accumulators
-    assert "tests/x.py::test_a@pytest-airflow-in-a-box::full-dag-bag" not in accumulators
+    assert "tests/x.py::test_a@pytest-airflow-in-a-box::dag-bag" not in accumulators
 
 
 @pytest.mark.parametrize(
@@ -523,7 +523,7 @@ def test_handle_logreport_stores_the_suffix_stripped_nodeid(
     """Store a `--dist loadgroup`-suffixed report's outcome under its bare nodeid.
 
     Regression test for issue #163: an item co-located into `plugin.py`'s
-    `FULL_DAG_BAG_XDIST_GROUP` reports through a nodeid xdist has rewritten to
+    `DAG_BAG_XDIST_GROUP` reports through a nodeid xdist has rewritten to
     `f"{nodeid}@{group}"`. Without stripping that suffix, the artifact would key this
     outcome differently depending on whether `--dist loadgroup` happened to be active,
     breaking `--airflow-baseline` comparisons across runs that use different dist modes.
@@ -532,7 +532,7 @@ def test_handle_logreport_stores_the_suffix_stripped_nodeid(
     monkeypatch.delenv(record.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
     config = _fake_config(airflow_record="x.json")
     record.configure(config)
-    suffixed = "tests/x.py::test_a@pytest-airflow-in-a-box::full-dag-bag"
+    suffixed = "tests/x.py::test_a@pytest-airflow-in-a-box::dag-bag"
 
     record.handle_logreport(_report(nodeid=suffixed, when="setup", outcome="passed"))
     record.handle_logreport(_report(nodeid=suffixed, when="call", outcome="passed"))

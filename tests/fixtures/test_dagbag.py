@@ -1,4 +1,4 @@
-"""Test the public full Dag bag fixture and its path selection.
+"""Test the public Dag bag fixture and its path selection.
 
 References:
     https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html
@@ -75,14 +75,14 @@ def _make_dag_folder(path: Path, dag_id: str) -> None:
     _write_dag_file(path / "dag.py", dag_id)
 
 
-def test_defaults_to_bootstrap_dag_folder(full_dag_bag: DagBag) -> None:
+def test_defaults_to_bootstrap_dag_folder(dag_bag: DagBag) -> None:
     """Discover the DagBag fixture and parse the empty bootstrap Dag folder."""
 
-    assert full_dag_bag.dags == {}
-    assert full_dag_bag.import_errors == {}
+    assert dag_bag.dags == {}
+    assert dag_bag.import_errors == {}
 
 
-def test_full_dag_bag_parses_valid_and_invalid_files(
+def test_dag_bag_parses_valid_and_invalid_files(
     pytester: pytest.Pytester,
 ) -> None:
     """Collect every valid Dag, retain import errors, and exclude Airflow examples."""
@@ -96,15 +96,15 @@ def test_full_dag_bag_parses_valid_and_invalid_files(
     )
     pytester.makepyfile(
         """
-        def test_dags(full_dag_bag):
-            assert set(full_dag_bag.dags) == {
+        def test_dags(dag_bag):
+            assert set(dag_bag.dags) == {
                 "single",
                 "multiple_one",
                 "multiple_two",
             }
-            assert len(full_dag_bag.import_errors) == 1
-            assert next(iter(full_dag_bag.import_errors)).endswith("invalid.py")
-            assert not any(dag_id.startswith("example_") for dag_id in full_dag_bag.dags)
+            assert len(dag_bag.import_errors) == 1
+            assert next(iter(dag_bag.import_errors)).endswith("invalid.py")
+            assert not any(dag_id.startswith("example_") for dag_id in dag_bag.dags)
         """
     )
 
@@ -121,9 +121,9 @@ def test_ini_dag_folder_wins_over_bootstrap(pytester: pytest.Pytester) -> None:
     pytester.makeini(f"[pytest]\nairflow_dags_folder = {ini_folder}\n")
     pytester.makepyfile(
         """
-        def test_dags(full_dag_bag):
-            assert set(full_dag_bag.dags) == {"from_ini"}
-            assert full_dag_bag.import_errors == {}
+        def test_dags(dag_bag):
+            assert set(dag_bag.dags) == {"from_ini"}
+            assert dag_bag.import_errors == {}
         """
     )
 
@@ -157,9 +157,9 @@ def test_ini_dag_folder_relative_path_ignores_cwd(
     subdir = pytester.path / "tests"
     subdir.mkdir()
     (subdir / "test_dags.py").write_text(
-        "def test_dags(full_dag_bag):\n"
-        '    assert set(full_dag_bag.dags) == {"from_ini"}\n'
-        "    assert full_dag_bag.import_errors == {}\n",
+        "def test_dags(dag_bag):\n"
+        '    assert set(dag_bag.dags) == {"from_ini"}\n'
+        "    assert dag_bag.import_errors == {}\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(subdir)
@@ -179,9 +179,9 @@ def test_cli_dag_folder_wins_over_ini(pytester: pytest.Pytester) -> None:
     pytester.makeini(f"[pytest]\nairflow_dags_folder = {ini_folder}\n")
     pytester.makepyfile(
         """
-        def test_dags(full_dag_bag):
-            assert set(full_dag_bag.dags) == {"from_cli"}
-            assert full_dag_bag.import_errors == {}
+        def test_dags(dag_bag):
+            assert set(dag_bag.dags) == {"from_cli"}
+            assert dag_bag.import_errors == {}
         """
     )
 
@@ -298,7 +298,7 @@ def test_cached_dag_bag_builds_once_per_session(
 def test_cached_dag_bag_never_touches_the_database(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Leave metadata-database initialization to `full_dag_bag` alone.
+    """Leave metadata-database initialization to `dag_bag` alone.
 
     Regression test for issue #85: the shared cache must not give DB-free smoke items a
     metadata-database dependency they never had before this fix. `_cached_dag_bag` parses
@@ -352,7 +352,7 @@ def test_cached_dag_bag_applies_parse_timeout_when_smoke_enabled(
 ) -> None:
     """Apply the smoke catalog's per-file parse timeout before an opportunistic parse.
 
-    Regression test for issue #85: `full_dag_bag` may be the one to parse the Dag folder
+    Regression test for issue #85: `dag_bag` may be the one to parse the Dag folder
     while the smoke catalog is enabled, and the smoke corpus builder can later reuse that
     DagBag -- the configured timeout must still be honored regardless of which one parses.
     """
