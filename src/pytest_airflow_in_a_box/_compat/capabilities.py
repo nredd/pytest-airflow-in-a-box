@@ -238,6 +238,16 @@ class AirflowCapabilities:
             real-world listener bug (register in the wrong manager and half the hooks
             silently never fire), so a future release silently collapsing back to one
             manager must fail loudly here instead of going unnoticed.
+        task_instance_mutation_hook_supports_dag_run: bool indicating whether the
+            `airflow.policies.task_instance_mutation_hook` hookspec declares a
+            `dag_run` parameter. False on every certified 3.1.x and 3.2.x release and
+            on 2.x, True from 3.3 onward. `pytest_airflow_in_a_box.components`'s
+            policy checks derive the legitimate hookimpl argument set from the live
+            installed hookspec directly (mirroring the listener checks), so nothing
+            here reads this field back -- it exists as a certified tripwire the same
+            way `sdk_listener_manager_available` does, so a future release silently
+            reverting the parameter is caught at `resolve_capabilities()` time rather
+            than only inside a user's own conformance check output.
     """
 
     release: Release
@@ -261,6 +271,7 @@ class AirflowCapabilities:
     asset_unique_key_location: AssetUniqueKeyLocation | None
     executor_contract: ExecutorContract | None
     sdk_listener_manager_available: bool
+    task_instance_mutation_hook_supports_dag_run: bool
 
 
 # Airflow below 2.8 raises `DAG is missing the start_date parameter` from
@@ -301,6 +312,7 @@ def _certify_v3(
     asset_unique_key_location: AssetUniqueKeyLocation,
     executor_contract: ExecutorContract,
     sdk_listener_manager_available: bool,
+    task_instance_mutation_hook_supports_dag_run: bool,
 ) -> AirflowCapabilities:
     """Build one certified 3.x contract row with the family-static fields filled.
 
@@ -322,6 +334,9 @@ def _certify_v3(
             onward, alongside the rest of that release's Task SDK listener-architecture
             changes (`dag_bag_location`, `task_instance_runner`,
             `asset_unique_key_location`).
+        task_instance_mutation_hook_supports_dag_run: bool indicating whether
+            `airflow.policies.task_instance_mutation_hook` declares a `dag_run`
+            parameter on this release. False on 3.1.x and 3.2.x, True from 3.3 onward.
 
     Returns:
         AirflowCapabilities containing the complete certified contract.
@@ -349,6 +364,9 @@ def _certify_v3(
         asset_unique_key_location=asset_unique_key_location,
         executor_contract=executor_contract,
         sdk_listener_manager_available=sdk_listener_manager_available,
+        task_instance_mutation_hook_supports_dag_run=(
+            task_instance_mutation_hook_supports_dag_run
+        ),
     )
 
 
@@ -392,6 +410,7 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         asset_unique_key_location=None,
         executor_contract=None,
         sdk_listener_manager_available=False,
+        task_instance_mutation_hook_supports_dag_run=False,
     )
 
 
@@ -409,6 +428,7 @@ _CERTIFIED_CAPABILITIES = (
             asset_unique_key_location=AssetUniqueKeyLocation.SDK,
             executor_contract=ExecutorContract.V3_1,
             sdk_listener_manager_available=False,
+            task_instance_mutation_hook_supports_dag_run=False,
         )
         for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
         if release < (3, 2, 0)
@@ -425,6 +445,7 @@ _CERTIFIED_CAPABILITIES = (
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_2,
             sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=False,
         ),
         (3, 2, 1): _certify_v3(
             (3, 2, 1),
@@ -437,6 +458,7 @@ _CERTIFIED_CAPABILITIES = (
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_2,
             sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=False,
         ),
         (3, 2, 2): _certify_v3(
             (3, 2, 2),
@@ -449,6 +471,7 @@ _CERTIFIED_CAPABILITIES = (
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_2,
             sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=False,
         ),
         (3, 3, 0): _certify_v3(
             (3, 3, 0),
@@ -461,6 +484,7 @@ _CERTIFIED_CAPABILITIES = (
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_3,
             sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=True,
         ),
         (3, 3, 1): _certify_v3(
             (3, 3, 1),
@@ -473,6 +497,7 @@ _CERTIFIED_CAPABILITIES = (
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
             executor_contract=ExecutorContract.V3_3,
             sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=True,
         ),
     }
 )
@@ -1130,6 +1155,29 @@ def _probe_sdk_listener_manager_available(version: str) -> bool:
     return callable(get_listener_manager)
 
 
+def _probe_task_instance_mutation_hook_supports_dag_run(installed_version: str) -> bool:
+    """Probe whether the `task_instance_mutation_hook` hookspec declares `dag_run`.
+
+    Parameters:
+        installed_version: str reported by package metadata.
+
+    Returns:
+        bool indicating whether the real, installed hookspec accepts a `dag_run`
+        parameter.
+
+    Raises:
+        AirflowCompatibilityError: The hookspec cannot be resolved or inspected.
+    """
+
+    hook = _resolve_symbol("airflow.policies", "task_instance_mutation_hook", installed_version)
+    return _signature_has_parameter(
+        hook,
+        "airflow.policies.task_instance_mutation_hook",
+        "dag_run",
+        installed_version,
+    )
+
+
 def _probe_task_instance_runner(task_instance: object, version: str) -> TaskInstanceRunner:
     """Resolve legacy or Task SDK task execution behavior.
 
@@ -1197,6 +1245,7 @@ _PROBED_FIELD_LABELS: dict[str, str] = {
     "asset_unique_key_location": "Asset unique-key canonical location",
     "executor_contract": "BaseExecutor attribute contract",
     "sdk_listener_manager_available": "airflow.sdk.listener manager",
+    "task_instance_mutation_hook_supports_dag_run": "task_instance_mutation_hook.dag_run",
 }
 
 
@@ -1281,6 +1330,7 @@ def _resolve_uncached(
     asset_unique_key_location: AssetUniqueKeyLocation | None = None
     executor_contract: ExecutorContract | None = None
     sdk_listener_manager_available = False
+    task_instance_mutation_hook_supports_dag_run = False
     if is_v3:
         asset_unique_key_location = _probe_asset_unique_key_location(installed_version)
         startup_details = _resolve_symbol(
@@ -1303,6 +1353,9 @@ def _resolve_uncached(
         )
         executor_contract = _probe_executor_contract(installed_version)
         sdk_listener_manager_available = _probe_sdk_listener_manager_available(installed_version)
+        task_instance_mutation_hook_supports_dag_run = (
+            _probe_task_instance_mutation_hook_supports_dag_run(installed_version)
+        )
     serialized_dag_location = _probe_serialized_dag(installed_version)
 
     observed = AirflowCapabilities(
@@ -1338,6 +1391,9 @@ def _resolve_uncached(
         asset_unique_key_location=asset_unique_key_location,
         executor_contract=executor_contract,
         sdk_listener_manager_available=sdk_listener_manager_available,
+        task_instance_mutation_hook_supports_dag_run=(
+            task_instance_mutation_hook_supports_dag_run
+        ),
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:

@@ -1,12 +1,20 @@
-"""Test static conformance checks for custom timetables, listeners, and executors."""
+"""Test static conformance checks for custom Airflow components."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, ClassVar
 
 import pytest
 from airflow.executors.base_executor import BaseExecutor
 from airflow.listeners import hookimpl
+from airflow.plugins_manager import AirflowPlugin
+from airflow.policies import hookimpl as policy_hookimpl
+from airflow.providers.sqlite.get_provider_info import get_provider_info as _real_provider_info
+from airflow.sdk.bases.notifier import BaseNotifier
+from airflow.sdk.bases.xcom import BaseXCom
+from airflow.secrets.base_secrets import BaseSecretsBackend
+from airflow.task.priority_strategy import PriorityWeightStrategy
 from airflow.timetables.base import DataInterval, Timetable
 
 from pytest_airflow_in_a_box.components import (
@@ -116,6 +124,148 @@ class _BrokenExecutor(BaseExecutor):
     sentry_integration = 123
 
 
+class _CleanXCom(BaseXCom):
+    """Conformant custom XCom backend: every check should pass."""
+
+    @staticmethod
+    def serialize_value(
+        value: Any,
+        *,
+        key: str | None = None,
+        task_id: str | None = None,
+        dag_id: str | None = None,
+        run_id: str | None = None,
+        map_index: int | None = None,
+    ) -> str:
+        del value, key, task_id, dag_id, run_id, map_index
+        return "clean"
+
+    @staticmethod
+    def deserialize_value(result: Any) -> Any:
+        del result
+        return None
+
+
+def _broken_xcom_serialize_value(self: Any, value: Any) -> str:
+    """Forgot `@staticmethod`; wrong shape entirely -- for `_BrokenXCom` below."""
+    del self, value
+    return "broken"
+
+
+def _broken_xcom_orm_deserialize_value(self: Any) -> Any:
+    """Removed in Airflow 3; nothing calls this -- for `_BrokenXCom` below."""
+    del self
+
+
+# Built via `type()` rather than a `class` statement: a real `class _BrokenXCom(BaseXCom)`
+# with this exact shape is a genuine Liskov substitution violation -- an instance method
+# where the base has a `@staticmethod`, missing five required-by-call-site keyword
+# parameters -- which `ty` correctly refuses to let a real subclass declare. `type()`
+# builds the identical runtime object `_check_xcom_backend_signature` inspects, without
+# going through `ty`'s override check.
+_BrokenXCom = type(
+    "_BrokenXCom",
+    (BaseXCom,),
+    {
+        "__doc__": "XCom backend exercising every XCom check at once.",
+        "serialize_value": _broken_xcom_serialize_value,
+        "orm_deserialize_value": _broken_xcom_orm_deserialize_value,
+    },
+)
+
+
+class _CleanWeightStrategy(PriorityWeightStrategy):
+    """Conformant custom weight strategy: every check should pass."""
+
+    def get_weight(self, ti: Any) -> int:
+        del ti
+        return 1
+
+    def __hash__(self) -> int:
+        return hash(self.__class__.__name__)
+
+
+class _AbstractWeightStrategy(PriorityWeightStrategy):
+    """Weight strategy that never implements the required `get_weight`."""
+
+
+class _HashOfNoneWeightStrategy(PriorityWeightStrategy):
+    """Weight strategy that implements `get_weight` but never overrides `__hash__`."""
+
+    def get_weight(self, ti: Any) -> int:
+        del ti
+        return 1
+
+
+class _CleanNotifier(BaseNotifier):
+    """Conformant custom notifier: every check should pass."""
+
+    template_fields: Sequence[str] = ("message",)
+
+    def __init__(self, message: str = "hello") -> None:
+        super().__init__()
+        self.message = message
+
+    def notify(self, context: Any) -> None:
+        del context
+
+
+class _BrokenNotifier(BaseNotifier):
+    """Notifier exercising every notifier check at once."""
+
+    template_fields: Sequence[str] = ("never_set",)
+
+
+class _CleanSecretsBackend(BaseSecretsBackend):
+    """Conformant custom secrets backend: every check should pass."""
+
+    def get_variable(self, key: str, team_name: str | None = None) -> str | None:
+        del key, team_name
+        return None
+
+
+class _BrokenSecretsBackend(BaseSecretsBackend):
+    """Secrets backend annotated to never return `None` on a miss."""
+
+    def get_variable(self, key: str, team_name: str | None = None) -> str:
+        del team_name
+        raise KeyError(key)
+
+
+class _CleanPolicy:
+    """Conformant custom policy: every check should pass on every certified release.
+
+    Declares only `task_instance` -- `task_instance_mutation_hook` gained `dag_run`
+    only in Airflow 3.3, so a hookimpl declaring it would fail registration on 3.1/3.2.
+    """
+
+    @policy_hookimpl
+    def task_instance_mutation_hook(self, task_instance: Any) -> None:
+        del task_instance
+
+
+class _BrokenPolicy:
+    """Policy exercising every policy check at once."""
+
+    @policy_hookimpl
+    def totally_made_up_hook(self, x: Any) -> None:
+        del x
+
+    @policy_hookimpl
+    def task_instance_mutation_hook(self, task_instance: Any, bogus: Any) -> None:
+        del task_instance, bogus
+
+
+class _CleanPlugin(AirflowPlugin):
+    """Conformant custom plugin: every check should pass."""
+
+    name = "clean_plugin"
+
+
+class _BrokenPlugin(AirflowPlugin):
+    """Plugin exercising the plugin check: never sets `name`."""
+
+
 def test_check_component_reports_no_problems_for_a_clean_timetable() -> None:
     """Accept a fully conformant module-level timetable."""
 
@@ -202,12 +352,202 @@ def test_check_component_flags_every_executor_problem() -> None:
     assert report.ok is False
 
 
+def test_check_component_reports_no_problems_for_a_clean_xcom_backend() -> None:
+    """Accept an XCom backend whose overrides accept the real base's call shape."""
+
+    report = check_component(_CleanXCom)
+
+    assert report.ok is True
+
+
+def test_check_component_flags_every_xcom_problem() -> None:
+    """Flag a broken `serialize_value` shape and the removed `orm_deserialize_value`."""
+
+    report = check_component(_BrokenXCom)
+
+    codes = {problem.code for problem in report.problems}
+    assert codes == {"xcom-backend-signature", "xcom-orm-deserialize-removed"}
+    assert report.ok is False
+
+
+def test_check_component_flags_an_xcom_backend_that_is_not_a_real_subclass() -> None:
+    """Flag a forced-kind component that does not subclass `BaseXCom` at all."""
+
+    class _NotAnXComBackend:
+        """Plain class that does not subclass `BaseXCom`."""
+
+    report = check_component(_NotAnXComBackend, kind=ComponentKind.XCOM)
+
+    assert {problem.code for problem in report.problems} == {"xcom-backend-signature"}
+
+
+def test_check_component_reports_no_problems_for_a_clean_weight_strategy() -> None:
+    """Accept a weight strategy implementing `get_weight` and `__hash__`."""
+
+    report = check_component(_CleanWeightStrategy)
+
+    assert report.ok is True
+
+
+def test_check_component_flags_an_abstract_weight_strategy() -> None:
+    """Flag a weight strategy that never implements the abstract `get_weight`."""
+
+    report = check_component(_AbstractWeightStrategy)
+
+    codes = {problem.code for problem in report.problems}
+    assert "weight-strategy-abstract" in codes
+    assert "weight-strategy-hash-of-none" in codes
+    assert report.ok is False
+
+
+def test_check_component_flags_a_weight_strategy_hash_of_none() -> None:
+    """Flag a weight strategy that implements `get_weight` but not `__hash__`."""
+
+    report = check_component(_HashOfNoneWeightStrategy)
+
+    assert {problem.code for problem in report.problems} == {"weight-strategy-hash-of-none"}
+
+
+def test_check_component_reports_no_problems_for_a_clean_notifier() -> None:
+    """Accept a notifier overriding `notify` whose `template_fields` all resolve."""
+
+    assert check_component(_CleanNotifier).ok is True
+    assert check_component(_CleanNotifier()).ok is True
+
+
+def test_check_component_flags_notifier_missing_notify_on_class_or_instance() -> None:
+    """Flag a notifier that never overrides `notify`, class or instance alike."""
+
+    class_report = check_component(_BrokenNotifier)
+    instance_report = check_component(_BrokenNotifier())
+
+    assert "notifier-missing-notify" in {p.code for p in class_report.problems}
+    assert "notifier-missing-notify" in {p.code for p in instance_report.problems}
+
+
+def test_check_component_flags_unresolvable_template_fields_only_on_an_instance() -> None:
+    """Call `template_fields` resolution only when given an instance, never a class."""
+
+    class_report = check_component(_BrokenNotifier)
+    instance_report = check_component(_BrokenNotifier())
+
+    assert "notifier-template-fields-unresolvable" not in {p.code for p in class_report.problems}
+    assert "notifier-template-fields-unresolvable" in {p.code for p in instance_report.problems}
+
+
+def test_check_component_reports_no_problems_for_a_clean_secrets_backend() -> None:
+    """Accept a secrets backend whose overridden getter is annotated `str | None`."""
+
+    report = check_component(_CleanSecretsBackend)
+
+    assert report.ok is True
+
+
+def test_check_component_flags_a_secrets_backend_getter_that_cannot_return_none() -> None:
+    """Flag a secrets backend getter annotated to never return `None`."""
+
+    report = check_component(_BrokenSecretsBackend)
+
+    assert {problem.code for problem in report.problems} == {"secrets-backend-raises-on-miss"}
+
+
+def test_check_component_reports_no_problems_for_a_clean_policy() -> None:
+    """Accept a policy hookimpl matching a real hookspec with no unknown arguments."""
+
+    report = check_component(_CleanPolicy)
+
+    assert report.ok is True
+
+
+def test_check_component_flags_every_policy_problem() -> None:
+    """Flag an unmatched hookspec name and an unknown hookimpl argument."""
+
+    report = check_component(_BrokenPolicy)
+
+    codes = {problem.code for problem in report.problems}
+    assert codes == {"policy-unknown-hookspec", "policy-argument-name-mismatch"}
+    assert report.ok is False
+
+
+def test_check_component_reports_no_problems_for_a_clean_plugin() -> None:
+    """Accept a plugin that sets `name`."""
+
+    report = check_component(_CleanPlugin)
+
+    assert report.ok is True
+
+
+def test_check_component_flags_a_plugin_missing_name() -> None:
+    """Flag a plugin that never sets `name`."""
+
+    report = check_component(_BrokenPlugin)
+
+    assert {problem.code for problem in report.problems} == {"plugin-name-missing"}
+
+
+def test_check_component_reports_no_problems_for_a_clean_provider() -> None:
+    """Accept the real, correctly configured `apache-airflow-providers-sqlite` provider.
+
+    Uses a real shipped provider rather than a local fixture: a fabricated
+    `get_provider_info` would need a `package-name` matching some real installed
+    distribution to pass `provider-package-name-mismatch`, and that distribution would
+    also need a real `apache_airflow_provider` entry point to pass
+    `provider-no-entry-point` -- properties only a real, already-published provider
+    package actually has.
+    """
+
+    report = check_component(_real_provider_info)
+
+    assert report.ok is True
+
+
+def test_check_component_names_a_provider_by_its_own_function_name() -> None:
+    """Name a provider report after the callable's own name, not `\"function\"`.
+
+    Regression test: `_as_type(component)` falls back to `type(component).__name__` for
+    a bare callable that is neither a class nor a built instance, which for every
+    real-world provider is the unhelpful, indistinguishable generic string `\"function\"`.
+    A class or instance is unaffected -- see `test_component_report_summary_lists_every_
+    problem` and the class-based tests above, none of which name-check `component_name`
+    because it was already correct for them.
+    """
+
+    report = check_component(_real_provider_info)
+
+    assert report.component_name == "get_provider_info"
+
+
+def test_check_component_flags_a_provider_info_schema_violation() -> None:
+    """Flag a `get_provider_info` callable missing schema-required fields.
+
+    Defined and called from this test module -- a sibling of `src/`, not a file the
+    editable install's own `.pth` root exposes -- so `_provider_owning_distribution`
+    cannot attribute it to any installed distribution, and the package-name-mismatch
+    and no-entry-point checks silently skip rather than firing on an unrelated,
+    incidental "distribution".
+    """
+
+    def get_provider_info() -> dict[str, Any]:
+        return {"package-name": "apache-airflow-providers-sqlite"}
+
+    report = check_component(get_provider_info, kind=ComponentKind.PROVIDER)
+
+    assert {problem.code for problem in report.problems} == {"provider-info-schema"}
+
+
 def test_check_component_classifies_by_kind_automatically() -> None:
     """Auto-detect a component's kind when none is given explicitly."""
 
     assert check_component(_CleanTimetable).ok is True
     assert check_component(_CleanListener).ok is True
     assert check_component(_CleanExecutor).ok is True
+    assert check_component(_CleanXCom).ok is True
+    assert check_component(_CleanWeightStrategy).ok is True
+    assert check_component(_CleanNotifier).ok is True
+    assert check_component(_CleanSecretsBackend).ok is True
+    assert check_component(_CleanPolicy).ok is True
+    assert check_component(_CleanPlugin).ok is True
+    assert check_component(_real_provider_info).ok is True
 
 
 def test_check_component_forced_kind_overrides_classification() -> None:
@@ -269,3 +609,10 @@ def test_component_kind_values_are_stable_strings() -> None:
     assert ComponentKind.TIMETABLE.value == "timetable"
     assert ComponentKind.LISTENER.value == "listener"
     assert ComponentKind.EXECUTOR.value == "executor"
+    assert ComponentKind.XCOM.value == "xcom"
+    assert ComponentKind.WEIGHT_STRATEGY.value == "weight-strategy"
+    assert ComponentKind.NOTIFIER.value == "notifier"
+    assert ComponentKind.SECRETS_BACKEND.value == "secrets-backend"
+    assert ComponentKind.POLICY.value == "policy"
+    assert ComponentKind.PLUGIN.value == "plugin"
+    assert ComponentKind.PROVIDER.value == "provider"

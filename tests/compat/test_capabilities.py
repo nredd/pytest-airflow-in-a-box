@@ -106,6 +106,14 @@ class _V33Executor:
     supports_connection_test = False
 
 
+def _task_instance_mutation_hook_without_dag_run(task_instance: object) -> None:
+    """Represent the pre-3.3 `task_instance_mutation_hook` hookspec signature."""
+
+
+def _task_instance_mutation_hook_with_dag_run(task_instance: object, dag_run: object) -> None:
+    """Represent the Airflow 3.3 `task_instance_mutation_hook` hookspec signature."""
+
+
 def _callable_symbol() -> None:
     """Provide a callable placeholder for required functions."""
 
@@ -254,6 +262,13 @@ def _fake_modules(release: tuple[int, int, int]) -> dict[str, SimpleNamespace]:
     modules["airflow.executors.base_executor"] = SimpleNamespace(
         BaseExecutor=executor_by_minor.get(release[:2], _V33Executor)
     )
+    modules["airflow.policies"] = SimpleNamespace(
+        task_instance_mutation_hook=(
+            _task_instance_mutation_hook_with_dag_run
+            if release[:2] == (3, 3)
+            else _task_instance_mutation_hook_without_dag_run
+        )
+    )
     return modules
 
 
@@ -359,6 +374,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -386,6 +402,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -413,6 +430,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -440,6 +458,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -467,6 +486,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -494,6 +514,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -521,6 +542,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -548,6 +570,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SDK,
                 executor_contract=ExecutorContract.V3_1,
                 sdk_listener_manager_available=False,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -575,6 +598,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
                 executor_contract=ExecutorContract.V3_2,
                 sdk_listener_manager_available=True,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -602,6 +626,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
                 executor_contract=ExecutorContract.V3_2,
                 sdk_listener_manager_available=True,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -629,6 +654,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
                 executor_contract=ExecutorContract.V3_2,
                 sdk_listener_manager_available=True,
+                task_instance_mutation_hook_supports_dag_run=False,
             ),
         ),
         (
@@ -656,6 +682,7 @@ def test_compat_package_import_does_not_import_airflow() -> None:
                 asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
                 executor_contract=ExecutorContract.V3_3,
                 sdk_listener_manager_available=True,
+                task_instance_mutation_hook_supports_dag_run=True,
             ),
         ),
     ],
@@ -805,6 +832,7 @@ def test_resolves_certified_v2_release_capabilities(
         asset_unique_key_location=None,
         executor_contract=None,
         sdk_listener_manager_available=False,
+        task_instance_mutation_hook_supports_dag_run=False,
     )
 
 
@@ -1255,6 +1283,22 @@ def _remove_sdk_listener_manager(modules: dict[str, SimpleNamespace]) -> None:
     del modules["airflow.sdk.listener"]
 
 
+def _add_dag_run_to_mutation_hook(modules: dict[str, SimpleNamespace]) -> None:
+    """Mutate a pre-3.3 release to report the 3.3 `task_instance_mutation_hook` shape."""
+
+    modules["airflow.policies"] = SimpleNamespace(
+        task_instance_mutation_hook=_task_instance_mutation_hook_with_dag_run
+    )
+
+
+def _remove_dag_run_from_mutation_hook(modules: dict[str, SimpleNamespace]) -> None:
+    """Mutate Airflow 3.3 to report the pre-3.3 `task_instance_mutation_hook` shape."""
+
+    modules["airflow.policies"] = SimpleNamespace(
+        task_instance_mutation_hook=_task_instance_mutation_hook_without_dag_run
+    )
+
+
 @pytest.mark.parametrize(
     ("release", "mutate", "symbol"),
     [
@@ -1268,6 +1312,16 @@ def _remove_sdk_listener_manager(modules: dict[str, SimpleNamespace]) -> None:
         ((3, 2, 2), _downgrade_executor_sentry_flag, "BaseExecutor attribute contract"),
         ((3, 2, 2), _add_connection_test_support, "BaseExecutor attribute contract"),
         ((3, 3, 0), _remove_sdk_listener_manager, "airflow.sdk.listener manager"),
+        (
+            (3, 2, 2),
+            _add_dag_run_to_mutation_hook,
+            "task_instance_mutation_hook.dag_run",
+        ),
+        (
+            (3, 3, 0),
+            _remove_dag_run_from_mutation_hook,
+            "task_instance_mutation_hook.dag_run",
+        ),
     ],
 )
 def test_rejects_vendor_contract_mismatch(
