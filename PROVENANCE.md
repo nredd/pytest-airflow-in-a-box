@@ -267,6 +267,27 @@ directly) does not already serve better. `airflow.settings.get_policy_plugin_man
 reading `pluggy`'s own `PluginManager` and by round-tripping `register`/`unregister` against the
 installed 3.3.0's real policy plugin manager end to end.
 
+`src/pytest_airflow_in_a_box/_compat/components.py`'s timetable/weight-strategy registration
+(`build_component_plugin`, `invalidate_component_lookup_caches`, `register_timetable`,
+`register_weight_strategy`, `timetable_round_trip`) is independently authored. Its embedded facts were
+transcribed by reading Apache Airflow source directly: `encode_timetable`/`decode_timetable` are
+defined in `airflow/serialization/serialized_objects.py` at commit
+`54bd5d8cd9f6f477cc83445737614dec81c4323c` (tag `3.1.0`, where `encode_timetable` raises
+`_TimetableNotRegistered` for an unregistered custom timetable at encode time) and re-exported from
+`airflow.serialization.encoders`/`decoders` into the same `serialized_objects` location from tag
+`3.2.0` onward (confirmed against the installed 3.3.0), so one import location covers every certified
+3.x release. The lookup each registration must satisfy: on 3.2+, `decode_timetable` resolves through
+`plugins_manager.get_timetables_plugins()` and `_encode_priority_weight_strategy` through
+`plugins_manager.get_priority_weight_strategy_plugins()` -- both `functools.cache` functions building
+`{qualname(cls): cls}` from every registered plugin's `timetables`/`priority_weight_strategies` list
+(confirmed by reading the installed 3.3.0's `plugins_manager.py`, and the reason
+`invalidate_component_lookup_caches` clears exactly those two derived caches and never `_get_plugins`,
+which holds the appended plugin itself); on 3.1.x the same lookups read the `timetable_classes`/
+`priority_weight_strategy_classes` module globals, populated by `initialize_*_plugins()` functions
+that no-op while the global is non-None, which is why the 3.1 invalidation resets them to `None`.
+Upstream's `qualname()` helper (`airflow/_shared/module_loading.py`, installed 3.3.0) keys a class by
+`__module__.__name__`, not `__qualname__`.
+
 No proprietary source code, credentials, hostnames, internal paths, or private repository history
 may be included in this project.
 

@@ -274,8 +274,9 @@ rather than a fixture.
 The five ini options above are run-wide, fixed before the first Airflow import -- right
 for a component every test needs, wrong for one only a single test wants. The
 `airflow_components` fixture yields a `ComponentRegistry` that registers a plugin,
-listener, policy, secrets backend, or executor directly into Airflow's live,
-process-global registries for the duration of one test, then reverts every one of them:
+listener, policy, secrets backend, executor, timetable, or priority weight strategy
+directly into Airflow's live, process-global registries for the duration of one test,
+then reverts every one of them:
 
 ```python
 def test_my_listener_fires(airflow_components, dag_maker):
@@ -321,12 +322,26 @@ longer match what this plugin has certified.
   `airflow_executor` ini. `component` must be defined at module scope somewhere
   importable -- Airflow resolves it later by dotted import path, and a class defined
   inside a test function has none
+- `timetable(component)` -- registers a custom timetable class through a synthesized
+  throwaway `AirflowPlugin`, which is exactly what makes Airflow's serialization round
+  trip resolve the class by qualname. Accepts the class or an instance (an instance
+  registers its class, plus runs the instance-only conformance checks). See the
+  [custom timetables guide](custom-timetables.md)
+- `priority_weight_strategy(component)` -- the same synthesized-plugin registration for
+  a `PriorityWeightStrategy` subclass, which is what lets Dag serialization accept an
+  operator's custom `weight_rule` at all. Deserialization re-instantiates the class
+  with no arguments, so state must live on the class
+- `serialization_round_trip(component)` -- registers a timetable INSTANCE via
+  `timetable()`, then asserts `decode_timetable(encode_timetable(...))` reconstructs
+  it: one call covers "not registered", serialize/deserialize asymmetry, and (when the
+  class defines its own `__eq__`) equality problems
 - `round_trip(component)` -- classifies `component` as exactly one of plugin, listener,
-  executor, or secrets backend (the same classification `check_component`'s own
-  auto-detection uses) and calls that method with its defaults, except a listener's
-  `task` flag, which follows the installed release's Task SDK availability so a 3.1.x
-  install round-trips core-only rather than raising. Not a substitute for `policy()`,
-  which has no bare-component form to classify
+  executor, secrets backend, timetable, or priority weight strategy (the same
+  classification `check_component`'s own auto-detection uses) and calls that method
+  with its defaults, except a listener's `task` flag, which follows the installed
+  release's Task SDK availability so a 3.1.x install round-trips core-only rather than
+  raising. Not a substitute for `policy()`, which has no bare-component form to
+  classify
 
 `airflow_components` is unavailable on the Airflow 2.x family, which predates the Task
 SDK's own plugin and listener managers entirely.

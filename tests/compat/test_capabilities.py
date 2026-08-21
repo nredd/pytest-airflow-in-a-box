@@ -154,7 +154,9 @@ def _base_modules() -> dict[str, SimpleNamespace]:
         "airflow.models.dag_version": SimpleNamespace(DagVersion=generic_class),
         "airflow.models.dagbundle": SimpleNamespace(DagBundleModel=generic_class),
         "airflow.serialization.serialized_objects": SimpleNamespace(
-            LazyDeserializedDAG=generic_class
+            LazyDeserializedDAG=generic_class,
+            encode_timetable=_callable_symbol,
+            decode_timetable=_callable_symbol,
         ),
         "airflow.sdk.definitions.dag": SimpleNamespace(_run_task=_callable_symbol),
         "airflow.sdk.execution_time.task_runner": SimpleNamespace(

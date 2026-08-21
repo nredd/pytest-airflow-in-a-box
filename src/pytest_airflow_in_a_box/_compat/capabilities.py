@@ -764,6 +764,11 @@ _V3_REQUIRED_SYMBOLS = (
     ("airflow.models.dag_version", "DagVersion"),
     ("airflow.models.dagbundle", "DagBundleModel"),
     ("airflow.serialization.serialized_objects", "LazyDeserializedDAG"),
+    # Defined in `serialized_objects` itself on 3.1.x and re-exported there from
+    # `airflow.serialization.encoders`/`decoders` on 3.2+, so this one location is
+    # stable across every certified 3.x release; see PROVENANCE.md.
+    ("airflow.serialization.serialized_objects", "encode_timetable"),
+    ("airflow.serialization.serialized_objects", "decode_timetable"),
     ("airflow.sdk.execution_time.task_runner", "RuntimeTaskInstance"),
     ("airflow.sdk.execution_time.task_runner", "parse"),
     ("airflow.sdk.execution_time.task_runner", "run"),

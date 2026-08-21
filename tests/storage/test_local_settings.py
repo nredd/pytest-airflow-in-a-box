@@ -78,8 +78,17 @@ class _RaisingImportlibUtil:
 
 @pytest.fixture(autouse=True)
 def _isolate_local_settings_module() -> Iterator[None]:
-    """Prevent `sys.path` mutation and cached imports from leaking between tests."""
+    """Prevent `sys.path` mutation and cached imports from leaking between tests.
 
+    Pops the cached `airflow_local_settings` on ENTRY as well as exit: any
+    airflow-booted test that ran earlier on this worker left the bootstrap-generated
+    module in `sys.modules`, so an exit-only pop hands this module's
+    first importing test the stale bootstrap module instead of the one it just wrote
+    -- observed as an order-dependent failure under xdist, where the schedule decides
+    which test imports first.
+    """
+
+    sys.modules.pop("airflow_local_settings", None)
     original_path = list(sys.path)
     yield
     sys.path[:] = original_path
