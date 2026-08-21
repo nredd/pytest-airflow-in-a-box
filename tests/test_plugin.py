@@ -312,10 +312,11 @@ def test_colocation_is_a_noop_without_the_xdist_plugin(pytester: pytest.Pytester
 
     Regression test for issue #163: `xdist_group` is only a known marker because
     `xdist.plugin.pytest_configure` registers it. `-p no:xdist` is an ordinary way to
-    force a serial run (`pytest-xdist` is a hard dependency, so it is always importable
-    but not always loaded), and previously this hook still tried to add the marker
-    unconditionally, aborting the run with `Failed: 'xdist_group' not found in
-    \\`markers\\` configuration option` under `--strict-markers`.
+    force a serial run (the `dev` dependency group installs `pytest-xdist`, so it is
+    always importable in this suite but not always loaded), and previously this hook
+    still tried to add the marker unconditionally, aborting the run with
+    `Failed: 'xdist_group' not found in \\`markers\\` configuration option` under
+    `--strict-markers`.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.

@@ -3704,7 +3704,7 @@ dev = [
     { name = "build", specifier = "==1.5.0" },
     { name = "prek", specifier = "==0.4.13" },
     { name = "pytest-cov", specifier = "==7.1.0" },
-    { name = "pytest-xdist", specifier = ">=3.8" },
+    { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "ruff", specifier = "==0.16.2" },
     { name = "towncrier", specifier = "==24.8.0" },
     { name = "ty", specifier = "==0.0.70" },

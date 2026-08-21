@@ -71,7 +71,7 @@ jobs:
           uv venv --python "$PYTHON_VERSION" .venv-ci
           uv pip install --python .venv-ci/bin/python \
             --constraint airflow-constraints.txt \
-            --editable . \
+            --editable ".[xdist]" \
             apache-airflow-core \
             "apache-airflow-providers-sqlite>=4.1,<5"
           printf 'complete=true\n' >> "$GITHUB_OUTPUT"
