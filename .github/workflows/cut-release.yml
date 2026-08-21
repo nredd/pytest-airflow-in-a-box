@@ -12,6 +12,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.12"
+  VERSION: ${{ inputs.version }}
 
 concurrency:
   group: cut-release
@@ -21,12 +22,13 @@ jobs:
   cut:
     name: Bump, tag, and push
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     if: github.actor == 'nredd'
     environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: main
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
       - name: Configure the release bot identity
@@ -41,8 +43,35 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
       - name: Bump version, build the changelog, tag, and push
-        run: uv run python scripts/cut_release.py "${{ inputs.version }}"
+        run: uv run python scripts/cut_release.py "$VERSION"
+      - name: Wait for CI to go green on the pushed commit
+        # `release.yml`'s `build` job refuses to publish unless `ci.yml` already has a
+        # successful *completed* run for the release commit's SHA -- the same check a
+        # human implicitly satisfies by waiting for a green `main` before running
+        # `gh release create` by hand. Poll for it here so automating that step doesn't
+        # silently drop the PyPI publish.
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "Waiting for ci.yml to complete for $sha..."
+          for _ in $(seq 1 80); do
+            conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed" \
+              --jq '.workflow_runs[0].conclusion // "missing"')"
+            if [ "$conclusion" = "success" ]; then
+              echo "CI succeeded for $sha"
+              exit 0
+            fi
+            if [ "$conclusion" != "missing" ]; then
+              echo "CI concluded '$conclusion' for $sha; refusing to release" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for CI to complete for $sha" >&2
+          exit 1
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PAT }}
-        run: gh release create "v${{ inputs.version }}" --title "v${{ inputs.version }}" --generate-notes
+        run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes

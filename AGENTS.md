@@ -30,8 +30,10 @@ native Windows support) -- use WSL2 or the devcontainer.
   Publishing to PyPI happens when the GitHub release is published (trusted publishing,
   `release.yml`)
 - Cutting a release is normally the restricted `Actions -> Cut Release ->
-  workflow_dispatch` job (`cut-release.yml`), gated to `nredd` plus the `release`
-  environment's required reviewer. It runs `scripts/cut_release.py`: bumps both version
+  workflow_dispatch` job (`cut-release.yml`), gated to `nredd` via `if: github.actor ==
+  'nredd'` plus the repo's `release` GitHub Environment (Settings -> Environments --
+  configured separately from this repo's tracked files, with `nredd` as a required
+  reviewer). It runs `scripts/cut_release.py`: bumps both version
   files, builds `CHANGELOG.md` from `changelog.d/` fragments, pushes both commits straight
   to `main`, tags, and creates the GitHub release -- authenticated with a PAT (`RELEASE_PAT`
   secret) so the resulting push/tag/release trigger `ci.yml`/`release.yml` exactly as a

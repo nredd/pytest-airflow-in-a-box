@@ -8,6 +8,12 @@ skip never engages. Skip the check outright for commits matching either of
 `cut_release.py`'s two release-commit message patterns; everything else defers to
 towncrier normally.
 
+At the git `pre-commit` stage (this hook has no `stages:` override, so it also runs there,
+not just `pre-push`), `HEAD` still points at the commit *before* the one being made -- the
+exemption can miss on a local `git commit` for that reason. It reliably matches wherever
+this hook runs against a fully-formed commit, which is the case this exists to fix:
+`ci.yml`'s `check` job (`prek run --all-files`, run against the real pushed commit).
+
 References:
     https://towncrier.readthedocs.io/en/latest/cli.html#towncrier-check
 """
@@ -21,8 +27,8 @@ import subprocess
 LOGGER = logging.getLogger(__name__)
 
 RELEASE_COMMIT_PATTERNS = (
-    r"^Bump version to \d",
-    r"^Update CHANGELOG\.md for v\d",
+    r"^Bump version to \d+\.\d+\.\d+\Z",
+    r"^Update CHANGELOG\.md for v\d+\.\d+\.\d+\Z",
 )
 
 
@@ -31,6 +37,9 @@ def head_commit_subject() -> str:
 
     Returns:
         str containing the commit subject.
+
+    Raises:
+        subprocess.CalledProcessError: `git log` failed.
     """
     return subprocess.run(
         ["git", "log", "-1", "--pretty=%s"],
