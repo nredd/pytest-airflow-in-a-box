@@ -1682,7 +1682,18 @@ def test_build_component_plugin_subclasses_the_core_airflow_plugin() -> None:
     assert issubclass(plugin_class, AirflowPlugin)
     assert plugin_class.timetables == [_SymmetricTimetable]
     assert plugin_class.name == "pytest-airflow-in-a-box-timetables-_SymmetricTimetable"
-    for attribute in compat_components.PLUGIN_LIST_ATTRIBUTES:
+    # Subclassing the INSTALLED base is itself the guarantee that every list attribute
+    # this release's cache functions iterate resolves on the synthesized plugin --
+    # asserted structurally rather than against `PLUGIN_LIST_ATTRIBUTES`, which
+    # transcribes the 3.3 superset (`partition_mappers` and friends do not exist on
+    # the 3.1/3.2 bases and would false-fail those legs).
+    declared = [
+        attribute
+        for attribute in compat_components.PLUGIN_LIST_ATTRIBUTES
+        if hasattr(AirflowPlugin, attribute)
+    ]
+    assert declared
+    for attribute in declared:
         assert hasattr(plugin_class, attribute)
 
 
