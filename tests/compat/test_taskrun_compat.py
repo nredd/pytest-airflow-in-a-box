@@ -1195,3 +1195,73 @@ def test_settle_dag_run_bounds_states_that_never_stabilize() -> None:
     taskrun._settle_dag_run(dag_run, dag, None)
 
     assert dag_run.update_calls == 3
+
+
+@pytest.mark.parametrize("dag_run_refresh", [True, False], ids=["3.3-shape", "3.1-shape"])
+def test_dependencies_met_refreshes_through_the_certified_signature(
+    monkeypatch: pytest.MonkeyPatch, dag_run_refresh: bool
+) -> None:
+    """Refresh from the persisted task through whichever signature the release carries.
+
+    Airflow 3.3 takes the owning DagRun so mutation hooks can see it; 3.1 does not accept
+    the argument at all. Only one shape is reachable on any installed release, so the
+    other is covered here with a capability double rather than an extra CI leg.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the capability probe and the refresh.
+        dag_run_refresh: bool selecting the certified refresh signature.
+    """
+
+    dag_run = object()
+    scheduler_task = object()
+    refreshes: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        taskrun,
+        "resolve_capabilities",
+        lambda: _capabilities(
+            TaskInstanceRunner.SDK_RUN_TASK,
+            dag_run_refresh=dag_run_refresh,
+        ),
+    )
+    monkeypatch.setattr(
+        taskrun, "_scheduler_task", lambda _instance, _session: (dag_run, scheduler_task)
+    )
+    monkeypatch.setattr(
+        taskrun,
+        "_refresh_from_task",
+        lambda *args: refreshes.append(args),
+    )
+    session: Any = _Session()
+    ti: Any = SimpleNamespace(are_dependencies_met=lambda **_kwargs: True)
+
+    assert taskrun.dependencies_met(ti, session=session) is True
+    assert refreshes == [
+        ((ti, scheduler_task, dag_run) if dag_run_refresh else (ti, scheduler_task))
+    ]
+    assert session.commits == 1
+
+
+def test_dependencies_met_without_a_session_commits_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip the commit when there is no session to commit, and still answer.
+
+    `flag_upstream_failed` writes through a session when one exists; with none supplied
+    there is nothing staged and nothing to flush.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the capability probe and the refresh.
+    """
+
+    monkeypatch.setattr(
+        taskrun,
+        "resolve_capabilities",
+        lambda: _capabilities(TaskInstanceRunner.SDK_RUN_TASK, dag_run_refresh=True),
+    )
+    monkeypatch.setattr(
+        taskrun, "_scheduler_task", lambda _instance, _session: (object(), object())
+    )
+    monkeypatch.setattr(taskrun, "_refresh_from_task", lambda *_args: None)
+    ti: Any = SimpleNamespace(are_dependencies_met=lambda **_kwargs: False)
+
+    assert taskrun.dependencies_met(ti, session=None) is False

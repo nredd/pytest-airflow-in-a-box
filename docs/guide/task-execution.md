@@ -38,6 +38,65 @@ next test's setup runs. This window already exists for `dag_maker(dag_id="fixed"
 explicit pinned id -- `run_dag` just makes a fixed real `dag_id` the only mode, which is why it
 is called out here.
 
+## Executor-driven runs
+
+Everything above runs your task bodies in the pytest process. Pass `executor=` to run them
+through a real Airflow executor instead -- workloads queued, heartbeats pumped, task bodies
+executing in supervised worker subprocesses that report back to a live Task Execution API:
+
+```python
+def test_orders_dag_through_our_executor(dag_bag, run_dag):
+    dag = dag_bag.dags["orders"]
+
+    result = run_dag(dag, executor="my_company.executors.MyExecutor")
+
+    assert result.success
+```
+
+`executor=` takes an alias registered through
+[`airflow_components.executor`](custom-components.md#runtime-component-registration), a dotted
+import path, a `BaseExecutor` subclass, or an instance you built yourself. The api-server the
+workers report to starts lazily on the first executor-driven call, exactly as `api_client`
+starts it, and `--apps core,execution` means it serves `/execution` as well as `/api/v2`.
+
+This is the piece upstream cannot offer. `dag.test(use_executor=True)` queues real workloads,
+but nothing in a test process serves the `/execution` API they need
+([apache/airflow#59074](https://github.com/apache/airflow/issues/59074)); this plugin already
+ships a live api-server, so pointing an executor at it is the whole trick. Nothing here is
+built on `dag.test`, which is mid-move upstream
+([#61803](https://github.com/apache/airflow/issues/61803),
+[#54658](https://github.com/apache/airflow/issues/54658)).
+
+The result is the same `DagRunResult`, with the same ordering, mapped-task expansion, and
+settling semantics -- both paths share one driver. Three things differ, all of them inherent
+to tasks running in another process:
+
+- **The Dag must be a file inside your Dag folder.** Each task is re-imported from that file
+  in a worker subprocess, so a `dag_maker` Dag -- defined in a test body -- can never qualify
+  and is refused by name, before any metadata is written. Use `dag_bag`.
+- **`result.errors` is best-effort.** A task's exception is raised inside the worker, so only
+  what the executor itself attaches to a failure reaches your test. `result.states` stays
+  authoritative, and the traceback is in the worker's log under the run's logs folder --
+  [`--airflow-home-keep`](airflow-home.md) will keep it around.
+- **Instances are dispatched one at a time**, in dependency order, so an executor's own
+  concurrency is not exercised. This is what keeps `result.order` meaningful.
+
+`run_triggerer=` cannot be combined with `executor=`: resuming a deferred task is a
+triggerer's job, and an executor-driven run settles a deferring instance as `deferred`.
+
+An instance that never settles fails the run naming the stuck task, rather than hanging.
+`--airflow-executor-timeout` (or the `airflow_executor_timeout` ini option) sets that budget
+per instance; it defaults to 300 seconds, which is generous for a worker subprocess that has
+to start up and parse a Dag file.
+
+Airflow 3.x only. `queue_workload`, `workloads.ExecuteTask` and the Task Execution API all
+arrived with AIP-72, so on the 2.x family `executor=` fails with an actionable error; drop it
+and the in-process path works there unchanged.
+
+Writing an executor to test is easier than it sounds -- Airflow 3 removed `SequentialExecutor`
+from core, so a serial one is about fifteen lines. See
+[Custom components](custom-components.md#a-worked-executor) for the whole thing.
+
 ## Whole-DagRun execution
 
 For a Dag authored directly in the test, rather than loaded from your `dags/` folder,
@@ -146,8 +205,8 @@ def test_task(dag_maker):
 ```
 
 Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `execute_dag_run`,
-`run_task_instance`, `ordered_task_instances`, `run_trigger`, `TaskResolutionError`, and
-`TriggerExecutionError`. `run_task_instance` resolves the executable task automatically for
+`execute_dag_run_via_executor`, `run_task_instance`, `ordered_task_instances`, `run_trigger`,
+`TaskResolutionError`, `TriggerExecutionError`, and `ExecutorRunError`. `run_task_instance` resolves the executable task automatically for
 any `dag_maker`-persisted Dag, including task instances queried through a different session
 (e.g. the `session` fixture); pass `task=` only for Dags the plugin does not own -- see
 [Testing a Dag defined elsewhere](#testing-a-dag-defined-elsewhere) for `run_dag`, which

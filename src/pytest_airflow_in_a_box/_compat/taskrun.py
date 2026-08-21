@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
 from pytest_airflow_in_a_box._compat.dag import expand_mapped_task_instances, task_is_mapped
@@ -58,11 +58,21 @@ TERMINAL_TASK_STATE_VALUES = frozenset(
 )
 
 
-class TaskResolutionError(RuntimeError):
+class DagRunDriveError(RuntimeError):
+    """Report a plugin-contract failure while driving a DagRun.
+
+    `drive_dag_run` re-raises every subclass instead of recording it against the
+    offending instance's key: a Dag whose task body raised is a Dag *outcome*, but a
+    task this plugin could not resolve, a trigger it could not drive, or an executor
+    that never reported is a failure of the harness itself and must stay loud.
+    """
+
+
+class TaskResolutionError(DagRunDriveError):
     """Report failure to resolve an executable task for a task instance."""
 
 
-class TriggerExecutionError(RuntimeError):
+class TriggerExecutionError(DagRunDriveError):
     """Report failure to drive a trigger to its first event."""
 
 
@@ -516,6 +526,53 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
         ti.refresh_from_task(task, dag_run=dag_run)
 
 
+def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
+    """Report whether Airflow's own dependency rules currently allow an instance to run.
+
+    The in-process path never asks this directly: `check_and_change_state_before
+    _execution` both evaluates the rules and moves the instance to ``running``. An
+    executor-driven run needs the answer *without* that transition, because the
+    instance has to reach the executor in ``queued`` instead. This asks Airflow the
+    same question through the same dependency machinery.
+
+    Evaluating dependencies requires the ORM instance to carry its serialized task, so
+    this refreshes from the persisted scheduler task first -- the same refresh the
+    in-process runner performs. `flag_upstream_failed` is enabled so a blocked
+    downstream is marked ``upstream_failed`` or ``skipped`` here, exactly as the
+    scheduler marks it, rather than being left for the closing `update_state` pass.
+
+    Parameters:
+        ti: airflow.models.taskinstance.TaskInstance being evaluated.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+
+    Returns:
+        bool reporting whether every dependency is currently met.
+
+    Raises:
+        TaskResolutionError: Persisted DagRun or task metadata cannot be loaded.
+    """
+
+    from airflow.ti_deps.dep_context import DepContext
+
+    dag_run, scheduler_task = _scheduler_task(ti, session)
+    capabilities = resolve_capabilities()
+    if capabilities.refresh_from_task_supports_dag_run:
+        _refresh_from_task(ti, scheduler_task, dag_run)
+    else:
+        _refresh_from_task(ti, scheduler_task)
+    instance: Any = ti
+    met = bool(
+        instance.are_dependencies_met(
+            dep_context=DepContext(flag_upstream_failed=True),
+            **_session_kwargs(session),
+        )
+    )
+    if session is not None:
+        # `flag_upstream_failed` writes through the session without committing.
+        session.commit()
+    return met
+
+
 def _task_identity(ti: Any) -> tuple[str, int]:
     """Return one task instance's ``(task_id, map_index)`` identity.
 
@@ -739,6 +796,105 @@ def _snapshot_dag_run(
     )
 
 
+class SettleInstance(Protocol):
+    """Settle one persisted task instance, or leave it untouched.
+
+    The one step that varies between an in-process run and an executor-driven one.
+    Everything around it -- dependency-safe ordering, mapped expansion, pre-settled
+    instances, the closing `update_state` fixpoint, and the result snapshot -- is
+    identical, so `drive_dag_run` owns all of it and calls exactly one of these.
+
+    An implementation settles ``ti`` when its dependencies allow and otherwise
+    returns without touching ``ti.state``: `drive_dag_run` reads that unchanged
+    state as "not executed", exactly as the scheduler leaves a blocked instance.
+    """
+
+    def __call__(self, ti: TaskInstance, task: Operator, *, session: Session | None) -> None:
+        """Settle one task instance.
+
+        Parameters:
+            ti: airflow.models.taskinstance.TaskInstance to settle.
+            task: airflow.sdk.types.Operator containing executable authoring code.
+            session: sqlalchemy.orm.Session | None owning the persisted metadata.
+
+        Raises:
+            BaseException: The task body raised; `drive_dag_run` records it against
+                the instance's key and continues, scheduler-shaped.
+        """
+
+
+def drive_dag_run(
+    dag_run: DagRun,
+    dag: Any,
+    session: Session | None,
+    settle: SettleInstance,
+) -> DagRunResult:
+    """Walk one DagRun in dependency-safe order, settling each instance through `settle`.
+
+    Shared by every way this plugin drives a DagRun. Instances are visited in
+    topological order, one attempt each; a raising task body is captured and
+    execution continues, scheduler-shaped. Mapped tasks expand mid-run once every
+    direct upstream settled.
+
+    Parameters:
+        dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
+        dag: Any containing the authoring Dag with executable task objects.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        settle: SettleInstance settling one instance, or leaving it untouched when
+            its dependencies are unmet.
+
+    Returns:
+        pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
+
+    Raises:
+        ValueError: A mapped task must expand but no `session` was supplied, or a
+            fetched task instance is absent from the supplied Dag graph.
+        DagRunDriveError: `settle` reported a plugin-contract failure rather than a
+            Dag outcome -- an unresolvable task, an undriveable trigger, or an
+            executor that never reported.
+    """
+
+    errors: dict[str, BaseException] = {}
+    executed: list[str] = []
+    attempted: set[tuple[str, int]] = set()
+    expansion_attempted: set[str] = set()
+    while (ti := _next_pending_task_instance(dag_run, dag, session, attempted)) is not None:
+        task_id, map_index = _task_identity(ti)
+        state = ti.state
+        if state is not None:
+            # Pre-settled instances (for example branch-skipped downstreams) never run.
+            attempted.add((task_id, map_index))
+            continue
+        if (
+            map_index < 0
+            and task_id not in expansion_attempted
+            and task_is_mapped(dag.get_task(task_id))
+        ):
+            expansion_attempted.add(task_id)
+            if not _upstreams_settled(dag_run, dag, task_id, session) or not (
+                _try_expand_mapped_task(dag_run, task_id, session)
+            ):
+                attempted.add((task_id, map_index))
+            continue
+        attempted.add((task_id, map_index))
+        key = task_key(task_id, map_index)
+        try:
+            settle(ti, dag.get_task(task_id), session=session)
+        except DagRunDriveError:
+            # Plugin-contract failures are not Dag outcomes; surface them.
+            raise
+        except Exception as error:
+            errors[key] = error
+        # An instance whose dependencies were unmet keeps its `None` state: not executed.
+        if ti.state != state:
+            executed.append(key)
+    _settle_dag_run(dag_run, dag, session)
+    if session is not None:
+        # `update_state` writes through the caller's session without committing.
+        session.commit()
+    return _snapshot_dag_run(dag_run, dag, session, errors=errors, executed=executed)
+
+
 def execute_dag_run(
     dag_run: DagRun,
     dag: Any,
@@ -748,6 +904,11 @@ def execute_dag_run(
     trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
 ) -> DagRunResult:
     """Execute every task instance of one DagRun and return an inert snapshot.
+
+    The in-process adapter over `drive_dag_run`: every instance runs in this
+    process through Airflow's own task entry point, with no executor and no
+    supervised subprocess. `pytest_airflow_in_a_box._compat.executor` is the
+    other adapter.
 
     Instances run in dependency-safe order with default dependency semantics,
     one attempt each. A raising task body is captured and execution continues,
@@ -781,57 +942,34 @@ def execute_dag_run(
             recorded as a task outcome.
     """
 
-    errors: dict[str, BaseException] = {}
-    executed: list[str] = []
-    attempted: set[tuple[str, int]] = set()
-    expansion_attempted: set[str] = set()
-    while (ti := _next_pending_task_instance(dag_run, dag, session, attempted)) is not None:
-        task_id, map_index = _task_identity(ti)
-        state = ti.state
-        if state is not None:
-            # Pre-settled instances (for example branch-skipped downstreams) never run.
-            attempted.add((task_id, map_index))
-            continue
-        if (
-            map_index < 0
-            and task_id not in expansion_attempted
-            and task_is_mapped(dag.get_task(task_id))
-        ):
-            expansion_attempted.add(task_id)
-            if not _upstreams_settled(dag_run, dag, task_id, session) or not (
-                _try_expand_mapped_task(dag_run, task_id, session)
-            ):
-                attempted.add((task_id, map_index))
-            continue
-        attempted.add((task_id, map_index))
-        key = task_key(task_id, map_index)
-        try:
-            run_task_instance(
-                ti,
-                dag.get_task(task_id),
-                run_triggerer=run_triggerer,
-                trigger_timeout=trigger_timeout,
-                session=session,
-            )
-        except (TaskResolutionError, TriggerExecutionError):
-            # Plugin-contract failures are not Dag outcomes; surface them.
-            raise
-        except Exception as error:
-            errors[key] = error
-        # An instance whose dependencies were unmet keeps its `None` state: not executed.
-        if ti.state != state:
-            executed.append(key)
-    _settle_dag_run(dag_run, dag, session)
-    if session is not None:
-        # `update_state` writes through the caller's session without committing.
-        session.commit()
-    return _snapshot_dag_run(dag_run, dag, session, errors=errors, executed=executed)
+    def settle(ti: TaskInstance, task: Operator, *, session: Session | None) -> None:
+        """Run one instance in this process through Airflow's own task entry point.
+
+        Parameters:
+            ti: airflow.models.taskinstance.TaskInstance to settle.
+            task: airflow.sdk.types.Operator containing executable authoring code.
+            session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        """
+
+        run_task_instance(
+            ti,
+            task,
+            run_triggerer=run_triggerer,
+            trigger_timeout=trigger_timeout,
+            session=session,
+        )
+
+    return drive_dag_run(dag_run, dag, session, settle)
 
 
 __all__ = (
     "DEFAULT_TRIGGER_TIMEOUT",
+    "DagRunDriveError",
+    "SettleInstance",
     "TaskResolutionError",
     "TriggerExecutionError",
+    "dependencies_met",
+    "drive_dag_run",
     "execute_dag_run",
     "ordered_task_instances",
     "run_task_instance",

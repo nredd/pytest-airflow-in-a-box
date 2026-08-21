@@ -21,6 +21,13 @@ def test_api(api_client, dag_maker):
     assert response.body["dag_id"] == "visible"
 ```
 
+The server runs with `--apps core,execution`, so it serves the Task Execution API at
+`/execution` alongside the public `/api/v2`. That second app is what supervised task workers
+report to, and it is what makes
+[executor-driven runs](task-execution.md#executor-driven-runs) possible -- upstream's
+`dag.test(use_executor=True)` queues real workloads but has no way to stand a server up
+inside a test process ([apache/airflow#59074](https://github.com/apache/airflow/issues/59074)).
+
 The `api_test` marker alone also starts the server, and every activated test -- marked or
 requesting `api_client`/`api_server_url` -- gets the selected URL published as
 `AIRFLOW__API__BASE_URL` for its duration, so application code can discover the endpoint

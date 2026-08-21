@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import ensure_database
+from pytest_airflow_in_a_box._compat.capabilities import require_v3
 from pytest_airflow_in_a_box._compat.components import timetable_lookup_resolves
 from pytest_airflow_in_a_box._compat.dag import (
     DagCleanupError,
@@ -35,6 +36,10 @@ from pytest_airflow_in_a_box._compat.dag import (
     persist_dag,
     select_task_instance,
 )
+from pytest_airflow_in_a_box._compat.executor import (
+    execute_dag_run_via_executor,
+    relative_dag_path,
+)
 from pytest_airflow_in_a_box._compat.taskrun import (
     DEFAULT_TRIGGER_TIMEOUT,
     execute_dag_run,
@@ -42,6 +47,7 @@ from pytest_airflow_in_a_box._compat.taskrun import (
 )
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.fixtures.components import register_schedule_timetable
+from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
 from pytest_airflow_in_a_box.markers import read_bool_marker
 from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
@@ -610,12 +616,52 @@ class _DagFactory:
         _close_records(self._records)
 
 
+def _executor_timeout(config: pytest.Config) -> float:
+    """Read the per-instance settle timeout for an executor-driven run, in seconds.
+
+    `--airflow-executor-timeout` wins over the `airflow_executor_timeout` ini option,
+    matching every other paired option this plugin registers.
+
+    Parameters:
+        config: pytest.Config containing the option and ini values.
+
+    Returns:
+        float containing the settle timeout in seconds.
+
+    Raises:
+        pytest.UsageError: The configured value is not a positive number.
+    """
+
+    command_line: object = config.getoption("airflow_executor_timeout")
+    source = "Option `--airflow-executor-timeout`"
+    if command_line is None:
+        command_line = config.getini("airflow_executor_timeout")
+        source = "Ini option `airflow_executor_timeout`"
+    if not isinstance(command_line, str):
+        raise pytest.UsageError(f"{source} must be a number")
+    try:
+        timeout = float(command_line)
+    except ValueError as error:
+        raise pytest.UsageError(f"{source} must be a number: '{command_line}'") from error
+    if timeout <= 0:
+        raise pytest.UsageError(f"{source} must be positive: '{command_line}'")
+    return timeout
+
+
 class _DagRunner:
     """Implement the public ``RunDag`` protocol for externally-authored Dags."""
 
-    def __init__(self) -> None:
-        """Initialize empty invocation and ownership tracking."""
+    def __init__(self, request: pytest.FixtureRequest) -> None:
+        """Initialize empty invocation and ownership tracking.
 
+        Parameters:
+            request: pytest.FixtureRequest used to reach the live api-server fixture
+                and the executor timeout option when an executor-driven run asks for
+                them. Nothing is looked up here, so a run that never passes
+                ``executor`` starts no server and reads no option.
+        """
+
+        self._request = request
         self._invocations = 0
         self._records: list[DagPersistenceRecord] = []
 
@@ -628,6 +674,7 @@ class _DagRunner:
         run_after: datetime | None = None,
         start_date: datetime | None = None,
         dag_run_kwargs: dict[str, Any] | None = None,
+        executor: str | type | object | None = None,
         run_triggerer: bool = False,
         trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
     ) -> DagRunResult:
@@ -643,6 +690,10 @@ class _DagRunner:
             start_date: datetime.datetime | None overriding the current UTC start date.
             dag_run_kwargs: dict[str, Any] | None forwarded to Airflow's scheduler Dag
                 creation method.
+            executor: str | type | object | None selecting an executor to run the tasks
+                through -- an alias registered via ``airflow_components.executor``, a
+                dotted import path, a ``BaseExecutor`` subclass, or an instance.
+                ``None``, the default, runs every task in this process instead.
             run_triggerer: bool running persisted trigger events and resuming deferrals.
             trigger_timeout: float seconds allowed for each trigger's first event.
 
@@ -650,9 +701,30 @@ class _DagRunner:
             pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
 
         Raises:
-            ValueError: ``dag.dag_id`` already has persisted Dag metadata.
+            ValueError: ``dag.dag_id`` already has persisted Dag metadata, or
+                ``run_triggerer`` was combined with ``executor``.
+            ExecutorRunError: ``executor`` cannot be resolved or driven to a result, or
+                ``dag`` is not defined in a file inside the Dag folder.
+            ComponentContractError: ``executor``'s class shape is broken.
         """
 
+        if executor is not None:
+            if run_triggerer:
+                raise ValueError(
+                    "`run_triggerer` cannot be combined with `executor`: resuming a "
+                    "deferred task is a triggerer's job, not an executor's, and an "
+                    "executor-driven run settles a deferring instance as `deferred`. "
+                    "Drop one of the two."
+                )
+            require_v3(
+                "run_dag(executor=...)",
+                "Airflow 2.x executors predate AIP-72: they take a CLI command list "
+                "rather than a workload, and there is no Task Execution API for a task "
+                "worker to report to. Drop `executor` to run the tasks in-process.",
+            )
+            # Ahead of `open_dag_session`, so a Dag no task worker could ever re-import
+            # is refused before this run writes any metadata to clean up afterwards.
+            relative_dag_path(dag, _dag_folder(self._request.config))
         dag_id = dag.dag_id
         session = open_dag_session(dag_id)
         try:
@@ -683,12 +755,26 @@ class _DagRunner:
             start_date=start_date,
             dag_run_kwargs=dag_run_kwargs or {},
         )
-        return execute_dag_run(
+        if executor is None:
+            return execute_dag_run(
+                dag_run,
+                dag,
+                session=session,
+                run_triggerer=run_triggerer,
+                trigger_timeout=trigger_timeout,
+            )
+        return execute_dag_run_via_executor(
             dag_run,
             dag,
+            executor=executor,
+            # Resolved before the configuration overrides go up: the api-server is a
+            # session-scoped subprocess that inherits the environment live at startup,
+            # so starting it inside `airflow_config` would leak the overrides into it.
+            api_server_url=self._request.getfixturevalue("api_server_url"),
+            dags_folder=_dag_folder(self._request.config),
+            bundle_name=record.bundle_name,
             session=session,
-            run_triggerer=run_triggerer,
-            trigger_timeout=trigger_timeout,
+            timeout=_executor_timeout(self._request.config),
         )
 
     def close(self) -> None:
@@ -765,7 +851,7 @@ def run_dag(request: pytest.FixtureRequest) -> Iterator[RunDag]:
     """
 
     ensure_database(get_bootstrap_state(request.config).root)
-    runner = _DagRunner()
+    runner = _DagRunner(request)
     try:
         yield runner
     finally:
