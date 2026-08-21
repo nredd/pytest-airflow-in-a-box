@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -15,6 +16,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowFamily,
     ApiSurface,
     AssetUniqueKeyLocation,
+    CertificationTier,
     DagBagLocation,
     DagRunInterface,
     ExecutorContract,
@@ -27,6 +29,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
 )
 from pytest_airflow_in_a_box.airflow_cfg import sqlite_url
 from pytest_airflow_in_a_box.bootstrap import STATE_VERSION, BootstrapState
+from pytest_airflow_in_a_box.certification import LAST_CERTIFIED_VERSION
 
 CAPABILITIES = AirflowCapabilities(
     release=(3, 3, 0),
@@ -351,6 +354,36 @@ def test_version_section_reports_versions_and_capabilities(
     assert any(line.startswith("- Python: `") for line in lines)
     assert "- Apache Airflow: `3.3.0`" in lines
     assert "- Capability `release`: `3.3.0`" in lines
+
+
+def test_version_section_explains_the_degraded_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Render the `DEGRADED:` bullet, with the remedy, on the `PROBED` tier."""
+
+    probed = replace(CAPABILITIES, certification=CertificationTier.PROBED)
+    monkeypatch.setattr(doctor, "resolve_capabilities", lambda: probed)
+
+    lines = doctor._version_section()
+
+    assert "- Capability `certification`: `probed`" in lines
+    degraded = [line for line in lines if line.startswith("- DEGRADED:")]
+    assert len(degraded) == 1
+    assert LAST_CERTIFIED_VERSION in degraded[0]
+    assert "live probe observations" in degraded[0]
+
+
+def test_version_section_has_no_degraded_bullet_on_the_certified_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the report bullet-free about certification on a certified release."""
+
+    monkeypatch.setattr(doctor, "resolve_capabilities", lambda: CAPABILITIES)
+
+    lines = doctor._version_section()
+
+    assert "- Capability `certification`: `certified`" in lines
+    assert not any(line.startswith("- DEGRADED:") for line in lines)
 
 
 def test_version_section_reports_incompatibility_without_raising(

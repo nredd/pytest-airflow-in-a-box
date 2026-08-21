@@ -18,6 +18,7 @@ from airflow.task.priority_strategy import PriorityWeightStrategy
 from airflow.timetables.base import DataInterval, Timetable
 
 from pytest_airflow_in_a_box.components import (
+    CertificationTier,
     ComponentContractError,
     ComponentKind,
     ComponentProblem,
@@ -601,6 +602,31 @@ def test_component_report_summary_lists_every_problem() -> None:
 
     assert "`Fake`: 1 problem(s) found:" in summary
     assert "[fake-code] fake message" in summary
+
+
+def test_component_report_summary_flags_the_probed_tier() -> None:
+    """Append the uncertified-release line on the `PROBED` tier, clean report included."""
+
+    clean = ComponentReport(
+        component_name="Fake", problems=(), certification=CertificationTier.PROBED
+    )
+    dirty = ComponentReport(
+        component_name="Fake",
+        problems=(ComponentProblem(code="fake-code", message="fake message", hint="fake hint"),),
+        certification=CertificationTier.PROBED,
+    )
+
+    assert "uncertified Apache Airflow release" in clean.summary()
+    assert "uncertified Apache Airflow release" in dirty.summary()
+    assert "[fake-code] fake message" in dirty.summary()
+
+
+def test_check_component_stamps_the_certification_tier() -> None:
+    """Stamp every report with the metadata-classified tier -- `CERTIFIED` on this repo."""
+
+    report = check_component(_CleanExecutor)
+
+    assert report.certification is CertificationTier.CERTIFIED
 
 
 def test_component_kind_values_are_stable_strings() -> None:

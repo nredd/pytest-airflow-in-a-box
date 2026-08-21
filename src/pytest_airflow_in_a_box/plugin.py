@@ -28,6 +28,7 @@ from pytest_airflow_in_a_box.bootstrap import (
     load_initial_state,
     validate_configure,
 )
+from pytest_airflow_in_a_box.certification import warn_if_airflow_uncertified
 from pytest_airflow_in_a_box.collection import (
     DagFile,
     collect_dag_file,
@@ -487,6 +488,7 @@ def pytest_configure(config: pytest.Config) -> None:
     apply_default_filterwarnings(config)
     record.configure(config)
     warn_if_migration_strict_is_a_noop(config)
+    warn_if_airflow_uncertified(config)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:

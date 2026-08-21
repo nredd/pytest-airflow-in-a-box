@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       airflow-version: ${{ steps.resolve.outputs.airflow-version }}
+      certify-complete: ${{ steps.certify.outputs.complete }}
       constraints-complete: ${{ steps.constraints.outputs.complete }}
       environment-complete: ${{ steps.environment.outputs.complete }}
       install-complete: ${{ steps.install.outputs.complete }}
@@ -87,6 +88,20 @@ jobs:
           path: resolved-packages.txt
           retention-days: 7
           if-no-files-found: error
+      - name: Probe certification tier and cache-name drift
+        id: certify
+        # Deliberately red on every uncertified upstream release: since #212 users on
+        # a new release degrade gracefully instead of failing, so this probe -- not
+        # the compat suite -- is what turns "new Airflow shipped" into a filed issue
+        # before any user hits the degraded tier. Do not soften it.
+        run: |
+          .venv-ci/bin/python -c '
+          from pytest_airflow_in_a_box.certification import certification_probe_report
+          text, code = certification_probe_report()
+          print(text)
+          raise SystemExit(code)
+          '
+          printf 'complete=true\n' >> "$GITHUB_OUTPUT"
       - name: Run compatibility suite
         id: test
         run: |
@@ -125,6 +140,7 @@ jobs:
         id: diagnostics
         env:
           AIRFLOW_VERSION: ${{ needs.compat.outputs.airflow-version || 'unresolved' }}
+          CERTIFY_COMPLETE: ${{ needs.compat.outputs.certify-complete }}
           CONSTRAINTS_COMPLETE: ${{ needs.compat.outputs.constraints-complete }}
           ENVIRONMENT_COMPLETE: ${{ needs.compat.outputs.environment-complete }}
           INSTALL_COMPLETE: ${{ needs.compat.outputs.install-complete }}
@@ -144,6 +160,8 @@ jobs:
             failure_stage=installation
           elif [ "$ENVIRONMENT_COMPLETE" != true ]; then
             failure_stage=environment-capture
+          elif [ "$CERTIFY_COMPLETE" != true ]; then
+            failure_stage=certification-probe
           elif [ "$TEST_COMPLETE" != true ]; then
             failure_stage=compatibility-suite
           else

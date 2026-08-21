@@ -13,7 +13,9 @@ database URL scheme, and backend tier, every override declared through the
 those travel on, so the generated `airflow.cfg` never shows them; a value whose option name
 reads as a credential is redacted to its length),
 plugin/pytest/Python/Airflow versions plus the resolved
-capability table, the resolved `core.executor` (flagging a 2.x SQLite run whose configuration
+capability table (including the certification tier: a `DEGRADED:` bullet explains an
+uncertified Airflow release resolved by live probing rather than byte-verified
+certification, and names the remedy), the resolved `core.executor` (flagging a 2.x SQLite run whose configuration
 overrides the plugin's `SequentialExecutor` default with a multi-threaded executor, which
 Airflow's `ready_to_reschedule` dependency rejects), whether
 [`--airflow-migration-strict`](../guide/migration-strict.md) is enabled (flagging it as a no-op

@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from pytest_airflow_in_a_box._compat.capabilities import CertificationTier, installed_certification
 from pytest_airflow_in_a_box._compat.components import (
     CHECK_REGISTRY,
     KIND_CLASSIFIERS,
@@ -73,10 +74,16 @@ class ComponentReport:
         component_name: str naming the checked component's type, for messages.
         problems: tuple[ComponentProblem, ...] containing every problem found, in
             registry order.
+        certification: CertificationTier | None recording the installed release's
+            certification tier at check time -- `PROBED` marks a report produced
+            against an uncertified Airflow release whose conformance tables were not
+            byte-verified. None when no tier is classifiable (no readable Airflow
+            metadata, or an environment `resolve_capabilities()` would reject).
     """
 
     component_name: str
     problems: tuple[ComponentProblem, ...]
+    certification: CertificationTier | None = None
 
     @property
     def ok(self) -> bool:
@@ -89,13 +96,20 @@ class ComponentReport:
 
         Returns:
             str containing one header line plus one `[code] message` line per problem,
-            or a one-line clean report when `ok` is True.
+            or a one-line clean report when `ok` is True; on the `PROBED` tier a
+            trailing line flags that the checks ran against an uncertified release.
         """
 
         if self.ok:
-            return f"`{self.component_name}`: no problems found."
-        lines = [f"`{self.component_name}`: {len(self.problems)} problem(s) found:"]
-        lines.extend(f"  [{problem.code}] {problem.message}" for problem in self.problems)
+            lines = [f"`{self.component_name}`: no problems found."]
+        else:
+            lines = [f"`{self.component_name}`: {len(self.problems)} problem(s) found:"]
+            lines.extend(f"  [{problem.code}] {problem.message}" for problem in self.problems)
+        if self.certification is CertificationTier.PROBED:
+            lines.append(
+                "  (checked against an uncertified Apache Airflow release: capabilities "
+                "were resolved by probing, not byte-verified certification)"
+            )
         return "\n".join(lines)
 
     def raise_for_problems(self) -> None:
@@ -160,10 +174,15 @@ def check_component(component: object, *, kind: ComponentKind | None = None) -> 
     # unaffected: a class's own `__name__` already equals `_as_type(component).__name__`
     # exactly, and a plain instance has no `__name__` of its own to prefer.
     component_name = getattr(component, "__name__", None) or component_type.__name__
-    return ComponentReport(component_name=component_name, problems=problems)
+    return ComponentReport(
+        component_name=component_name,
+        problems=problems,
+        certification=installed_certification(),
+    )
 
 
 __all__ = (
+    "CertificationTier",
     "ComponentContractError",
     "ComponentKind",
     "ComponentProblem",

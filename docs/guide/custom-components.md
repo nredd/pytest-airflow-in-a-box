@@ -297,8 +297,19 @@ wondered about later -- you cannot register a listener with an unmatched hookspe
 then be surprised it never fires. A problem with the registration itself, rather than the
 component, raises `ComponentSandboxError` instead: an unsupported dual-registration
 request, an executor class with no importable module-level path, an unknown policy
-hookspec name, or an installed Apache Airflow release whose live cache-clearable names no
-longer match what this plugin has certified.
+hookspec name, or -- on a certified Apache Airflow release -- live cache-clearable names
+that no longer match what this plugin has certified.
+
+On an Airflow release newer than the last certified one (a fresh upstream minor or
+patch), the sandbox degrades instead of failing: capabilities resolve by live probing,
+unknown plugins-manager caches are snapshot/cleared generically by introspection, and
+drift from the last certified tables is logged rather than raised. State isolation
+still holds byte-for-byte; what the degraded tier gives up is byte-verified vetting of
+Airflow's internals. The degraded tier is surfaced three ways: one
+`UncertifiedAirflowWarning` per session at configure time, a `DEGRADED:` bullet in
+[`--airflow-doctor`](../reference/diagnostics.md), and a machine-readable
+`ComponentReport.certification` field (`CertificationTier.PROBED`) on every
+`check_component` report.
 
 - `plugin(component)` -- registers into every plugins-manager half the installed release
   has (both core and Task SDK from 3.2 on; core only on 3.1.x, which carries no Task SDK

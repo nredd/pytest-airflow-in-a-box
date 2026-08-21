@@ -16,6 +16,7 @@ from airflow.timetables.base import Timetable
 from pytest_airflow_in_a_box._compat import components as compat_components
 from pytest_airflow_in_a_box._compat.capabilities import (
     CERTIFIED_CORE_PLUGINS_MANAGER_CACHES,
+    CertificationTier,
     CertifiedCaches,
     PluginsManagerShape,
     SharedModuleLoading,
@@ -658,6 +659,177 @@ def test_clear_plugins_manager_caches_module_globals_shape_happy_path(
 
     assert fake_core.plugins is None
     assert fake_core.loaded_plugins == set()
+
+
+# ---------------------------------------------------------------------------
+# Probe-and-degrade: the PROBED certification tier (#212)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_and_clear_cache_functions_probed_clears_uncertified_extra_generically(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Clear an uncertified extra cache on the `PROBED` tier instead of raising.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the degradation warning.
+    """
+
+    module = _fake_cached_module(("alpha", "beta"))
+    module.alpha()
+    module.beta()
+
+    with caplog.at_level("WARNING"):
+        compat_components._verify_and_clear_cache_functions(
+            module,
+            CertifiedCaches(required=frozenset({"alpha"})),
+            CertificationTier.PROBED,
+        )
+
+    assert module.alpha.cache_info().currsize == 0
+    assert module.beta.cache_info().currsize == 0
+    assert "uncertified extra ['beta']" in caplog.text
+
+
+def test_verify_and_clear_cache_functions_probed_tolerates_missing_required(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Tolerate a missing required cache name on the `PROBED` tier, clearing the rest.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the degradation warning.
+    """
+
+    module = _fake_cached_module(("alpha",))
+    module.alpha()
+
+    with caplog.at_level("WARNING"):
+        compat_components._verify_and_clear_cache_functions(
+            module,
+            CertifiedCaches(required=frozenset({"alpha", "beta"})),
+            CertificationTier.PROBED,
+        )
+
+    assert module.alpha.cache_info().currsize == 0
+    assert "missing ['beta']" in caplog.text
+
+
+def test_verify_and_clear_cache_functions_probed_stays_silent_without_drift(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log nothing on the `PROBED` tier when the observed set matches the certified row.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture asserting no degradation warning fires.
+    """
+
+    module = _fake_cached_module(("alpha",))
+    module.alpha()
+
+    with caplog.at_level("WARNING"):
+        compat_components._verify_and_clear_cache_functions(
+            module,
+            CertifiedCaches(required=frozenset({"alpha"})),
+            CertificationTier.PROBED,
+        )
+
+    assert module.alpha.cache_info().currsize == 0
+    assert caplog.text == ""
+
+
+def test_verify_and_reset_module_globals_probed_tolerates_missing_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Reset the present certified globals on the `PROBED` tier, logging the missing.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the degradation warning.
+    """
+
+    module = _fake_globals_module({"plugins": "populated"})
+
+    with caplog.at_level("WARNING"):
+        compat_components._verify_and_reset_module_globals(
+            module,
+            CertifiedCaches(required=frozenset({"plugins", "plugins_cache"})),
+            CertificationTier.PROBED,
+        )
+
+    assert module.plugins is None
+    assert not hasattr(module, "plugins_cache")
+    assert "plugins_cache" in caplog.text
+
+
+def test_clear_plugins_manager_caches_probed_skips_missing_sdk_module(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Skip the SDK half with a warning on the `PROBED` tier instead of raising.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+        caplog: pytest.LogCaptureFixture capturing the degradation warning.
+    """
+
+    real_capabilities = resolve_capabilities()
+    fake_capabilities = replace(
+        real_capabilities,
+        plugins_manager=PluginsManagerShape.CACHED_FUNCTIONS,
+        shared_module_loading=SharedModuleLoading.DUPLICATED,
+        certification=CertificationTier.PROBED,
+    )
+    certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.CACHED_FUNCTIONS]
+    fake_core = _fake_cached_module(tuple(certified.required), module_name="fake_cached_core")
+    fake_shared = _fake_cached_module(("_get_grouped_entry_points",), module_name="fake_shared")
+    monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
+    monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (fake_core, None))
+    monkeypatch.setattr(
+        compat_components,
+        "_shared_module_loading_modules",
+        lambda _shape: (fake_shared, fake_shared),
+    )
+
+    with caplog.at_level("WARNING"):
+        compat_components.clear_plugins_manager_caches()
+
+    assert "SDK half of the cache clear is skipped" in caplog.text
+
+
+def test_clear_plugins_manager_caches_probed_clears_unexpected_sdk_module(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Clear an unexpectedly present SDK module generically on the `PROBED` tier.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+        caplog: pytest.LogCaptureFixture capturing the degradation warning.
+    """
+
+    real_capabilities = resolve_capabilities()
+    fake_capabilities = replace(
+        real_capabilities,
+        plugins_manager=PluginsManagerShape.MODULE_GLOBALS,
+        shared_module_loading=SharedModuleLoading.SINGLE,
+        certification=CertificationTier.PROBED,
+    )
+    certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
+    fake_core = _fake_globals_module(dict.fromkeys(certified.required, "populated"))
+    fake_sdk = _fake_cached_module(("surprise_cache",), module_name="fake_unexpected_sdk")
+    fake_sdk.surprise_cache()
+    fake_shared = _fake_cached_module(("_get_grouped_entry_points",), module_name="fake_shared")
+    monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
+    monkeypatch.setattr(
+        compat_components, "_plugins_manager_modules", lambda: (fake_core, fake_sdk)
+    )
+    monkeypatch.setattr(
+        compat_components, "_shared_module_loading_modules", lambda _shape: (fake_shared,)
+    )
+
+    with caplog.at_level("WARNING"):
+        compat_components.clear_plugins_manager_caches()
+
+    assert fake_core.plugins is None
+    assert fake_sdk.surprise_cache.cache_info().currsize == 0
+    assert "uncertified extra ['surprise_cache']" in caplog.text
 
 
 # ---------------------------------------------------------------------------
