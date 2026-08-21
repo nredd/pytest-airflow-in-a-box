@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from pytest_airflow_in_a_box import record
@@ -11,6 +13,10 @@ from pytest_airflow_in_a_box.bootstrap import (
 )
 
 pytest_plugins = ["pytester"]
+
+# Root of this plugin's logger namespace. Every `LOGGER` in `src/` is a
+# `logging.getLogger(__name__)` beneath it.
+PLUGIN_LOGGER_ROOT = "pytest_airflow_in_a_box"
 
 # Dev-only marker for the migration orchestrator's real-uv/network e2e test
 # (tests/migration/test_e2e.py). Deliberately not part of the consumer-facing marker
@@ -50,6 +56,32 @@ def _isolate_nested_pytest_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.delenv(ISOLATED_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reenable_plugin_loggers() -> None:
+    """Undo `disable_existing_loggers` fallout before every test.
+
+    A `logging.config.dictConfig` call that raises leaves every logger that already
+    existed with `disabled = True`, and stdlib never reverts it -- so one failing
+    `dictConfig` anywhere in the session silently mutes this plugin's loggers for the
+    rest of the process. `caplog.at_level` does not undo it: that guards against
+    `logging.disable()` and per-logger levels, not the per-logger `disabled` attribute.
+    A test asserting on plugin log output therefore passes or fails depending on what
+    ran before it in the same process -- serial ordering happened to hide that, and
+    xdist worker assignment does not.
+
+    Autouse and global for the same reason as `_isolate_record_active_config_stack`:
+    a new test asserting on log output must not be able to reintroduce the order
+    dependency by omission.
+
+    Returns:
+        None.
+    """
+
+    for name in list(logging.Logger.manager.loggerDict):
+        if name.startswith(PLUGIN_LOGGER_ROOT):
+            logging.getLogger(name).disabled = False
 
 
 @pytest.fixture(autouse=True)

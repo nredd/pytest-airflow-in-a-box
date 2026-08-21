@@ -762,11 +762,6 @@ def test_log_stats_table_marks_ok_and_slowpoke_rows(caplog: pytest.LogCaptureFix
     dag_bag: Any = SimpleNamespace(
         dagbag_stats=[_stat("fast.py", 0.1), _stat("slow.py", 8.0), _stat("dead.py", 12.0)]
     )
-    # A failed `logging.config.dictConfig` call elsewhere in the suite can leave this logger
-    # disabled process-wide (stdlib `disable_existing_loggers` never gets reverted on failure);
-    # `caplog.at_level` only guards against `logging.disable()`, not this per-logger attribute.
-    logging.getLogger("pytest_airflow_in_a_box.smoke").disabled = False
-
     with caplog.at_level("INFO", logger="pytest_airflow_in_a_box.smoke"):
         text = smoke._log_stats_table(dag_bag, timeout=10.0, ratio=0.75)
 
