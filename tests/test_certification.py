@@ -13,6 +13,7 @@ from pytest_airflow_in_a_box import certification
 from pytest_airflow_in_a_box._compat import capabilities as capability_module
 from pytest_airflow_in_a_box._compat import components as compat_components
 from pytest_airflow_in_a_box._compat.capabilities import (
+    CERTIFIED_CORE_PLUGINS_MANAGER_CACHES,
     CertificationTier,
     PluginsManagerShape,
     SharedModuleLoading,
@@ -252,13 +253,38 @@ def test_cache_drift_lines_flags_a_missing_sdk_module(monkeypatch: pytest.Monkey
     assert any("missing entirely" in line for line in lines)
 
 
-def test_cache_drift_lines_skips_an_absent_sdk_module_on_module_globals(
+def _fake_globals_module(values: dict[str, object], module_name: str) -> object:
+    """Build a fake module exposing plain module-level globals.
+
+    Parameters:
+        values: dict[str, object] mapping global name to its initial value.
+        module_name: str naming the fake module, for diagnostics.
+
+    Returns:
+        object shaped like a 3.1.x-era plugins-manager module.
+    """
+
+    module = types.ModuleType(module_name)
+    for name, value in values.items():
+        setattr(module, name, value)
+    return module
+
+
+def _module_globals_environment(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    sdk_module: object | None,
+    core_module: object,
+    shared_names: tuple[str, ...] = ("_get_grouped_entry_points",),
 ) -> None:
-    """Audit only the core and shared modules on the 3.1.x `module-globals` shape.
+    """Fake a healthy 3.1.x-shaped installation for the drift audit.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+        sdk_module: object | None installed as the (normally absent) SDK half.
+        core_module: object installed as the plugins-manager core half.
+        shared_names: tuple[str, ...] naming the shared module's cache functions;
+            defaults to the certified single name, override to fake shared drift.
     """
 
     fake_capabilities = replace(
@@ -266,20 +292,58 @@ def test_cache_drift_lines_skips_an_absent_sdk_module_on_module_globals(
         plugins_manager=PluginsManagerShape.MODULE_GLOBALS,
         shared_module_loading=SharedModuleLoading.SINGLE,
     )
-    core = _fake_cached_module((), "fake_31_core")
-    shared = _fake_cached_module(("_get_grouped_entry_points",), "fake_shared")
+    shared = _fake_cached_module(shared_names, "fake_shared")
     monkeypatch.setattr(capability_module, "resolve_capabilities", lambda: fake_capabilities)
-    monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (core, None))
+    monkeypatch.setattr(
+        compat_components, "_plugins_manager_modules", lambda: (core_module, sdk_module)
+    )
     monkeypatch.setattr(
         compat_components, "_shared_module_loading_modules", lambda _shape: (shared,)
     )
 
+
+def test_cache_drift_lines_clean_on_a_conformant_module_globals_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report zero drift for a healthy 3.1.x shape -- presence audit, not cache audit.
+
+    Reviewer-found hole: a cache-function audit here reported all nineteen certified
+    plain globals as missing on every healthy 3.1.x install.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+    """
+
+    certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
+    core = _fake_globals_module(dict.fromkeys(certified.required), "fake_31_core")
+    _module_globals_environment(monkeypatch, sdk_module=None, core_module=core)
+
+    assert certification._cache_drift_lines() == []
+
+
+def test_cache_drift_lines_flags_module_globals_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag a missing certified global and an unexpected SDK half on the 3.1.x shape.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+    """
+
+    core = _fake_globals_module({"plugins": None}, "fake_31_core")
+    sdk = _fake_globals_module({}, "fake_unexpected_sdk")
+    _module_globals_environment(
+        monkeypatch,
+        sdk_module=sdk,
+        core_module=core,
+        shared_names=("_get_grouped_entry_points", "surprise_shared_cache"),
+    )
+
     lines = certification._cache_drift_lines()
 
-    # The MODULE_GLOBALS core row certifies plain globals, not cache functions, so an
-    # empty cache-clearable observation on the fake core is a `missing` drift line;
-    # what matters here is that no SDK line appears at all.
-    assert not any("sdk" in line.lower() for line in lines)
+    assert any("missing module globals" in line for line in lines)
+    assert any("expects no SDK plugins manager" in line for line in lines)
+    assert any("surprise_shared_cache" in line for line in lines)
 
 
 def test_cache_drift_lines_reports_nothing_on_the_2x_shape(

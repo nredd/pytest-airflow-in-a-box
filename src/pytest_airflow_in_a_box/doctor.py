@@ -228,12 +228,12 @@ def _version_section() -> list[str]:
     if capabilities.certification is CertificationTier.PROBED:
         lines.append(
             f"- DEGRADED: Apache Airflow "
-            f"`{_format_capability_value(capabilities.release)}` is newer than the "
-            f"last certified release (`{LAST_CERTIFIED_VERSION}`). Capabilities above "
-            f"are live probe observations, not byte-verified certification, and the "
-            f"component sandbox snapshots/restores unknown caches generically. "
-            f"Upgrade `pytest-airflow-in-a-box` once it certifies this release, or "
-            f"pin `apache-airflow-core<={LAST_CERTIFIED_VERSION}`."
+            f"`{_format_capability_value(capabilities.release)}` has no certified "
+            f"contract row (last certified release: `{LAST_CERTIFIED_VERSION}`). "
+            f"Capabilities above are live probe observations, not byte-verified "
+            f"certification, and the component sandbox snapshots/restores unknown "
+            f"caches generically. Upgrade `pytest-airflow-in-a-box` once it certifies "
+            f"this release, or install a certified `apache-airflow-core` release."
         )
     return lines
 

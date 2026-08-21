@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.capabilities import (
     AIRFLOW_DISTRIBUTION,
-    SUPPORTED_VERSIONS,
+    SUPPORTED_RELEASES,
     CertificationTier,
     CertifiedCaches,
     installed_certification,
@@ -32,7 +32,10 @@ if TYPE_CHECKING:
 
     from pytest_airflow_in_a_box._compat.capabilities import AirflowCapabilities
 
-LAST_CERTIFIED_VERSION = SUPPORTED_VERSIONS[-1]
+# `max()`, not `[-1]`: the certified tuple is hand-maintained and a backport row
+# appended out of order must not silently change the release this module tells users
+# to pin to or the canary names as last-certified.
+LAST_CERTIFIED_VERSION = ".".join(str(part) for part in max(SUPPORTED_RELEASES))
 
 
 class UncertifiedAirflowWarning(RuntimeWarning):
@@ -72,14 +75,15 @@ def warn_if_airflow_uncertified(config: pytest.Config) -> None:
         return
     config.issue_config_time_warning(
         UncertifiedAirflowWarning(
-            f"Apache Airflow '{_installed_version_display()}' is newer than the last "
-            f"certified release ('{LAST_CERTIFIED_VERSION}'): capabilities were "
+            f"Apache Airflow '{_installed_version_display()}' has no certified "
+            f"contract row in this version of `pytest-airflow-in-a-box` (last "
+            f"certified release: '{LAST_CERTIFIED_VERSION}'): capabilities were "
             f"resolved by live probing and the component sandbox degrades to generic "
             f"snapshot/restore. State isolation still holds byte-for-byte; "
             f"byte-verified vetting of Airflow internals does not. Upgrade "
-            f"`pytest-airflow-in-a-box` once it certifies this release, or pin "
-            f"`apache-airflow-core<={LAST_CERTIFIED_VERSION}`. Run `pytest "
-            f"--airflow-doctor` for details."
+            f"`pytest-airflow-in-a-box` once it certifies this release, or install a "
+            f"certified `apache-airflow-core` release. Run `pytest --airflow-doctor` "
+            f"for details."
         ),
         2,
     )
@@ -103,12 +107,42 @@ def _capability_report_lines(capabilities: AirflowCapabilities) -> list[str]:
     return lines
 
 
-def _cache_drift_lines() -> list[str]:
-    """Diff live cache-clearable names against the certified rows, one line per module.
+def _cache_function_drift(module: Any, certified: CertifiedCaches) -> str | None:
+    """Diff one module's live cache-clearable names against its certified row.
+
+    Parameters:
+        module: Any containing the module to introspect.
+        certified: CertifiedCaches containing the certified cache-clearable names.
 
     Returns:
-        list[str] containing one `module: missing [...], extra [...]` line per drifted
-        module, empty when every module matches its certified row.
+        str | None containing a `module: missing [...], extra [...]` line, or None
+        when the module matches its certified row.
+    """
+
+    # Deferred on genuine import cost: `certification.py` must stay importable
+    # pre-bootstrap and this helper only runs from the Airflow-importing probe.
+    from pytest_airflow_in_a_box._compat.components import _cache_clearable_names
+
+    observed = _cache_clearable_names(module)
+    missing = sorted(certified.required - observed)
+    extra = sorted(observed - (certified.required | certified.optional))
+    if missing or extra:
+        return f"{module.__name__}: missing {missing}, uncertified extra {extra}"
+    return None
+
+
+def _cache_drift_lines() -> list[str]:
+    """Diff live plugins-manager state against the certified rows, one line per module.
+
+    Audits by shape, mirroring `clear_plugins_manager_caches`: the `CACHED_FUNCTIONS`
+    core/SDK rows and the shared-module-loading rows diff `functools.cache` names by
+    introspection, while the 3.1.x `MODULE_GLOBALS` core row certifies plain globals
+    and is diffed by attribute presence instead -- a cache-function audit there would
+    report all nineteen certified globals as missing on every healthy 3.1.x install.
+
+    Returns:
+        list[str] containing one drift line per drifted module, empty when every
+        module matches its certified row.
     """
 
     # Deferred on genuine import cost: this walks live `airflow.plugins_manager`
@@ -121,7 +155,6 @@ def _cache_drift_lines() -> list[str]:
         resolve_capabilities,
     )
     from pytest_airflow_in_a_box._compat.components import (
-        _cache_clearable_names,
         _plugins_manager_modules,
         _shared_module_loading_modules,
     )
@@ -133,29 +166,40 @@ def _cache_drift_lines() -> list[str]:
         return []
 
     core_module, sdk_module = _plugins_manager_modules()
-    audited: list[tuple[Any, CertifiedCaches]] = [
-        (core_module, CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[shape])
-    ]
-    if sdk_module is not None or shape is PluginsManagerShape.CACHED_FUNCTIONS:
-        audited.append((sdk_module, CERTIFIED_SDK_PLUGINS_MANAGER_CACHES[shape]))
-    audited.extend(
-        (module, CERTIFIED_SHARED_MODULE_LOADING_CACHES[shared_shape])
-        for module in _shared_module_loading_modules(shared_shape)
-    )
-
+    core_certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[shape]
     lines = []
-    for module, certified in audited:
-        if module is None:
+    if shape is PluginsManagerShape.CACHED_FUNCTIONS:
+        core_line = _cache_function_drift(core_module, core_certified)
+        if core_line is not None:
+            lines.append(core_line)
+        if sdk_module is None:
             lines.append(
                 "airflow.sdk.plugins_manager: missing entirely where the "
                 "`cached-functions` shape expects it"
             )
-            continue
-        observed = _cache_clearable_names(module)
-        missing = sorted(certified.required - observed)
-        extra = sorted(observed - (certified.required | certified.optional))
-        if missing or extra:
-            lines.append(f"{module.__name__}: missing {missing}, uncertified extra {extra}")
+        else:
+            sdk_line = _cache_function_drift(
+                sdk_module, CERTIFIED_SDK_PLUGINS_MANAGER_CACHES[shape]
+            )
+            if sdk_line is not None:
+                lines.append(sdk_line)
+    else:
+        missing = sorted(
+            name for name in core_certified.required if not hasattr(core_module, name)
+        )
+        if missing:
+            lines.append(f"{core_module.__name__}: missing module globals {missing}")
+        if sdk_module is not None:
+            lines.append(
+                f"{sdk_module.__name__}: exists where the `module-globals` shape "
+                f"expects no SDK plugins manager"
+            )
+
+    shared_certified = CERTIFIED_SHARED_MODULE_LOADING_CACHES[shared_shape]
+    for module in _shared_module_loading_modules(shared_shape):
+        shared_line = _cache_function_drift(module, shared_certified)
+        if shared_line is not None:
+            lines.append(shared_line)
     return lines
 
 

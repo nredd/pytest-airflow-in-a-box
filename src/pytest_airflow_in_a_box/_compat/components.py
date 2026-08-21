@@ -67,6 +67,34 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
+# Messages already emitted by `_warn_degraded_once`. `clear_plugins_manager_caches`
+# runs at sandbox construction AND finalize -- twice per component test -- so a
+# persistent drift on an uncertified release would otherwise repeat the identical
+# multi-line warning block for every test in the session.
+_EMITTED_DEGRADE_WARNINGS: set[str] = set()
+
+
+def _warn_degraded_once(message: str) -> None:
+    """Log one degraded-tier warning at most once per process.
+
+    Parameters:
+        message: str containing the fully built warning text; the text itself is the
+            deduplication key, so an identical drift warns once and a changed drift
+            warns again.
+    """
+
+    if message in _EMITTED_DEGRADE_WARNINGS:
+        return
+    _EMITTED_DEGRADE_WARNINGS.add(message)
+    LOGGER.warning(message)
+
+
+def _reset_degrade_warnings_for_testing() -> None:
+    """Clear the once-per-process degraded-warning cache for isolated tests."""
+
+    _EMITTED_DEGRADE_WARNINGS.clear()
+
+
 # Bare strings, not `pytest_airflow_in_a_box.components.ComponentKind` members: importing
 # the public enum here would import this module's own consumer, a cycle. The public
 # `ComponentKind` values match these exactly; `tests/test_components.py` pins the match.
@@ -2441,7 +2469,8 @@ def _cache_clearable_names(module: Any) -> frozenset[str]:
 def _verify_and_clear_cache_functions(
     module: Any,
     certified: CertifiedCaches,
-    certification: CertificationTier = CertificationTier.CERTIFIED,
+    *,
+    certification: CertificationTier,
 ) -> None:
     """Verify observed `functools.cache` names against the certified sets, then clear them.
 
@@ -2452,19 +2481,23 @@ def _verify_and_clear_cache_functions(
     earlier releases the same `PluginsManagerShape` row covers) is tolerated, and only
     names that are both certified and actually present are cleared.
 
-    On the `PROBED` tier drift degrades instead of failing: every observed
-    cache-clearable name is cleared generically -- introspection discovers uncertified
-    extras exactly as reliably as certified names, so an unknown upstream cache is
-    snapshot-cleared byte-for-byte -- and any missing/extra drift is logged once per
-    call so the lost vetting stays visible in test logs. What the degraded tier gives
-    up is semantic vetting of the name set, not cache isolation.
+    On the `PROBED` tier drift degrades instead of failing: every *module-owned*
+    observed cache-clearable name is cleared generically -- introspection discovers
+    uncertified extras exactly as reliably as certified names, so an unknown upstream
+    cache is snapshot-cleared byte-for-byte -- and any missing/extra drift is logged
+    once per call so the lost vetting stays visible in test logs. An uncertified extra
+    whose `__module__` points outside `module` is a re-export and is deliberately left
+    untouched (clearing a foreign listener/policy getter cache would destroy state the
+    sandbox must preserve); what the degraded tier gives up is semantic vetting of the
+    name set, not cache isolation.
 
     Parameters:
         module: Any containing the module to introspect and clear.
         certified: CertifiedCaches containing the certified cache-clearable names.
         certification: CertificationTier selecting hard-fail or degrade on drift.
-            Defaults to `CERTIFIED` so a caller that never resolved a tier stays on
-            the strict, fail-closed contract.
+            Required, keyword-only: a call site that silently defaulted to
+            `CERTIFIED` would reinstate hard-fail-on-uncertified -- the exact
+            bricking #212 removes -- and stay green across the certified CI matrix.
 
     Raises:
         ComponentSandboxError: On the `CERTIFIED` tier, the observed name set is
@@ -2484,15 +2517,37 @@ def _verify_and_clear_cache_functions(
                 f"names are tolerated and not listed). This plugin's `airflow_components` "
                 f"snapshot/restore machinery is out of date for this release; file an issue."
             )
-        LOGGER.warning(
+        _warn_degraded_once(
             f"`{module.__name__}`'s cache-clearable callables drifted from the last "
             f"certified set (missing {missing}, uncertified extra {extra}); the "
-            f"installed Apache Airflow release is uncertified, so every observed cache "
-            f"is cleared generically instead of failing. Upgrade "
+            f"installed Apache Airflow release is uncertified, so every module-owned "
+            f"observed cache is cleared generically instead of failing. Upgrade "
             f"`pytest-airflow-in-a-box` for a certified row."
         )
-    names_to_clear = observed if certification is CertificationTier.PROBED else observed & allowed
-    for name in names_to_clear:
+    # On the CERTIFIED tier the raise above already guaranteed `observed <= allowed`,
+    # so `observed` is the exact certified clear set; only the PROBED tier holds back
+    # foreign re-exports.
+    foreign: set[str] = set()
+    if certification is CertificationTier.PROBED:
+        # Bound the generic clear to caches the module itself owns: an uncertified
+        # extra whose `__module__` points elsewhere is a re-export (a future release
+        # importing, say, `get_policy_plugin_manager` into this namespace), and the
+        # never-clear contract on the listener/policy getters (see
+        # `clear_plugins_manager_caches` and `policy_plugin_manager`) outranks the
+        # under-clear guarantee for names certification never vetted.
+        foreign = {
+            name
+            for name in observed - allowed
+            if getattr(getattr(module, name), "__module__", None) != module.__name__
+        }
+        if foreign:
+            _warn_degraded_once(
+                f"`{module.__name__}` re-exports cache-clearable callables owned by "
+                f"other modules ({sorted(foreign)}); these are left untouched -- "
+                f"clearing a foreign cache (a listener or policy manager getter, say) "
+                f"would destroy state the sandbox must preserve."
+            )
+    for name in observed - foreign:
         getattr(module, name).cache_clear()
 
 
@@ -2510,7 +2565,8 @@ _MODULE_GLOBAL_EMPTY_CONTAINER_RESETS: dict[str, Callable[[], object]] = {
 def _verify_and_reset_module_globals(
     module: Any,
     certified: CertifiedCaches,
-    certification: CertificationTier = CertificationTier.CERTIFIED,
+    *,
+    certification: CertificationTier,
 ) -> None:
     """Verify every certified global is present, then reset each to its cache-empty value.
 
@@ -2538,8 +2594,8 @@ def _verify_and_reset_module_globals(
         module: Any containing the module to introspect and reset.
         certified: CertifiedCaches containing the certified global names.
         certification: CertificationTier selecting hard-fail or degrade on a missing
-            name. Defaults to `CERTIFIED` so a caller that never resolved a tier stays
-            on the strict, fail-closed contract.
+            name. Required, keyword-only, for the same fail-closed-by-accident hazard
+            `_verify_and_clear_cache_functions` documents.
 
     Raises:
         ComponentSandboxError: On the `CERTIFIED` tier, a certified name is missing
@@ -2554,7 +2610,7 @@ def _verify_and_reset_module_globals(
                 f"{missing}. This plugin's `airflow_components` snapshot/restore machinery "
                 f"is out of date for the installed Apache Airflow release; file an issue."
             )
-        LOGGER.warning(
+        _warn_degraded_once(
             f"`{module.__name__}` no longer defines the certified plugin-cache globals "
             f"{missing}; the installed Apache Airflow release is uncertified, so the "
             f"present globals reset and the missing ones are skipped. Upgrade "
@@ -2615,22 +2671,34 @@ def clear_plugins_manager_caches() -> None:
     core_certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[shape]
     sdk_certified = CERTIFIED_SDK_PLUGINS_MANAGER_CACHES[shape]
     if shape is PluginsManagerShape.CACHED_FUNCTIONS:
-        _verify_and_clear_cache_functions(core_module, core_certified, certification)
+        _verify_and_clear_cache_functions(core_module, core_certified, certification=certification)
         if sdk_module is None:
             if certification is CertificationTier.CERTIFIED:
                 raise ComponentSandboxError(
                     "certified `cached-functions` expects `airflow.sdk.plugins_manager` to "
                     "exist, but it is not importable on the installed Apache Airflow release."
                 )
-            LOGGER.warning(
+            _warn_degraded_once(
                 "`airflow.sdk.plugins_manager` is not importable where the derived "
                 "`cached-functions` shape expects it; the installed Apache Airflow "
                 "release is uncertified, so the SDK half of the cache clear is skipped."
             )
         else:
-            _verify_and_clear_cache_functions(sdk_module, sdk_certified, certification)
+            _verify_and_clear_cache_functions(
+                sdk_module, sdk_certified, certification=certification
+            )
     else:
-        _verify_and_reset_module_globals(core_module, core_certified, certification)
+        _verify_and_reset_module_globals(core_module, core_certified, certification=certification)
+        if certification is CertificationTier.PROBED:
+            # A `MODULE_GLOBALS`-shaped release certifies zero cache functions, but an
+            # uncertified gap release can grow one; sweeping the core module with an
+            # empty certified row clears any module-owned `functools.cache` state
+            # generically (and logs it as drift) instead of letting it leak across
+            # sandboxes -- the byte-for-byte promise covers cache functions on every
+            # shape.
+            _verify_and_clear_cache_functions(
+                core_module, CertifiedCaches(required=frozenset()), certification=certification
+            )
         if sdk_module is not None:
             if certification is CertificationTier.CERTIFIED:
                 raise ComponentSandboxError(
@@ -2638,14 +2706,28 @@ def clear_plugins_manager_caches() -> None:
                     "but the installed Apache Airflow release provides one."
                 )
             # An unexpected SDK plugins manager on an uncertified release still holds
-            # cached state a sandboxed test must not leak; clear it generically. The
-            # MODULE_GLOBALS row's SDK table is empty, so every observed name counts
-            # as drift and `_verify_and_clear_cache_functions` logs it once.
-            _verify_and_clear_cache_functions(sdk_module, sdk_certified, certification)
+            # cached state a sandboxed test must not leak; clear its cache-clearables
+            # generically. Warn here unconditionally rather than relying on the
+            # generic clear's own drift log: a plain module global carries no
+            # structural marker (see `_verify_and_reset_module_globals`), so an
+            # unknown module holding only plain-global state exposes zero
+            # cache-clearables and the drift log would stay silent while that state
+            # leaks -- the one degradation this branch cannot repair must at least be
+            # visible.
+            _warn_degraded_once(
+                "`airflow.sdk.plugins_manager` exists where the derived "
+                "`module-globals` shape expects none; the installed Apache Airflow "
+                "release is uncertified, so its cache-clearable state is cleared "
+                "generically and any plain-global state it holds cannot be vetted "
+                "or restored."
+            )
+            _verify_and_clear_cache_functions(
+                sdk_module, sdk_certified, certification=certification
+            )
 
     shared_certified = CERTIFIED_SHARED_MODULE_LOADING_CACHES[shared_shape]
     for module in _shared_module_loading_modules(shared_shape):
-        _verify_and_clear_cache_functions(module, shared_certified, certification)
+        _verify_and_clear_cache_functions(module, shared_certified, certification=certification)
 
 
 def listener_manager_snapshot(manager: Any) -> tuple[Any, ...]:

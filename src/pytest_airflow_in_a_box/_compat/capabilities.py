@@ -92,8 +92,10 @@ SUPPORTED_RELEASES = SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
 # row resolves by pure probing (`CertificationTier.PROBED`) instead of hard-failing,
 # so a fresh upstream release degrades the assurance tier rather than bricking the
 # plugin until re-certification ships. Releases below the floor, and majors outside 3,
-# keep hard-failing -- they are known-unsupported, not unknown. See issue #212.
-MIN_V3_RELEASE: Release = SUPPORTED_RELEASES[0]
+# keep hard-failing -- they are known-unsupported, not unknown. `min()`, not `[0]`:
+# the certified tuple is hand-maintained and a backport row appended out of order must
+# not silently move a user-facing policy boundary. See issue #212.
+MIN_V3_RELEASE: Release = min(SUPPORTED_RELEASES)
 SUPPORTED_VERSIONS = tuple(
     ".".join(str(part) for part in release) for release in SUPPORTED_RELEASES
 )
@@ -844,6 +846,10 @@ _REQUIRED_SYMBOLS_BY_FAMILY = {
 }
 
 _CAPABILITIES: AirflowCapabilities | None = None
+# `installed_certification()`'s process-lifetime cache; the flag distinguishes a cached
+# None (unclassifiable environment) from not-yet-classified.
+_CERTIFICATION: CertificationTier | None = None
+_CERTIFICATION_CACHED = False
 
 
 def _raise_compatibility_error(
@@ -1048,10 +1054,31 @@ def installed_certification() -> CertificationTier | None:
     as None, and `resolve_capabilities()` remains the authority that turns those into
     actionable errors once a test actually needs Airflow.
 
+    Cached for the process lifetime, "classify once, trust forever": the tier is
+    process-constant, callers run per `check_component` report and per configure hook,
+    and a mid-session metadata mutation must not let reports disagree with the tier
+    the resolved capabilities already carry.
+    `_reset_capabilities_for_testing()` clears this cache too.
+
     Returns:
         CertificationTier | None naming the tier `resolve_capabilities()` would resolve
         at, or None when no tier is classifiable (including environments resolution
         would reject outright).
+    """
+
+    global _CERTIFICATION, _CERTIFICATION_CACHED
+    if _CERTIFICATION_CACHED:
+        return _CERTIFICATION
+    _CERTIFICATION = _classify_installed_certification()
+    _CERTIFICATION_CACHED = True
+    return _CERTIFICATION
+
+
+def _classify_installed_certification() -> CertificationTier | None:
+    """Perform the uncached tier classification behind `installed_certification`.
+
+    Returns:
+        CertificationTier | None as documented on the caching wrapper.
     """
 
     family = installed_family()
@@ -1062,8 +1089,20 @@ def installed_certification() -> CertificationTier | None:
         release = _parse_release(meta.version)
         if release is None or release not in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V2]:
             return None
+        if _running_python() > V2_MAX_PYTHON_BY_RELEASE[release]:
+            # `_installed_v2_release` rejects the over-cap combination outright, so
+            # no tier is classifiable -- mirroring resolution keeps the degraded-tier
+            # warning from suggesting a version pin where the real remedy differs.
+            return None
         return CertificationTier.CERTIFIED
     if family is not AirflowFamily.V3:
+        return None
+    try:
+        _reject_corrupt_environment()
+    except AirflowCompatibilityError:
+        # Resolution rejects a dual-family install before ever classifying it; a
+        # `PROBED` answer here would aim the degraded-tier warning's pin-or-upgrade
+        # remedy at an environment whose real remedy is recreation.
         return None
     try:
         installed_version = metadata.version(AIRFLOW_DISTRIBUTION)
@@ -1783,10 +1822,12 @@ def resolve_capabilities() -> AirflowCapabilities:
 
 
 def _reset_capabilities_for_testing() -> None:
-    """Clear the successful-resolution cache for isolated compatibility tests."""
+    """Clear the resolution and certification caches for isolated compatibility tests."""
 
-    global _CAPABILITIES
+    global _CAPABILITIES, _CERTIFICATION, _CERTIFICATION_CACHED
     _CAPABILITIES = None
+    _CERTIFICATION = None
+    _CERTIFICATION_CACHED = False
 
 
 __all__ = (

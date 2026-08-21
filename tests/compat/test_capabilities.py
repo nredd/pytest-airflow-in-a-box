@@ -876,6 +876,38 @@ def test_installed_certification_classifies_v2_from_metadata(
     assert capability_module.installed_certification() is expected
 
 
+def test_installed_certification_is_none_for_a_corrupt_dual_family_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify a dual-family install as None, not `PROBED`.
+
+    Reviewer-found hole: without the corruption rejection, an uncertified core next to
+    a leftover 2.x monolith warned with a pin-or-upgrade remedy where the real remedy
+    is recreating the environment -- `resolve_capabilities()` rejects it outright.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.4.0", {}, meta_version="2.11.2")
+
+    assert capability_module.installed_certification() is None
+
+
+def test_installed_certification_is_none_for_an_over_cap_v2_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify a 2.x release running above its Python ceiling as None, not `CERTIFIED`.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version="2.7.3", python_version=(3, 12))
+
+    assert capability_module.installed_certification() is None
+
+
 def test_installed_certification_is_none_without_airflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -890,14 +922,16 @@ def test_installed_certification_is_none_without_airflow(
     assert capability_module.installed_certification() is None
 
 
-def test_installed_certification_survives_racing_metadata_mutations(
+def test_classify_installed_certification_survives_racing_metadata_mutations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Stay never-raising when the environment mutates between classification reads.
 
-    `installed_certification` re-reads metadata after `installed_family` classified
-    the family; both re-read branches (a vanished 2.x meta version and a 3.x core
-    read that starts raising) must degrade to None, not crash.
+    The uncached classifier re-reads metadata after `installed_family` classified the
+    family; both re-read branches (a vanished 2.x meta version and a 3.x core read
+    that starts raising) must degrade to None, not crash. Driven through the private
+    classifier on purpose: the public wrapper caches its first answer, so a second
+    scenario in the same test would never re-classify.
 
     Parameters:
         monkeypatch: pytest.MonkeyPatch faking the racing classification reads.
@@ -911,7 +945,7 @@ def test_installed_certification_survives_racing_metadata_mutations(
         "_meta_distribution",
         lambda: capability_module._MetaDistribution(version=None, major=None),
     )
-    assert capability_module.installed_certification() is None
+    assert capability_module._classify_installed_certification() is None
 
     monkeypatch.setattr(
         capability_module, "installed_family", lambda: capability_module.AirflowFamily.V3
@@ -923,7 +957,30 @@ def test_installed_certification_survives_racing_metadata_mutations(
         raise OSError(f"unreadable metadata for '{distribution_name}'")
 
     monkeypatch.setattr(capability_module.metadata, "version", raising_version)
-    assert capability_module.installed_certification() is None
+    assert capability_module._classify_installed_certification() is None
+
+
+def test_installed_certification_caches_its_first_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify once and trust forever, so reports cannot drift from the resolved tier.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing then mutating the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, "3.3.1", {})
+    assert (
+        capability_module.installed_certification()
+        is capability_module.CertificationTier.CERTIFIED
+    )
+
+    _install_fake_environment(monkeypatch, "3.4.0", {})
+
+    assert (
+        capability_module.installed_certification()
+        is capability_module.CertificationTier.CERTIFIED
+    )
 
 
 @pytest.mark.parametrize("version", ["garbage", "3.3", "3.3.0rc1", "3.3.0.post1"])

@@ -62,8 +62,13 @@ def _clean_plugins_manager_caches() -> None:
     that register into the REAL modules clear inline at their own end instead --
     leaking a `ComponentRegistryPlugin` past the test is a real cross-module flake
     (observed against `tests/fixtures/test_dag.py`), not a hypothetical.
+
+    Also clears the once-per-process degraded-warning cache: the PROBED-tier tests
+    below assert on `caplog`, and fake modules reuse names across tests, so a warning
+    deduplicated by an earlier test would silently blank a later assertion.
     """
 
+    compat_components._reset_degrade_warnings_for_testing()
     compat_components.clear_plugins_manager_caches()
 
 
@@ -88,6 +93,10 @@ def _fake_cached_module(names: tuple[str, ...], *, module_name: str = "fake_cach
                 return n
 
             _fn.__name__ = n
+            # Stamp ownership: the PROBED-tier generic clear only touches caches whose
+            # `__module__` matches the module carrying them, exactly like a function
+            # defined in the real module would.
+            _fn.__module__ = module_name
             return _fn
 
         setattr(module, name, _make(name))
@@ -315,7 +324,9 @@ def test_shared_module_loading_modules_single_imports_the_certified_location(
     assert requested == ["airflow.utils.entry_points"]
     assert len(modules) == 1
     compat_components._verify_and_clear_cache_functions(
-        modules[0], CERTIFIED_SHARED_MODULE_LOADING_CACHES[SharedModuleLoading.SINGLE]
+        modules[0],
+        CERTIFIED_SHARED_MODULE_LOADING_CACHES[SharedModuleLoading.SINGLE],
+        certification=CertificationTier.CERTIFIED,
     )
 
 
@@ -360,7 +371,9 @@ def test_verify_and_clear_cache_functions_clears_every_certified_name() -> None:
     assert module.alpha.cache_info().currsize == 1
 
     compat_components._verify_and_clear_cache_functions(
-        module, CertifiedCaches(required=frozenset({"alpha", "beta"}))
+        module,
+        CertifiedCaches(required=frozenset({"alpha", "beta"})),
+        certification=CertificationTier.CERTIFIED,
     )
 
     assert module.alpha.cache_info().currsize == 0
@@ -374,7 +387,9 @@ def test_verify_and_clear_cache_functions_raises_on_missing_name() -> None:
 
     with pytest.raises(compat_components.ComponentSandboxError, match="missing"):
         compat_components._verify_and_clear_cache_functions(
-            module, CertifiedCaches(required=frozenset({"alpha", "beta"}))
+            module,
+            CertifiedCaches(required=frozenset({"alpha", "beta"})),
+            certification=CertificationTier.CERTIFIED,
         )
 
 
@@ -385,7 +400,9 @@ def test_verify_and_clear_cache_functions_raises_on_uncertified_extra_name() -> 
 
     with pytest.raises(compat_components.ComponentSandboxError, match="extra"):
         compat_components._verify_and_clear_cache_functions(
-            module, CertifiedCaches(required=frozenset({"alpha"}))
+            module,
+            CertifiedCaches(required=frozenset({"alpha"})),
+            certification=CertificationTier.CERTIFIED,
         )
 
 
@@ -401,7 +418,9 @@ def test_verify_and_clear_cache_functions_tolerates_an_absent_optional_name() ->
     module = _fake_cached_module(("alpha",))
 
     compat_components._verify_and_clear_cache_functions(
-        module, CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"}))
+        module,
+        CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"})),
+        certification=CertificationTier.CERTIFIED,
     )
 
 
@@ -414,7 +433,9 @@ def test_verify_and_clear_cache_functions_clears_a_present_optional_name() -> No
     assert module.beta.cache_info().currsize == 1
 
     compat_components._verify_and_clear_cache_functions(
-        module, CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"}))
+        module,
+        CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"})),
+        certification=CertificationTier.CERTIFIED,
     )
 
     assert module.alpha.cache_info().currsize == 0
@@ -428,7 +449,9 @@ def test_verify_and_clear_cache_functions_raises_on_extra_beyond_required_and_op
 
     with pytest.raises(compat_components.ComponentSandboxError, match="extra"):
         compat_components._verify_and_clear_cache_functions(
-            module, CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"}))
+            module,
+            CertifiedCaches(required=frozenset({"alpha"}), optional=frozenset({"beta"})),
+            certification=CertificationTier.CERTIFIED,
         )
 
 
@@ -460,7 +483,9 @@ def test_certified_core_cached_functions_table_matches_the_3_2_0_shape() -> None
     )
 
     compat_components._verify_and_clear_cache_functions(
-        module, CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.CACHED_FUNCTIONS]
+        module,
+        CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.CACHED_FUNCTIONS],
+        certification=CertificationTier.CERTIFIED,
     )
 
 
@@ -476,7 +501,9 @@ def test_verify_and_clear_cache_functions_real_core_module_matches_certified_tab
     core_module, _sdk_module = compat_components._plugins_manager_modules()
     certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.CACHED_FUNCTIONS]
 
-    compat_components._verify_and_clear_cache_functions(core_module, certified)
+    compat_components._verify_and_clear_cache_functions(
+        core_module, certified, certification=CertificationTier.CERTIFIED
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +519,9 @@ def test_verify_and_reset_module_globals_resets_every_certified_name() -> None:
     )
 
     compat_components._verify_and_reset_module_globals(
-        module, CertifiedCaches(required=frozenset({"plugins", "loaded_plugins", "import_errors"}))
+        module,
+        CertifiedCaches(required=frozenset({"plugins", "loaded_plugins", "import_errors"})),
+        certification=CertificationTier.CERTIFIED,
     )
 
     assert module.plugins is None
@@ -507,7 +536,9 @@ def test_verify_and_reset_module_globals_raises_on_missing_name() -> None:
 
     with pytest.raises(compat_components.ComponentSandboxError, match="plugins_cache"):
         compat_components._verify_and_reset_module_globals(
-            module, CertifiedCaches(required=frozenset({"plugins", "plugins_cache"}))
+            module,
+            CertifiedCaches(required=frozenset({"plugins", "plugins_cache"})),
+            certification=CertificationTier.CERTIFIED,
         )
 
 
@@ -525,7 +556,9 @@ def test_verify_and_reset_module_globals_real_31_shape_matches_certified_table()
     certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
     module = _fake_globals_module(dict.fromkeys(certified.required, "populated"))
 
-    compat_components._verify_and_reset_module_globals(module, certified)
+    compat_components._verify_and_reset_module_globals(
+        module, certified, certification=CertificationTier.CERTIFIED
+    )
 
     assert module.loaded_plugins == set()
     assert module.import_errors == {}
@@ -666,6 +699,27 @@ def test_clear_plugins_manager_caches_module_globals_shape_happy_path(
 # ---------------------------------------------------------------------------
 
 
+def test_warn_degraded_once_deduplicates_identical_messages(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log an identical degraded-tier message once per process, distinct ones each.
+
+    `clear_plugins_manager_caches` runs twice per component test, so without the
+    dedup a persistent drift would repeat the same block for every test.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the warnings.
+    """
+
+    with caplog.at_level("WARNING"):
+        compat_components._warn_degraded_once("drift alpha")
+        compat_components._warn_degraded_once("drift alpha")
+        compat_components._warn_degraded_once("drift beta")
+
+    assert caplog.text.count("drift alpha") == 1
+    assert caplog.text.count("drift beta") == 1
+
+
 def test_verify_and_clear_cache_functions_probed_clears_uncertified_extra_generically(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -683,7 +737,7 @@ def test_verify_and_clear_cache_functions_probed_clears_uncertified_extra_generi
         compat_components._verify_and_clear_cache_functions(
             module,
             CertifiedCaches(required=frozenset({"alpha"})),
-            CertificationTier.PROBED,
+            certification=CertificationTier.PROBED,
         )
 
     assert module.alpha.cache_info().currsize == 0
@@ -707,11 +761,41 @@ def test_verify_and_clear_cache_functions_probed_tolerates_missing_required(
         compat_components._verify_and_clear_cache_functions(
             module,
             CertifiedCaches(required=frozenset({"alpha", "beta"})),
-            CertificationTier.PROBED,
+            certification=CertificationTier.PROBED,
         )
 
     assert module.alpha.cache_info().currsize == 0
     assert "missing ['beta']" in caplog.text
+
+
+def test_verify_and_clear_cache_functions_probed_leaves_foreign_reexports_untouched(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Skip an uncertified extra whose `__module__` points outside the audited module.
+
+    Reviewer-found hole: an unbounded generic clear would wipe a re-exported
+    listener/policy getter cache -- the exact never-clear state the sandbox preserves.
+
+    Parameters:
+        caplog: pytest.LogCaptureFixture capturing the re-export warning.
+    """
+
+    module = _fake_cached_module(("alpha", "reexported_getter"))
+    module.reexported_getter.__module__ = "airflow.settings"
+    module.alpha()
+    module.reexported_getter()
+
+    with caplog.at_level("WARNING"):
+        compat_components._verify_and_clear_cache_functions(
+            module,
+            CertifiedCaches(required=frozenset({"alpha"})),
+            certification=CertificationTier.PROBED,
+        )
+
+    assert module.alpha.cache_info().currsize == 0
+    assert module.reexported_getter.cache_info().currsize == 1
+    assert "re-exports cache-clearable callables owned by other modules" in caplog.text
+    assert "reexported_getter" in caplog.text
 
 
 def test_verify_and_clear_cache_functions_probed_stays_silent_without_drift(
@@ -730,7 +814,7 @@ def test_verify_and_clear_cache_functions_probed_stays_silent_without_drift(
         compat_components._verify_and_clear_cache_functions(
             module,
             CertifiedCaches(required=frozenset({"alpha"})),
-            CertificationTier.PROBED,
+            certification=CertificationTier.PROBED,
         )
 
     assert module.alpha.cache_info().currsize == 0
@@ -752,7 +836,7 @@ def test_verify_and_reset_module_globals_probed_tolerates_missing_name(
         compat_components._verify_and_reset_module_globals(
             module,
             CertifiedCaches(required=frozenset({"plugins", "plugins_cache"})),
-            CertificationTier.PROBED,
+            certification=CertificationTier.PROBED,
         )
 
     assert module.plugins is None
@@ -830,6 +914,90 @@ def test_clear_plugins_manager_caches_probed_clears_unexpected_sdk_module(
     assert fake_core.plugins is None
     assert fake_sdk.surprise_cache.cache_info().currsize == 0
     assert "uncertified extra ['surprise_cache']" in caplog.text
+    assert "cannot be vetted" in caplog.text
+
+
+def test_clear_plugins_manager_caches_probed_sweeps_core_cache_functions_on_module_globals(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Clear an uncertified `functools.cache` grown on a `MODULE_GLOBALS`-shaped core.
+
+    Reviewer-found hole: the `MODULE_GLOBALS` arm only reset plain globals, so a gap
+    release adding a cache function to `airflow.plugins_manager` leaked that cache
+    across sandboxes with no log line.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+        caplog: pytest.LogCaptureFixture capturing the drift warning.
+    """
+
+    real_capabilities = resolve_capabilities()
+    fake_capabilities = replace(
+        real_capabilities,
+        plugins_manager=PluginsManagerShape.MODULE_GLOBALS,
+        shared_module_loading=SharedModuleLoading.SINGLE,
+        certification=CertificationTier.PROBED,
+    )
+    certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
+    fake_core = _fake_globals_module(dict.fromkeys(certified.required, "populated"))
+    fake_core.__name__ = "fake_31_core"
+    surprise = _fake_cached_module(("surprise_cache",), module_name="fake_31_core")
+    fake_core.surprise_cache = surprise.surprise_cache
+    fake_core.surprise_cache()
+    fake_shared = _fake_cached_module(("_get_grouped_entry_points",), module_name="fake_shared")
+    monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
+    monkeypatch.setattr(compat_components, "_plugins_manager_modules", lambda: (fake_core, None))
+    monkeypatch.setattr(
+        compat_components, "_shared_module_loading_modules", lambda _shape: (fake_shared,)
+    )
+
+    with caplog.at_level("WARNING"):
+        compat_components.clear_plugins_manager_caches()
+
+    assert fake_core.plugins is None
+    assert fake_core.surprise_cache.cache_info().currsize == 0
+    assert "uncertified extra ['surprise_cache']" in caplog.text
+
+
+def test_clear_plugins_manager_caches_probed_flags_an_unclearable_unexpected_sdk_module(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Warn even when the unexpected SDK module exposes nothing generically clearable.
+
+    A module holding only plain globals has no `.cache_clear` markers, so the generic
+    clear's own drift log stays silent; the branch-level warning is the only signal
+    that un-restorable state exists. Reviewer-found hole: without it, this exact case
+    no-opped with no log line at all.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
+        caplog: pytest.LogCaptureFixture capturing the degradation warning.
+    """
+
+    real_capabilities = resolve_capabilities()
+    fake_capabilities = replace(
+        real_capabilities,
+        plugins_manager=PluginsManagerShape.MODULE_GLOBALS,
+        shared_module_loading=SharedModuleLoading.SINGLE,
+        certification=CertificationTier.PROBED,
+    )
+    certified = CERTIFIED_CORE_PLUGINS_MANAGER_CACHES[PluginsManagerShape.MODULE_GLOBALS]
+    fake_core = _fake_globals_module(dict.fromkeys(certified.required, "populated"))
+    fake_sdk = _fake_globals_module({"plugins": "populated"}, module_name="fake_globals_sdk")
+    fake_shared = _fake_cached_module(("_get_grouped_entry_points",), module_name="fake_shared")
+    monkeypatch.setattr(compat_components, "resolve_capabilities", lambda: fake_capabilities)
+    monkeypatch.setattr(
+        compat_components, "_plugins_manager_modules", lambda: (fake_core, fake_sdk)
+    )
+    monkeypatch.setattr(
+        compat_components, "_shared_module_loading_modules", lambda _shape: (fake_shared,)
+    )
+
+    with caplog.at_level("WARNING"):
+        compat_components.clear_plugins_manager_caches()
+
+    assert fake_sdk.plugins == "populated"
+    assert "cannot be vetted" in caplog.text
 
 
 # ---------------------------------------------------------------------------
