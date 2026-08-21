@@ -266,7 +266,26 @@ rather than rebinding the module attribute, so any other code holding a referenc
 object (a real, if currently unconfirmed-elsewhere, risk `airflow.configuration.ensure_secrets_loaded`'s
 own `len(...) == 2` reload heuristic exists to paper over) keeps seeing the same object with restored
 contents. `ensure_secrets_loaded` is deliberately never called by this plugin's restore path for exactly
-that heuristic's own reason: it belongs to upstream and may change.
+that heuristic's own reason: it belongs to upstream and may change. The heuristic's exact shape,
+confirmed by reading the installed 3.3.0's `configuration.py` directly: with its default
+`default_backends` argument (`DEFAULT_SECRETS_SEARCH_PATH`, two entries --
+`EnvironmentVariablesBackend` and `MetastoreBackend`), `ensure_secrets_loaded()` returns the live
+`secrets_backend_list` unless `len(secrets_backend_list) == 2`, in which case it returns a FRESH
+`initialize_secrets_backends()` list built from configuration without rebinding the module global;
+with a non-default `default_backends` (the worker path) it always rebuilds. A sandbox-registered
+backend therefore stays visible through `ensure_secrets_loaded()` on the installed 3.3.0 --
+`register_secrets_backend` always grows the list past two (the two defaults plus the registration,
+one more when `airflow_secrets_backend` seeds a custom backend at position zero) -- which
+`tests/fixtures/test_component_channel_interactions.py` pins with and without an ini backend across
+the certified matrix, so a heuristic drift on any certified release fails a test here rather than
+silently hiding registrations.
+A note on restore semantics that same file pins as contract: because the restore reinstates the
+snapshot's exact INSTANCE objects, an ini-seeded substrate backend survives sandbox teardown as the
+same live object (state included), never as a freshly-constructed one, and an ini-seeded
+plugins-folder LISTENER survives teardown because the cached, never-cleared listener managers are
+resolved (built, if nothing had yet) at sandbox construction before the listener snapshot is taken,
+so a listener the plugins-folder scan integrated is part of the restored snapshot -- documented in
+`docs/guide/custom-components.md`'s "Hazards at the sandbox seam".
 
 `airflow.listeners.listener.get_listener_manager` and `airflow.sdk.listener.get_listener_manager` are
 BOTH `functools.cache`-decorated on the installed 3.3.0 (confirmed by `hasattr(get_listener_manager,

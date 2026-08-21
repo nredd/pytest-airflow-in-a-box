@@ -2547,8 +2547,7 @@ def _verify_and_clear_cache_functions(
                 f"clearing a foreign cache (a listener or policy manager getter, say) "
                 f"would destroy state the sandbox must preserve."
             )
-    for name in observed - foreign:
-        getattr(module, name).cache_clear()
+    _drop_caches(module, cache_functions=observed - foreign, module_globals=())
 
 
 # `loaded_plugins`/`import_errors` reset to an empty container of their own declared
@@ -2560,6 +2559,48 @@ _MODULE_GLOBAL_EMPTY_CONTAINER_RESETS: dict[str, Callable[[], object]] = {
     "loaded_plugins": set,
     "import_errors": dict,
 }
+
+
+def _drop_caches(
+    module: Any,
+    *,
+    cache_functions: Iterable[str],
+    module_globals: Iterable[str],
+) -> None:
+    """Drop the named caches on one module: the single cache-invalidation mechanic.
+
+    Both invalidation surfaces route through here -- `clear_plugins_manager_caches`
+    (via `_verify_and_clear_cache_functions` / `_verify_and_reset_module_globals`,
+    which own all verification and tier handling) and
+    `invalidate_component_lookup_caches` -- so what "dropping a cache" means is defined
+    exactly once per name kind: a `cache_functions` name is a
+    `functools.cache`/`functools.lru_cache` wrapper and drops via `.cache_clear()`; a
+    `module_globals` name is a plain module-level global and drops by rebinding to its
+    declared cache-empty value, `None` except for the container-sentineled names in
+    `_MODULE_GLOBAL_EMPTY_CONTAINER_RESETS`.
+
+    The two callers stay separate functions ON PURPOSE, differing only in WHICH names
+    they pass: `clear_plugins_manager_caches` drops every certified/observed cache
+    including the plugin list itself (`_get_plugins` on 3.2+, the `plugins` global on
+    3.1.x), while `invalidate_component_lookup_caches` drops only the two
+    derived-lookup caches precisely so the plugin `register_plugin` just appended to
+    the live list is NOT discarded -- see that function's docstring. Do not collapse
+    them into one function with a scope switch; the narrow name set IS the invariant.
+
+    Parameters:
+        module: Any containing the module whose caches to drop.
+        cache_functions: Iterable[str] naming `.cache_clear()`-bearing attributes to
+            clear; every name must be present and cache-clearable on `module`.
+        module_globals: Iterable[str] naming plain globals to rebind to their
+            cache-empty values; every name is rebound whether or not it is currently
+            set.
+    """
+
+    for name in cache_functions:
+        getattr(module, name).cache_clear()
+    for name in module_globals:
+        factory = _MODULE_GLOBAL_EMPTY_CONTAINER_RESETS.get(name)
+        setattr(module, name, factory() if factory is not None else None)
 
 
 def _verify_and_reset_module_globals(
@@ -2616,11 +2657,11 @@ def _verify_and_reset_module_globals(
             f"present globals reset and the missing ones are skipped. Upgrade "
             f"`pytest-airflow-in-a-box` for a certified row."
         )
-    for name in certified.required:
-        if not hasattr(module, name):
-            continue
-        factory = _MODULE_GLOBAL_EMPTY_CONTAINER_RESETS.get(name)
-        setattr(module, name, factory() if factory is not None else None)
+    _drop_caches(
+        module,
+        cache_functions=(),
+        module_globals=(name for name in certified.required if hasattr(module, name)),
+    )
 
 
 def clear_plugins_manager_caches() -> None:
@@ -2955,11 +2996,11 @@ def invalidate_component_lookup_caches() -> None:
 
     core_module, _sdk_module = _plugins_manager_modules()
     if hasattr(core_module, "get_timetables_plugins"):
-        for name in DERIVED_LOOKUP_CACHE_FUNCTIONS:
-            getattr(core_module, name).cache_clear()
+        _drop_caches(
+            core_module, cache_functions=DERIVED_LOOKUP_CACHE_FUNCTIONS, module_globals=()
+        )
         return
-    for name in DERIVED_LOOKUP_MODULE_GLOBALS:
-        setattr(core_module, name, None)
+    _drop_caches(core_module, cache_functions=(), module_globals=DERIVED_LOOKUP_MODULE_GLOBALS)
 
 
 def lookup_key(component_type: type) -> str:
@@ -3524,8 +3565,12 @@ def register_executor(component: object, *, alias: str) -> str:
         alias: str naming the alias `ExecutorLoader.load_executor(alias)` resolves.
 
     Returns:
-        str containing `alias`, unchanged, for the caller to pass into whichever Airflow
-        configuration surface selects an executor by name.
+        str containing `alias`, unchanged, for the caller to resolve through
+        `ExecutorLoader.load_executor` / `lookup_executor_name_by_str`. NOT for a
+        `core.executor` override: `_get_executor_names` memoizes its config parse
+        into `_executor_names` -- which `snapshot_executor_loader` already forced at
+        sandbox construction -- and a bare single-part config value resolves against
+        the built-in core executor names, never this alias map.
 
     Raises:
         ComponentSandboxError: `component` has no real, importable module-level path.
