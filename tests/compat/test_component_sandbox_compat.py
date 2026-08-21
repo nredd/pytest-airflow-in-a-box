@@ -362,6 +362,55 @@ def test_cache_clearable_names_finds_only_cache_clear_attributes() -> None:
     assert names == frozenset({"alpha", "beta"})
 
 
+def test_drop_caches_clears_the_named_cache_functions() -> None:
+    """Clear exactly the named `functools.cache` functions, leaving others populated."""
+
+    module = _fake_cached_module(("alpha", "beta"))
+    module.alpha()
+    module.beta()
+    assert module.alpha.cache_info().currsize == 1
+    assert module.beta.cache_info().currsize == 1
+
+    compat_components._drop_caches(module, cache_functions=("alpha",), module_globals=())
+
+    assert module.alpha.cache_info().currsize == 0
+    assert module.beta.cache_info().currsize == 1
+
+
+def test_drop_caches_rebinds_the_named_module_globals_to_their_empty_values() -> None:
+    """Rebind plain globals to `None` and container-sentineled ones to fresh containers."""
+
+    module: Any = types.ModuleType("fake_globals_module")
+    module.timetable_classes = {"pkg.Timetable": object}
+    module.loaded_plugins = {"a_plugin"}
+    module.import_errors = {"plugin.py": "boom"}
+    module.untouched = {"left": "alone"}
+
+    compat_components._drop_caches(
+        module,
+        cache_functions=(),
+        module_globals=("timetable_classes", "loaded_plugins", "import_errors"),
+    )
+
+    assert module.timetable_classes is None
+    assert module.loaded_plugins == set()
+    assert module.import_errors == {}
+    assert module.untouched == {"left": "alone"}
+
+
+def test_drop_caches_with_empty_iterables_is_a_no_op() -> None:
+    """Touch nothing when both name iterables are empty."""
+
+    module = _fake_cached_module(("alpha",))
+    module.alpha()
+    module.timetable_classes = {"pkg.Timetable": object}
+
+    compat_components._drop_caches(module, cache_functions=(), module_globals=())
+
+    assert module.alpha.cache_info().currsize == 1
+    assert module.timetable_classes == {"pkg.Timetable": object}
+
+
 def test_verify_and_clear_cache_functions_clears_every_certified_name() -> None:
     """Clear every certified `functools.cache` function, real, no mismatch."""
 

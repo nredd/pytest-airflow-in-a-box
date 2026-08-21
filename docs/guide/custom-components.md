@@ -333,10 +333,13 @@ Airflow's internals. The degraded tier is surfaced three ways: one
 - `secrets_backend(component, *, first=True)` -- inserts into the secrets backend search
   path, at the front (checked before every other configured backend) by default
 - `executor(component, *, alias="test") -> str` -- registers an executor class under
-  `alias`, returning it for use with `airflow_config(executor=...)` or the
-  `airflow_executor` ini. `component` must be defined at module scope somewhere
-  importable -- Airflow resolves it later by dotted import path, and a class defined
-  inside a test function has none
+  `alias`, returning it for use with
+  `airflow_config({("core", "executor"): alias})` within the same test. The alias
+  exists only in this process for this one test, so the `airflow_executor` ini can
+  never name it: that option is resolved before the first Airflow import, when no
+  alias exists yet, and takes a real dotted class path. `component` must be defined at
+  module scope somewhere importable -- Airflow resolves it later by dotted import
+  path, and a class defined inside a test function has none
 - `timetable(component)` -- registers a custom timetable class through a synthesized
   throwaway `AirflowPlugin`, which is exactly what makes Airflow's serialization round
   trip resolve the class by qualname. Accepts the class or an instance (an instance
@@ -360,3 +363,77 @@ Airflow's internals. The degraded tier is surfaced three ways: one
 
 `airflow_components` is unavailable on the Airflow 2.x family, which predates the Task
 SDK's own plugin and listener managers entirely.
+
+## How the two channels compose
+
+The ini options and the `airflow_components` sandbox install the same component
+families through two channels with different lifetimes. The contract between them:
+
+- **The ini options are the session substrate.** `airflow_plugins_folder`,
+  `airflow_executor`, `airflow_xcom_backend`, and `airflow_secrets_backend` /
+  `airflow_secrets_backend_kwargs` are resolved into the generated `AIRFLOW_HOME` and
+  the pre-import environment before the first Airflow import, and stay fixed for the
+  whole run.
+- **`airflow_components` is a per-test overlay on that substrate.** Every registration
+  mutates Airflow's live process-global registries for one test, and teardown reverts
+  each registry to whatever the substrate seeded -- never to empty. An ini-configured
+  executor, secrets backend, or plugins-folder component is live before the sandbox
+  snapshots, so it is exactly what restoration reinstates; the next test sees the
+  substrate again, sandbox registrations gone.
+- **`airflow_config` environment overrides sit between the two.** A
+  `with airflow_config(...)` block -- or the [`airflow_config` ini
+  option](configuration.md), whose context is the whole session -- outranks the
+  generated `airflow.cfg` for its context's duration, because the environment outranks
+  every file on each `conf.get()`. It changes what Airflow *reads*, never the live
+  registries the sandbox manages.
+
+One consequence worth spelling out: `airflow_executor` writes `[core] executor` into
+the generated `airflow.cfg`, while an `airflow_config` ini line `core.executor = ...`
+becomes the `AIRFLOW__CORE__EXECUTOR` environment variable -- so when both are set,
+the `airflow_config` line wins for the whole session. That is deliberate:
+`core.executor` is intentionally not on the `airflow_config` denylist, and the
+environment channel is defined to outrank the file channel. Set one or the other.
+
+## Hazards at the sandbox seam
+
+The live-mutation channel has sharp edges that are documented contract, each pinned by
+a test, not accidents to be discovered:
+
+- **Teardown restores secrets backend *instances*, not configuration.** The sandbox
+  restores `airflow.configuration.secrets_backend_list` to the exact pre-test instance
+  objects by slice assignment; it never calls upstream's `ensure_secrets_loaded()`
+  rebuild. A substrate backend that accumulated state during a test (an open client, a
+  populated cache) is resurrected as that same live object in every later test, not
+  reconstructed fresh from configuration.
+- **`ensure_secrets_loaded()` hides nothing today, by upstream heuristic.**
+  `airflow.configuration.ensure_secrets_loaded()` returns the live
+  `secrets_backend_list` UNLESS the list holds exactly two entries -- its two built-in
+  defaults -- in which case it rebuilds a fresh list from configuration instead
+  (without touching the module global). A sandbox-registered backend always grows the
+  list past two (the two defaults plus the registration; one more with an ini
+  backend), so it stays visible through `ensure_secrets_loaded()` with or without an
+  ini backend configured. That visibility rests on upstream's `len(...) == 2`
+  heuristic, which this plugin does not own; see PROVENANCE.md.
+- **Plugins-folder modules reload across sandboxed tests; old bindings go stale.**
+  Teardown removes a plugins-folder module from `sys.modules` and clears the
+  plugins-manager caches, so the next plugin access rescans the folder and executes
+  the file again, producing a NEW module object with new class objects. Anything
+  holding the previous load's objects -- a class a test imported and kept, the
+  restored listener instance on a manager -- is bound to the old ones, and an
+  identity or `isinstance` comparison across a sandboxed test boundary compares
+  classes from different loads. Compare by name across tests, never by identity.
+- **Each sandboxed test costs two plugins-folder rescans.** The sandbox clears the
+  plugins-manager caches at construction (so a stale pre-test load cannot win) and
+  again at teardown (so nothing the test computed lingers), and each clear makes the
+  next plugin access rescan the folder. `dag_maker(schedule=...)`'s first call in a
+  test adds one more wrinkle: its registered-timetable lookup probe runs BEFORE the
+  sandbox exists, so the plugin load that probe may trigger is immediately discarded
+  by the sandbox construction clear and repeated afterward.
+- **An ini plugins-folder listener survives teardown through the snapshot, by
+  construction ordering.** Sandbox construction clears the plugins-manager caches,
+  THEN resolves the listener managers -- integrating plugins-folder listeners when a
+  manager is built here for the first time -- and only then snapshots them, so the
+  ini-seeded listener is inside the snapshot teardown restores. This ordering is
+  pinned as contract by test; the cached listener-manager getters themselves are
+  never cleared, which is what keeps the restored manager (and its substrate
+  listeners) alive across tests.

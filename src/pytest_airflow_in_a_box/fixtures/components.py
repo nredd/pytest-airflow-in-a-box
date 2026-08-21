@@ -11,6 +11,7 @@ References:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pytest
@@ -89,6 +90,89 @@ def _scoped_listener_problems(
         problems=tuple(problem for problem in report.problems if problem.code not in mooted),
         certification=report.certification,
     )
+
+
+@dataclass(frozen=True)
+class _TimetablePolicy:
+    """One timetable registration gate, expressed as data.
+
+    Every timetable registration in this module -- the strict `ComponentRegistry`
+    methods and the lenient `dag_maker(schedule=...)` transparent path alike -- is the
+    same operation, `check_component` gating followed by `sandbox.register_timetable`,
+    differing only in this policy. `_gate_and_register_timetable` is the one
+    implementation; the three module constants below are the only policies.
+
+    Parameters:
+        blocking: frozenset[str] | None naming the problem codes that block
+            registration, or None meaning every reported problem blocks.
+        warn_nonblocking: bool logging each non-blocking problem as a warning so the
+            conformance signal survives a lenient gate.
+        require_instance: bool refusing a bare class -- encoding a timetable requires
+            a live instance.
+    """
+
+    blocking: frozenset[str] | None
+    warn_nonblocking: bool
+    require_instance: bool
+
+
+# `ComponentRegistry.timetable`'s full conformance gate: every problem blocks.
+_STRICT_TIMETABLE = _TimetablePolicy(blocking=None, warn_nonblocking=False, require_instance=False)
+
+# `register_schedule_timetable`'s registration-scoped gate. The one conformance problem
+# that makes transparent registration FUTILE rather than merely suspect blocks: a
+# `<locals>` class can never resolve by qualname, so registering it only defers the
+# failure to a raw `TimetableNotRegistered` deep inside persist. Everything else warns.
+_SCHEDULE_TIMETABLE = _TimetablePolicy(
+    blocking=frozenset({sandbox.TIMETABLE_LOCAL_QUALNAME}),
+    warn_nonblocking=True,
+    require_instance=False,
+)
+
+# `serialization_round_trip`'s gate: the strict policy plus the instance requirement.
+_ROUND_TRIP_TIMETABLE = _TimetablePolicy(
+    blocking=None, warn_nonblocking=False, require_instance=True
+)
+
+
+def _gate_and_register_timetable(timetable: object, policy: _TimetablePolicy) -> None:
+    """Gate one timetable through `check_component` under `policy`, then register it.
+
+    Parameters:
+        timetable: object containing the timetable class or instance to register.
+        policy: _TimetablePolicy selecting which problems block, whether non-blocking
+            problems warn, and whether a bare class is refused.
+
+    Raises:
+        ComponentContractError: A problem `policy` treats as blocking was found.
+        ComponentSandboxError: `policy` requires an instance and `timetable` is a
+            class.
+    """
+
+    if policy.require_instance and isinstance(timetable, type):
+        raise sandbox.ComponentSandboxError(
+            f"serialization_round_trip() needs a live `{timetable.__name__}` "
+            f"instance -- encoding a timetable requires one; pass "
+            f"`{timetable.__name__}(...)` instead of the class."
+        )
+    report = check_component(timetable, kind=ComponentKind.TIMETABLE)
+    if policy.blocking is not None:
+        if policy.warn_nonblocking:
+            for problem in report.problems:
+                if problem.code not in policy.blocking:
+                    LOGGER.warning(
+                        f"`{report.component_name}` [{problem.code}]: "
+                        f"{problem.message} {problem.hint}"
+                    )
+        report = ComponentReport(
+            component_name=report.component_name,
+            problems=tuple(
+                problem for problem in report.problems if problem.code in policy.blocking
+            ),
+            certification=report.certification,
+        )
+    report.raise_for_problems()
+    sandbox.register_timetable(timetable)
 
 
 class _ComponentSandbox:
@@ -191,8 +275,7 @@ class _ComponentSandbox:
     def timetable(self, component: object) -> None:
         """See `pytest_airflow_in_a_box.types.ComponentRegistry.timetable`."""
 
-        check_component(component, kind=ComponentKind.TIMETABLE).raise_for_problems()
-        sandbox.register_timetable(component)
+        _gate_and_register_timetable(component, _STRICT_TIMETABLE)
 
     def priority_weight_strategy(self, component: object) -> None:
         """See `pytest_airflow_in_a_box.types.ComponentRegistry.priority_weight_strategy`."""
@@ -203,13 +286,7 @@ class _ComponentSandbox:
     def serialization_round_trip(self, component: object) -> None:
         """See `pytest_airflow_in_a_box.types.ComponentRegistry.serialization_round_trip`."""
 
-        if isinstance(component, type):
-            raise sandbox.ComponentSandboxError(
-                f"serialization_round_trip() needs a live `{component.__name__}` "
-                f"instance -- encoding a timetable requires one; pass "
-                f"`{component.__name__}(...)` instead of the class."
-            )
-        self.timetable(component)
+        _gate_and_register_timetable(component, _ROUND_TRIP_TIMETABLE)
         ComponentReport(
             component_name=type(component).__name__,
             problems=sandbox.timetable_round_trip(component),
@@ -338,12 +415,6 @@ class _ComponentSandbox:
         raise failures[0][1]
 
 
-# The one conformance problem that makes transparent registration FUTILE rather than
-# merely suspect: a `<locals>` class can never resolve by qualname, so registering it
-# only defers the failure to a raw `TimetableNotRegistered` deep inside persist.
-_SCHEDULE_REGISTRATION_BLOCKING = (sandbox.TIMETABLE_LOCAL_QUALNAME,)
-
-
 def register_schedule_timetable(timetable: object) -> None:
     """Register a `dag_maker` schedule timetable behind a registration-scoped gate.
 
@@ -353,9 +424,10 @@ def register_schedule_timetable(timetable: object) -> None:
     is stricter than Airflow itself (`timetable-serialize-pair-incomplete` hard-fails
     a stateless serialize-only timetable that upstream's default `deserialize`, a bare
     `return cls()`, handles fine). Only the problem that makes registration futile
-    raises (`timetable-local-qualname`); everything else is logged as a warning so the
-    signal survives without turning a previously-working Dag into a hard failure. The
-    explicit `airflow_components.timetable()` call keeps the full gate.
+    raises (`timetable-local-qualname`, see `_SCHEDULE_TIMETABLE`); everything else is
+    logged as a warning so the signal survives without turning a previously-working
+    Dag into a hard failure. The explicit `airflow_components.timetable()` call keeps
+    the full gate.
 
     Parameters:
         timetable: object containing the custom timetable instance to register.
@@ -365,22 +437,7 @@ def register_schedule_timetable(timetable: object) -> None:
             (`timetable-local-qualname`).
     """
 
-    report = check_component(timetable, kind=ComponentKind.TIMETABLE)
-    for problem in report.problems:
-        if problem.code not in _SCHEDULE_REGISTRATION_BLOCKING:
-            LOGGER.warning(
-                f"`{report.component_name}` [{problem.code}]: {problem.message} {problem.hint}"
-            )
-    ComponentReport(
-        component_name=report.component_name,
-        problems=tuple(
-            problem
-            for problem in report.problems
-            if problem.code in _SCHEDULE_REGISTRATION_BLOCKING
-        ),
-        certification=report.certification,
-    ).raise_for_problems()
-    sandbox.register_timetable(timetable)
+    _gate_and_register_timetable(timetable, _SCHEDULE_TIMETABLE)
 
 
 @pytest.fixture

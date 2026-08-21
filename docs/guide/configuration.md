@@ -111,6 +111,12 @@ That covers the metadata database URL and pool flag, `core.dags_folder`, `core.u
 auth-manager and JWT surface. Each message names the supported knob. `core.executor` is *not*
 on the list -- bootstrap does not own it, and `--airflow-doctor` already tells you to set it.
 
+Because `core.executor` is settable here while the `airflow_executor` ini writes the same option
+into the generated `airflow.cfg`, the two can disagree -- and the `airflow_config` line wins for
+the whole session: it is applied as the `AIRFLOW__CORE__EXECUTOR` environment variable, and the
+environment outranks the file on every `conf.get()`. Set one or the other; see
+[how the two channels compose](custom-components.md#how-the-two-channels-compose).
+
 One option is rejected only *conditionally*: `core.dagbag_import_timeout` is fine on an ordinary
 run, but with [the smoke catalog](smoke-tests.md) enabled it is an error, because the catalog
 pins that same variable from `airflow_dag_parse_timeout` -- which also scales the per-file parse

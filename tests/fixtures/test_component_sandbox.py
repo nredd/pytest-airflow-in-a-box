@@ -34,6 +34,7 @@ from airflow.timetables.base import Timetable
 from pytest_airflow_in_a_box._compat import components as sandbox
 from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
 from pytest_airflow_in_a_box.components import ComponentContractError, ComponentSandboxError
+from pytest_airflow_in_a_box.fixtures import components as fixture_components
 
 # Skipping (not faking) on 3.1.x legs is the honest choice for the tests below that
 # genuinely need the real Task SDK listener manager; the 3.1 dispatch branches
@@ -971,6 +972,217 @@ def test_finalize_logs_additional_failures_beyond_the_first(
 
     assert "restore_secrets_backend_list" in caplog.text
     assert "also failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# _gate_and_register_timetable: one gate implementation, three policies
+# ---------------------------------------------------------------------------
+
+
+class _PolicyCleanTimetable(Timetable):
+    """Fully conformant module-level timetable for the policy-matrix tests."""
+
+    def infer_manual_data_interval(self, *, run_after: Any) -> Any:
+        """Never actually run; only the conformance gate is under test.
+
+        Parameters:
+            run_after: Any containing the manual trigger time.
+
+        Returns:
+            Any; never actually returns.
+
+        Raises:
+            NotImplementedError: Always; this timetable never schedules for real.
+        """
+
+        del run_after
+        raise NotImplementedError
+
+    def next_dagrun_info(self, *, last_automated_data_interval: Any, restriction: Any) -> Any:
+        """Schedule nothing.
+
+        Parameters:
+            last_automated_data_interval: Any containing the previous interval.
+            restriction: Any containing the time restriction.
+
+        Returns:
+            Any containing None, meaning no next run.
+        """
+
+        del last_automated_data_interval, restriction
+        return None
+
+    def serialize(self) -> dict[str, Any]:
+        """Emit an empty payload.
+
+        Returns:
+            dict[str, Any] containing nothing.
+        """
+
+        return {}
+
+    @classmethod
+    def deserialize(cls, data: dict[str, Any]) -> _PolicyCleanTimetable:
+        """Reconstruct from an empty payload.
+
+        Parameters:
+            data: dict[str, Any] containing the serialized payload.
+
+        Returns:
+            _PolicyCleanTimetable containing a fresh instance.
+        """
+
+        del data
+        return cls()
+
+
+class _PolicySerializeOnlyTimetable(Timetable):
+    """Trip only non-futile problems: missing protocol methods, incomplete pair."""
+
+    def serialize(self) -> dict[str, Any]:
+        """Emit an empty payload.
+
+        Returns:
+            dict[str, Any] containing nothing.
+        """
+
+        return {}
+
+
+@pytest.fixture
+def recorded_registrations(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Record `sandbox.register_timetable` calls instead of mutating live state.
+
+    The matrix tests exercise GATE behavior only; the registration mechanics behind
+    the seam are covered by `tests/compat/test_component_sandbox_compat.py`, so
+    recording keeps these tests free of global plugin-list mutation and of the
+    sandbox cleanup that mutation would require.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the seam function for one test.
+
+    Returns:
+        list[object] accumulating every timetable passed to the seam.
+    """
+
+    registered: list[object] = []
+    monkeypatch.setattr(sandbox, "register_timetable", registered.append)
+    return registered
+
+
+def test_gate_strict_policy_registers_a_clean_timetable(
+    recorded_registrations: list[object],
+) -> None:
+    """Register a conformant timetable straight through the strict policy."""
+
+    timetable = _PolicyCleanTimetable()
+
+    fixture_components._gate_and_register_timetable(
+        timetable, fixture_components._STRICT_TIMETABLE
+    )
+
+    assert recorded_registrations == [timetable]
+
+
+def test_gate_strict_policy_blocks_every_problem(
+    recorded_registrations: list[object],
+) -> None:
+    """Hard-fail the strict policy on a problem the schedule policy merely warns on."""
+
+    with pytest.raises(ComponentContractError, match="timetable-serialize-pair-incomplete"):
+        fixture_components._gate_and_register_timetable(
+            _PolicySerializeOnlyTimetable(), fixture_components._STRICT_TIMETABLE
+        )
+
+    assert recorded_registrations == []
+
+
+def test_gate_schedule_policy_warns_and_registers_on_a_nonblocking_problem(
+    recorded_registrations: list[object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Downgrade every non-futile problem to a warning and still register."""
+
+    timetable = _PolicySerializeOnlyTimetable()
+
+    with caplog.at_level(logging.WARNING, logger="pytest_airflow_in_a_box.fixtures.components"):
+        fixture_components._gate_and_register_timetable(
+            timetable, fixture_components._SCHEDULE_TIMETABLE
+        )
+
+    assert recorded_registrations == [timetable]
+    assert "timetable-serialize-pair-incomplete" in caplog.text
+
+
+def test_gate_policy_with_warn_nonblocking_off_stays_silent(
+    recorded_registrations: list[object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Filter without warning when a policy blocks selectively but does not warn.
+
+    No shipped policy combines a blocking set with `warn_nonblocking=False`, but the
+    policy type is data and the combination must behave: non-blocking problems are
+    silently dropped, registration proceeds.
+    """
+
+    timetable = _PolicySerializeOnlyTimetable()
+    policy = fixture_components._TimetablePolicy(
+        blocking=frozenset({sandbox.TIMETABLE_LOCAL_QUALNAME}),
+        warn_nonblocking=False,
+        require_instance=False,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="pytest_airflow_in_a_box.fixtures.components"):
+        fixture_components._gate_and_register_timetable(timetable, policy)
+
+    assert recorded_registrations == [timetable]
+    assert caplog.text == ""
+
+
+def test_gate_schedule_policy_blocks_a_local_qualname(
+    recorded_registrations: list[object],
+) -> None:
+    """Keep the one futile-registration problem a hard failure under the lenient policy."""
+
+    class _LocalTimetable(Timetable):
+        """Fail `timetable-local-qualname` by construction."""
+
+    with pytest.raises(ComponentContractError, match="timetable-local-qualname"):
+        fixture_components._gate_and_register_timetable(
+            _LocalTimetable(), fixture_components._SCHEDULE_TIMETABLE
+        )
+
+    assert recorded_registrations == []
+
+
+def test_gate_round_trip_policy_refuses_a_class(
+    recorded_registrations: list[object],
+) -> None:
+    """Refuse a bare class before the conformance check even runs."""
+
+    with pytest.raises(
+        ComponentSandboxError,
+        match=r"pass `_PolicyCleanTimetable\(\.\.\.\)` instead of the class",
+    ):
+        fixture_components._gate_and_register_timetable(
+            _PolicyCleanTimetable, fixture_components._ROUND_TRIP_TIMETABLE
+        )
+
+    assert recorded_registrations == []
+
+
+def test_gate_round_trip_policy_registers_a_clean_instance(
+    recorded_registrations: list[object],
+) -> None:
+    """Accept a live conformant instance through the strict-plus-instance policy."""
+
+    timetable = _PolicyCleanTimetable()
+
+    fixture_components._gate_and_register_timetable(
+        timetable, fixture_components._ROUND_TRIP_TIMETABLE
+    )
+
+    assert recorded_registrations == [timetable]
 
 
 # ---------------------------------------------------------------------------
