@@ -8,6 +8,60 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.10.0] - 2026-08-21
+
+### Added
+
+- `run_dag(dag, executor=...)` drives a real DagRun through a user-supplied Airflow
+  executor: workloads queued through `queue_workload`, heartbeats pumped, and task bodies
+  executing in supervised worker subprocesses that report to a live Task Execution API.
+  `executor=` accepts an alias registered through `airflow_components.executor`, a dotted
+  import path, a `BaseExecutor` subclass, or an instance -- so the runtime component
+  sandbox and the executor now compose, which nothing could do before. This is the gap
+  upstream cannot close from a test process: `dag.test(use_executor=True)` queues real
+  workloads but has no `/execution` API to point them at
+  ([apache/airflow#59074](https://github.com/apache/airflow/issues/59074)), and this plugin
+  already ships a live api-server. Nothing here is built on `dag.test`, which is mid-move
+  upstream ([#61803](https://github.com/apache/airflow/issues/61803),
+  [#54658](https://github.com/apache/airflow/issues/54658)). The result is the same
+  `DagRunResult`, sharing one driver with the in-process path so ordering, mapped-task
+  expansion, and settling semantics are identical by construction. Three differences are
+  inherent to running tasks in another process and are documented rather than papered over:
+  the Dag must be a real file inside the folder `dag_bag` parses (a `dag_maker` Dag is
+  refused by name, before any metadata is written, because no worker subprocess could
+  re-import it), `result.errors` carries only what the executor itself attached to a failure,
+  and instances are dispatched one at a time so an executor's own concurrency is not
+  exercised. `--airflow-executor-timeout` and the `airflow_executor_timeout` ini option bound
+  how long one instance may take to settle, defaulting to 300 seconds, and a stuck instance
+  fails the run by name instead of hanging. Airflow 3.x only: workloads and the Task
+  Execution API are AIP-72 machinery, so on 2.x `executor=` fails with an actionable error.
+  Also exported from `pytest_airflow_in_a_box.taskinstance` for callers driving their own
+  DagRun: `execute_dag_run_via_executor`, `ExecutorRunError`, `DagRunDriveError`, and
+  `DEFAULT_EXECUTOR_TIMEOUT`.
+  ([#116](https://github.com/nredd/pytest-airflow-in-a-box/issues/116)).
+- Add a full fixtures reference (`docs/reference/fixtures.md` plus a README table) and README/guide examples of testing a standalone `@task` through `run_task` without authoring a Dag, backed by an end-user contract test.
+  ([#224](https://github.com/nredd/pytest-airflow-in-a-box/issues/224)).
+- Add a restricted `workflow_dispatch` job (`cut-release.yml`) that bumps the version, builds the changelog, tags, and creates the GitHub release in one gated run, replacing the fully manual `make release` flow.
+  ([#226](https://github.com/nredd/pytest-airflow-in-a-box/issues/226)).
+
+### Changed
+
+- The isolated api-server now runs with `--apps core,execution` instead of `--apps core`, so
+  it serves the Task Execution API at `/execution` alongside the public `/api/v2`. Both apps
+  share one dag bag inside the same process, so this costs no extra worker; it is what lets a
+  real executor's task workers report back. No existing `/api/v2` behaviour changes.
+  ([#116](https://github.com/nredd/pytest-airflow-in-a-box/issues/116)).
+- BREAKING: rename `full_dag_bag` -> `dag_bag`, `airflow_home_path` -> `airflow_home`, and `airflow_dags_folder_path` -> `airflow_dags_folder`, with no deprecation aliases. The `xdist_group` shared with the smoke catalog is now `pytest-airflow-in-a-box::dag-bag` (visible as a nodeid suffix under `--dist loadgroup`), and the package module formerly named `airflow_home` is private (`_airflow_home`) so the fixture name stays available. A consumer conftest that defines its own `dag_bag` fixture now overrides the plugin's.
+  ([#224](https://github.com/nredd/pytest-airflow-in-a-box/issues/224)).
+- BREAKING: `check_component` now requires a custom executor to override `BaseExecutor.end`,
+  in addition to `sync` and `_process_workloads`. Its default raises `NotImplementedError`
+  unconditionally, and an executor missing it previously passed `executor-missing-override`
+  clean, only to fail at teardown. This also gates `run_dag(dag, executor=...)` and
+  `airflow_components.executor(...)`, both of which run `check_component` as a preflight: an
+  executor that previously ran successfully through either while missing `end` now fails
+  before a single task is dispatched.
+  ([#231](https://github.com/nredd/pytest-airflow-in-a-box/issues/231)).
+
 ## [0.9.0] - 2026-08-21
 
 ### Added
