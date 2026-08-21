@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -762,3 +763,11 @@ def test_custom_timetable_predicate_matches_upstream_exemption_exactly() -> None
 
     assert dag_compat.is_custom_timetable_instance(_ExampleDagsShapedTimetable())
     assert dag_compat.custom_schedule_timetables(_ExampleDagsShapedTimetable()) != ()
+
+
+def test_time_restriction_type_resolves_the_installed_class() -> None:
+    """Resolve the installed release's `TimeRestriction` class."""
+
+    timetables_base = importlib.import_module("airflow.timetables.base")
+
+    assert dag_compat.time_restriction_type() is timetables_base.TimeRestriction

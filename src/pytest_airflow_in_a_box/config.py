@@ -51,6 +51,8 @@ from contextlib import contextmanager
 
 import pytest
 
+from pytest_airflow_in_a_box._compat.settings import configure_vars
+
 ConfigOverrides = Mapping[tuple[str, str], str | None]
 EnvOverrides = Mapping[str, str | None]
 
@@ -210,10 +212,7 @@ def _refresh_settings() -> None:
     and safe to call again while restoring.
     """
 
-    # Deferred to keep this module importable before Airflow bootstrap completes.
-    from airflow import settings
-
-    settings.configure_vars()
+    configure_vars()
 
 
 @contextmanager

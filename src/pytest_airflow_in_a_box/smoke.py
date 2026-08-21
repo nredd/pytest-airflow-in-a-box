@@ -35,7 +35,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
-from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer
+from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer, time_restriction_type
+from pytest_airflow_in_a_box._compat.db import create_session, get_pool_model
 from pytest_airflow_in_a_box._compat.introspection import (
     SecretsLookup,
     mapped_expansion,
@@ -1663,8 +1664,7 @@ class ScheduleSanityItem(pytest.Item):
                 failed to serialize.
         """
 
-        from airflow.timetables.base import TimeRestriction
-
+        time_restriction_class = time_restriction_type()
         dag_bag = _smoke_dag_bag(self.session, self.config)
         entries = _serialized_dag_cache(self.session, self.config)
         serialized_dag_class = _get_dag_serializer()
@@ -1690,7 +1690,7 @@ class ScheduleSanityItem(pytest.Item):
             try:
                 # Deserialization mutates its input, so the shared cache gets a copy.
                 decoded = serialized_dag_class.deserialize_dag(copy.deepcopy(entry.payload()))
-                restriction = TimeRestriction(
+                restriction = time_restriction_class(
                     earliest=decoded.start_date,
                     latest=decoded.end_date,
                     catchup=decoded.catchup,
@@ -1754,16 +1754,13 @@ class PoolReferencesExistItem(pytest.Item):
                 count, or a task references a pool the database does not contain.
         """
 
-        # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
-        from airflow.models.pool import Pool
-        from airflow.utils.session import create_session
-
+        pool_model = get_pool_model()
         dag_bag = _smoke_corpus(self.session, self.config)
         failures: list[str] = []
         with create_session() as database_session:
             existing: dict[str, int] = {
                 name: slots
-                for pool in Pool.get_pools(session=database_session)
+                for pool in pool_model.get_pools(session=database_session)
                 if isinstance(name := pool.pool, str) and isinstance(slots := pool.slots, int)
             }
             conflicts = sorted(
@@ -1781,7 +1778,7 @@ class PoolReferencesExistItem(pytest.Item):
             to_seed = [seed for seed in self.pools if seed.name not in existing]
             if to_seed:
                 database_session.add_all(
-                    Pool(pool=seed.name, slots=seed.slots, include_deferred=False)
+                    pool_model(pool=seed.name, slots=seed.slots, include_deferred=False)
                     for seed in to_seed
                 )
             known = set(existing) | {seed.name for seed in self.pools}

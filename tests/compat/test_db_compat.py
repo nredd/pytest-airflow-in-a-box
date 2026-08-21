@@ -132,6 +132,32 @@ def test_registry_selection_follows_the_family(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
+def test_create_session_delegates_to_airflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delegate session creation to Airflow's `create_session` at call time."""
+
+    session_module = importlib.import_module("airflow.utils.session")
+    sentinel = object()
+    monkeypatch.setattr(session_module, "create_session", lambda: sentinel)
+
+    assert compat_db.create_session() is sentinel
+
+
+def test_create_session_opens_a_context_manager_on_the_installed_release() -> None:
+    """Resolve the installed release's real session context manager."""
+
+    from contextlib import AbstractContextManager
+
+    assert isinstance(compat_db.create_session(), AbstractContextManager)
+
+
+def test_get_pool_model_resolves_the_installed_pool_model() -> None:
+    """Resolve the installed release's `Pool` mapped class."""
+
+    pool_module = importlib.import_module("airflow.models.pool")
+
+    assert compat_db.get_pool_model() is pool_module.Pool
+
+
 def test_v2_registry_mirrors_the_group_sequence() -> None:
     """Keep the 2.x registry group names identical to the 3.x sequence."""
 
