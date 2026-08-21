@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -36,9 +38,10 @@ def test_database_incompatibility_renders_as_usage_error(
         raise failure
 
     monkeypatch.setattr(plugin, "ensure_database", broken_database)
+    config: Any = SimpleNamespace(stash=pytest.Stash())
 
     with pytest.raises(pytest.UsageError, match=r"Airflow 2\.x is installed") as caught:
-        plugin._ensure_database_or_usage_error(tmp_path)
+        plugin._ensure_database_or_usage_error(config, tmp_path)
 
     assert caught.value.__cause__ is failure
 
