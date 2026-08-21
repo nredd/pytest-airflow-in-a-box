@@ -67,7 +67,7 @@ def test_multiple_outputs_work_without_metadata(run_task: RunTask) -> None:
 
 @pytest.mark.requires_airflow3
 def test_standalone_task_runs_without_a_dag(run_task: RunTask) -> None:
-    """Execute a bare `@task` with no Dag, mirroring the README example byte for byte.
+    """Execute a bare `@task` with no Dag, mirroring the README example.
 
     Calling a decorated function outside any Dag returns an XComArg whose `.operator` is
     unbound; `run_task` binds it to a synthetic per-test Dag and executes DB-free. The
