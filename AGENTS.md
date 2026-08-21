@@ -26,8 +26,16 @@ native Windows support) -- use WSL2 or the devcontainer.
   the `SERIAL_ONLY` tests skip on a worker, so a parallel run is legitimately under 100%
 - `make all` -- format, lint, type, test, lock, build. The pre-PR gate, together with
   `uv run prek run --all-files`
-- `make release` -- tag + push only. Publishing to PyPI happens when the GitHub release
-  is published (trusted publishing, `release.yml`)
+- `make release` -- tag + push only, for a `main` that already has a merged version bump.
+  Publishing to PyPI happens when the GitHub release is published (trusted publishing,
+  `release.yml`)
+- Cutting a release is normally the restricted `Actions -> Cut Release ->
+  workflow_dispatch` job (`cut-release.yml`), gated to `nredd` plus the `release`
+  environment's required reviewer. It runs `scripts/cut_release.py`: bumps both version
+  files, builds `CHANGELOG.md` from `changelog.d/` fragments, pushes both commits straight
+  to `main`, tags, and creates the GitHub release -- authenticated with a PAT (`RELEASE_PAT`
+  secret) so the resulting push/tag/release trigger `ci.yml`/`release.yml` exactly as a
+  human-driven release would
 
 Everything goes through `uv`. There is no pytest ini section -- `defaults.py` supplies
 zero-ini defaults on purpose.
@@ -50,7 +58,8 @@ zero-ini defaults on purpose.
   tools ad hoc -- Dependabot does that weekly. `uv.lock` is committed and `uv lock
   --check` runs in CI and as a hook
 - The version lives in BOTH `pyproject.toml` and `__init__.py` `__version__`, and
-  `make release` / `release.yml` hard-fail on mismatch. Bump both, plus `CHANGELOG.md`
+  `make release` / `release.yml` hard-fail on mismatch; `scripts/cut_release.py` is the one
+  place that *writes* both, kept in sync by construction. Bump both, plus `CHANGELOG.md`
   (Keep a Changelog + SemVer, link issue/PR numbers)
 - Upstream-derived code must be recorded in `PROVENANCE.md` (currently only
   `_compat/taskrun.py::run_task_instance`, adapted from Apache Airflow). Never add
