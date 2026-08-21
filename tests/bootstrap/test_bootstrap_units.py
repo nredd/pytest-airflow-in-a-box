@@ -262,7 +262,7 @@ def test_state_from_environment_requires_the_variable(
     monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
 
     with pytest.raises(pytest.UsageError, match="did not inherit bootstrap state"):
-        bootstrap._state_from_environment()
+        bootstrap._state_from_environment("local xdist worker")
 
 
 def test_argument_value_requires_a_following_value() -> None:
@@ -461,6 +461,64 @@ def test_worker_environment_mismatch_on_plugins_folder_fails_loudly(
 
     with pytest.raises(
         pytest.UsageError, match="disagrees with state: `AIRFLOW__CORE__PLUGINS_FOLDER`"
+    ):
+        bootstrap.load_initial_state(config, [])
+
+
+def test_isolated_child_inherits_state_through_the_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Take the inherit path when only the isolated-worker variable is set.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the inherited environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    monkeypatch.delenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setenv(bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
+    monkeypatch.setenv(
+        STATE_ENVIRONMENT_VARIABLE,
+        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
+    )
+    for name, value in bootstrap._environment(state).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delitem(sys.modules, "airflow", raising=False)
+
+    config: Any = SimpleNamespace()
+
+    assert bootstrap.load_initial_state(config, []) == state
+
+
+def test_isolated_child_environment_mismatch_names_the_role(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Attribute an environment disagreement to the isolated child, not xdist.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the mismatched environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    monkeypatch.delenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setenv(bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
+    monkeypatch.setenv(
+        STATE_ENVIRONMENT_VARIABLE,
+        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
+    )
+    for name, value in bootstrap._environment(state).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AIRFLOW_HOME", "/somewhere/else")
+    monkeypatch.delitem(sys.modules, "airflow", raising=False)
+
+    config: Any = SimpleNamespace()
+
+    with pytest.raises(
+        pytest.UsageError, match="for the isolated child disagrees with state: `AIRFLOW_HOME`"
     ):
         bootstrap.load_initial_state(config, [])
 

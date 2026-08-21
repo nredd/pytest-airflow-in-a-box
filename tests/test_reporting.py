@@ -129,6 +129,44 @@ def test_configure_reporting_ignores_controller_configuration() -> None:
     assert config.option.log_file == "pytest.log"
 
 
+def test_configure_reporting_scopes_log_file_for_isolated_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rewrite the log-file destination inside an `airflow_isolated` child.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the isolated-worker identity.
+    """
+
+    monkeypatch.setenv(reporting.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
+    config = _config(log_file="pytest.log")
+
+    reporting.configure_reporting(config)
+
+    assert config.option.log_file == "pytest.iso-1234abcd.log"
+
+
+def test_configure_reporting_scopes_junit_xml_for_isolated_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rewrite the JUnit XML destination inside an `airflow_isolated` child.
+
+    Regression test: pytest's junitxml plugin skips writing on xdist workers but not
+    in an isolated child, which would overwrite the parent's `pytest.xml` with just
+    its own batch.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the isolated-worker identity.
+    """
+
+    monkeypatch.setenv(reporting.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
+    config = _config(xmlpath="reports/pytest.xml")
+
+    reporting.configure_reporting(config)
+
+    assert config.option.xmlpath == str(Path("reports/pytest.iso-1234abcd.xml"))
+
+
 def test_configure_reporting_scopes_option_log_file() -> None:
     """Rewrite the parsed ``--log-file`` option on an xdist worker."""
 
