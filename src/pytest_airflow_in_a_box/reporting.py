@@ -31,10 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box.bootstrap import (
-    ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
-    XdistWorkerConfig,
-)
+from pytest_airflow_in_a_box.bootstrap import XdistWorkerConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -94,26 +91,20 @@ def worker_coverage_file(value: str, worker: str) -> str:
 
 
 def _worker_identity(config: pytest.Config) -> str | None:
-    """Read the validated worker identity from one configuration.
-
-    An `airflow_isolated` child process is not an xdist worker but shares the same
-    artifact-collision exposure -- its `log_file` and `COVERAGE_FILE` destinations come
-    from the same inherited configuration the parent writes to -- so its environment
-    identity scopes those destinations exactly like an xdist worker identity does.
+    """Read the validated xdist worker identity from one configuration.
 
     Parameters:
         config: pytest.Config possibly extended with xdist worker input.
 
     Returns:
-        str | None containing the worker identity on xdist workers and isolated
-        children.
+        str | None containing the worker identity on xdist workers.
 
     Raises:
-        pytest.UsageError: The xdist worker identity is missing or malformed.
+        pytest.UsageError: The worker identity is missing or malformed.
     """
 
     if not isinstance(config, XdistWorkerConfig):
-        return os.environ.get(ISOLATED_WORKER_ENVIRONMENT_VARIABLE) or None
+        return None
     worker = config.workerinput.get(WORKER_ID_KEY)
     if not isinstance(worker, str) or not worker:
         raise pytest.UsageError(
@@ -205,7 +196,7 @@ def configure_report_dir(config: pytest.Config) -> None:
 
 
 def configure_reporting(config: pytest.Config) -> None:
-    """Scope shared report artifacts to one xdist worker or isolated child.
+    """Scope shared report artifacts to one xdist worker.
 
     Must run before pytest's logging plugin instantiates its file handler,
     which reads the ``log_file`` option exactly once during configuration.
@@ -241,18 +232,6 @@ def configure_reporting(config: pytest.Config) -> None:
         scoped_coverage = worker_coverage_file(coverage_file, worker)
         os.environ[COVERAGE_FILE_ENVIRONMENT_VARIABLE] = scoped_coverage
         LOGGER.debug(f"Scoped coverage data file to worker `{worker}`: '{scoped_coverage}'")
-    # Only an isolated child scopes the JUnit destination: pytest's own junitxml
-    # plugin already skips XML writing on xdist workers, but the child is not an
-    # xdist worker, so without scoping it would overwrite the parent's `pytest.xml`
-    # with just its own batch.
-    if (
-        os.environ.get(ISOLATED_WORKER_ENVIRONMENT_VARIABLE)
-        and hasattr(config.option, "xmlpath")
-        and config.option.xmlpath is not None
-    ):
-        scoped_xml = str(worker_suffixed_path(Path(config.option.xmlpath), worker))
-        config.option.xmlpath = scoped_xml
-        LOGGER.debug(f"Scoped JUnit XML file to worker `{worker}`: '{scoped_xml}'")
 
 
 __all__ = (

@@ -1,9 +1,5 @@
 # Markers
 
-- `airflow_isolated(entry_points=..., environment=..., name=..., timeout=...)`: run in a
-  one-shot child pytest process with a synthetic entry-point distribution on
-  `PYTHONPATH` and `AIRFLOW__*` overrides applied before the first Airflow import --
-  see [Isolated entry-point tests](../guide/isolated-tests.md)
 - `db_test`: requires the isolated metadata database (triggers its lazy initialization)
 - `api_test`: starts the isolated REST API server lazily and publishes its URL as
   `AIRFLOW__API__BASE_URL` for the test's duration (triggers lazy database initialization)
