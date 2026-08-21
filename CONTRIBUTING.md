@@ -53,7 +53,7 @@ of the compat matrix (`.github/workflows/compat.yml`) still need a real PR to ex
 
 `make test` enforces 100% branch coverage (`fail_under = 100` in
 `[tool.coverage.report]`), checked locally per-run and in CI as the union across the
-whole 25-leg compat matrix. Two things make that number honest instead of a lie:
+whole 24-leg compat matrix. Two things make that number honest instead of a lie:
 
 - **Subprocess measurement.** Many tests drive the plugin through pytester's
   `runpytest_subprocess`, which spawns a real child interpreter. `make test` installs a
@@ -77,8 +77,13 @@ whole 25-leg compat matrix. Two things make that number honest instead of a lie:
 
 `tests/enduser/` is the consumer contract: every test there carries module-level
 `pytestmark = pytest.mark.compat` and runs across the full compat matrix (Airflow
-3.1.0-3.3.0 x Python 3.10-3.14, plus the pytest-floor/xdist/macOS/arm/musl legs -- see
-`.github/workflows/compat.yml`). To add one:
+3.1.0-3.3.0 x Python 3.10-3.14, plus the pytest-floor/macOS/arm/musl legs -- see
+`.github/workflows/compat.yml`). Those legs run under `-n auto --dist loadgroup`, so a
+new test must be xdist-safe: give it a `dag_id` no other test uses, and do not reset the
+whole database. `make test` is serial, so it will not catch a parallel-only break --
+reproduce CI's configuration with `make test-xdist` before pushing. That target skips the
+coverage gate on purpose: the `SERIAL_ONLY` tests skip themselves on a worker, so a
+parallel run legitimately reports under 100%. To add one:
 
 - Build a real DAG with `airflow.sdk.DAG` and real operators/sensors, and drive it
   through the plugin's own public fixtures (`run_task`, `dag_maker`, etc. -- see

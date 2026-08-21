@@ -27,6 +27,9 @@ test:  ## Run tests with branch coverage, subprocess runs included
 	uv run coverage combine
 	uv run coverage report
 
+test-xdist:  ## Reproduce CI's parallel configuration (no coverage gate -- see below)
+	uv run pytest -n auto --dist loadgroup -m "not migration_e2e"
+
 test-migration-e2e:  ## Run the real-uv/network migration-orchestrator e2e test (slow, not in `make all`)
 	PYTEST_AIRFLOW_IN_A_BOX_MIGRATION_E2E=1 uv run pytest -v -m migration_e2e tests/migration/test_e2e.py
 

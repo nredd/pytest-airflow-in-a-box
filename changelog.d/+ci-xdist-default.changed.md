@@ -1,0 +1,1 @@
+Run the compat CI matrix under `-n auto --dist loadgroup` by default instead of serially, and add a `make test-xdist` target so contributors can reproduce that configuration locally. `make test` stays serial because the coverage gate depends on it.

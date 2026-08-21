@@ -8,7 +8,7 @@ jobs:
     name: >-
       ${{ matrix.os || 'ubuntu-latest' }} /
       Airflow ${{ matrix.airflow-version }} / Python ${{ matrix.python-version }}
-      ${{ matrix.pytest-args }}${{ matrix.pytest-label }}${{ matrix.pytest-paths && ' / consumer contract only' || '' }}
+      ${{ matrix.dist != 'serial' && matrix.dist || '' }}${{ matrix.pytest-label }}${{ matrix.airflow-family == 'airflow2' && ' / consumer contract only' || '' }}
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 30
     strategy:
@@ -46,18 +46,19 @@ jobs:
           - airflow-version: "3.3.0"
             python-version: "3.12"
             pytest-spec: "pytest==8.0.0"
+            # Not cosmetic: this name is a required status check in the repo ruleset.
             pytest-label: "/ pytest 8.0.0"
+          # The serial reference leg. `tests/test_db.py`'s `SERIAL_ONLY` tests and the
+          # `dag_ids=None` sweep in `tests/enduser/test_asset_scheduling.py` skip
+          # themselves on an xdist worker, so `clear_db`'s whole-database-reset paths
+          # reach the coverage union only from a serial run. `ci.yml`'s postgres job also
+          # runs them (`-m "compat or db_test or postgres"`, no `-n`) and uploads
+          # coverage, so this leg is not the sole contributor -- but it is the only one
+          # that does not need Docker, and it keeps an unburied serial signal for triaging
+          # a suspected parallelism artifact. Do not parallelize both.
           - airflow-version: "3.3.0"
             python-version: "3.14"
-          # The one leg closing PLAN.md's outer-suite xdist verification: a
-          # deliberate duplicate of the latest Airflow x latest CPython leg
-          # running the whole outer suite parallel, kept separate so the serial
-          # leg's signal stays unburied. Pinned to `-n 4` (the runner's vCPU
-          # count) for reproducibility; the nested `-n auto` compat scenario
-          # covers real per-host core-count variance.
-          - airflow-version: "3.3.0"
-            python-version: "3.14"
-            pytest-args: "-n 4"
+            dist: serial
           - airflow-version: "3.3.0"
             python-version: "3.12"
             os: macos-latest
@@ -76,23 +77,22 @@ jobs:
           - airflow-version: "2.11.2"
             python-version: "3.12"
             airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
           # Same 2.11.2 leg under xdist (#43): gives the `ensure_database` warnings-context
           # fix (unrelated to migration-strict mode, but found while spiking on it) live
           # real-Airflow coverage on top of the mocked regression test in `test_plugin.py`.
+          # The 2.x tier is serial by default -- those legs finish in 1-2m, where a
+          # per-worker Airflow bootstrap costs more than the fan-out returns -- so this
+          # one asks for parallelism explicitly.
           - airflow-version: "2.11.2"
             python-version: "3.12"
             airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
-            pytest-args: "-n 2"
+            dist: "-n 2"
           - airflow-version: "2.10.5"
             python-version: "3.11"
             airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
           - airflow-version: "2.9.3"
             python-version: "3.10"
             airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
           # The #139 reach-back legs: the last release of the 2.8 and 2.7 lines, both on
           # 3.11 -- the highest interpreter either supports and what their constraints
           # files target. Below 2.9 the FAB auth-manager models live in-tree at
@@ -101,13 +101,62 @@ jobs:
           - airflow-version: "2.8.4"
             python-version: "3.11"
             airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
           - airflow-version: "2.7.3"
             python-version: "3.11"
             airflow-family: "airflow2"
-            pytest-paths: "tests/enduser"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The one place a matrix entry turns into pytest arguments. A 3.x leg runs the whole
+      # outer suite under `-n auto --dist loadgroup`; `loadgroup` rather than xdist's
+      # default `load` because `pytest.mark.xdist_group` is inert under every other dist
+      # mode, and that marker is the mitigation `docs/guide/seeding.md` and
+      # `docs/guide/task-execution.md` hand contributors for same-`dag_id` and seeded-name
+      # contention. It is also what `plugin.py::_colocate_smoke_catalog_with_full_dag_bag`
+      # gates on. A 2.x leg runs the consumer contract serially, because
+      # those legs finish in 1-2m where a per-worker Airflow bootstrap costs more than the
+      # fan-out returns. `dist:` overrides that family default -- `serial` for no fan-out,
+      # or a literal flag like `-n 2`. Deriving here rather than restating per leg keeps a
+      # leg's entry down to the two axes that actually vary, and lets the run step and both
+      # artifact names read one set of outputs instead of re-deriving from `matrix.*`
+      # three times. Runs before anything that can fail so the `always()` report upload
+      # below always has a slug -- an empty one would collide across legs.
+      - name: Resolve leg arguments
+        id: leg
+        env:
+          AIRFLOW_FAMILY: ${{ matrix.airflow-family }}
+          DIST: ${{ matrix.dist }}
+          PYTEST_SPEC: ${{ matrix.pytest-spec }}
+          LEG_OS: ${{ matrix.os || 'ubuntu-latest' }}
+          AIRFLOW_VERSION: ${{ matrix.airflow-version }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        run: |
+          if [ "$AIRFLOW_FAMILY" = "airflow2" ]; then
+            paths="tests/enduser"
+            default_dist=""
+          else
+            paths=""
+            default_dist="-n auto --dist loadgroup"
+          fi
+          case "$DIST" in
+            "") args="$default_dist" ;;
+            serial) args="" ;;
+            *) args="$DIST" ;;
+          esac
+          slug="${LEG_OS}-${AIRFLOW_VERSION}-${PYTHON_VERSION}"
+          if [ -n "$DIST" ]; then
+            slug="${slug}-$(printf '%s' "$DIST" | tr -d ' -')"
+          fi
+          if [ -n "$PYTEST_SPEC" ]; then
+            slug="${slug}-pytest8"
+          fi
+          if [ -n "$paths" ]; then
+            slug="${slug}-enduser"
+          fi
+          {
+            printf 'pytest_args=%s\n' "$args"
+            printf 'pytest_paths=%s\n' "$paths"
+            printf 'slug=%s\n' "$slug"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -151,22 +200,24 @@ jobs:
         run: >-
           .venv-ci/bin/python -m coverage run -m pytest -v
           --airflow-report-dir="${{ github.workspace }}/reports"
-          ${{ matrix.pytest-args }} ${{ matrix.pytest-paths }}
+          ${{ steps.leg.outputs.pytest_args }} ${{ steps.leg.outputs.pytest_paths }}
       - name: Upload reports
         # `always()` because a report from a failing leg is the whole point;
         # `if-no-files-found: warn` because a leg that died before configuration
         # leaves nothing behind, and a second red X would bury the real failure.
-        if: always()
+        # Gated on the slug because `always()` also fires when checkout failed and
+        # `Resolve leg arguments` never ran -- an empty slug would collide across legs.
+        if: always() && steps.leg.outputs.slug
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: reports-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}${{ matrix.pytest-spec && '-pytest8' || '' }}${{ matrix.pytest-paths && '-enduser' || '' }}
+          name: reports-${{ steps.leg.outputs.slug }}
           path: reports
           retention-days: 7
           if-no-files-found: warn
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-${{ matrix.os || 'ubuntu-latest' }}-${{ matrix.airflow-version }}-${{ matrix.python-version }}${{ matrix.pytest-args && '-xdist' || '' }}${{ matrix.pytest-spec && '-pytest8' || '' }}${{ matrix.pytest-paths && '-enduser' || '' }}
+          name: coverage-${{ steps.leg.outputs.slug }}
           path: .coverage.*
           include-hidden-files: true
           if-no-files-found: error
@@ -205,6 +256,7 @@ jobs:
         run: >-
           .venv-ci/bin/python -m coverage run -m pytest -v
           --airflow-report-dir="${{ github.workspace }}/reports"
+          -n auto --dist loadgroup
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -22,6 +22,8 @@ native Windows support) -- use WSL2 or the devcontainer.
 - `make test` -- the real coverage gate. Installs a coverage `.pth` so pytester
   subprocess runs are measured; plain `uv run pytest` is fine for iteration but
   undercounts coverage and will miss the 100% gate
+- `make test-xdist` -- reproduces CI's `-n auto --dist loadgroup`. No coverage gate:
+  the `SERIAL_ONLY` tests skip on a worker, so a parallel run is legitimately under 100%
 - `make all` -- format, lint, type, test, lock, build. The pre-PR gate, together with
   `uv run prek run --all-files`
 - `make release` -- tag + push only. Publishing to PyPI happens when the GitHub release
@@ -92,12 +94,20 @@ pytester `runpytest_subprocess`, which is why the coverage `.pth` exists. Marker
 
 ## CI
 
-`ci.yml`: check job (lint, type, hooks, build), 25-leg compat matrix (`compat.yml`,
+`ci.yml`: check job (lint, type, hooks, build), 24-leg compat matrix (`compat.yml`,
 Airflow 3.1.0-3.3.0 x Python 3.10-3.14 via Airflow constraints files, plus pytest-floor,
-xdist, macOS, arm, musl legs), a real-Docker postgres job, and a coverage-combine job
-that enforces the 100% union. `airflow-canary.yml` runs weekly against the newest
-Airflow and files an issue on failure. `act pull_request` can run the Linux workflow
-locally.
+macOS, arm, musl legs), a real-Docker postgres job, and a coverage-combine job
+that enforces the 100% union. A leg's matrix entry is just `airflow-version` +
+`python-version`; the `Resolve leg arguments` step derives the rest. 3.x legs run the
+whole suite under `-n auto --dist loadgroup`, 2.x legs run `tests/enduser` serially, and
+`dist:` overrides that default. `loadgroup` matters: `pytest.mark.xdist_group`, the
+documented mitigation for same-`dag_id` contention, is inert under any other dist mode. One 3.x leg (`3.3.0` /
+`3.14`) is pinned `dist: serial` -- the `SERIAL_ONLY` tests in `tests/test_db.py` skip
+themselves on an xdist worker, so `clear_db`'s whole-database-reset paths reach the union
+only from a serial run (the postgres job is the other source). Job names are required
+status checks in the repo ruleset -- renaming a leg blocks every PR.
+`airflow-canary.yml` runs weekly against the newest Airflow and files an issue on
+failure. `act pull_request` can run the Linux workflow locally.
 
 ## Agent skills
 
