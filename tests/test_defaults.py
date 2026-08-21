@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 import warnings
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -128,6 +129,25 @@ def test_default_filterwarnings_reject_invalid_filter_line() -> None:
     with pytest.raises(
         pytest.UsageError,
         match="`airflow_default_filterwarnings` contains an invalid filter line",
+    ):
+        defaults.apply_default_filterwarnings(config)
+
+
+def test_default_filterwarnings_surface_a_relocated_parser_as_usage_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Render a pytest release without `parse_warning_filter` as a usage error.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the `_pytest.config` module entry.
+    """
+
+    ini = {"airflow_default_filterwarnings": list(defaults.DEFAULT_FILTERWARNINGS)}
+    config: Any = SimpleNamespace(getini=lambda name: ini[name], stash=pytest.Stash())
+    monkeypatch.setitem(sys.modules, "_pytest.config", ModuleType("_pytest.config"))
+
+    with pytest.raises(
+        pytest.UsageError, match=r"does not expose `_pytest\.config\.parse_warning_filter`"
     ):
         defaults.apply_default_filterwarnings(config)
 

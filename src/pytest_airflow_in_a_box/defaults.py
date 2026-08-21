@@ -173,9 +173,15 @@ def apply_default_filterwarnings(config: pytest.Config) -> None:
     """
 
     # Local import: deferred so a future pytest release relocating this private,
-    # version-coupled symbol can't break import for every plugin user -- only a
-    # configure-time call ever reaches it.
-    from _pytest.config import parse_warning_filter
+    # version-coupled symbol breaks at configure time -- where the guard below
+    # renders it as an actionable usage error -- instead of at plugin import.
+    try:
+        from _pytest.config import parse_warning_filter
+    except ImportError as error:
+        raise pytest.UsageError(
+            f"This pytest release does not expose `_pytest.config.parse_warning_filter`, "
+            f"which `airflow_default_filterwarnings` requires: {error}"
+        ) from error
 
     lines = config.getini("airflow_default_filterwarnings")
     if not isinstance(lines, list):
