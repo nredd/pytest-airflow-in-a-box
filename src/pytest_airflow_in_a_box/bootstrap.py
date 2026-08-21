@@ -41,7 +41,6 @@ STATE_VERSION = 5
 STATE_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_BOOTSTRAP_STATE"
 WORKER_INPUT_KEY = "pytest_airflow_in_a_box_bootstrap_state"
 XDIST_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_XDIST_WORKER"
-ISOLATED_WORKER_ENVIRONMENT_VARIABLE = "PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER"
 PASSWORDS = '{"admin": "admin"}\n'
 SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
 SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED"
@@ -367,12 +366,8 @@ def _state_from_payload(value: object, *, validate_files: bool) -> BootstrapStat
     return state
 
 
-def _state_from_environment(role: str) -> BootstrapState:
+def _state_from_environment() -> BootstrapState:
     """Load inherited worker state from the process environment.
-
-    Parameters:
-        role: str naming the inheriting process kind (`local xdist worker` or
-            `isolated child`) for error messages.
 
     Returns:
         BootstrapState containing validated inherited state.
@@ -384,8 +379,8 @@ def _state_from_environment(role: str) -> BootstrapState:
     serialized = os.environ.get(STATE_ENVIRONMENT_VARIABLE)
     if serialized is None:
         raise pytest.UsageError(
-            f"The {role} did not inherit bootstrap state; remote xdist gateways and "
-            "hand-set worker environment variables are unsupported"
+            "Local xdist worker did not inherit bootstrap state; remote xdist gateways are "
+            "unsupported"
         )
     try:
         decoded: object = json.loads(serialized)
@@ -903,11 +898,7 @@ def _environment_names() -> tuple[str, ...]:
 
 
 def load_initial_state(config: pytest.Config, args: list[str]) -> BootstrapState:
-    """Create owner state or load state inherited by a worker-shaped child process.
-
-    Two process kinds inherit rather than bootstrap: a local xdist worker, and the
-    one-shot child an `airflow_isolated` batch spawns -- structurally an xdist worker
-    of one, reusing the identical environment channel (see `isolated.py`).
+    """Create owner state or load state inherited by a local xdist worker.
 
     Parameters:
         config: pytest.Config active during initial conftest loading.
@@ -926,22 +917,18 @@ def load_initial_state(config: pytest.Config, args: list[str]) -> BootstrapState
             "early import or disable the importing pytest plugin."
         )
     if os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE):
-        role = "local xdist worker"
-    elif os.environ.get(ISOLATED_WORKER_ENVIRONMENT_VARIABLE):
-        role = "isolated child"
-    else:
-        return _owner_state(config, args)
-    state = _state_from_environment(role)
-    expected_environment = _environment(state)
-    mismatched = [
-        name for name, value in expected_environment.items() if os.environ.get(name) != value
-    ]
-    if mismatched:
-        names = ", ".join(f"`{name}`" for name in sorted(mismatched))
-        raise pytest.UsageError(
-            f"Inherited Airflow environment for the {role} disagrees with state: {names}"
-        )
-    return state
+        state = _state_from_environment()
+        expected_environment = _environment(state)
+        mismatched = [
+            name for name, value in expected_environment.items() if os.environ.get(name) != value
+        ]
+        if mismatched:
+            names = ", ".join(f"`{name}`" for name in sorted(mismatched))
+            raise pytest.UsageError(
+                f"Inherited xdist Airflow environment disagrees with state: {names}"
+            )
+        return state
+    return _owner_state(config, args)
 
 
 def get_bootstrap_state(config: pytest.Config) -> BootstrapState:
@@ -1021,7 +1008,6 @@ def validate_configure(config: pytest.Config) -> None:
 
 
 __all__ = (
-    "ISOLATED_WORKER_ENVIRONMENT_VARIABLE",
     "STATE_ENVIRONMENT_VARIABLE",
     "BootstrapState",
     "configure_node",

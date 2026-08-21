@@ -5,10 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pytest_airflow_in_a_box import record
-from pytest_airflow_in_a_box.bootstrap import (
-    ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
-    STATE_ENVIRONMENT_VARIABLE,
-)
+from pytest_airflow_in_a_box.bootstrap import STATE_ENVIRONMENT_VARIABLE
 
 pytest_plugins = ["pytester"]
 
@@ -49,7 +46,6 @@ def _isolate_nested_pytest_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
-    monkeypatch.delenv(ISOLATED_WORKER_ENVIRONMENT_VARIABLE, raising=False)
 
 
 @pytest.fixture(autouse=True)

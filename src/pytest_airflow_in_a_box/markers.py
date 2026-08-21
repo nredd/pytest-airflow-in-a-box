@@ -15,9 +15,6 @@ import pytest
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 
 MARKER_DESCRIPTIONS = (
-    "airflow_isolated(entry_points=..., environment=..., name=..., timeout=...): run in a "
-    "one-shot child pytest process with a synthetic entry-point distribution and "
-    "`AIRFLOW__*` overrides",
     "api_test: start the isolated Airflow REST API server lazily and publish `api.base_url`",
     "compat: exercise the public plugin surface across certified runtimes",
     "db_test: require the isolated Airflow metadata database (triggers lazy database init)",
