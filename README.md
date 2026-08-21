@@ -25,6 +25,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 
 - [Quickstart](#quickstart)
 - [Fixtures](#fixtures)
+- [Markers](#markers)
 - [Why not...](#why-not)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -151,6 +152,23 @@ The full reference, with scopes, database behavior, and Airflow-2.x availability
 | `api_client` | Authenticated client bound to the isolated API server |
 | `api_base_url` | The live server URL, published to Airflow config for `api_test` tests |
 | `cap_structlog` | Capture structlog events emitted during the test |
+
+## Markers
+
+The full reference, with argument grammar and gating behavior, lives at
+[Markers](https://nredd.github.io/pytest-airflow-in-a-box/reference/markers/):
+
+| Marker | One-liner |
+| ------ | --------- |
+| `db_test` | Requires the isolated Airflow metadata database |
+| `api_test` | Starts the isolated REST API server, publishes its base URL |
+| `postgres` | Requires a provisioned Postgres metadata database |
+| `compat` | End-user tests exercised across the version matrix |
+| `need_serialized_dag([enabled])` | Request serialized Dag behavior from `dag_maker` |
+| `environment(name)` | Run only when the named environment's sentinel path exists |
+| `requires_airflow2` / `requires_airflow3` | Run only on the named Airflow family, auto-skipped elsewhere |
+| `smoke` | Bundled zero-boilerplate check, opt in with `airflow_smoke` |
+| `airflow_isolated(...)` | Run in a one-shot child pytest process with entry-point/env overrides |
 
 ## Why not...
 
