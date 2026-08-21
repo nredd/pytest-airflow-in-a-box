@@ -2649,7 +2649,7 @@ def clear_plugins_manager_caches() -> None:
         ComponentSandboxError: The resolved release is 2.x, which has neither a
             plugins-manager cache mechanism nor a Task SDK to duplicate shared module
             loading into -- `airflow_components` itself never reaches this call on 2.x
-            (see `v2_gate_message`), so this guard is a self-consistency check against
+            (see `require_v3`), so this guard is a self-consistency check against
             direct misuse, not a real code path. On the `CERTIFIED` tier only: the
             installed release's live cache-clearable names, or
             `_get_grouped_entry_points` module presence, no longer match the certified

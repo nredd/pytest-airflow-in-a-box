@@ -960,6 +960,91 @@ def test_classify_installed_certification_survives_racing_metadata_mutations(
     assert capability_module._classify_installed_certification() is None
 
 
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("3.1.8", False),
+        ("3.2.0", False),
+        ("3.2.1", True),
+        ("3.4.0", True),
+        ("3.10.0", True),
+        ("garbage", None),
+    ],
+)
+def test_sqlite_engine_override_reliable_pins_the_release_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+    expected: bool | None,
+) -> None:
+    """Pin `SQLITE_ENGINE_OVERRIDE_RELIABLE_SINCE` on both sides of the 3.2.1 boundary.
+
+    "3.4.0" proves the comparison extrapolates forward to uncertified releases,
+    "3.10.0" pins the fix for the old string predicate (`startswith("3.1.")` matched
+    "3.10.x" as unreliable), and an unparseable core version classifies as None
+    rather than raising.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+        version: str containing the fake core metadata version.
+        expected: bool | None containing the expected classification.
+    """
+
+    _install_fake_environment(monkeypatch, version, {})
+
+    assert capability_module.sqlite_engine_override_reliable() is expected
+
+
+def test_sqlite_engine_override_reliable_is_false_on_the_v2_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify the whole 2.x family as unreliable from the meta-distribution alone.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, None, {}, meta_version="2.10.5")
+
+    assert capability_module.sqlite_engine_override_reliable() is False
+
+
+def test_sqlite_engine_override_reliable_is_none_without_airflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Classify an Airflow-free environment as None instead of raising.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the fake environment.
+    """
+
+    _install_fake_environment(monkeypatch, None, {})
+
+    assert capability_module.sqlite_engine_override_reliable() is None
+
+
+def test_sqlite_engine_override_reliable_survives_racing_metadata_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stay never-raising when the core metadata read fails after family classification.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch faking the racing classification reads.
+    """
+
+    monkeypatch.setattr(
+        capability_module, "installed_family", lambda: capability_module.AirflowFamily.V3
+    )
+
+    def raising_version(distribution_name: str) -> str:
+        """Raise the representative metadata failure for every distribution."""
+
+        raise OSError(f"unreadable metadata for '{distribution_name}'")
+
+    monkeypatch.setattr(capability_module.metadata, "version", raising_version)
+
+    assert capability_module.sqlite_engine_override_reliable() is None
+
+
 def test_installed_certification_caches_its_first_classification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

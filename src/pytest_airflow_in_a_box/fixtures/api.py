@@ -37,7 +37,7 @@ from typing import Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import ensure_database
-from pytest_airflow_in_a_box._compat.capabilities import v2_gate_message
+from pytest_airflow_in_a_box._compat.capabilities import require_v3
 from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
 from pytest_airflow_in_a_box.config import airflow_config
 
@@ -404,13 +404,11 @@ def api_server_url(pytestconfig: pytest.Config) -> Iterator[str]:
         ApiServerError: The server exited early or never became responsive.
     """
 
-    message = v2_gate_message(
+    require_v3(
         "api_server_url",
         "2.x has no `airflow api-server`; a FAB `airflow webserver` tier is "
         "demand-driven Phase 4.",
     )
-    if message is not None:
-        pytest.fail(message, pytrace=False)
     state = get_bootstrap_state(pytestconfig)
     ensure_database(state.root)
     yield from _launch_api_server(state)

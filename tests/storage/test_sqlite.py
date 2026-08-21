@@ -11,6 +11,7 @@ from sqlalchemy import create_engine as sqlalchemy_create_engine
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
+from pytest_airflow_in_a_box._compat import capabilities as capability_module
 from pytest_airflow_in_a_box.storage import sqlite
 from pytest_airflow_in_a_box.storage.sqlite import (
     PragmaProfile,
@@ -182,25 +183,25 @@ def test_non_sqlite_engine_delegates_without_listener(monkeypatch: pytest.Monkey
 def test_legacy_listener_installation_is_idempotent_and_ignores_other_dbapi_connections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Install one Engine listener for Airflow 3.1 and ignore non-SQLite connections."""
+    """Install one Engine listener for an unreliable release and ignore non-SQLite connections."""
 
     database_path = tmp_path / "metadata.db"
-    requested_distributions: list[str] = []
+    classifier_answers: list[bool] = []
 
-    def installed_version(distribution: str) -> str:
-        """Record the package metadata lookup and select the legacy Airflow release."""
+    def classified_unreliable() -> bool:
+        """Record the classifier call and select the fallback path."""
 
-        requested_distributions.append(distribution)
-        return "3.1.8"
+        classifier_answers.append(False)
+        return classifier_answers[-1]
 
-    monkeypatch.setattr(sqlite.metadata, "version", installed_version)
+    monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", classified_unreliable)
     monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
 
     install_legacy_sqlite_listener()
     listener = sqlite._LEGACY_SQLITE_LISTENER
     install_legacy_sqlite_listener()
 
-    assert requested_distributions == ["apache-airflow-core", "apache-airflow-core"]
+    assert classifier_answers == [False, False]
     assert listener is not None
     assert sqlite._LEGACY_SQLITE_LISTENER is listener
     assert event.contains(Engine, "connect", listener)
@@ -214,7 +215,7 @@ def test_legacy_listener_scopes_real_sqlite_engines_to_configured_path(
 
     target_path = tmp_path / "target.db"
     other_path = tmp_path / "other.db"
-    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", lambda: False)
     monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{target_path}")
     install_legacy_sqlite_listener()
     target_engine = sqlalchemy_create_engine(f"sqlite:///{target_path}")
@@ -243,10 +244,15 @@ def test_legacy_listener_scopes_real_sqlite_engines_to_configured_path(
 def test_legacy_listener_supports_airflow_3_2_0(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Use the path-scoped fallback for Airflow 3.2.0's unreliable engine hook."""
+    """Use the path-scoped fallback for Airflow 3.2.0's unreliable engine hook.
+
+    Driven through the real `sqlite_engine_override_reliable` on faked capability
+    metadata, proving `install_legacy_sqlite_listener` is actually wired to the
+    consolidated version decision rather than a local read.
+    """
 
     database_path = tmp_path / "metadata.db"
-    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.2.0")
+    monkeypatch.setattr(capability_module.metadata, "version", lambda _distribution: "3.2.0")
     monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
 
     install_legacy_sqlite_listener()
@@ -259,7 +265,7 @@ def test_legacy_listener_supports_airflow_3_2_0(
 def test_legacy_listener_is_noop_after_airflow_3_2_0(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leave the class-level event registry unchanged where the engine hook is reliable."""
 
-    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.2.2")
+    monkeypatch.setattr(capability_module.metadata, "version", lambda _distribution: "3.2.2")
     monkeypatch.delenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, raising=False)
 
     install_legacy_sqlite_listener()
@@ -270,14 +276,14 @@ def test_legacy_listener_is_noop_after_airflow_3_2_0(monkeypatch: pytest.MonkeyP
 def test_legacy_listener_is_noop_without_airflow_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Avoid global installation when the Airflow distribution is unavailable."""
+    """Avoid global installation when no Airflow distribution is classifiable."""
 
     def missing_distribution(distribution: str) -> str:
-        """Simulate an environment without the Airflow core distribution."""
+        """Simulate an environment without any Airflow distribution."""
 
-        raise sqlite.metadata.PackageNotFoundError(distribution)
+        raise capability_module.metadata.PackageNotFoundError(distribution)
 
-    monkeypatch.setattr(sqlite.metadata, "version", missing_distribution)
+    monkeypatch.setattr(capability_module.metadata, "version", missing_distribution)
 
     install_legacy_sqlite_listener()
 
@@ -302,7 +308,7 @@ def test_legacy_listener_rejects_invalid_database_urls(
 ) -> None:
     """Wrap missing and malformed Airflow database values in semantic errors."""
 
-    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", lambda: False)
     if sql_alchemy_conn is None:
         monkeypatch.delenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, raising=False)
     else:
@@ -334,7 +340,7 @@ def test_legacy_listener_wraps_invalid_sqlite_path(
 
             raise OSError("invalid path")
 
-    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", lambda: False)
     monkeypatch.setenv(sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{database_path}")
     monkeypatch.setattr(sqlite, "Path", lambda _value: InvalidPath())
 
@@ -349,9 +355,9 @@ def test_legacy_listener_wraps_invalid_sqlite_path(
 def test_legacy_listener_ignores_a_configured_non_sqlite_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Skip registration when Airflow 3.1 is configured for another database backend."""
+    """Skip registration when an unreliable release is configured for another backend."""
 
-    monkeypatch.setattr(sqlite.metadata, "version", lambda _distribution: "3.1.8")
+    monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", lambda: False)
     monkeypatch.setenv(
         sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE,
         "postgresql://user:password@database/airflow",
@@ -402,17 +408,21 @@ def test_invalid_profiles_are_rejected(profile: PragmaProfile, message: str) -> 
 def test_legacy_listener_always_installs_on_the_v2_family(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Install the listener on 2.x regardless of any version gate."""
+    """Install the listener on 2.x regardless of any version gate.
 
-    from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily
+    Driven through the real `sqlite_engine_override_reliable` on faked capability
+    metadata: the 3.x core is absent and the 2.x meta-distribution classifies the
+    family, which has no engine-override point at all.
+    """
 
-    def core_absent(distribution: str) -> str:
-        """Report the 3.x core distribution as absent."""
+    def meta_only(distribution: str) -> str:
+        """Report the 3.x core as absent and a certified 2.x meta-distribution."""
 
-        raise sqlite.metadata.PackageNotFoundError(distribution)
+        if distribution == capability_module.AIRFLOW_META_DISTRIBUTION:
+            return "2.10.5"
+        raise capability_module.metadata.PackageNotFoundError(distribution)
 
-    monkeypatch.setattr(sqlite.metadata, "version", core_absent)
-    monkeypatch.setattr(sqlite, "installed_family", lambda: AirflowFamily.V2)
+    monkeypatch.setattr(capability_module.metadata, "version", meta_only)
     monkeypatch.setenv(
         sqlite.SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE, f"sqlite:///{tmp_path / 'meta.db'}"
     )
@@ -425,15 +435,9 @@ def test_legacy_listener_always_installs_on_the_v2_family(
 def test_legacy_listener_skips_an_airflow_free_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Install nothing when the core is absent and no 2.x family is present."""
+    """Install nothing when no release is classifiable (the None arm of the gate)."""
 
-    def core_absent(distribution: str) -> str:
-        """Report the 3.x core distribution as absent."""
-
-        raise sqlite.metadata.PackageNotFoundError(distribution)
-
-    monkeypatch.setattr(sqlite.metadata, "version", core_absent)
-    monkeypatch.setattr(sqlite, "installed_family", lambda: None)
+    monkeypatch.setattr(sqlite, "sqlite_engine_override_reliable", lambda: None)
 
     install_legacy_sqlite_listener()
 

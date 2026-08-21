@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pytest_airflow_in_a_box._compat import components as sandbox
-from pytest_airflow_in_a_box._compat.capabilities import installed_certification, v2_gate_message
+from pytest_airflow_in_a_box._compat.capabilities import installed_certification, require_v3
 from pytest_airflow_in_a_box._compat.components import (
     KIND_CLASSIFIERS,
     LISTENER_CORE_MANAGER_ONLY,
@@ -400,13 +400,11 @@ def airflow_components(pytestconfig: pytest.Config) -> Iterator[ComponentRegistr
         ComponentRegistry registering components for the duration of one test.
     """
 
-    message = v2_gate_message(
+    require_v3(
         "airflow_components",
         "it registers into the Task SDK's own plugin and listener managers, which 2.x "
         "predates entirely.",
     )
-    if message is not None:
-        pytest.fail(message, pytrace=False)
     state = get_bootstrap_state(pytestconfig)
     registry = _ComponentSandbox(state.plugins_folder)
     try:
