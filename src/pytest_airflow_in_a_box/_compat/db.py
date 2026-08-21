@@ -232,7 +232,7 @@ class DatabaseCleanupError(RuntimeError):
     """Report failure to clear the isolated Airflow metadata database."""
 
 
-def create_session() -> AbstractContextManager[Any]:
+def create_session() -> AbstractContextManager[Session]:
     """Open Airflow's transactional metadata session context manager.
 
     A plain deferred-import seam, not a capability probe: ``create_session`` is
@@ -240,9 +240,9 @@ def create_session() -> AbstractContextManager[Any]:
     the runtime Airflow import behind ``_compat``.
 
     Returns:
-        contextlib.AbstractContextManager[Any] yielding a
-        ``sqlalchemy.orm.Session`` that commits on clean exit and rolls back on
-        error, exactly as upstream's ``create_session`` does.
+        contextlib.AbstractContextManager[sqlalchemy.orm.Session] yielding a
+        session that commits on clean exit and rolls back on error, exactly as
+        upstream's ``create_session`` does.
 
     Raises:
         ImportError: Airflow is not importable in this environment.
