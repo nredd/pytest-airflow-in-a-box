@@ -31,7 +31,10 @@ from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box.bootstrap import XdistWorkerConfig
+from pytest_airflow_in_a_box.bootstrap import (
+    ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
+    XdistWorkerConfig,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -91,20 +94,26 @@ def worker_coverage_file(value: str, worker: str) -> str:
 
 
 def _worker_identity(config: pytest.Config) -> str | None:
-    """Read the validated xdist worker identity from one configuration.
+    """Read the validated worker identity from one configuration.
+
+    An `airflow_isolated` child process is not an xdist worker but shares the same
+    artifact-collision exposure -- its `log_file` and `COVERAGE_FILE` destinations come
+    from the same inherited configuration the parent writes to -- so its environment
+    identity scopes those destinations exactly like an xdist worker identity does.
 
     Parameters:
         config: pytest.Config possibly extended with xdist worker input.
 
     Returns:
-        str | None containing the worker identity on xdist workers.
+        str | None containing the worker identity on xdist workers and isolated
+        children.
 
     Raises:
-        pytest.UsageError: The worker identity is missing or malformed.
+        pytest.UsageError: The xdist worker identity is missing or malformed.
     """
 
     if not isinstance(config, XdistWorkerConfig):
-        return None
+        return os.environ.get(ISOLATED_WORKER_ENVIRONMENT_VARIABLE) or None
     worker = config.workerinput.get(WORKER_ID_KEY)
     if not isinstance(worker, str) or not worker:
         raise pytest.UsageError(

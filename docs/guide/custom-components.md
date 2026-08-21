@@ -231,6 +231,10 @@ installed distribution this way (for example one defined directly in a test file
 part of an installed package) is silently skipped by both checks. The underlying
 distribution index is built once per process and reused, not rescanned on every call.
 
+To prove the entry point itself *resolves* -- not just that it exists -- run a test under
+[`airflow_isolated`](isolated-tests.md), which registers a synthetic distribution and exercises
+real `entry_points()` discovery in a one-shot child process.
+
 ## Making a component reachable
 
 A clean `check_component` report only proves the component's own shape is sound -- it

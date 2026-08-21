@@ -129,6 +129,23 @@ def test_configure_reporting_ignores_controller_configuration() -> None:
     assert config.option.log_file == "pytest.log"
 
 
+def test_configure_reporting_scopes_log_file_for_isolated_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rewrite the log-file destination inside an `airflow_isolated` child.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the isolated-worker identity.
+    """
+
+    monkeypatch.setenv(reporting.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
+    config = _config(log_file="pytest.log")
+
+    reporting.configure_reporting(config)
+
+    assert config.option.log_file == "pytest.iso-1234abcd.log"
+
+
 def test_configure_reporting_scopes_option_log_file() -> None:
     """Rewrite the parsed ``--log-file`` option on an xdist worker."""
 
