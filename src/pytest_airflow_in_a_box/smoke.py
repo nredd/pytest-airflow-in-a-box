@@ -1340,8 +1340,10 @@ def _render_table(headers: Sequence[str], rows: Sequence[Mapping[str, str]]) -> 
     Owned replacement for ``airflow.cli.simple_table.AirflowConsole`` -- an unstable CLI
     internal this plugin only ever used for report rendering. The header row and its dash
     separator render even when ``rows`` is empty, so an empty report still names its columns.
-    Each column is as wide as its widest content (header or cell); lines carry no trailing
-    padding.
+    Each column is as wide as its widest content (header or cell); the separator spans every
+    column's full width while header and data lines carry no trailing padding. Widths are
+    measured in code points, so double-width (e.g. CJK) cells render misaligned -- accepted,
+    since Dag file paths and ids are overwhelmingly ASCII.
 
     Parameters:
         headers: Sequence[str] naming the columns, in render order. Each header doubles as
@@ -1353,6 +1355,8 @@ def _render_table(headers: Sequence[str], rows: Sequence[Mapping[str, str]]) -> 
         str containing the rendered table text, terminated by a newline.
     """
 
+    # The literal 0 is not dead: with zero rows the unpacking leaves max() a single int
+    # argument, which it would reject as a non-iterable.
     widths = [max(len(header), *(len(row[header]) for row in rows), 0) for header in headers]
 
     def _line(cells: Iterable[str]) -> str:

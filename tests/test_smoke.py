@@ -1137,6 +1137,11 @@ def test_log_serialization_table_marks_ok_and_failed_rows(
     assert "ok" in text
     assert "FAILED" in text
     assert "-" in text
+    # Exact-row pins: the substring assertions above went vacuous once the renderer's
+    # separator started carrying dashes ("-") and the `broken` dag_id already contains
+    # "ok", so pin the placeholder and status cells in situ.
+    assert "broken | 0.200s    | -           | 0.200s | FAILED" in text
+    assert "fast   | 0.100s    | 0.050s      | 0.150s | ok" in text
     assert "Dag serialization report" in caplog.text
 
 
