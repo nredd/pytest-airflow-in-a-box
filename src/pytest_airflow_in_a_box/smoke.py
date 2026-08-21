@@ -145,7 +145,7 @@ class SmokeCorpus:
     """Cross-process representation of one parsed Dag folder.
 
     ``runtime_lookups`` is deliberately tri-state: ``None`` means the producer reused a
-    ``DagBag`` that `full_dag_bag` had already parsed without interception, so runtime
+    ``DagBag`` that `dag_bag` had already parsed without interception, so runtime
     secrets findings are unavailable; an empty tuple means the parse was observed and no
     lookup happened.
     """
@@ -833,13 +833,13 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
     Sets ``AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT`` immediately before construction so Airflow
     hard-kills any single file exceeding the configured timeout; the environment variable is read
     per lookup, not cached at import, so this stays safe to set late and per-run. Reuses a
-    DagBag `full_dag_bag` already parsed for this process, if one exists, rather than parsing
+    DagBag `dag_bag` already parsed for this process, if one exists, rather than parsing
     the Dag folder a second time. A fresh parse here is deliberately not cached on the session
-    the way `full_dag_bag`'s is -- nothing else in a smoke-only run needs the live DagBag past
+    the way `dag_bag`'s is -- nothing else in a smoke-only run needs the live DagBag past
     this function returning, only the portable SmokeCorpus it builds from it.
 
     Parameters:
-        session: pytest.Session used to reach a DagBag already parsed by `full_dag_bag`.
+        session: pytest.Session used to reach a DagBag already parsed by `dag_bag`.
         config: pytest.Config containing plugin options and ini values.
 
     Returns:
@@ -1083,7 +1083,7 @@ def _shared_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smok
     """Elect one process to parse Dags and share the result with local workers.
 
     Parameters:
-        session: pytest.Session used to reach a DagBag already parsed by `full_dag_bag`.
+        session: pytest.Session used to reach a DagBag already parsed by `dag_bag`.
         config: pytest.Config carrying the shared bootstrap run root.
 
     Returns:
@@ -2086,7 +2086,7 @@ class TopLevelVariableAccessItem(pytest.Item):
 
         The AST pass reports direct top-level calls with exact locations; the runtime pass
         adds lookups hidden behind helpers, recorded while the corpus producer (or the
-        `full_dag_bag` parse it reuses) filled the ``DagBag``. Runtime findings deduplicate
+        `dag_bag` parse it reuses) filled the ``DagBag``. Runtime findings deduplicate
         against AST findings by file and call span, and degrade gracefully to AST-only for
         a ``DagBag`` parsed without instrumentation.
 

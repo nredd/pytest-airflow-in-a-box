@@ -88,7 +88,7 @@ airflow_config = [
 ```
 
 That ordering is the point. A `with airflow_config(...)` block in a test runs long after
-`full_dag_bag` has parsed your Dag folder once for the whole worker process, and a
+`dag_bag` has parsed your Dag folder once for the whole worker process, and a
 `.__enter__()` at conftest module scope both runs too late and never restores.
 
 The grammar is one option per line. The value is split on the *first* `=`, so a value may
@@ -163,11 +163,11 @@ teardown, restoring every name exactly.
 
 Ordering is the caveat. pytest instantiates autouse fixtures ahead of requested ones at the same
 scope, so a `scope="session", autouse=True` wrapper like the one above *is* applied before a
-session-scoped `full_dag_bag` that the same test requests. But that guarantee is per test:
+session-scoped `dag_bag` that the same test requests. But that guarantee is per test:
 
 - A *function*-scoped wrapper is instantiated after every session-scoped fixture, so it cannot
   precede a Dag parse.
-- `full_dag_bag` parses once per worker process and caches. A test collected earlier and outside
+- `dag_bag` parses once per worker process and caches. A test collected earlier and outside
   your wrapper's conftest scope can win the parse, after which no override reaches it.
 
 So use the ini option for anything that must precede the first parse unconditionally, and this
@@ -176,20 +176,24 @@ warning about `api_client`/`api_server_url` above applies here too, for the whol
 
 ## Where the run lives
 
-`airflow_home_path` and `airflow_dags_folder_path` return this run's isolated `AIRFLOW_HOME` and
-the Dag directory `full_dag_bag` parses, as `pathlib.Path`:
+`airflow_home` and `airflow_dags_folder` return this run's isolated `AIRFLOW_HOME` and
+the Dag directory `dag_bag` parses, as `pathlib.Path`:
 
 ```python
-def test_paths(airflow_home_path, airflow_dags_folder_path):
-    assert (airflow_home_path / "airflow.cfg").is_file()
-    assert (airflow_dags_folder_path / "my_dag.py").is_file()
+def test_paths(airflow_home, airflow_dags_folder):
+    assert (airflow_home / "airflow.cfg").is_file()
+    assert (airflow_dags_folder / "my_dag.py").is_file()
 ```
 
 Both are session-scoped and touch neither Airflow nor the metadata database, so asking where a
-directory is never triggers an import or a migration. The `_path` suffix is deliberate: plain
-`airflow_home` and `airflow_dags_folder` are the ini options these fixtures resolve.
+directory is never triggers an import or a migration. The names deliberately match the
+`airflow_home` and `airflow_dags_folder` ini options -- fixtures and ini options live in
+separate pytest registries, so the same name works in both contexts. One nuance: the
+`airflow_home` *ini option* names the base directory to provision under, while the fixture
+returns the disposable per-run root created below it; `airflow_dags_folder` returns exactly
+the directory its option configures.
 
-`airflow_dags_folder_path` follows the same ladder `full_dag_bag` does -- `--dag-folder`, then
+`airflow_dags_folder` follows the same ladder `dag_bag` does -- `--dag-folder`, then
 the `airflow_dags_folder` ini option, then the empty `dags/` directory inside the run's
 `AIRFLOW_HOME`. That last one is a disposable scratch directory meaning "no Dag folder was
 configured", not a corpus.

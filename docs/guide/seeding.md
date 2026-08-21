@@ -50,12 +50,12 @@ during a test parse. Depending on the release you get
 [PR #61630](https://github.com/apache/airflow/pull/61630) defers the root-cause fix.
 
 The plugin answers those lookups itself, from the same metastore rows `airflow_variables` and
-`airflow_connections` commit. Every parse the plugin runs is covered: `full_dag_bag`, the
+`airflow_connections` commit. Every parse the plugin runs is covered: `dag_bag`, the
 `--collect-dag-folder` import items, and the smoke catalog's corpus build. Nothing reads the
 database until a Dag actually issues a lookup, so a Dag folder that never touches Variables or
 Connections costs nothing.
 
-**Seed at session scope, before anything parses.** `full_dag_bag` parses once per worker and
+**Seed at session scope, before anything parses.** `dag_bag` parses once per worker and
 stashes the result for the whole session, and collected Dag items are plain `pytest.Item`s with
 no fixture support at all. Both are settled before any function-scoped fixture gets a turn, so
 parse-time values belong in `pytest_sessionstart`:
@@ -78,8 +78,8 @@ def pytest_sessionstart(session):
 metastore, exactly as it does at task time.
 
 Seeding from `airflow_variables` and then asking for the bag with
-`request.getfixturevalue("full_dag_bag")` does work, but only for whichever test materializes
-the bag first. Any earlier test or smoke item that touches `full_dag_bag` unseeded pins a bag
+`request.getfixturevalue("dag_bag")` does work, but only for whichever test materializes
+the bag first. Any earlier test or smoke item that touches `dag_bag` unseeded pins a bag
 full of import errors for the rest of the session, so that form goes flaky the moment file
 order, `-k`, or `-p randomly` changes. Prefer the session-scoped seed above.
 

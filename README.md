@@ -24,6 +24,7 @@ fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
 ## Contents
 
 - [Quickstart](#quickstart)
+- [Fixtures](#fixtures)
 - [Why not...](#why-not)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -44,8 +45,8 @@ pip install "pytest-airflow-in-a-box[airflow3]"
 Point the plugin at your repo's `dags/` folder and run a real Dag end to end:
 
 ```python
-def test_my_dag(full_dag_bag, run_dag):
-    dag = full_dag_bag.dags["my_dag_id"]
+def test_my_dag(dag_bag, run_dag):
+    dag = dag_bag.dags["my_dag_id"]
 
     result = run_dag(dag)
 
@@ -96,10 +97,60 @@ tasks run with `dag_maker.run_ti("produce")`, and `pytest_airflow_in_a_box.match
 supports one-expression bulk assertions like
 `assert result == {"produce": succeeded(21), "consume": succeeded(42)}`.
 
+### Testing a standalone task
+
+A `@task` needs no Dag at all -- and no database. `run_task` executes the decorated
+function's operator in process via a synthetic per-test Dag (Airflow 3.x only):
+
+```python
+from airflow.sdk import task
+
+
+@task
+def add(x: int, y: int) -> int:
+    return x + y
+
+
+def test_add(run_task):
+    result = run_task(add(1, 2).operator)
+
+    assert result.xcoms["return_value"] == 3
+```
+
+The same pattern renders templates without executing (`render_task`) and hand-drives a bare
+`execute()` (`task_context`) -- see
+[DB-free task execution](https://nredd.github.io/pytest-airflow-in-a-box/guide/db-free-execution/).
+
 The `pytest11` entry point registers the plugin automatically -- no `pytest_plugins`
 declaration needed. See the [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/)
 for the full `dag_maker`/`run_dag`/`run`/`run_ti` surface, sessions, DB-free task execution,
 deferrable operators, the REST API fixture, and bundled smoke checks.
+
+## Fixtures
+
+The full reference, with scopes, database behavior, and Airflow-2.x availability, lives at
+[Fixtures](https://nredd.github.io/pytest-airflow-in-a-box/reference/fixtures/):
+
+| Fixture | One-liner |
+| ------- | --------- |
+| `dag_bag` | All Dags parsed from the configured Dag directory, once per worker process |
+| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it |
+| `run_dag` | Run an externally-authored Dag, e.g. one pulled from `dag_bag` |
+| `run_task` | DB-free in-process runner for a single operator or standalone `@task` |
+| `render_task` | DB-free rendering of an operator's `template_fields`, no `execute()` |
+| `task_context` | DB-free Task SDK template context for hand-driven `execute()` calls |
+| `session` | Airflow metadata DB session, rolled back on teardown |
+| `airflow_variables` | Seed Airflow Variables for one test, deleted on teardown |
+| `airflow_connections` | Seed Airflow Connections for one test, deleted on teardown |
+| `airflow_parse_secrets` | Resolve top-level Variable/Connection lookups in Dag files |
+| `airflow_configure` | Apply `airflow_config` overrides until session teardown |
+| `airflow_components` | Register custom plugins, listeners, policies, executors, timetables |
+| `airflow_home` | This run's isolated `AIRFLOW_HOME` as a `Path` |
+| `airflow_dags_folder` | The Dag directory `dag_bag` parses, as a `Path` |
+| `api_server_url` | Base URL of the isolated live Airflow API server |
+| `api_client` | Authenticated client bound to the isolated API server |
+| `api_base_url` | The live server URL, published to Airflow config for `api_test` tests |
+| `cap_structlog` | Capture structlog events emitted during the test |
 
 ## Why not...
 
@@ -164,8 +215,8 @@ marker because Airflow 2.x never supported 3.13 -- on newer interpreters the ext
 nothing and the plugin's runtime check names the fix) installs the certified Airflow 2.x
 compatibility tier ([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)):
 `dag_maker` (including whole-DagRun execution through `dag_maker.run()`), `run_ti`,
-`full_dag_bag`, `run_dag`, `clear_db`, seeding, the configuration surface
-(`airflow_config`, `airflow_configure`, `airflow_home_path`, `airflow_dags_folder_path`),
+`dag_bag`, `run_dag`, `clear_db`, seeding, the configuration surface
+(`airflow_config`, `airflow_configure`, `airflow_home`, `airflow_dags_folder`),
 and the bundled smoke checks run against 2.7.3, 2.8.4,
 2.9.3, 2.10.5, and 2.11.2. The marker is the family-wide cap; 2.7.3 and 2.8.4 cap lower still,
 at 3.11, and the plugin's runtime check names the offending release. Requesting both Airflow

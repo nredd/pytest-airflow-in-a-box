@@ -47,9 +47,9 @@ _DAG_BAG_SUITE = """
     RECORD_DIR = Path({record_dir!r})
 
 
-    def test_corpus_parses_deterministically(full_dag_bag):
+    def test_corpus_parses_deterministically(dag_bag):
         worker = os.environ["PYTEST_XDIST_WORKER"]
-        record = {{"worker": worker, "dag_ids": sorted(full_dag_bag.dags)}}
+        record = {{"worker": worker, "dag_ids": sorted(dag_bag.dags)}}
         (RECORD_DIR / worker).write_text(json.dumps(record), encoding="utf-8")
 """
 
@@ -114,7 +114,7 @@ _SMOKE_REPORTING_CONFTST = """
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
-def test_full_dag_bag_is_identical_on_every_worker(pytester: pytest.Pytester) -> None:
+def test_dag_bag_is_identical_on_every_worker(pytester: pytest.Pytester) -> None:
     """Parse the bundled corpus into the same session Dag bag on both workers."""
 
     record_dir = pytester.path / "records"
@@ -234,15 +234,15 @@ _WORKER_REPORTING_CONFTEST = """
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
-def test_smoke_catalog_and_full_dag_bag_consumer_share_one_worker_and_parse(
+def test_smoke_catalog_and_dag_bag_consumer_share_one_worker_and_parse(
     pytester: pytest.Pytester,
 ) -> None:
-    """Parse the Dag folder once when the catalog and a `full_dag_bag` consumer coexist.
+    """Parse the Dag folder once when the catalog and a `dag_bag` consumer coexist.
 
     Regression test for issue #163: an ungrouped smoke catalog could land on a
-    different worker than a `full_dag_bag` consumer under `--dist loadgroup`, so the
+    different worker than a `dag_bag` consumer under `--dist loadgroup`, so the
     corpus was parsed twice, concurrently, on separate workers. Both now share
-    `FULL_DAG_BAG_XDIST_GROUP`, which forces `--dist loadgroup` to schedule them onto
+    `DAG_BAG_XDIST_GROUP`, which forces `--dist loadgroup` to schedule them onto
     the same worker, so the process-local live-`DagBag` reuse (`fixtures/dagbag.py`)
     actually triggers.
     """
@@ -258,8 +258,8 @@ def test_smoke_catalog_and_full_dag_bag_consumer_share_one_worker_and_parse(
     pytester.makeconftest(_WORKER_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
     pytester.makepyfile(
         """
-        def test_consumer(full_dag_bag):
-            assert set(full_dag_bag.dags) == {"colocate_dag"}
+        def test_consumer(dag_bag):
+            assert set(dag_bag.dags) == {"colocate_dag"}
         """
     )
 

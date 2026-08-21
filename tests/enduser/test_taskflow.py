@@ -4,8 +4,8 @@
 `airflow.models` (2.x) to `airflow.sdk` (3.x), and TaskFlow's `task` decorator
 moved from `airflow.decorators` (2.x, still importable on 3.x) to `airflow.sdk`.
 `ordered_task_instances`/`run_task_instance` are family-branched in
-`_compat.taskrun`, so only the DB-free multiple-outputs test needs the Task SDK's
-`run_task` runner and carries `requires_airflow3`.
+`_compat.taskrun`, so only the DB-free tests need the Task SDK's `run_task` runner
+and carry `requires_airflow3`.
 """
 
 from __future__ import annotations
@@ -63,6 +63,24 @@ def test_multiple_outputs_work_without_metadata(run_task: RunTask) -> None:
 
     assert result.xcoms["left"] == 20
     assert result.xcoms["right"] == 22
+
+
+@pytest.mark.requires_airflow3
+def test_standalone_task_runs_without_a_dag(run_task: RunTask) -> None:
+    """Execute a bare `@task` with no Dag, mirroring the README example.
+
+    Calling a decorated function outside any Dag returns an XComArg whose `.operator` is
+    unbound; `run_task` binds it to a synthetic per-test Dag and executes DB-free. The
+    README's "Testing a standalone task" snippet must keep working exactly as published.
+    """
+
+    @task
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    result = run_task(add(1, 2).operator)
+
+    assert result.xcoms["return_value"] == 3
 
 
 @pytest.mark.db_test

@@ -84,8 +84,8 @@ zero-ini defaults on purpose.
   checks, `--airflow-doctor` diagnostics
 - `taskinstance.py` -- `run_trigger`, `ordered_task_instances`
 - `types.py` -- public typing contracts for fixtures
-- `fixtures/` -- `dag_maker`, `full_dag_bag`, sessions, DB-free
-  `run_task`/`render_task`/`task_context`, REST API server + client, `airflow_variables`/`airflow_connections`, `cap_structlog`, `airflow_configure`, `airflow_home_path`/`airflow_dags_folder_path`
+- `fixtures/` -- `dag_maker`, `dag_bag`, sessions, DB-free
+  `run_task`/`render_task`/`task_context`, REST API server + client, `airflow_variables`/`airflow_connections`, `cap_structlog`, `airflow_configure`, `airflow_home`/`airflow_dags_folder`
 - `storage/` -- storage-ladder selection, SQLite tuning, Postgres provisioning
 - `_compat/` -- private Airflow-version shims, each guarded by `capabilities.py` probes
 

@@ -40,23 +40,23 @@ to need the corpus parses it once and publishes a serialized artifact below the 
 the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
 no scheduling effect, so user-authored smoke tests remain fully parallel too.
 
-A test using the `full_dag_bag` fixture in the same worker process shares that parse too: if
-`full_dag_bag` already parsed in this process, the corpus builder reuses that live `DagBag` instead
+A test using the `dag_bag` fixture in the same worker process shares that parse too: if
+`dag_bag` already parsed in this process, the corpus builder reuses that live `DagBag` instead
 of parsing again (the catalog is always collected last, so this is the common case). While the
-catalog is enabled this way, `airflow_dag_parse_timeout` also governs `full_dag_bag`'s own parse, so
-a Dag file that exceeds it lands in `full_dag_bag.import_errors` instead of `full_dag_bag.dags`.
+catalog is enabled this way, `airflow_dag_parse_timeout` also governs `dag_bag`'s own parse, so
+a Dag file that exceeds it lands in `dag_bag.import_errors` instead of `dag_bag.dags`.
 Treat a shared `DagBag` as read-only: a consumer's mutation is visible to the catalog's checks too.
 
-That same-process reuse depends on the corpus builder and a `full_dag_bag` consumer landing on the
+That same-process reuse depends on the corpus builder and a `dag_bag` consumer landing on the
 same worker, which plain load-balanced scheduling does not guarantee. Under `--dist loadgroup`, if
-this run also has a test that uses `full_dag_bag` and would survive an active `-m` expression, the
+this run also has a test that uses `dag_bag` and would survive an active `-m` expression, the
 plugin puts the whole catalog and one such consumer into a shared `xdist_group`, forcing them onto
-the same worker -- instead of the corpus builder and `full_dag_bag` independently parsing the same
+the same worker -- instead of the corpus builder and `dag_bag` independently parsing the same
 folder in parallel on two workers. Only one consumer joins the group, not every one in the run, so a
-suite with many `full_dag_bag` tests does not have all of their execution serialized onto a single
+suite with many `dag_bag` tests does not have all of their execution serialized onto a single
 worker just to save one parse. An item that already carries its own explicit `xdist_group` is never
-chosen or overwritten. `-k` deselection is not predicted the way `-m` is, so a `full_dag_bag`
-consumer dropped only by `-k` may still be chosen. A smoke-only run with no `full_dag_bag` consumer
+chosen or overwritten. `-k` deselection is not predicted the way `-m` is, so a `dag_bag`
+consumer dropped only by `-k` may still be chosen. A smoke-only run with no `dag_bag` consumer
 is unaffected and keeps distributing the catalog across workers as described above.
 
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
@@ -92,7 +92,7 @@ default whenever the catalog is enabled, and each has its own ini to disable or 
   an AST scan over exactly the files Airflow parsed (direct calls like `Variable.get(...)`,
   `Connection.get(...)`, `BaseHook.get_connection(...)`, with exact file and line), and runtime
   interception that patches the secrets entry points while the shared corpus fills its `DagBag`,
-  which also catches lookups hidden behind helper functions. The `full_dag_bag` parse is
+  which also catches lookups hidden behind helper functions. The `dag_bag` parse is
   instrumented the same way whenever the catalog is enabled, so the runtime pass survives either
   parse ordering; a `DagBag` that was somehow parsed without instrumentation degrades the check
   to AST-only with a logged note. Disable with

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pytest_airflow_in_a_box import airflow_home, baseline, record
+from pytest_airflow_in_a_box import _airflow_home, baseline, record
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
@@ -48,16 +48,16 @@ from pytest_airflow_in_a_box.fixtures import (
     airflow_components,
     airflow_configure,
     airflow_connections,
-    airflow_dags_folder_path,
-    airflow_home_path,
+    airflow_dags_folder,
+    airflow_home,
     airflow_parse_secrets,
     airflow_variables,
     api_base_url,
     api_client,
     api_server_url,
     cap_structlog,
+    dag_bag,
     dag_maker,
-    full_dag_bag,
     render_task,
     run_dag,
     run_task,
@@ -65,8 +65,8 @@ from pytest_airflow_in_a_box.fixtures import (
     task_context,
 )
 from pytest_airflow_in_a_box.fixtures.dagbag import (
-    FULL_DAG_BAG_FIXTURE_NAME,
-    FULL_DAG_BAG_XDIST_GROUP,
+    DAG_BAG_FIXTURE_NAME,
+    DAG_BAG_XDIST_GROUP,
 )
 from pytest_airflow_in_a_box.ini_config import apply_ini_overrides, validate_smoke_conflict
 from pytest_airflow_in_a_box.isolated import (
@@ -101,16 +101,16 @@ __all__ = (
     "airflow_components",
     "airflow_configure",
     "airflow_connections",
-    "airflow_dags_folder_path",
-    "airflow_home_path",
+    "airflow_dags_folder",
+    "airflow_home",
     "airflow_parse_secrets",
     "airflow_variables",
     "api_base_url",
     "api_client",
     "api_server_url",
     "cap_structlog",
+    "dag_bag",
     "dag_maker",
-    "full_dag_bag",
     "get_bootstrap_state",
     "render_task",
     "run_dag",
@@ -138,7 +138,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         dest="dag_folder",
         metavar="PATH",
-        help="Parse Dags from PATH for the full_dag_bag fixture.",
+        help="Parse Dags from PATH for the dag_bag fixture.",
     )
     group.addoption(
         "--airflow-home",
@@ -210,7 +210,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     parser.addini(
         "airflow_dags_folder",
-        "Directory parsed by the full_dag_bag fixture.",
+        "Directory parsed by the dag_bag fixture.",
         default="",
     )
     parser.addini(
@@ -383,7 +383,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type="bool",
         default=False,
     )
-    airflow_home.register_options(parser)
+    _airflow_home.register_options(parser)
     group.addoption(
         "--airflow-report-dir",
         action="store",
@@ -453,7 +453,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
     if not config.option.airflow_doctor:
         return None
     sys.stdout.write(render_doctor_report(config))
-    airflow_home.resolve_retention_policy(config)
+    _airflow_home.resolve_retention_policy(config)
     return 0
 
 
@@ -477,7 +477,7 @@ def pytest_configure(config: pytest.Config) -> None:
         config: pytest.Config for the active test session.
     """
 
-    airflow_home.resolve_retention_policy(config)
+    _airflow_home.resolve_retention_policy(config)
     register_markers(config)
     validate_configure(config)
     validate_smoke_conflict(config)
@@ -521,7 +521,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         session: pytest.Session about to start collecting and running tests.
     """
 
-    airflow_home.mark_session_started(session.config)
+    _airflow_home.mark_session_started(session.config)
     _install_dict_config_interceptor()
 
 
@@ -541,7 +541,7 @@ def pytest_report_header(config: pytest.Config) -> list[str]:
         list[str] containing one header line, or no lines on an xdist worker.
     """
 
-    return airflow_home.report_header(get_bootstrap_state(config))
+    return _airflow_home.report_header(get_bootstrap_state(config))
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -590,21 +590,21 @@ def pytest_collection_modifyitems(
     smoke_ids = {id(item) for item in items[smoke_start:]}
     baseline.apply_selection_and_xfail(session, config, items)
     smoke_items = [item for item in items if id(item) in smoke_ids]
-    _colocate_smoke_catalog_with_full_dag_bag(items, smoke_items, config)
+    _colocate_smoke_catalog_with_dag_bag(items, smoke_items, config)
 
 
-def _requires_full_dag_bag(item: pytest.Item) -> bool:
-    """Report whether one collected test consumes the `full_dag_bag` fixture.
+def _requires_dag_bag(item: pytest.Item) -> bool:
+    """Report whether one collected test consumes the `dag_bag` fixture.
 
     Parameters:
-        item: pytest.Item inspected for `full_dag_bag` fixture usage.
+        item: pytest.Item inspected for `dag_bag` fixture usage.
 
     Returns:
-        bool reporting whether the item requires `full_dag_bag`.
+        bool reporting whether the item requires `dag_bag`.
     """
 
     fixturenames: tuple[str, ...] = tuple(getattr(item, "fixturenames", ()))
-    return FULL_DAG_BAG_FIXTURE_NAME in fixturenames
+    return DAG_BAG_FIXTURE_NAME in fixturenames
 
 
 def _survives_markexpr(item: pytest.Item, config: pytest.Config) -> bool:
@@ -614,7 +614,7 @@ def _survives_markexpr(item: pytest.Item, config: pytest.Config) -> bool:
     the time this plugin's `tryfirst` collection hook decides xdist co-location --
     unlike `--airflow-baseline-select`, which this plugin applies itself earlier in the
     same hook. Predicting the `-m` result here avoids grouping the smoke catalog with a
-    `full_dag_bag` consumer that `-m` is about to drop from the run anyway, wasting the
+    `dag_bag` consumer that `-m` is about to drop from the run anyway, wasting the
     catalog's own cross-worker distribution for no reuse benefit. Mirrors
     `smoke.py::_markexpr_wants_smoke`'s use of the same private, version-coupled
     symbol, deferred and exception-guarded the same way and for the same reason: an
@@ -649,17 +649,17 @@ def _survives_markexpr(item: pytest.Item, config: pytest.Config) -> bool:
         return True
 
 
-def _colocate_smoke_catalog_with_full_dag_bag(
+def _colocate_smoke_catalog_with_dag_bag(
     items: list[pytest.Item], smoke_items: list[pytest.Item], config: pytest.Config
 ) -> None:
-    """Force the smoke catalog onto one `full_dag_bag` consumer's xdist worker.
+    """Force the smoke catalog onto one `dag_bag` consumer's xdist worker.
 
     Under `--dist loadgroup`, an ungrouped smoke item can land on a different worker
-    than a `full_dag_bag` consumer. Since the process-local live-DagBag cache
+    than a `dag_bag` consumer. Since the process-local live-DagBag cache
     (`fixtures/dagbag.py::LIVE_DAG_BAG_KEY`) only helps when both share a worker, that
     split causes the Dag folder to be parsed twice, in parallel. Grouping with a single
     consumer is enough to fix that: it guarantees the catalog's worker already has a
-    cached `DagBag` to reuse, without forcing every other `full_dag_bag` consumer onto
+    cached `DagBag` to reuse, without forcing every other `dag_bag` consumer onto
     that same worker too -- which, for a suite with many such consumers, would trade
     one avoided parse for serializing all of their execution onto a single worker.
 
@@ -673,7 +673,7 @@ def _colocate_smoke_catalog_with_full_dag_bag(
     a no-op.
 
     Parameters:
-        items: list[pytest.Item] surviving collection, inspected for `full_dag_bag` use.
+        items: list[pytest.Item] surviving collection, inspected for `dag_bag` use.
         smoke_items: list[pytest.Item] containing the synthesized smoke catalog items.
         config: pytest.Config used to detect `--dist=loadgroup` and predict `-m`.
 
@@ -687,7 +687,7 @@ def _colocate_smoke_catalog_with_full_dag_bag(
         (
             item
             for item in items
-            if _requires_full_dag_bag(item)
+            if _requires_dag_bag(item)
             and item.get_closest_marker("xdist_group") is None
             and _survives_markexpr(item, config)
         ),
@@ -696,7 +696,7 @@ def _colocate_smoke_catalog_with_full_dag_bag(
     if dag_bag_item is None:
         return
     for item in (*smoke_items, dag_bag_item):
-        item.add_marker(pytest.mark.xdist_group(name=FULL_DAG_BAG_XDIST_GROUP))
+        item.add_marker(pytest.mark.xdist_group(name=DAG_BAG_XDIST_GROUP))
 
 
 def _loadgroup_dist_active(config: pytest.Config) -> bool:
@@ -964,7 +964,7 @@ def pytest_terminal_summary(
     """
 
     baseline.render_terminal_summary(terminalreporter, exitstatus, config)
-    airflow_home.terminal_summary(terminalreporter, config, get_bootstrap_state(config))
+    _airflow_home.terminal_summary(terminalreporter, config, get_bootstrap_state(config))
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -982,7 +982,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """
 
     record.write_recorded_artifact(session, exitstatus)
-    airflow_home.record_session_outcome(session.config, exitstatus)
+    _airflow_home.record_session_outcome(session.config, exitstatus)
 
 
 @pytest.hookimpl(optionalhook=True)

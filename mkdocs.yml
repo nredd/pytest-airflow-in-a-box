@@ -67,6 +67,7 @@ nav:
       - Migration diff orchestrator: guide/migration-orchestrator.md
       - Cookbook: guide/cookbook.md
   - Reference:
+      - Fixtures: reference/fixtures.md
       - Markers: reference/markers.md
       - Defaults: reference/defaults.md
       - Diagnostics: reference/diagnostics.md

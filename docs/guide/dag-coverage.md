@@ -13,7 +13,7 @@ Action's `requirements-file` input so it lands in the same venv).
 
 ## Why this works
 
-Every parse path in the plugin -- `full_dag_bag`, the smoke catalog's corpus builder, and
+Every parse path in the plugin -- `dag_bag`, the smoke catalog's corpus builder, and
 Dag-file collection items -- funnels through one plain in-process `DagBag` constructor.
 Airflow's importer loads each Dag file with a `SourceFileLoader` whose *module name* is
 mangled (`unusual_prefix_<hash>_<stem>`), but whose code objects carry the real on-disk
@@ -32,12 +32,12 @@ to, which is why none of `coverage.py`'s subprocess settings (`concurrency`,
   the report with no warning and the total looks fine. Pass one `--cov` per measured
   folder: `--cov=dags --cov=src`
 - There are TWO Dag folder options: `--dag-folder` / `airflow_dags_folder` feeds
-  `full_dag_bag` (and, through it, [`run_dag`](task-execution.md#testing-a-dag-defined-elsewhere))
+  `dag_bag` (and, through it, [`run_dag`](task-execution.md#testing-a-dag-defined-elsewhere))
   and the [smoke catalog](smoke-tests.md), while `--collect-dag-folder` /
   `airflow_collect_dags_folder` feeds [Dag-file collection](dag-collection.md). They are
   usually the same directory, but coverage sees only what `--cov` names -- cover every
   folder your tests actually parse
-- When neither `--dag-folder` nor `airflow_dags_folder` is set, `full_dag_bag` falls back
+- When neither `--dag-folder` nor `airflow_dags_folder` is set, `dag_bag` falls back
   to the empty scratch `dags/` directory below the disposable bootstrap run root. Never
   feed that path to `--cov`: it is temporary, per-run, and deleted at session end
 

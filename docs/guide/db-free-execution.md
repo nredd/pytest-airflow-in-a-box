@@ -36,6 +36,24 @@ def test_floating_operator(run_task):
     assert result.state == TaskInstanceState.SUCCESS
 ```
 
+The same goes for a standalone `@task`: calling the decorated function outside any Dag
+returns an XComArg, and its `.operator` runs directly:
+
+```python
+from airflow.sdk import task
+
+
+@task
+def add(x: int, y: int) -> int:
+    return x + y
+
+
+def test_add(run_task):
+    result = run_task(add(1, 2).operator)
+
+    assert result.xcoms["return_value"] == 3
+```
+
 The Task SDK requires every executing task to have a bound Dag, so `run_task`,
 `render_task`, and `task_context` bind an unbound operator IN PLACE to a synthetic
 `DAG(dag_id=..., schedule=None)`. Pass `dag_id="..."` to name it, or leave it off for a

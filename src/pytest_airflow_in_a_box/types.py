@@ -226,7 +226,7 @@ class RunDag(Protocol):
     """Persist and execute one externally-authored Dag through a full DagRun.
 
     Unlike ``DagMaker``, which always builds its own Dag, ``RunDag`` adopts a Dag the
-    caller already authored elsewhere -- typically one pulled from ``full_dag_bag`` -- and
+    caller already authored elsewhere -- typically one pulled from ``dag_bag`` -- and
     drives it through the same persist/create/execute pipeline, keyed on the Dag's own
     ``dag_id`` rather than a synthetic one. Because the real ``dag_id`` is preserved, two
     tests exercising the same ``dag_id`` concurrently on different ``pytest-xdist`` workers

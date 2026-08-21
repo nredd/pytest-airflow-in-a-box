@@ -2,7 +2,7 @@
 
 Three pieces ship together and are contract-tested together across the whole compatibility
 matrix: the `airflow_config` ini option, the session-scoped `airflow_configure` fixture, and
-the `airflow_home_path` / `airflow_dags_folder_path` path fixtures. All three are
+the `airflow_home` / `airflow_dags_folder` path fixtures. All three are
 family-independent -- they read pytest configuration and the plugin's own bootstrap state, and
 touch neither the metadata database nor any versioned Airflow internal -- so nothing here is
 gated behind `requires_airflow3`.
@@ -82,10 +82,10 @@ def test_airflow_configure_applies_a_runtime_batch(
 
 
 def test_path_fixtures_resolve_without_reaching_into_bootstrap(
-    airflow_home_path: Path, airflow_dags_folder_path: Path
+    airflow_home: Path, airflow_dags_folder: Path
 ) -> None:
     """Hand back both directories the plugin already resolves, as plain paths."""
 
-    assert airflow_home_path == Path(os.environ["AIRFLOW_HOME"])
-    assert (airflow_home_path / "airflow.cfg").is_file()
-    assert airflow_dags_folder_path.is_dir()
+    assert airflow_home == Path(os.environ["AIRFLOW_HOME"])
+    assert (airflow_home / "airflow.cfg").is_file()
+    assert airflow_dags_folder.is_dir()

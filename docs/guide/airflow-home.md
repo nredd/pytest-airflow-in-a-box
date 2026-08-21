@@ -105,19 +105,19 @@ is removed under `failed`. Pass `--airflow-home-retention=all` when you need to 
 
 ## Reaching it from a test
 
-The `airflow_home_path` fixture returns the directory as a `pathlib.Path`, so a test or a
+The `airflow_home` fixture returns the directory as a `pathlib.Path`, so a test or a
 consumer fixture never needs to reach into the plugin's bootstrap internals or re-read
 `AIRFLOW_HOME` from the environment:
 
 ```python
-def test_local_settings_were_written(airflow_home_path):
-    assert (airflow_home_path / "config" / "airflow_local_settings.py").is_file()
+def test_local_settings_were_written(airflow_home):
+    assert (airflow_home / "config" / "airflow_local_settings.py").is_file()
 ```
 
 It is session-scoped and imports no Airflow. Under `xdist` every worker reports the controller's
 directory, because workers inherit it rather than creating their own. See
 [Airflow configuration](configuration.md#where-the-run-lives) for the companion
-`airflow_dags_folder_path`.
+`airflow_dags_folder`.
 
 ## Pairing with report artifacts
 

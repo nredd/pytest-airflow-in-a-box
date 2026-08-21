@@ -5,9 +5,12 @@ fixture meant importing ``bootstrap.get_bootstrap_state`` -- an internal -- and 
 import into the fixture body to avoid tripping bootstrap too early. These two fixtures are the
 supported way to ask.
 
-Both names carry a ``_path`` suffix because ``airflow_home`` and ``airflow_dags_folder`` are
-already taken by the ini options these fixtures resolve, and ``airflow_home`` is additionally a
-module `plugin.py` imports into the namespace pytest scans for fixtures.
+Both fixture names deliberately mirror ini options -- fixtures and ini options live in
+separate pytest registries, so the shared name is legal. ``airflow_dags_folder`` returns
+exactly what its ini option configures; the ``airflow_home`` *ini* names the base directory
+while the fixture returns the disposable run root created below it. The package module
+formerly named ``airflow_home`` is private (``_airflow_home``) precisely so the fixture name
+stays available; see ``test_no_fixture_name_shadows_a_package_module``.
 
 Neither fixture touches the metadata database, so neither belongs in
 ``fixtures.DATABASE_FIXTURE_NAMES``: asking where a directory is must not import Airflow or
@@ -31,7 +34,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-def airflow_home_path(pytestconfig: pytest.Config) -> Path:
+def airflow_home(pytestconfig: pytest.Config) -> Path:
     """Return this run's isolated `AIRFLOW_HOME`.
 
     The directory holding `airflow.cfg`, `logs/`, the SimpleAuthManager password file, and --
@@ -56,10 +59,10 @@ def airflow_home_path(pytestconfig: pytest.Config) -> Path:
 
 
 @pytest.fixture(scope="session")
-def airflow_dags_folder_path(pytestconfig: pytest.Config) -> Path:
-    """Return the Dag directory `full_dag_bag` parses.
+def airflow_dags_folder(pytestconfig: pytest.Config) -> Path:
+    """Return the Dag directory `dag_bag` parses.
 
-    Resolved exactly as `full_dag_bag` resolves it: `--dag-folder` first, then the
+    Resolved exactly as `dag_bag` resolves it: `--dag-folder` first, then the
     `airflow_dags_folder` ini option (relative values resolving against `config.rootpath`), and
     otherwise the empty `dags/` directory inside this run's isolated `AIRFLOW_HOME`.
 
@@ -74,7 +77,7 @@ def airflow_dags_folder_path(pytestconfig: pytest.Config) -> Path:
         pytestconfig: pytest.Config containing plugin options, ini values, and rootpath.
 
     Returns:
-        pathlib.Path containing the Dag directory `full_dag_bag` parses.
+        pathlib.Path containing the Dag directory `dag_bag` parses.
 
     Raises:
         pytest.UsageError: A parsed Dag folder option has an invalid type, or Airflow
@@ -84,4 +87,4 @@ def airflow_dags_folder_path(pytestconfig: pytest.Config) -> Path:
     return _dag_folder(pytestconfig)
 
 
-__all__ = ("airflow_dags_folder_path", "airflow_home_path")
+__all__ = ("airflow_dags_folder", "airflow_home")

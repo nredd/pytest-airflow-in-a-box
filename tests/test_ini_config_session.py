@@ -63,8 +63,8 @@ def test_overrides_precede_consumer_conftest_import(pytester: pytest.Pytester) -
     result.assert_outcomes(passed=1)
 
 
-def test_overrides_precede_the_full_dag_bag_parse(pytester: pytest.Pytester) -> None:
-    """Apply overrides before `full_dag_bag` builds its one-per-process Dag bag.
+def test_overrides_precede_the_dag_bag_parse(pytester: pytest.Pytester) -> None:
+    """Apply overrides before `dag_bag` builds its one-per-process Dag bag.
 
     The Dag file reads the option through Airflow's own parser at import time and encodes the
     answer in its `dag_id`, so the assertion can only pass if the override was live during the
@@ -91,9 +91,9 @@ def test_overrides_precede_the_full_dag_bag_parse(pytester: pytest.Pytester) -> 
     )
     pytester.makepyfile(
         """
-        def test_override_was_live_during_the_parse(full_dag_bag):
-            assert not full_dag_bag.import_errors
-            assert "probe_12_5" in full_dag_bag.dags
+        def test_override_was_live_during_the_parse(dag_bag):
+            assert not dag_bag.import_errors
+            assert "probe_12_5" in dag_bag.dags
         """
     )
 

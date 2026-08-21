@@ -48,7 +48,7 @@ def test_overrides_apply_for_the_whole_session(pytester: pytest.Pytester) -> Non
     result.assert_outcomes(passed=2)
 
 
-def test_an_autouse_session_wrapper_precedes_full_dag_bag(pytester: pytest.Pytester) -> None:
+def test_an_autouse_session_wrapper_precedes_dag_bag(pytester: pytest.Pytester) -> None:
     """Apply a consumer's autouse session overrides before the one-per-process Dag parse.
 
     The Dag file encodes the parsed option in its `dag_id`, so a passing assertion proves the
@@ -83,9 +83,9 @@ def test_an_autouse_session_wrapper_precedes_full_dag_bag(pytester: pytest.Pytes
     )
     pytester.makepyfile(
         """
-        def test_override_was_live_during_the_parse(full_dag_bag):
-            assert not full_dag_bag.import_errors
-            assert "probe_12_5" in full_dag_bag.dags
+        def test_override_was_live_during_the_parse(dag_bag):
+            assert not dag_bag.import_errors
+            assert "probe_12_5" in dag_bag.dags
         """
     )
 

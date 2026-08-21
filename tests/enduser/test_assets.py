@@ -69,10 +69,10 @@ def test_asset_dags_survive_serialization(pytester: pytest.Pytester) -> None:
 
     pytester.makepyfile(
         """
-        def test_assets(full_dag_bag):
-            producer = full_dag_bag.dags["asset_outlet"]
+        def test_assets(dag_bag):
+            producer = dag_bag.dags["asset_outlet"]
             task = producer.get_task("publish")
-            consumer = full_dag_bag.dags["asset_consumer"]
+            consumer = dag_bag.dags["asset_consumer"]
 
             assert producer.schedule is None
             assert task.outlets[0].uri == "asset://compat/corpus-output"

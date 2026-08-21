@@ -1,7 +1,7 @@
 """Provide function-scoped factories for isolated persisted Airflow Dags.
 
 ``dag_maker`` builds and owns its own Dag; ``run_dag`` adopts one already authored
-elsewhere (typically pulled from ``full_dag_bag``) and drives it through the same
+elsewhere (typically pulled from ``dag_bag``) and drives it through the same
 persist/create/execute pipeline.
 
 References:
