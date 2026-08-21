@@ -1158,14 +1158,20 @@ def test_gate_schedule_policy_blocks_a_local_qualname(
 def test_gate_round_trip_policy_refuses_a_class(
     recorded_registrations: list[object],
 ) -> None:
-    """Refuse a bare class before the conformance check even runs."""
+    """Refuse a bare class before the conformance check even runs.
+
+    A class `check_component` DOES flag, on purpose: getting `ComponentSandboxError`
+    with the instance-refusal message (not `ComponentContractError` naming the
+    conformance problems) proves the isinstance guard genuinely runs first -- a clean
+    class would raise the same error under either ordering and pin nothing.
+    """
 
     with pytest.raises(
         ComponentSandboxError,
-        match=r"pass `_PolicyCleanTimetable\(\.\.\.\)` instead of the class",
+        match=r"pass `_PolicySerializeOnlyTimetable\(\.\.\.\)` instead of the class",
     ):
         fixture_components._gate_and_register_timetable(
-            _PolicyCleanTimetable, fixture_components._ROUND_TRIP_TIMETABLE
+            _PolicySerializeOnlyTimetable, fixture_components._ROUND_TRIP_TIMETABLE
         )
 
     assert recorded_registrations == []

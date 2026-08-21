@@ -2275,6 +2275,12 @@ def test_derived_lookup_cache_names_are_a_strict_subset_of_the_certified_rows() 
     assert set(compat_components.DERIVED_LOOKUP_MODULE_GLOBALS) < module_globals.required
     assert "_get_plugins" not in compat_components.DERIVED_LOOKUP_CACHE_FUNCTIONS
     assert "plugins" not in compat_components.DERIVED_LOOKUP_MODULE_GLOBALS
+    # `_drop_caches` resets a container-sentineled name to a fresh container rather
+    # than `None`; the 3.1.x derived-lookup loaders recompute only on `None`, so a
+    # future derived-lookup global must never share a container-sentineled name.
+    assert not set(compat_components.DERIVED_LOOKUP_MODULE_GLOBALS) & set(
+        compat_components._MODULE_GLOBAL_EMPTY_CONTAINER_RESETS
+    )
 
 
 @pytest.mark.skipif(

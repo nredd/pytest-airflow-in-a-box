@@ -125,7 +125,11 @@ def test_ini_substrate_survives_sandbox_finalize(
     second, unsandboxed, proves finalize restored the substrate -- ini executor still
     resolving, ini secrets backend restored as the SAME instance object, plugins-folder
     plugin back via rescan, plugins-folder listener surviving through the listener
-    snapshot (the construction-ordering contract) -- with every overlay gone.
+    snapshot -- with every overlay gone.
+
+    Parameters:
+        pytester: pytest.Pytester running the nested session.
+        monkeypatch: pytest.MonkeyPatch disabling plugin autoload for the subprocess.
     """
 
     plugins_source = pytester.path / "shared-plugins"
@@ -182,8 +186,10 @@ def test_ini_substrate_survives_sandbox_finalize(
             assert default.module_path == "support_executors.IniExecutor"
 
             # Ini secrets backend: instantiated at the front of the live search path.
+            # Stored as the OBJECT, not an `id()`, so the later identity assertion
+            # cannot be satisfied by CPython address reuse after a rebuild.
             assert type(secrets_backend_list[0]).__name__ == "IniSecretsBackend"
-            support_secrets.STATE["ini_backend_id"] = id(secrets_backend_list[0])
+            support_secrets.STATE["ini_backend"] = secrets_backend_list[0]
 
             # Ini plugins-folder plugin and its listener: loaded and integrated.
             assert "ini_channel_plugin" in _plugin_names(sandbox)
@@ -233,13 +239,14 @@ def test_ini_substrate_survives_sandbox_finalize(
             backend_names = [type(backend).__name__ for backend in secrets_backend_list]
             assert backend_names[0] == "IniSecretsBackend"
             assert "SandboxSecretsBackend" not in backend_names
-            assert id(secrets_backend_list[0]) == support_secrets.STATE["ini_backend_id"]
+            assert secrets_backend_list[0] is support_secrets.STATE["ini_backend"]
 
             # Ini plugins-folder plugin: back through the post-finalize rescan.
             assert "ini_channel_plugin" in _plugin_names(sandbox)
 
-            # Ini plugins-folder listener: survives via the construction-time listener
-            # snapshot (clear-then-resolve-then-snapshot ordering); overlay gone.
+            # Ini plugins-folder listener: survives because the never-cleared, cached
+            # manager was resolved and snapshotted at sandbox construction with the
+            # integrated listener already on it; overlay gone.
             core_manager, _task_manager = sandbox.listener_managers()
             names = _listener_type_names(core_manager)
             assert "_IniListener" in names
@@ -322,6 +329,10 @@ def test_airflow_config_ini_outranks_the_airflow_executor_ini(
     `conf.get()`. The nested test proves both channels genuinely wrote (the file
     carries the `airflow_executor` value, the environment carries the override), so
     the winner assertion cannot pass vacuously.
+
+    Parameters:
+        pytester: pytest.Pytester running the nested session.
+        monkeypatch: pytest.MonkeyPatch disabling plugin autoload for the subprocess.
     """
 
     pytester.makeini(

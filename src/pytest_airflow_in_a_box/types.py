@@ -550,8 +550,11 @@ class ComponentRegistry(Protocol):
             alias: str naming the alias to register the executor under.
 
         Returns:
-            str containing ``alias``, unchanged, for passing into whichever Airflow
-            configuration surface selects an executor by name.
+            str containing ``alias``, unchanged, for resolving through
+            ``ExecutorLoader.load_executor(alias)`` /
+            ``ExecutorLoader.lookup_executor_name_by_str(alias)`` within the same
+            test. No configuration surface can select the alias -- see the
+            custom-components guide.
 
         Raises:
             ComponentSandboxError: ``component`` is not defined at module scope.

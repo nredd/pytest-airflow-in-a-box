@@ -273,17 +273,18 @@ confirmed by reading the installed 3.3.0's `configuration.py` directly: with its
 `secrets_backend_list` unless `len(secrets_backend_list) == 2`, in which case it returns a FRESH
 `initialize_secrets_backends()` list built from configuration without rebinding the module global;
 with a non-default `default_backends` (the worker path) it always rebuilds. A sandbox-registered
-backend therefore stays visible through `ensure_secrets_loaded()` on every certified release --
+backend therefore stays visible through `ensure_secrets_loaded()` on the installed 3.3.0 --
 `register_secrets_backend` always grows the list past two (the two defaults plus the registration,
 one more when `airflow_secrets_backend` seeds a custom backend at position zero) -- which
-`tests/fixtures/test_component_channel_interactions.py` pins with and without an ini backend, so a
-future upstream change to the heuristic fails a test here rather than silently hiding registrations.
+`tests/fixtures/test_component_channel_interactions.py` pins with and without an ini backend across
+the certified matrix, so a heuristic drift on any certified release fails a test here rather than
+silently hiding registrations.
 A note on restore semantics that same file pins as contract: because the restore reinstates the
 snapshot's exact INSTANCE objects, an ini-seeded substrate backend survives sandbox teardown as the
 same live object (state included), never as a freshly-constructed one, and an ini-seeded
-plugins-folder LISTENER survives teardown because sandbox construction clears the plugins-manager
-caches BEFORE resolving (and thereby, on first construction, integrating plugins into) the cached
-listener managers and snapshotting them -- ordering documented in
+plugins-folder LISTENER survives teardown because the cached, never-cleared listener managers are
+resolved (built, if nothing had yet) at sandbox construction before the listener snapshot is taken,
+so a listener the plugins-folder scan integrated is part of the restored snapshot -- documented in
 `docs/guide/custom-components.md`'s "Hazards at the sandbox seam".
 
 `airflow.listeners.listener.get_listener_manager` and `airflow.sdk.listener.get_listener_manager` are

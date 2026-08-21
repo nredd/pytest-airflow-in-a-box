@@ -333,13 +333,17 @@ Airflow's internals. The degraded tier is surfaced three ways: one
 - `secrets_backend(component, *, first=True)` -- inserts into the secrets backend search
   path, at the front (checked before every other configured backend) by default
 - `executor(component, *, alias="test") -> str` -- registers an executor class under
-  `alias`, returning it for use with
-  `airflow_config({("core", "executor"): alias})` within the same test. The alias
-  exists only in this process for this one test, so the `airflow_executor` ini can
-  never name it: that option is resolved before the first Airflow import, when no
-  alias exists yet, and takes a real dotted class path. `component` must be defined at
-  module scope somewhere importable -- Airflow resolves it later by dotted import
-  path, and a class defined inside a test function has none
+  `alias`, returning it for use with `ExecutorLoader.load_executor(alias)` /
+  `ExecutorLoader.lookup_executor_name_by_str(alias)` within the same test. No
+  configuration surface can select the alias: the `airflow_executor` ini is resolved
+  before the first Airflow import, when no alias exists yet, and takes a real dotted
+  class path -- and a `core.executor` override is silently ignored too, because
+  `ExecutorLoader._get_executor_names()` memoizes its config parse into
+  `_executor_names` (which the sandbox itself already forced while snapshotting the
+  loader), and a bare single-part value resolves against Airflow's built-in core
+  executor names, never the alias map. `component` must be defined at module scope
+  somewhere importable -- Airflow resolves it later by dotted import path, and a
+  class defined inside a test function has none
 - `timetable(component)` -- registers a custom timetable class through a synthesized
   throwaway `AirflowPlugin`, which is exactly what makes Airflow's serialization round
   trip resolve the class by qualname. Accepts the class or an instance (an instance
@@ -415,9 +419,12 @@ a test, not accidents to be discovered:
   ini backend configured. That visibility rests on upstream's `len(...) == 2`
   heuristic, which this plugin does not own; see PROVENANCE.md.
 - **Plugins-folder modules reload across sandboxed tests; old bindings go stale.**
-  Teardown removes a plugins-folder module from `sys.modules` and clears the
-  plugins-manager caches, so the next plugin access rescans the folder and executes
-  the file again, producing a NEW module object with new class objects. Anything
+  Teardown clears the plugins-manager caches, so the next plugin access rescans the
+  folder -- and upstream's directory loader unconditionally re-executes each file via
+  `module_from_spec`, reassigning its `sys.modules` entry -- producing a NEW module
+  object with new class objects. (Teardown's `sys.modules` handling is secondary: a
+  plugins-folder key the test introduced is deleted, while a pre-existing one is
+  restored to its original module object.) Anything
   holding the previous load's objects -- a class a test imported and kept, the
   restored listener instance on a manager -- is bound to the old ones, and an
   identity or `isinstance` comparison across a sandboxed test boundary compares
@@ -429,11 +436,10 @@ a test, not accidents to be discovered:
   test adds one more wrinkle: its registered-timetable lookup probe runs BEFORE the
   sandbox exists, so the plugin load that probe may trigger is immediately discarded
   by the sandbox construction clear and repeated afterward.
-- **An ini plugins-folder listener survives teardown through the snapshot, by
-  construction ordering.** Sandbox construction clears the plugins-manager caches,
-  THEN resolves the listener managers -- integrating plugins-folder listeners when a
-  manager is built here for the first time -- and only then snapshots them, so the
-  ini-seeded listener is inside the snapshot teardown restores. This ordering is
-  pinned as contract by test; the cached listener-manager getters themselves are
-  never cleared, which is what keeps the restored manager (and its substrate
-  listeners) alive across tests.
+- **An ini plugins-folder listener survives teardown through the listener snapshot.**
+  The listener-manager getters are `functools.cache`d and deliberately never cleared,
+  so the manager -- built at first use, plugins-folder listeners integrated then --
+  persists across tests, and sandbox construction resolves the managers (building
+  them, if nothing had yet) before snapshotting them, so the ini-seeded listener is
+  inside the snapshot teardown restores. Survival is a property of the snapshot's
+  contents and the never-cleared manager cache, pinned as contract by test.

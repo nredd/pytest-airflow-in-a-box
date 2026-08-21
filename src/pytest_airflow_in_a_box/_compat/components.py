@@ -3565,8 +3565,12 @@ def register_executor(component: object, *, alias: str) -> str:
         alias: str naming the alias `ExecutorLoader.load_executor(alias)` resolves.
 
     Returns:
-        str containing `alias`, unchanged, for the caller to pass into whichever Airflow
-        configuration surface selects an executor by name.
+        str containing `alias`, unchanged, for the caller to resolve through
+        `ExecutorLoader.load_executor` / `lookup_executor_name_by_str`. NOT for a
+        `core.executor` override: `_get_executor_names` memoizes its config parse
+        into `_executor_names` -- which `snapshot_executor_loader` already forced at
+        sandbox construction -- and a bare single-part config value resolves against
+        the built-in core executor names, never this alias map.
 
     Raises:
         ComponentSandboxError: `component` has no real, importable module-level path.
