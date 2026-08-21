@@ -91,12 +91,18 @@ def test_public_surface_is_explicit() -> None:
     )
     assert db.__all__ == ("DatabaseCleanupError", "TableGroup", "clear_db")
     assert defaults.__all__ == (
+        "DEFAULT_FILTERWARNINGS",
+        "DEFAULT_FILTERWARNINGS_KEY",
         "FILTERWARNINGS",
         "INI_DEFAULTS",
         "OPTION_DEFAULTS",
         "OptionDefault",
+        "ParsedFilter",
+        "apply_bootstrap_warning_filters",
+        "apply_default_filterwarnings",
         "apply_filterwarnings",
         "apply_option_defaults",
+        "register_default_filterwarnings_option",
         "register_ini_defaults",
     )
     assert fixtures.__all__ == (

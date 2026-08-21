@@ -34,8 +34,11 @@ from pytest_airflow_in_a_box.collection import (
     prune_duplicate_items,
 )
 from pytest_airflow_in_a_box.defaults import (
+    apply_bootstrap_warning_filters,
+    apply_default_filterwarnings,
     apply_filterwarnings,
     apply_option_defaults,
+    register_default_filterwarnings_option,
     register_ini_defaults,
 )
 from pytest_airflow_in_a_box.doctor import render_doctor_report
@@ -395,6 +398,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     record.register_options(parser)
     baseline.register_options(parser)
+    register_default_filterwarnings_option(parser)
     register_ini_defaults(parser)
 
 
@@ -480,6 +484,7 @@ def pytest_configure(config: pytest.Config) -> None:
     configure_reporting(config)
     apply_option_defaults(config)
     apply_filterwarnings(config)
+    apply_default_filterwarnings(config)
     record.configure(config)
     warn_if_migration_strict_is_a_noop(config)
 
@@ -792,10 +797,10 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     if os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE) is not None:
         return
     if any(_requires_database_at_collection(item) for item in session.items):
-        _ensure_database_or_usage_error(get_bootstrap_state(session.config).root)
+        _ensure_database_or_usage_error(session.config, get_bootstrap_state(session.config).root)
 
 
-def _ensure_database_or_usage_error(root: Path) -> None:
+def _ensure_database_or_usage_error(config: pytest.Config, root: Path) -> None:
     """Initialize the metadata database, rendering incompatibility as a usage error.
 
     `AirflowCompatibilityError` describes an installation problem the user must fix
@@ -820,7 +825,13 @@ def _ensure_database_or_usage_error(root: Path) -> None:
     migration-strict mode -- any consumer with their own `error::` filter over a
     warning Airflow's import-time bootstrap happens to raise hits it today.
 
+    The plugin's own ``airflow_default_filterwarnings`` lines are re-applied on top of
+    the reset default so plugin-sourced bootstrap noise (alembic's ``path_separator``
+    deprecation) stays suppressed even inside this context; a consumer emptying that
+    ini option restores full visibility.
+
     Parameters:
+        config: pytest.Config carrying the cached bootstrap warning filters.
         root: Path containing the bootstrap run directory.
 
     Raises:
@@ -830,6 +841,7 @@ def _ensure_database_or_usage_error(root: Path) -> None:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("default")
+            apply_bootstrap_warning_filters(config)
             ensure_database(root)
     except AirflowCompatibilityError as error:
         raise pytest.UsageError(str(error)) from error
@@ -879,7 +891,7 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     apply_environment_gate(item)
     apply_xdist_refusal(item)
     if _requires_database(item):
-        _ensure_database_or_usage_error(get_bootstrap_state(item.config).root)
+        _ensure_database_or_usage_error(item.config, get_bootstrap_state(item.config).root)
 
 
 def pytest_assertrepr_compare(
