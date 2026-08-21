@@ -3,7 +3,9 @@
 
 {% for text, values in sections[''][category].items() %}
 - {{ text }}
+{% if values %}
   ({{ values|join(', ') }}).
+{% endif %}
 {% endfor %}
 
 {% endfor %}
