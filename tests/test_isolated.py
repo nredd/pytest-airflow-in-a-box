@@ -114,7 +114,12 @@ def test_read_marker_rejects_a_bare_payload() -> None:
     ("kwargs", "match"),
     [
         ({"entry_points": "airflow.plugins"}, "must map group names"),
-        ({"entry_points": {"": "x = y:Z"}}, "group names must be non-empty strings"),
+        ({"entry_points": {"": "x = y:Z"}}, "group names must match"),
+        ({"entry_points": {"bad]group": "x = y:Z"}}, "group names must match"),
+        (
+            {"entry_points": {"airflow.plugins": "x = pkg:X\nevil = other:Y"}},
+            "no internal whitespace",
+        ),
         ({"entry_points": {"airflow.plugins": 7}}, "must be one line or a list of lines"),
         ({"entry_points": {"airflow.plugins": [7]}}, "must be a string"),
         ({"entry_points": {"airflow.plugins": "x -> y:Z"}}, "must be `name = module:attr`"),
@@ -350,14 +355,14 @@ def test_runtest_protocol_defers_for_inert_items(monkeypatch: pytest.MonkeyPatch
 
     marked = _node(pytest.mark.airflow_isolated(entry_points={"g": "x = y:Z"}))
 
-    assert isolated.runtest_protocol(_node(None)) is None
+    assert isolated.runtest_protocol(_node(None), None) is None
 
     monkeypatch.setenv("PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER", "iso-1234abcd")
-    assert isolated.runtest_protocol(marked) is None
+    assert isolated.runtest_protocol(marked, None) is None
 
     monkeypatch.delenv("PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER")
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
-    assert isolated.runtest_protocol(marked) is None
+    assert isolated.runtest_protocol(marked, None) is None
 
 
 def test_report_writer_writes_the_envelope(tmp_path: Path) -> None:
@@ -378,6 +383,30 @@ def test_report_writer_writes_the_envelope(tmp_path: Path) -> None:
         "test_a.py::test_one",
         "test_a.py::test_two",
     ]
+
+
+def test_report_writer_degrades_unserializable_properties_to_reprs(
+    tmp_path: Path,
+) -> None:
+    """Serialize a non-JSON `record_property` value as its repr, not a crash.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the envelope file.
+    """
+
+    writer = isolated_child.IsolatedReportWriter(tmp_path / "report.json")
+    session: Any = SimpleNamespace()
+    report = _passed_report("test_a.py::test_one")
+    report.user_properties.append(("payload", object()))
+
+    writer.pytest_runtest_logreport(report)
+    writer.pytest_sessionfinish(session, 0)
+
+    decoded = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    (entry,) = decoded["reports"]
+    ((name, value),) = entry["user_properties"]
+    assert name == "payload"
+    assert value.startswith("<object object at")
 
 
 def test_report_writer_renders_write_failures_as_usage_errors(tmp_path: Path) -> None:
@@ -818,6 +847,289 @@ def test_extra_child_reports_are_dropped_with_a_warning(
 
     result.assert_outcomes(passed=1, warnings=1)
     assert "outside its batch" in result.stdout.str()
+
+
+def test_claimed_protocol_tears_down_the_predecessor_stack(
+    pytester: pytest.Pytester,
+) -> None:
+    """Unwind setup-stack entries the next item does not need after a claimed slot.
+
+    Regression test: claiming the protocol without ``teardown_exact(nextitem)`` left a
+    predecessor's collectors on the setup stack, and the first item of the following
+    module crashed its setup with "previous item was not torn down properly".
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        test_module_a="""
+        import pytest
+
+
+        def test_plain() -> None:
+            assert True
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"})
+        def test_marked_last_in_module() -> None:
+            assert True
+        """,
+        test_module_b="""
+        def test_follows_the_claimed_slot() -> None:
+            assert True
+        """,
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=3)
+    assert "not torn down properly" not in result.stdout.str()
+
+
+def test_predecessor_teardown_failure_replays_as_a_teardown_error(
+    pytester: pytest.Pytester,
+) -> None:
+    """Attribute a failing inherited finalizer to the claimed item's teardown.
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        test_module_a="""
+        import os
+        from collections.abc import Iterator
+
+        import pytest
+
+
+        @pytest.fixture(scope="module", autouse=True)
+        def exploding_module_teardown() -> Iterator[None]:
+            yield
+            if not os.environ.get("PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER"):
+                raise RuntimeError("deliberate finalizer failure")
+
+
+        def test_plain() -> None:
+            assert True
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"})
+        def test_marked_last_in_module() -> None:
+            assert True
+        """,
+        test_module_b="""
+        def test_follows_the_claimed_slot() -> None:
+            assert True
+        """,
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=3, errors=1)
+    assert "deliberate finalizer failure" in result.stdout.str()
+
+
+def test_recorded_artifact_carries_gated_and_crash_outcomes(
+    pytester: pytest.Pytester,
+) -> None:
+    """Record replayed outcomes with the parent-computed `gated` flag.
+
+    Regression test: the child never receives the CLI-only `--airflow-record` option,
+    so its reports carry no `gated` user property; the parent must stash it during
+    replay or every family-gated isolated test records `gated: false`.
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        """
+        import pytest
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"})
+        @pytest.mark.requires_airflow2
+        @pytest.mark.requires_airflow3
+        def test_family_gated_isolated() -> None:
+            assert True
+        """
+    )
+    artifact_path = pytester.path / "record.json"
+
+    result = pytester.runpytest_subprocess("-q", "--airflow-record", str(artifact_path))
+
+    result.assert_outcomes(skipped=1)
+    outcomes = json.loads(artifact_path.read_text(encoding="utf-8"))["outcomes"]
+    entry = outcomes[
+        "test_recorded_artifact_carries_gated_and_crash_outcomes.py::test_family_gated_isolated"
+    ]
+    assert entry["gated"] is True
+    assert entry["outcome"] == "skipped"
+
+
+def test_recorded_artifact_includes_a_crashed_batch_failure(
+    pytester: pytest.Pytester,
+) -> None:
+    """Finalize a synthesized batch failure into the recorded artifact.
+
+    Regression test: a lone `call`-phase synthesized report never finalized in the
+    `--airflow-record` accumulator, so a crashed child's failure vanished from an
+    artifact stamped complete; the crash-sentinel phase finalizes it as failed.
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+    """
+
+    pytester.makeconftest(
+        """
+        import os
+
+
+        def pytest_sessionstart(session) -> None:
+            if os.environ.get("PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER"):
+                os._exit(3)
+        """
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"})
+        def test_batch_crashes() -> None:
+            assert True
+        """
+    )
+    artifact_path = pytester.path / "record.json"
+
+    result = pytester.runpytest_subprocess("-q", "--airflow-record", str(artifact_path))
+
+    result.assert_outcomes(failed=1)
+    outcomes = json.loads(artifact_path.read_text(encoding="utf-8"))["outcomes"]
+    entry = outcomes[
+        "test_recorded_artifact_includes_a_crashed_batch_failure.py::test_batch_crashes"
+    ]
+    assert entry["outcome"] == "failed"
+
+
+def test_run_batch_reports_dist_info_write_failures_as_batch_failures(
+    tmp_path: Path,
+) -> None:
+    """Fail the batch, not the session, when the scratch directory is unwritable.
+
+    Parameters:
+        tmp_path: pathlib.Path providing the file blocking the scratch directory.
+    """
+
+    blocker = tmp_path / "root"
+    blocker.write_text("", encoding="utf-8")
+    payload = isolated.IsolatedPayload(
+        entry_points=(("g", ("x = y:Z",)),), environment=(), name=None, timeout=1.0
+    )
+    batch = isolated.IsolatedBatch(payload=payload, digest="abcd1234", nodeids=("t.py::t",))
+    state: Any = SimpleNamespace(root=blocker, logs_folder=tmp_path)
+    item: Any = SimpleNamespace()
+
+    isolated._run_batch(batch, item, state)
+
+    assert batch.started is True
+    assert batch.failure is not None
+    assert "Could not write synthetic distribution" in batch.failure
+
+
+def test_malformed_marker_aborts_before_any_test_runs(pytester: pytest.Pytester) -> None:
+    """Abort the session with one clean usage error on a malformed marker payload.
+
+    Regression test: validation used to run lazily inside the runtest protocol, so a
+    malformed marker anywhere in the session aborted mid-run, stranding the tests
+    already executed.
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        """
+        import pytest
+
+
+        def test_unmarked() -> None:
+            assert True
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"}, timeout="5")
+        def test_malformed_marker() -> None:
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    output = result.stdout.str() + result.stderr.str()
+    assert "must be a positive number" in output
+    assert "1 passed" not in output
+
+
+def test_ambient_pytest_addopts_does_not_reach_the_child(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scrub inherited `PYTEST_ADDOPTS` from the child environment.
+
+    Regression test: an inherited `-n 0` collided with the child's own `-p no:xdist`
+    and failed every batch with an unrecognized-arguments crash.
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+        monkeypatch: pytest.MonkeyPatch installing the ambient addopts.
+    """
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n 0")
+    pytester.makepyfile(
+        """
+        import os
+
+        import pytest
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"})
+        def test_addopts_scrubbed() -> None:
+            assert "PYTEST_ADDOPTS" not in os.environ
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=1)
+
+
+def test_family_gated_marked_tests_still_skip_under_xdist(
+    pytester: pytest.Pytester,
+) -> None:
+    """Let the family gate win over the xdist refusal for a gated marked test.
+
+    Parameters:
+        pytester: pytest.Pytester running the plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        """
+        import pytest
+
+
+        @pytest.mark.airflow_isolated(environment={"AIRFLOW__DEMO__FLAG": "1"})
+        @pytest.mark.requires_airflow2
+        @pytest.mark.requires_airflow3
+        def test_family_gated() -> None:
+            assert True
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "-n", "1")
+
+    result.assert_outcomes(skipped=1)
 
 
 def test_marked_tests_are_refused_under_xdist(pytester: pytest.Pytester) -> None:

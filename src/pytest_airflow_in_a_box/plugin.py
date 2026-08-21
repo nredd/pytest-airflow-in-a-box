@@ -67,6 +67,7 @@ from pytest_airflow_in_a_box.fixtures.dagbag import (
 from pytest_airflow_in_a_box.ini_config import apply_ini_overrides, validate_smoke_conflict
 from pytest_airflow_in_a_box.isolated import (
     apply_xdist_refusal,
+    store_batches,
 )
 from pytest_airflow_in_a_box.isolated import (
     runtest_protocol as isolated_runtest_protocol,
@@ -757,7 +758,10 @@ def _requires_database_at_collection(item: pytest.Item) -> bool:
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
-    """Apply migration-strict filters, then initialize the database when required.
+    """Apply migration-strict filters, stash isolated batches, then init the database.
+
+    ``store_batches`` runs against the final deselected item list and aborts the
+    session on a malformed `airflow_isolated` marker before any test runs.
 
     The migration-strict mutation runs first and unconditionally with respect to the
     worker check below it: pytest re-reads the `filterwarnings` ini list per warning
@@ -784,6 +788,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
     """
 
     apply_migration_strict_filterwarnings(session.config)
+    store_batches(session)
     if os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE) is not None:
         return
     if any(_requires_database_at_collection(item) for item in session.items):
@@ -841,25 +846,26 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> 
 
     Parameters:
         item: pytest.Item about to enter its runtest protocol.
-        nextitem: pytest.Item | None scheduled after this one; unused because the
-            child session performs its own teardown sequencing.
+        nextitem: pytest.Item | None scheduled after this one, bounding the claimed
+            protocol's setup-stack teardown.
 
     Returns:
         bool | None containing ``True`` when the item was replayed from a child run.
     """
 
-    del nextitem
-    return isolated_runtest_protocol(item)
+    return isolated_runtest_protocol(item, nextitem)
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Gate family- and environment-marked tests, then lazily initialize the database.
 
-    The `airflow_isolated`-under-xdist refusal runs first, and from this hook rather
-    than the protocol hook, so an xdist worker renders it as an ordinary per-test
-    error instead of a crashed node. The family and environment gates run next so a
-    skipped test never pays the Airflow import and migration cost. The database check
-    is a safety net for items injected after collection and the primary path on xdist
+    The family and environment gates run first so a skipped test never pays the
+    Airflow import and migration cost -- and so a gated `airflow_isolated` test skips
+    under xdist exactly as it would serially (where the child applies the same gates),
+    instead of tripping the refusal below. The `airflow_isolated`-under-xdist refusal
+    runs from this hook rather than the protocol hook so an xdist worker renders it as
+    an ordinary per-test error instead of a crashed node. The database check is a
+    safety net for items injected after collection and the primary path on xdist
     workers; single-process runs initialize during ``pytest_collection_finish``.
 
     Parameters:
@@ -869,9 +875,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
         pytest.UsageError: The item carries `airflow_isolated` on an xdist worker.
     """
 
-    apply_xdist_refusal(item)
     apply_family_gate(item)
     apply_environment_gate(item)
+    apply_xdist_refusal(item)
     if _requires_database(item):
         _ensure_database_or_usage_error(get_bootstrap_state(item.config).root)
 

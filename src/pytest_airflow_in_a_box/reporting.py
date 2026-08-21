@@ -205,7 +205,7 @@ def configure_report_dir(config: pytest.Config) -> None:
 
 
 def configure_reporting(config: pytest.Config) -> None:
-    """Scope shared report artifacts to one xdist worker.
+    """Scope shared report artifacts to one xdist worker or isolated child.
 
     Must run before pytest's logging plugin instantiates its file handler,
     which reads the ``log_file`` option exactly once during configuration.
@@ -241,6 +241,18 @@ def configure_reporting(config: pytest.Config) -> None:
         scoped_coverage = worker_coverage_file(coverage_file, worker)
         os.environ[COVERAGE_FILE_ENVIRONMENT_VARIABLE] = scoped_coverage
         LOGGER.debug(f"Scoped coverage data file to worker `{worker}`: '{scoped_coverage}'")
+    # Only an isolated child scopes the JUnit destination: pytest's own junitxml
+    # plugin already skips XML writing on xdist workers, but the child is not an
+    # xdist worker, so without scoping it would overwrite the parent's `pytest.xml`
+    # with just its own batch.
+    if (
+        os.environ.get(ISOLATED_WORKER_ENVIRONMENT_VARIABLE)
+        and hasattr(config.option, "xmlpath")
+        and config.option.xmlpath is not None
+    ):
+        scoped_xml = str(worker_suffixed_path(Path(config.option.xmlpath), worker))
+        config.option.xmlpath = scoped_xml
+        LOGGER.debug(f"Scoped JUnit XML file to worker `{worker}`: '{scoped_xml}'")
 
 
 __all__ = (

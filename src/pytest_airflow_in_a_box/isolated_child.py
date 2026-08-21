@@ -71,8 +71,12 @@ class IsolatedReportWriter:
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            # `default=repr` keeps a non-JSON-serializable report payload -- e.g. a
+            # `record_property` value holding an arbitrary object, legal in plain
+            # pytest -- from crashing the whole batch; the value degrades to its repr.
             self._path.write_text(
-                json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                json.dumps(envelope, indent=2, sort_keys=True, default=repr) + "\n",
+                encoding="utf-8",
             )
         except OSError as error:
             raise pytest.UsageError(
