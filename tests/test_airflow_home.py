@@ -88,6 +88,7 @@ def _state(
         database_path=root / "airflow.db",
         password_file=root / "passwords.json",
         config_path=root / "airflow.cfg",
+        plugins_folder=root / "plugins",
         jwt_secret="secret",
         fernet_key="fernet",
         storage_reason=str(storage_reason),
@@ -95,6 +96,10 @@ def _state(
         sql_alchemy_conn="sqlite:////tmp/airflow.db",
         db_backend=str(db_backend),
         family="apache-airflow-core",
+        executor="",
+        xcom_backend="",
+        secrets_backend="",
+        secrets_backend_kwargs="",
     )
 
 

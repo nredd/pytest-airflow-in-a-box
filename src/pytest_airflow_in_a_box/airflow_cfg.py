@@ -45,6 +45,11 @@ def write_airflow_config(
     jwt_secret: str,
     fernet_key: str,
     family: AirflowFamily,
+    plugins_folder: Path,
+    executor: str = "",
+    xcom_backend: str = "",
+    secrets_backend: str = "",
+    secrets_backend_kwargs: str = "",
 ) -> None:
     """Write a deterministic Airflow configuration without importing Airflow.
 
@@ -58,6 +63,16 @@ def write_airflow_config(
     server tier yet, and the FAB backend paths trip 2.x's substring-based
     `_upgrade_auth_backends` deprecation rewrite.
 
+    `plugins_folder` is always written, matching `dags_folder`: it is a required
+    direct child of the run root, not a project fact that can be absent. The four
+    keyword-only strings default to `""` (unset) and each write only when non-empty,
+    so an unconfigured run's `[core]`/`[secrets]` output is unchanged from before this
+    parameter set existed; a configured `executor` or `xcom_backend` overrides the 2.x
+    branch's own hard-coded `executor` value below, since both are equally inert on
+    2.x (see above) and the explicit value is the more useful thing to show in the
+    file. `[secrets]` is emitted only when `secrets_backend` is configured -- a stray
+    `secrets_backend_kwargs` with no backend is dropped rather than written alone.
+
     Parameters:
         config_path: pathlib.Path receiving the generated configuration.
         dags_folder: pathlib.Path containing test Dag files.
@@ -68,6 +83,12 @@ def write_airflow_config(
             secret key (2.x).
         fernet_key: str shared by every Airflow process encrypting metadata.
         family: AirflowFamily selecting the configuration surface to write.
+        plugins_folder: pathlib.Path containing symlinked or empty plugin sources.
+        executor: str written to `[core] executor` when non-empty.
+        xcom_backend: str written to `[core] xcom_backend` when non-empty.
+        secrets_backend: str written to `[secrets] backend` when non-empty.
+        secrets_backend_kwargs: str written to `[secrets] backend_kwargs` when
+            non-empty and `secrets_backend` is also configured.
 
     Raises:
         ValueError: A path is relative, or the URL, JWT secret, or Fernet key is empty.
@@ -79,6 +100,7 @@ def write_airflow_config(
         "dags_folder": dags_folder,
         "logs_folder": logs_folder,
         "password_file": password_file,
+        "plugins_folder": plugins_folder,
     }
     for name, path in paths.items():
         if not path.is_absolute():
@@ -93,6 +115,7 @@ def write_airflow_config(
     cfg = configparser.ConfigParser(interpolation=None)
     core = {
         "dags_folder": str(dags_folder),
+        "plugins_folder": str(plugins_folder),
         "unit_test_mode": "True",
         "load_examples": "False",
     }
@@ -118,6 +141,15 @@ def write_airflow_config(
     else:
         cfg["webserver"] = {"secret_key": jwt_secret}
         cfg["core"]["executor"] = "SequentialExecutor"
+    if executor:
+        cfg["core"]["executor"] = executor
+    if xcom_backend:
+        cfg["core"]["xcom_backend"] = xcom_backend
+    if secrets_backend:
+        secrets_section = {"backend": secrets_backend}
+        if secrets_backend_kwargs:
+            secrets_section["backend_kwargs"] = secrets_backend_kwargs
+        cfg["secrets"] = secrets_section
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8", newline="\n") as config_file:

@@ -1,8 +1,9 @@
 """Test the `airflow_config` ini option: its grammar, its denylist, and its restoration.
 
 Probe keys are deliberately ones bootstrap does not own -- `core.dagbag_import_timeout` and
-`core.plugins_folder` -- for the same reason `tests/test_config.py` picks them: an owned key
-would be rejected by the denylist under test rather than exercising the grammar.
+`core.default_task_retries` -- because an owned key would be rejected by the denylist under
+test rather than exercising the grammar (`core.plugins_folder`, `tests/test_config.py`'s other
+probe, became bootstrap-owned with the `airflow_plugins_folder` ini option).
 
 References:
     https://github.com/nredd/pytest-airflow-in-a-box/issues/202
@@ -31,7 +32,7 @@ from pytest_airflow_in_a_box.ini_config import (
 
 TIMEOUT_KEY = ("core", "dagbag_import_timeout")
 TIMEOUT_NAME = "AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"
-PLUGINS_NAME = "AIRFLOW__CORE__PLUGINS_FOLDER"
+RETRIES_NAME = "AIRFLOW__CORE__DEFAULT_TASK_RETRIES"
 
 OWNED_NAMES = frozenset(
     {
@@ -48,6 +49,10 @@ OWNED_NAMES = frozenset(
         "AIRFLOW__API_AUTH__JWT_SECRET",
         "AIRFLOW__WEBSERVER__SECRET_KEY",
         "AIRFLOW__CORE__FERNET_KEY",
+        "AIRFLOW__CORE__PLUGINS_FOLDER",
+        "AIRFLOW__CORE__XCOM_BACKEND",
+        "AIRFLOW__SECRETS__BACKEND",
+        "AIRFLOW__SECRETS__BACKEND_KWARGS",
     }
 )
 
@@ -125,16 +130,16 @@ def test_splits_the_section_on_the_last_dot() -> None:
 def test_splits_the_value_on_the_first_equals_sign() -> None:
     """Preserve an `=` inside a value, as connection URLs and query strings carry."""
 
-    overrides = parse_ini_overrides(_config(["core.plugins_folder = a=b=c"]))
+    overrides = parse_ini_overrides(_config(["core.default_task_retries = a=b=c"]))
 
-    assert overrides == {("core", "plugins_folder"): "a=b=c"}
+    assert overrides == {("core", "default_task_retries"): "a=b=c"}
 
 
 def test_an_empty_value_is_the_empty_string() -> None:
     """Accept an empty value; the line list has no syntax for requesting absence."""
 
-    assert parse_ini_overrides(_config(["core.plugins_folder ="])) == {
-        ("core", "plugins_folder"): ""
+    assert parse_ini_overrides(_config(["core.default_task_retries ="])) == {
+        ("core", "default_task_retries"): ""
     }
 
 
@@ -179,7 +184,7 @@ def test_rejects_a_malformed_section_or_key(line: str, message: str) -> None:
 @pytest.mark.parametrize(
     "lines",
     [
-        ["core.plugins_folder = a", "core.plugins_folder = b"],
+        ["core.default_task_retries = a", "core.default_task_retries = b"],
         ["a.b.key = a", "a_b.key = b"],
     ],
     ids=["identical-pairs", "colliding-after-mangling"],
@@ -199,8 +204,22 @@ def test_rejects_two_lines_naming_one_variable(lines: list[str]) -> None:
         ("database.sql_alchemy_pool_enabled = False", "`airflow_db_backend` ini option"),
         ("logging.base_log_folder = /logs", "`airflow_home` ini option"),
         ("core.unit_test_mode = False", "this run's bootstrap owns it"),
+        ("core.plugins_folder = /plugins", "`airflow_plugins_folder` ini option"),
+        ("core.xcom_backend = x.Y", "`airflow_xcom_backend` ini option"),
+        ("secrets.backend = x.Y", "`airflow_secrets_backend` ini option"),
+        ("secrets.backend_kwargs = {}", "`airflow_secrets_backend_kwargs` ini option"),
     ],
-    ids=["dags-folder", "conn", "pool", "logs", "no-specific-remedy"],
+    ids=[
+        "dags-folder",
+        "conn",
+        "pool",
+        "logs",
+        "no-specific-remedy",
+        "plugins-folder",
+        "xcom-backend",
+        "secrets-backend",
+        "secrets-backend-kwargs",
+    ],
 )
 def test_rejects_an_option_bootstrap_owns(line: str, remedy: str) -> None:
     """Name the supported knob rather than silently fighting bootstrap."""
@@ -220,8 +239,8 @@ def test_denied_names_are_derived_from_the_bootstrap_surface() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["AIRFLOW__CORE__EXECUTOR", TIMEOUT_NAME, PLUGINS_NAME],
-    ids=["executor", "dagbag-import-timeout", "plugins-folder"],
+    ["AIRFLOW__CORE__EXECUTOR", TIMEOUT_NAME, RETRIES_NAME],
+    ids=["executor", "dagbag-import-timeout", "default-task-retries"],
 )
 def test_overridable_options_are_not_denied(name: str) -> None:
     """Keep consumer-owned options overridable; `--airflow-doctor` tells users to set them."""
@@ -235,16 +254,16 @@ def test_apply_sets_the_environment_and_stashes_the_overrides(
     """Assign every declared variable and record the parsed mapping for diagnostics."""
 
     monkeypatch.setenv(TIMEOUT_NAME, "original")
-    monkeypatch.delenv(PLUGINS_NAME, raising=False)
-    config = _config(["core.dagbag_import_timeout = 12.5", "core.plugins_folder = /plugins"])
+    monkeypatch.delenv(RETRIES_NAME, raising=False)
+    config = _config(["core.dagbag_import_timeout = 12.5", "core.default_task_retries = 3"])
 
     apply_ini_overrides(config)
 
     assert os.environ[TIMEOUT_NAME] == "12.5"
-    assert os.environ[PLUGINS_NAME] == "/plugins"
+    assert os.environ[RETRIES_NAME] == "3"
     assert config.stash[INI_OVERRIDES_KEY] == {
         TIMEOUT_KEY: "12.5",
-        ("core", "plugins_folder"): "/plugins",
+        ("core", "default_task_retries"): "3",
     }
 
 
@@ -254,15 +273,15 @@ def test_the_registered_cleanup_restores_the_environment_exactly(
     """Restore a pre-existing value and delete a name that was absent beforehand."""
 
     monkeypatch.setenv(TIMEOUT_NAME, "original")
-    monkeypatch.delenv(PLUGINS_NAME, raising=False)
-    config = _config(["core.dagbag_import_timeout = 12.5", "core.plugins_folder = /plugins"])
+    monkeypatch.delenv(RETRIES_NAME, raising=False)
+    config = _config(["core.dagbag_import_timeout = 12.5", "core.default_task_retries = 3"])
     apply_ini_overrides(config)
 
     assert len(config.cleanups) == 1
     config.cleanups[0]()
 
     assert os.environ[TIMEOUT_NAME] == "original"
-    assert PLUGINS_NAME not in os.environ
+    assert RETRIES_NAME not in os.environ
 
 
 def test_smoke_conflict_is_ignored_when_the_catalog_is_off() -> None:
@@ -274,7 +293,7 @@ def test_smoke_conflict_is_ignored_when_the_catalog_is_off() -> None:
 def test_smoke_conflict_ignores_an_unrelated_override() -> None:
     """Reject only the options the catalog actually pins."""
 
-    validate_smoke_conflict(_smoke_config({("core", "plugins_folder"): "/p"}, smoke=True))
+    validate_smoke_conflict(_smoke_config({("core", "default_task_retries"): "3"}, smoke=True))
 
 
 def test_smoke_conflict_rejects_the_parse_timeout() -> None:

@@ -17,7 +17,7 @@ INI = """
 [pytest]
 airflow_config =
     core.dagbag_import_timeout = 12.5
-    core.plugins_folder = /plugins-from-ini
+    core.default_task_retries = 7
 """
 
 
@@ -32,7 +32,7 @@ def test_overrides_reach_the_configuration_parser(pytester: pytest.Pytester) -> 
 
         def test_declared_override_is_visible():
             assert conf.get("core", "dagbag_import_timeout") == "12.5"
-            assert conf.get("core", "plugins_folder") == "/plugins-from-ini"
+            assert conf.get("core", "default_task_retries") == "7"
         """
     )
 
@@ -183,7 +183,7 @@ def test_the_conflict_check_leaves_the_catalog_enabled(pytester: pytest.Pytester
         pytest="""
         [pytest]
         airflow_config =
-            core.plugins_folder = /plugins-from-ini
+            core.default_task_retries = 7
         """,
     )
     dags = pytester.mkdir("dags")
