@@ -30,7 +30,6 @@ dependencies = [
     "packaging>=22",
     "pytest>=8",
     "pytest-timeout>=2.4",
-    "pytest-xdist>=3.8",
     "sqlalchemy>=1.4.36,<3",
 ]
 
@@ -54,6 +53,9 @@ postgres = [
     "asyncpg>=0.29,<1",
     "psycopg2-binary>=2.9,<3",
     "testcontainers>=4.15,<5",
+]
+xdist = [
+    "pytest-xdist>=3.8",
 ]
 
 [project.urls]
@@ -79,6 +81,7 @@ dev = [
     "build==1.5.0",
     "prek==0.4.13",
     "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
     "ruff==0.16.2",
     "towncrier==24.8.0",
     "ty==0.0.70",
