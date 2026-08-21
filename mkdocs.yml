@@ -56,6 +56,7 @@ nav:
       - Smoke tests: guide/smoke-tests.md
       - Custom components: guide/custom-components.md
       - Custom timetables: guide/custom-timetables.md
+      - Isolated entry-point tests: guide/isolated-tests.md
       - Report artifacts: guide/reports.md
       - Migration-strict mode: guide/migration-strict.md
       - Database: guide/database.md
