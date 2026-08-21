@@ -16,6 +16,7 @@ from pytest_airflow_in_a_box import (
     artifact,
     baseline,
     collection,
+    components,
     config,
     db,
     defaults,
@@ -74,6 +75,14 @@ def test_public_surface_is_explicit() -> None:
         "prune_duplicate_items",
         "read_declared_cases",
     )
+    assert components.__all__ == (
+        "ComponentContractError",
+        "ComponentKind",
+        "ComponentProblem",
+        "ComponentReport",
+        "ComponentSandboxError",
+        "check_component",
+    )
     assert config.__all__ == (
         "ENV_VAR_PREFIX",
         "airflow_config",
@@ -97,6 +106,7 @@ def test_public_surface_is_explicit() -> None:
         "register_ini_defaults",
     )
     assert fixtures.__all__ == (
+        "airflow_components",
         "airflow_configure",
         "airflow_connections",
         "airflow_dags_folder_path",
@@ -155,6 +165,7 @@ def test_public_surface_is_explicit() -> None:
         "render_terminal_summary",
     )
     assert plugin.__all__ == (
+        "airflow_components",
         "airflow_configure",
         "airflow_connections",
         "airflow_dags_folder_path",
@@ -219,6 +230,7 @@ def test_public_surface_is_explicit() -> None:
         "AirflowConfigure",
         "AirflowConnections",
         "AirflowVariables",
+        "ComponentRegistry",
         "DagMaker",
         "RenderTask",
         "RunDag",
@@ -300,6 +312,17 @@ def test_config_helpers_do_not_import_airflow() -> None:
 
     script = (
         "import sys; import pytest_airflow_in_a_box.config; "
+        "raise SystemExit('airflow' in sys.modules)"
+    )
+
+    subprocess.check_output([sys.executable, "-c", script], text=True)
+
+
+def test_component_helpers_do_not_import_airflow() -> None:
+    """Keep the component conformance checks safe before Airflow bootstrap."""
+
+    script = (
+        "import sys; import pytest_airflow_in_a_box.components; "
         "raise SystemExit('airflow' in sys.modules)"
     )
 

@@ -62,6 +62,8 @@ zero-ini defaults on purpose.
 - `bootstrap.py` / `airflow_cfg.py` -- isolated `AIRFLOW_HOME` + deterministic test cfg
 - `config.py` -- `airflow_config()` context manager/decorator for option + env overrides
 - `db.py` -- registry-driven metadata DB cleanup (`clear_db`, `TableGroup`)
+- `components.py` -- registry-driven static conformance checks for custom timetables,
+  listeners, and executors (`check_component`, `ComponentKind`)
 - `defaults.py` -- zero-ini pytest defaults and narrowed warning filters
 - `ini_config.py` -- the `airflow_config` ini option: grammar, bootstrap-owned denylist,
   and pre-conftest application

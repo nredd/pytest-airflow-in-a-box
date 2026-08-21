@@ -19,6 +19,7 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     AirflowFamily,
     resolve_capabilities,
 )
+from pytest_airflow_in_a_box._compat.components import _is_timetable
 from pytest_airflow_in_a_box._compat.registry import (
     register_authoring_dag,
     unregister_authoring_dag,
@@ -125,6 +126,100 @@ def _needs_implicit_start_date(schedule: Any, dag_kwargs: dict[str, Any]) -> boo
         return False
     default_args = dag_kwargs.get("default_args") or {}
     return default_args.get("start_date") is None
+
+
+def is_custom_timetable_instance(schedule: Any) -> bool:
+    """Report whether a `schedule` value is a live custom-timetable instance.
+
+    The predicate behind `custom_schedule_timetables` (and through it `dag_maker`'s
+    transparent timetable registration), so its gates are ordered to keep every other
+    `schedule` spelling exactly as cheap and as 2.x-safe as before: the 2.x family
+    exits first (the component sandbox this feeds is 3.x-only, and its own gate would
+    `pytest.fail` the test), then `None` and bare classes (the collector raises for a
+    custom timetable CLASS separately), then anything `_compat.components._is_timetable`
+    does not recognize -- delegated rather than re-implemented, so `dag_maker`'s hook
+    and `check_component`'s auto-classification can never disagree about what counts
+    as a timetable. What survives is a timetable instance, exempted only when
+    `_needs_timetable_registration` says the serializer imports it directly.
+
+    Parameters:
+        schedule: Any containing the `schedule` value handed to `dag_maker`.
+
+    Returns:
+        bool marking `schedule` as an instance needing registration before
+        serialization.
+    """
+
+    if _is_v2() or schedule is None or isinstance(schedule, type):
+        return False
+    if not _is_timetable(schedule):
+        return False
+    return _needs_timetable_registration(type(schedule))
+
+
+def _needs_timetable_registration(component_type: type) -> bool:
+    """Report whether Airflow's serializer resolves a timetable class only by registry.
+
+    Mirrors upstream's own exemption exactly: `is_core_timetable_import_path` treats
+    only the `airflow.timetables.` prefix as importable-without-registration, so
+    everything else -- including Airflow's own shipped
+    `airflow.example_dags.plugins.workday.AfterWorkdayTimetable` and provider
+    timetables whose entry-point plugin is not loaded -- goes through the registered
+    lookup and needs registration. A broader `airflow.` exemption would silently skip
+    exactly those and reintroduce the raw `TimetableNotRegistered` failure.
+
+    Parameters:
+        component_type: type containing the timetable class.
+
+    Returns:
+        bool marking the class as one the serializer resolves through the registry.
+    """
+
+    return not component_type.__module__.startswith("airflow.timetables.")
+
+
+def custom_schedule_timetables(schedule: Any) -> tuple[Any, ...]:
+    """Collect every custom timetable instance a `schedule` value carries.
+
+    Two shapes need registration before serialization: a custom timetable passed as
+    `schedule` directly, and one nested inside a built-in wrapper's `timetable`
+    attribute -- `AssetOrTimeSchedule(timetable=CustomTimetable(), assets=[...])`
+    lives under `airflow.timetables.assets` itself, but its `serialize()` calls
+    `encode_timetable` on the INNER custom timetable, which fails unregistered
+    exactly like the direct case. The one-level `timetable` probe covers the only
+    nesting shape Airflow ships; the else-branch keeps a custom timetable that
+    happens to expose its own `timetable` attribute from double-registering.
+
+    Parameters:
+        schedule: Any containing the `schedule` value handed to `dag_maker`.
+
+    Returns:
+        tuple[Any, ...] containing the custom timetable instances to register, empty
+        when nothing needs registration.
+
+    Raises:
+        TypeError: `schedule` is a custom timetable CLASS. Airflow accepts it at Dag
+            construction and only dies much later inside metadata sync with a bare
+            `KeyError: 'timetable'`, so the one place that already inspects
+            `schedule` names the mistake instead.
+    """
+
+    if (
+        not _is_v2()
+        and isinstance(schedule, type)
+        and _is_timetable(schedule)
+        and _needs_timetable_registration(schedule)
+    ):
+        raise TypeError(
+            f"`schedule` needs a live `{schedule.__name__}` instance -- pass "
+            f"`{schedule.__name__}(...)` instead of the class."
+        )
+    if is_custom_timetable_instance(schedule):
+        return (schedule,)
+    inner = getattr(schedule, "timetable", None)
+    if is_custom_timetable_instance(inner):
+        return (inner,)
+    return ()
 
 
 def build_dag(dag_id: str, fileloc: str, dag_kwargs: dict[str, Any]) -> DAG:
@@ -859,8 +954,10 @@ __all__ = (
     "build_dag",
     "cleanup_dag",
     "create_dag_run",
+    "custom_schedule_timetables",
     "ensure_dag_absent",
     "expand_mapped_task_instances",
+    "is_custom_timetable_instance",
     "open_dag_session",
     "persist_dag",
     "select_task_instance",

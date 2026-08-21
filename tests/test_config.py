@@ -1,7 +1,10 @@
 """Test unified Airflow configuration and environment overrides.
 
-Overrides here target ``core.dagbag_import_timeout`` and ``core.plugins_folder``, neither of which
-bootstrap assigns, so a test can observe Airflow's own default outside the context. They
+Overrides here target ``core.dagbag_import_timeout`` (which bootstrap never assigns, so a test
+can observe Airflow's own default outside the context) and ``core.plugins_folder`` (which
+bootstrap DOES own since the `airflow_plugins_folder` ini option -- fine here, because
+``airflow_config`` is exactly the supported per-test escape hatch for an owned option, and these
+tests never depend on its out-of-context value). They
 deliberately avoid ``core.dags_folder`` and ``core.unit_test_mode``, which bootstrap owns and which
 would change this suite's own Airflow behavior if a test died mid-context.
 

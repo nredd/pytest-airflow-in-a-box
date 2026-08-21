@@ -7,7 +7,7 @@ References:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -472,10 +472,179 @@ class RunTask(Protocol):
         """
 
 
+class ComponentRegistry(Protocol):
+    """Register a custom Airflow component for one test, reverting it afterward.
+
+    Every method runs ``pytest_airflow_in_a_box.components.check_component`` first and
+    raises ``ComponentContractError`` on any conformance problem, so a broken component
+    is never silently registered and left to be wondered about later. A problem with the
+    registration itself rather than the component -- an unsupported dual-registration
+    request, an executor class with no importable module path, an unknown policy
+    hookspec name, or similar -- raises
+    ``pytest_airflow_in_a_box.components.ComponentSandboxError`` instead.
+    """
+
+    def plugin(self, component: object) -> None:
+        """Register one Airflow plugin into every plugins-manager half this release has.
+
+        Parameters:
+            component: object containing an ``AirflowPlugin`` subclass or instance.
+        """
+
+    def listener(self, component: object, *, core: bool = True, task: bool = True) -> None:
+        """Register one listener with the core and/or Task SDK listener manager.
+
+        The conformance check's manager-scope findings are filtered by the requested
+        scope: a hookimpl whose hookspec exists on only one manager (core-only
+        ``on_dag_run_success``, for example) is accepted whenever that manager is among
+        the requested ones, and refused only when it could never fire -- registered
+        exclusively with the manager that lacks its hookspec.
+
+        Parameters:
+            component: object containing a listener class or instance carrying at least
+                one ``@hookimpl``-decorated method.
+            core: bool registering with the core ``ListenerManager``.
+            task: bool registering with the Task SDK ``ListenerManager``.
+
+        Raises:
+            ComponentSandboxError: Neither ``core`` nor ``task`` is True, or ``task=True``
+                on a release with no Task SDK listener manager (Airflow 3.1.x).
+        """
+
+    def policy(self, **hooks: Callable[..., object]) -> None:
+        """Build and register one cluster-policy plugin from hookspec-named callables.
+
+        Registers directly with Airflow's policy plugin manager and never writes an
+        ``airflow_local_settings.py`` file, so per-test policies are fully decoupled
+        from the ``airflow_local_settings`` collision guard. A registered
+        ``task_instance_mutation_hook`` additionally flips the
+        ``task_instance_mutation_hook.is_noop`` dispatch gate to False for the test
+        (reverted at teardown) -- Airflow short-circuits on that flag, so the hookimpl
+        would otherwise register but never fire.
+
+        Parameters:
+            hooks: Callable[..., object] values keyed by hookspec name (``task_policy``,
+                ``dag_policy``, ``task_instance_mutation_hook``, ``pod_mutation_hook``,
+                ``get_airflow_context_vars``, ``get_dagbag_import_timeout``).
+
+        Raises:
+            ComponentSandboxError: ``hooks`` is empty.
+        """
+
+    def secrets_backend(self, component: object, *, first: bool = True) -> None:
+        """Insert one secrets backend into the search path.
+
+        Parameters:
+            component: object containing a ``BaseSecretsBackend`` subclass or instance.
+            first: bool inserting at the front of the search path when True (checked
+                before every other configured backend), the back when False.
+        """
+
+    def executor(self, component: object, *, alias: str = "test") -> str:
+        """Register one executor class under an alias, resolvable by name.
+
+        Parameters:
+            component: object containing a ``BaseExecutor`` subclass, defined at module
+                scope somewhere importable -- Airflow resolves it later by dotted import
+                path.
+            alias: str naming the alias to register the executor under.
+
+        Returns:
+            str containing ``alias``, unchanged, for passing into whichever Airflow
+            configuration surface selects an executor by name.
+
+        Raises:
+            ComponentSandboxError: ``component`` is not defined at module scope.
+        """
+
+    def timetable(self, component: object) -> None:
+        """Register one custom timetable class through a synthesized throwaway plugin.
+
+        Builds a throwaway ``AirflowPlugin`` subclass carrying the class in its
+        ``timetables`` attribute and registers it, which is exactly what makes
+        Airflow's serialization round trip work: ``encode_timetable`` refuses an
+        unregistered custom timetable outright on 3.1.x, and ``decode_timetable``
+        resolves the class by qualname through the plugins manager on every certified
+        3.x release. Only a module-scope class can register -- Airflow later resolves
+        it by dotted import path, and the ``timetable-local-qualname`` conformance
+        check enforces that up front. Registering the same class twice is harmless;
+        the qualname-keyed lookup mapping dedupes.
+
+        Timetable LOGIC needs none of this: ``next_dagrun_info`` and
+        ``infer_manual_data_interval`` are pure functions of a ``DataInterval`` and a
+        ``TimeRestriction``, callable directly with no registration, no fixture, and
+        no metadata database. Register only for the serialization path.
+
+        Parameters:
+            component: object containing a ``Timetable`` subclass or instance;
+                an instance registers its class.
+        """
+
+    def priority_weight_strategy(self, component: object) -> None:
+        """Register one priority weight strategy class through a synthesized plugin.
+
+        Builds a throwaway ``AirflowPlugin`` subclass carrying the class in its
+        ``priority_weight_strategies`` attribute and registers it, which is what lets
+        Dag serialization accept the strategy at all --
+        ``_encode_priority_weight_strategy`` refuses any custom strategy the plugins
+        manager cannot resolve by qualname, on every certified 3.x release. Only a
+        module-scope class can register, and deserialization re-instantiates it with
+        no arguments, so state must live on the class (upstream's own documented
+        contract).
+
+        Parameters:
+            component: object containing a ``PriorityWeightStrategy`` subclass or
+                instance; an instance registers its class.
+        """
+
+    def serialization_round_trip(self, component: object) -> None:
+        """Register one timetable instance, then assert it survives encode/decode.
+
+        Registers via ``timetable()`` first, then runs
+        ``decode_timetable(encode_timetable(...))`` and raises on any asymmetry: the
+        decoded instance reconstructing as a different class, reconstructing with a
+        different ``serialize()`` payload than the original produced, or (when the
+        class defines its own ``__eq__``) comparing unequal to the original. One call
+        covers "not registered", serialize/deserialize asymmetry, and equality
+        problems in a single assertion.
+
+        Parameters:
+            component: object containing the ``Timetable`` instance to round-trip.
+
+        Raises:
+            ComponentSandboxError: ``component`` is a class -- encoding needs a live
+                instance.
+            ComponentContractError: The class fails a timetable conformance check, or
+                the round trip reconstructs asymmetrically
+                (``timetable-round-trip-mismatch``).
+        """
+
+    def round_trip(self, component: object) -> None:
+        """Classify one component and register it with the matching method's defaults.
+
+        Classifies ``component`` as exactly one of plugin, listener, executor,
+        secrets backend, timetable, or priority weight strategy -- the same classification
+        ``pytest_airflow_in_a_box.components.check_component`` uses for auto-detection
+        -- and calls that method with its default keyword arguments, except a
+        listener's ``task`` flag, which follows the installed release's Task SDK
+        availability so a 3.1.x install (no Task SDK listener manager at all)
+        round-trips core-only rather than raising. Not a substitute for ``policy()``,
+        which has no bare-component form to classify.
+
+        Parameters:
+            component: object containing the component to classify and register.
+
+        Raises:
+            ComponentSandboxError: ``component`` matches zero or more than one
+                registrable kind.
+        """
+
+
 __all__ = (
     "AirflowConfigure",
     "AirflowConnections",
     "AirflowVariables",
+    "ComponentRegistry",
     "DagMaker",
     "RenderTask",
     "RunDag",

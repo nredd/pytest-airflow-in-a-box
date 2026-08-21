@@ -92,6 +92,10 @@ _REMEDIES: Final[dict[str, str]] = {
     "AIRFLOW__LOGGING__BASE_LOG_FOLDER": (
         "set the `airflow_home` ini option or pass `--airflow-home`"
     ),
+    "AIRFLOW__CORE__PLUGINS_FOLDER": "set the `airflow_plugins_folder` ini option",
+    "AIRFLOW__CORE__XCOM_BACKEND": "set the `airflow_xcom_backend` ini option",
+    "AIRFLOW__SECRETS__BACKEND": "set the `airflow_secrets_backend` ini option",
+    "AIRFLOW__SECRETS__BACKEND_KWARGS": "set the `airflow_secrets_backend_kwargs` ini option",
 }
 
 # The catalog pins this from `airflow_dag_parse_timeout`, which also scales the per-file parse

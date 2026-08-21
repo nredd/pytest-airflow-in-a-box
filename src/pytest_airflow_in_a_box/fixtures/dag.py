@@ -21,12 +21,14 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from pytest_airflow_in_a_box._compat import ensure_database
+from pytest_airflow_in_a_box._compat.components import timetable_lookup_resolves
 from pytest_airflow_in_a_box._compat.dag import (
     DagCleanupError,
     DagPersistenceRecord,
     build_dag,
     cleanup_dag,
     create_dag_run,
+    custom_schedule_timetables,
     ensure_dag_absent,
     expand_mapped_task_instances,
     open_dag_session,
@@ -39,11 +41,12 @@ from pytest_airflow_in_a_box._compat.taskrun import (
     run_task_instance,
 )
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
+from pytest_airflow_in_a_box.fixtures.components import register_schedule_timetable
 from pytest_airflow_in_a_box.markers import read_bool_marker
 from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from datetime import datetime
     from types import TracebackType
 
@@ -255,7 +258,15 @@ class _DagContext(AbstractContextManager["DAG"]):
 class _DagFactory:
     """Implement the public ``DagMaker`` protocol without importing Airflow eagerly."""
 
-    def __init__(self, nodeid: str, fileloc: str, worker: str, *, serialized: bool) -> None:
+    def __init__(
+        self,
+        nodeid: str,
+        fileloc: str,
+        worker: str,
+        *,
+        serialized: bool,
+        register_timetable: Callable[[Any], None] | None = None,
+    ) -> None:
         """Store deterministic identity inputs and marker defaults.
 
         Parameters:
@@ -263,8 +274,12 @@ class _DagFactory:
             fileloc: str naming the consumer test module.
             worker: str containing the xdist worker identity.
             serialized: bool containing the marker-derived default.
+            register_timetable: Callable[[Any], None] | None registering one custom
+                timetable instance before its Dag is built, or None to skip
+                registration entirely (direct construction in unit tests).
         """
 
+        self._register_timetable = register_timetable
         self._nodeid = nodeid
         self._fileloc = fileloc
         self._worker = worker
@@ -336,7 +351,8 @@ class _DagFactory:
             contextlib.AbstractContextManager[airflow.sdk.DAG] for task definition.
 
         Raises:
-            TypeError: ``serialized`` is not a boolean or ``None``.
+            TypeError: ``serialized`` is not a boolean or ``None``, or ``schedule``
+                is a custom timetable class rather than an instance.
             ValueError: An explicit ``dag_id`` is invalid.
         """
 
@@ -348,6 +364,13 @@ class _DagFactory:
             if dag_id is None
             else _validate_dag_id(dag_id)
         )
+        # Before `build_dag`, not at context exit: Airflow 3.1's `encode_timetable`
+        # already refuses an unregistered custom timetable when `persist_dag` runs.
+        # The collector runs even with no hook wired, so its custom-timetable-CLASS
+        # guard names that mistake for direct `_DagFactory` users too.
+        for timetable in custom_schedule_timetables(dag_kwargs.get("schedule")):
+            if self._register_timetable is not None:
+                self._register_timetable(timetable)
         dag = build_dag(resolved_dag_id, self._fileloc, dag_kwargs)
         self._dag = dag
         self._serialized_dag = None
@@ -693,7 +716,37 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
     marker_default = read_bool_marker(request.node, "need_serialized_dag", default=False)
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
     fileloc = str(Path(str(request.node.path)).resolve())
-    factory = _DagFactory(request.node.nodeid, fileloc, worker, serialized=marker_default)
+
+    def register_timetable(timetable: Any) -> None:
+        """Register one custom timetable through the lazily-pulled component sandbox.
+
+        A class the registered-timetable lookup ALREADY resolves -- deployed the
+        supported way, via the run's plugins folder or a venv entry point -- is left
+        alone entirely: no sandbox, no gate, no behavior change for setups that
+        worked before this hook existed. Otherwise `getfixturevalue` on purpose, not
+        a fixture parameter: pytest caches the resolved fixture, so every `dag_maker`
+        call in one test shares a single sandbox (and its snapshot/finalize cleanup),
+        while tests passing no custom timetable -- the overwhelming majority -- never
+        construct the sandbox at all. Registration then goes through
+        `register_schedule_timetable`'s registration-scoped gate rather than the full
+        `ComponentRegistry.timetable` conformance gate.
+
+        Parameters:
+            timetable: Any containing the custom `Timetable` instance to register.
+        """
+
+        if timetable_lookup_resolves(type(timetable)):
+            return
+        request.getfixturevalue("airflow_components")
+        register_schedule_timetable(timetable)
+
+    factory = _DagFactory(
+        request.node.nodeid,
+        fileloc,
+        worker,
+        serialized=marker_default,
+        register_timetable=register_timetable,
+    )
     try:
         yield factory
     finally:

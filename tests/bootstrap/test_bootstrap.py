@@ -34,6 +34,8 @@ def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
             assert state.config_path == Path(os.environ["AIRFLOW_CONFIG"])
             assert state.dags_folder.is_dir()
             assert state.logs_folder.is_dir()
+            assert state.plugins_folder.is_dir()
+            assert list(state.plugins_folder.iterdir()) == []
             assert state.password_file.is_file()
             assert state.config_path.is_file()
             assert (state.root / "config" / "airflow_local_settings.py").is_file()
@@ -61,6 +63,85 @@ def test_serial_bootstrap_state_and_cleanup(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
     payload = json.loads(record_path.read_text(encoding="utf-8"))
     assert not Path(payload["root"]).exists()
+
+
+def test_airflow_plugins_folder_ini_symlinks_source_entries(pytester: pytest.Pytester) -> None:
+    """Symlink a configured plugins source directory's entries into the run's `plugins/`."""
+
+    source = pytester.path / "shared-plugins"
+    source.mkdir()
+    (source / "my_plugin.py").write_text("VALUE = 1\n", encoding="utf-8")
+    pytester.makeini(f"[pytest]\nairflow_plugins_folder = {source}\n")
+    pytester.makepyfile(
+        """
+        from pytest_airflow_in_a_box.plugin import get_bootstrap_state
+
+        def test_plugins_are_linked(pytestconfig):
+            state = get_bootstrap_state(pytestconfig)
+            linked = state.plugins_folder / "my_plugin.py"
+            assert linked.is_symlink()
+            assert linked.read_text(encoding="utf-8") == "VALUE = 1\\n"
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=1)
+
+
+def test_airflow_plugins_folder_ini_resolves_relative_to_the_rootdir(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anchor a relative `airflow_plugins_folder` to the rootdir, not the invocation CWD.
+
+    Regression test: without rootpath-anchoring, invoking pytest from a subdirectory of
+    the project made a relative, genuinely-existing source directory look missing (a
+    CWD-relative `is_dir()` check raised a usage error), while invoking from the rootdir
+    itself created dangling symlinks instead (a CWD-relative source, but `symlink_to`
+    resolves a relative target against the *link's own* directory, not the CWD) --
+    silently dropping every plugin either way.
+
+    Parameters:
+        pytester: pytest.Pytester running the assertion in a real bootstrapped subprocess.
+        monkeypatch: pytest.MonkeyPatch changing the invocation directory.
+    """
+
+    source = pytester.path / "shared-plugins"
+    source.mkdir()
+    (source / "my_plugin.py").write_text("VALUE = 1\n", encoding="utf-8")
+    pytester.makeini("[pytest]\nairflow_plugins_folder = shared-plugins\n")
+    pytester.makepyfile(
+        """
+        from pytest_airflow_in_a_box.plugin import get_bootstrap_state
+
+        def test_plugins_are_linked(pytestconfig):
+            state = get_bootstrap_state(pytestconfig)
+            linked = state.plugins_folder / "my_plugin.py"
+            assert linked.is_symlink()
+            assert linked.read_text(encoding="utf-8") == "VALUE = 1\\n"
+        """
+    )
+    subdir = pytester.path / "subdir"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+
+    result = pytester.runpytest_subprocess("-q", str(pytester.path))
+
+    result.assert_outcomes(passed=1)
+
+
+def test_airflow_plugins_folder_ini_rejects_a_missing_source(pytester: pytest.Pytester) -> None:
+    """Give an actionable error when the configured plugins source does not exist."""
+
+    missing = pytester.path / "does-not-exist"
+    pytester.makeini(f"[pytest]\nairflow_plugins_folder = {missing}\n")
+    pytester.makepyfile("def test_never_runs():\n    assert False\n")
+
+    result = pytester.runpytest_subprocess("-q")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*airflow_plugins_folder*must name a directory*"])
 
 
 def test_airflow_environment_precedes_conftest_import(pytester: pytest.Pytester) -> None:
@@ -180,7 +261,7 @@ def test_stale_inherited_state_fails_loudly(
 
     missing = pytester.path / "missing-root"
     payload = {
-        "version": 4,
+        "version": 5,
         "owner_pid": 1,
         "root": str(missing),
         "dags_folder": str(missing / "dags"),
@@ -188,6 +269,7 @@ def test_stale_inherited_state_fails_loudly(
         "database_path": str(missing / "airflow.db"),
         "password_file": str(missing / "passwords.json"),
         "config_path": str(missing / "airflow.cfg"),
+        "plugins_folder": str(missing / "plugins"),
         "jwt_secret": "secret",
         "fernet_key": "fernet",
         "storage_reason": "system-temp",
@@ -195,6 +277,10 @@ def test_stale_inherited_state_fails_loudly(
         "sql_alchemy_conn": sqlite_url(missing / "airflow.db"),
         "db_backend": "sqlite",
         "family": "apache-airflow-core",
+        "executor": "",
+        "xcom_backend": "",
+        "secrets_backend": "",
+        "secrets_backend_kwargs": "",
     }
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     monkeypatch.setenv(STATE_ENVIRONMENT_VARIABLE, json.dumps(payload))
@@ -214,10 +300,11 @@ def test_inherited_state_requires_derived_local_settings(
     root = pytester.path / "inherited-root"
     (root / "dags").mkdir(parents=True)
     (root / "logs").mkdir()
+    (root / "plugins").mkdir()
     (root / "passwords.json").write_text("{}", encoding="utf-8")
     (root / "airflow.cfg").write_text("", encoding="utf-8")
     payload = {
-        "version": 4,
+        "version": 5,
         "owner_pid": 1,
         "root": str(root),
         "dags_folder": str(root / "dags"),
@@ -225,6 +312,7 @@ def test_inherited_state_requires_derived_local_settings(
         "database_path": str(root / "airflow.db"),
         "password_file": str(root / "passwords.json"),
         "config_path": str(root / "airflow.cfg"),
+        "plugins_folder": str(root / "plugins"),
         "jwt_secret": "secret",
         "fernet_key": "fernet",
         "storage_reason": "system-temp",
@@ -232,6 +320,10 @@ def test_inherited_state_requires_derived_local_settings(
         "sql_alchemy_conn": sqlite_url(root / "airflow.db"),
         "db_backend": "sqlite",
         "family": "apache-airflow-core",
+        "executor": "",
+        "xcom_backend": "",
+        "secrets_backend": "",
+        "secrets_backend_kwargs": "",
     }
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     monkeypatch.setenv(STATE_ENVIRONMENT_VARIABLE, json.dumps(payload))

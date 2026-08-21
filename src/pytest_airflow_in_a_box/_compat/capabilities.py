@@ -179,6 +179,57 @@ class SecretsResolution(str, Enum):
     SUPERVISOR_COMMS = "airflow.sdk.execution_time.task_runner.SUPERVISOR_COMMS"
 
 
+class ExecutorContract(str, Enum):
+    """Closed set of certified `BaseExecutor` attribute contracts.
+
+    Names the certified attribute table `pytest_airflow_in_a_box.components.check_component`
+    matches a custom executor against. 3.2 renamed 3.1's `supports_sentry: bool` flag to
+    `sentry_integration: str` and added `supports_callbacks`/`supports_multi_team`; 3.3 added
+    `supports_connection_test` on top of the 3.2 shape. The three certified releases are
+    otherwise attribute-compatible for the fields this plugin checks.
+    """
+
+    V3_1 = "3.1"
+    V3_2 = "3.2"
+    V3_3 = "3.3"
+
+
+class PluginsManagerShape(str, Enum):
+    """Closed set of certified `airflow.plugins_manager` cache mechanisms.
+
+    Names the total 3.1 -> 3.2 API break in which the module-global cache Airflow's
+    plugin loading used through 3.1.x (`plugins`, `loaded_plugins`, and sixteen sibling
+    globals in `airflow.plugins_manager`, each `None`/empty until first load, reset by
+    hand rather than by any cache primitive) was deleted outright and replaced by eleven
+    independent `functools.cache`-decorated functions, plus a second, structurally
+    identical split on `airflow.sdk.plugins_manager` -- a module that does not exist at
+    all on 3.1.x, since the Task SDK carries no plugin-loading surface of its own before
+    3.2. `pytest_airflow_in_a_box._compat.components` certifies the exact clearable-name
+    set for each shape and hard-fails on a mismatch; see that module's docstring for why
+    the check resolves lazily rather than inside `resolve_capabilities()`.
+    """
+
+    MODULE_GLOBALS = "module-globals"
+    CACHED_FUNCTIONS = "cached-functions"
+
+
+class SharedModuleLoading(str, Enum):
+    """Closed set of certified `_get_grouped_entry_points` vendoring shapes.
+
+    Names the 3.2+ double-vendoring of Airflow's entry-point discovery cache. Through
+    3.1.x, `_get_grouped_entry_points` (`functools.cache`-decorated) lives once, at
+    `airflow.utils.entry_points`. 3.2 moved it to `airflow._shared.module_loading` and
+    gave the Task SDK its own independently-cached, identically-named copy at
+    `airflow.sdk._shared.module_loading` -- confirmed distinct module objects on the
+    installed 3.3.0, so clearing one never clears the other. This field makes "clear it
+    twice on 3.2+" structural (the seam function returns one or two modules to walk)
+    rather than a fact `pytest_airflow_in_a_box._compat.components` has to remember.
+    """
+
+    SINGLE = "single"
+    DUPLICATED = "duplicated"
+
+
 @dataclass(frozen=True)
 class AirflowCapabilities:
     """Immutable metadata describing a validated Airflow private interface.
@@ -211,6 +262,40 @@ class AirflowCapabilities:
         asset_unique_key_location: AssetUniqueKeyLocation | None naming the module
             asset-condition evaluation imports its unique-key type from; None on 2.x,
             which evaluates dataset conditions by URI string with no unique-key type.
+        executor_contract: ExecutorContract | None naming the certified `BaseExecutor`
+            attribute contract `check_component` matches a custom executor against;
+            None on 2.x, whose executor interface predates the certified 3.x table.
+        sdk_listener_manager_available: bool indicating whether `airflow.sdk.listener`
+            exposes its own listener manager, separate from the core one at
+            `airflow.listeners.listener`. Constant True on every certified 3.x release
+            and False on 2.x, which has no Task SDK and so no second manager to split
+            hookspecs across; kept as a probed tripwire rather than a bare family
+            constant because the dual-manager split is the single most common
+            real-world listener bug (register in the wrong manager and half the hooks
+            silently never fire), so a future release silently collapsing back to one
+            manager must fail loudly here instead of going unnoticed.
+        task_instance_mutation_hook_supports_dag_run: bool indicating whether the
+            `airflow.policies.task_instance_mutation_hook` hookspec declares a
+            `dag_run` parameter. False on every certified 3.1.x and 3.2.x release and
+            on 2.x, True from 3.3 onward. `pytest_airflow_in_a_box.components`'s
+            policy checks derive the legitimate hookimpl argument set from the live
+            installed hookspec directly (mirroring the listener checks), so nothing
+            here reads this field back -- it exists as a certified tripwire the same
+            way `sdk_listener_manager_available` does, so a future release silently
+            reverting the parameter is caught at `resolve_capabilities()` time rather
+            than only inside a user's own conformance check output.
+        plugins_manager: PluginsManagerShape | None naming the certified
+            `airflow.plugins_manager` cache mechanism; None on 2.x. Derived from
+            `release` alone (the 3.1 -> 3.2 break applies uniformly), not independently
+            probed: probing it for real means importing `airflow.plugins_manager` and
+            `airflow.sdk.plugins_manager`, which `resolve_capabilities()` must not do
+            for every session regardless of whether a test ever touches a custom
+            component. `pytest_airflow_in_a_box._compat.components` verifies the live
+            shape lazily, on first `airflow_components` use; see its module docstring.
+        shared_module_loading: SharedModuleLoading | None naming the certified
+            `_get_grouped_entry_points` vendoring shape; None on 2.x. Derived from
+            `release` alone, for the same reason `plugins_manager` is: the real
+            verification is deferred and lazy, not eager here.
     """
 
     release: Release
@@ -232,6 +317,11 @@ class AirflowCapabilities:
     max_python: tuple[int, int] | None
     dag_requires_start_date: bool
     asset_unique_key_location: AssetUniqueKeyLocation | None
+    executor_contract: ExecutorContract | None
+    sdk_listener_manager_available: bool
+    task_instance_mutation_hook_supports_dag_run: bool
+    plugins_manager: PluginsManagerShape | None
+    shared_module_loading: SharedModuleLoading | None
 
 
 # Airflow below 2.8 raises `DAG is missing the start_date parameter` from
@@ -260,6 +350,52 @@ def _dag_requires_start_date(family: AirflowFamily, release: Release) -> bool:
     return family is AirflowFamily.V2 and release < V2_START_DATE_REQUIRED_BELOW
 
 
+# The 3.1 -> 3.2 plugins-manager and shared-module-loading break shares one boundary;
+# see `PluginsManagerShape` and `SharedModuleLoading`. Both fields are derived from
+# `release` alone, on both the certified and the observed side (`_certify_v3` and
+# `_resolve_uncached` both call these), rather than independently probed: verifying the
+# live shape means importing `airflow.plugins_manager` and `airflow.sdk.plugins_manager`,
+# a cost `resolve_capabilities()` must not pay for every session. The real verification
+# happens lazily in `pytest_airflow_in_a_box._compat.components`, on first
+# `airflow_components` use -- see that module's docstring for the full rationale. Unlike
+# the independently-probed 3.x-varying fields (`executor_contract`,
+# `sdk_listener_manager_available`, ...), a mismatch here is therefore a
+# self-consistency guard against a typo in this file, not a real runtime observation --
+# the same honesty distinction `_verify_contract` already draws for `max_python` and
+# `dag_requires_start_date`.
+PLUGINS_MANAGER_BREAK: Release = (3, 2, 0)
+
+
+def _plugins_manager_shape(release: Release) -> PluginsManagerShape:
+    """Derive the certified `plugins_manager` shape for one 3.x release.
+
+    Parameters:
+        release: tuple[int, int, int] containing the certified base release.
+
+    Returns:
+        PluginsManagerShape naming the release's cache mechanism.
+    """
+
+    if release < PLUGINS_MANAGER_BREAK:
+        return PluginsManagerShape.MODULE_GLOBALS
+    return PluginsManagerShape.CACHED_FUNCTIONS
+
+
+def _shared_module_loading(release: Release) -> SharedModuleLoading:
+    """Derive the certified `shared_module_loading` shape for one 3.x release.
+
+    Parameters:
+        release: tuple[int, int, int] containing the certified base release.
+
+    Returns:
+        SharedModuleLoading naming the release's entry-point cache vendoring.
+    """
+
+    if release < PLUGINS_MANAGER_BREAK:
+        return SharedModuleLoading.SINGLE
+    return SharedModuleLoading.DUPLICATED
+
+
 def _certify_v3(
     release: Release,
     *,
@@ -270,6 +406,9 @@ def _certify_v3(
     startup_details_supports_sentry: bool,
     runtime_task_instance_supports_queue: bool,
     asset_unique_key_location: AssetUniqueKeyLocation,
+    executor_contract: ExecutorContract,
+    sdk_listener_manager_available: bool,
+    task_instance_mutation_hook_supports_dag_run: bool,
 ) -> AirflowCapabilities:
     """Build one certified 3.x contract row with the family-static fields filled.
 
@@ -283,6 +422,17 @@ def _certify_v3(
         runtime_task_instance_supports_queue: bool indicating the runtime DTO queue field.
         asset_unique_key_location: AssetUniqueKeyLocation naming the canonical import
             location for asset-condition evaluation's unique-key type.
+        executor_contract: ExecutorContract naming the certified `BaseExecutor`
+            attribute contract for this release.
+        sdk_listener_manager_available: bool indicating whether `airflow.sdk.listener`
+            exists and exposes a listener manager on this release. False on 3.1.x, whose
+            `airflow.sdk` carries no listener manager module at all; True from 3.2
+            onward, alongside the rest of that release's Task SDK listener-architecture
+            changes (`dag_bag_location`, `task_instance_runner`,
+            `asset_unique_key_location`).
+        task_instance_mutation_hook_supports_dag_run: bool indicating whether
+            `airflow.policies.task_instance_mutation_hook` declares a `dag_run`
+            parameter on this release. False on 3.1.x and 3.2.x, True from 3.3 onward.
 
     Returns:
         AirflowCapabilities containing the complete certified contract.
@@ -308,6 +458,13 @@ def _certify_v3(
         max_python=None,
         dag_requires_start_date=False,
         asset_unique_key_location=asset_unique_key_location,
+        executor_contract=executor_contract,
+        sdk_listener_manager_available=sdk_listener_manager_available,
+        task_instance_mutation_hook_supports_dag_run=(
+            task_instance_mutation_hook_supports_dag_run
+        ),
+        plugins_manager=_plugins_manager_shape(release),
+        shared_module_loading=_shared_module_loading(release),
     )
 
 
@@ -349,6 +506,11 @@ def _certify_v2(release: Release) -> AirflowCapabilities:
         max_python=V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(AirflowFamily.V2, release),
         asset_unique_key_location=None,
+        executor_contract=None,
+        sdk_listener_manager_available=False,
+        task_instance_mutation_hook_supports_dag_run=False,
+        plugins_manager=None,
+        shared_module_loading=None,
     )
 
 
@@ -364,6 +526,9 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=False,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SDK,
+            executor_contract=ExecutorContract.V3_1,
+            sdk_listener_manager_available=False,
+            task_instance_mutation_hook_supports_dag_run=False,
         )
         for release in SUPPORTED_RELEASES_BY_FAMILY[AirflowFamily.V3]
         if release < (3, 2, 0)
@@ -378,6 +543,9 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=False,
         ),
         (3, 2, 1): _certify_v3(
             (3, 2, 1),
@@ -388,6 +556,9 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=False,
         ),
         (3, 2, 2): _certify_v3(
             (3, 2, 2),
@@ -398,6 +569,9 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=False,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_2,
+            sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=False,
         ),
         (3, 3, 0): _certify_v3(
             (3, 3, 0),
@@ -408,6 +582,9 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_3,
+            sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=True,
         ),
         (3, 3, 1): _certify_v3(
             (3, 3, 1),
@@ -418,6 +595,9 @@ _CERTIFIED_CAPABILITIES = (
             startup_details_supports_sentry=True,
             runtime_task_instance_supports_queue=True,
             asset_unique_key_location=AssetUniqueKeyLocation.SERIALIZATION,
+            executor_contract=ExecutorContract.V3_3,
+            sdk_listener_manager_available=True,
+            task_instance_mutation_hook_supports_dag_run=True,
         ),
     }
 )
@@ -441,6 +621,135 @@ _CERTIFIED_SERIALIZED_DAG_LOCATIONS = {
     (3, 3, 0): _SerializedDagLocation.DEFINITIONS,
     (3, 3, 1): _SerializedDagLocation.DEFINITIONS,
 }
+
+
+@dataclass(frozen=True)
+class CertifiedCaches:
+    """Certified cache-clearable names for one shape: always-present plus release-optional.
+
+    A two-frozenset certification, not a bare set: keying the certified tables by
+    capability enum rather than by release means one row spans several point releases,
+    and upstream adds cache functions mid-line (`get_deadline_references_plugins` in
+    3.2.2, `get_windows_plugins` in 3.3.0). `required` names must all be present on
+    every release the row covers; `optional` names are certified-but-absent-on-some
+    releases -- tolerated when missing, verified and cleared when present. Any observed
+    name outside `required | optional` is still a hard failure, so the under-clear
+    guarantee (an uncertified upstream cache can never slip past verification silently)
+    survives the relaxation.
+
+    Parameters:
+        required: frozenset[str] containing names present on every covered release.
+        optional: frozenset[str] containing names certified for the shape but absent on
+            some covered releases.
+    """
+
+    required: frozenset[str]
+    optional: frozenset[str] = frozenset()
+
+
+# Certified `functools.cache`-decorated callable names in `airflow.plugins_manager`
+# (core) and `airflow.sdk.plugins_manager` (Task SDK), keyed by `PluginsManagerShape`
+# rather than by release -- two rows cover every certified 3.x release, mirroring
+# `_CERTIFIED_SERIALIZED_DAG_LOCATIONS` above. `pytest_airflow_in_a_box._compat.components`
+# enumerates the *observed* set on the installed release by introspection (any attribute
+# exposing `.cache_clear`) and hard-fails unless the observed set is a superset of the
+# row's `required` names and a subset of `required | optional` -- the check that
+# actually matters going forward, since 3.2+ is still under active development and
+# upstream can add another cache function in a release this plugin has not certified
+# yet.
+#
+# The MODULE_GLOBALS row cannot be verified the same way: a plain module-level global
+# carries no structural marker distinguishing "lazily-cached plugin state" from any other
+# module attribute, so there is no safe way to *discover* it by introspection the way
+# `.cache_clear` discovers a `functools.cache` function. It exists purely as a permanently
+# fixed, hand-verified fact about a release line Airflow will never again modify (3.1.x
+# is fully released and closed), transcribed by reading the installed
+# `apache-airflow-core==3.1.0` wheel's `airflow/plugins_manager.py` directly (see
+# PROVENANCE.md) -- `airflow.sdk.plugins_manager` does not exist at all on 3.1.x (the
+# paired `apache-airflow-task-sdk==1.1.0` wheel ships no `plugins_manager.py`), hence the
+# empty SDK-side set. Verification for this row is PRESENCE-only (every certified name
+# must exist), not symmetric-difference: there is no future 3.1.x release that could add
+# an uncertified name for this check to catch.
+CERTIFIED_CORE_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, CertifiedCaches] = {
+    PluginsManagerShape.MODULE_GLOBALS: CertifiedCaches(
+        required=frozenset(
+            {
+                "plugins",
+                "loaded_plugins",
+                "import_errors",
+                "macros_modules",
+                "admin_views",
+                "flask_blueprints",
+                "fastapi_apps",
+                "fastapi_root_middlewares",
+                "external_views",
+                "react_apps",
+                "menu_links",
+                "flask_appbuilder_views",
+                "flask_appbuilder_menu_links",
+                "global_operator_extra_links",
+                "operator_extra_links",
+                "registered_operator_link_classes",
+                "timetable_classes",
+                "hook_lineage_reader_classes",
+                "priority_weight_strategy_classes",
+            }
+        )
+    ),
+    PluginsManagerShape.CACHED_FUNCTIONS: CertifiedCaches(
+        # The nine names present on every CACHED_FUNCTIONS release, transcribed from the
+        # `apache-airflow-core==3.2.0` wheel's `airflow/plugins_manager.py` and
+        # re-verified against the installed 3.3.0; see PROVENANCE.md.
+        required=frozenset(
+            {
+                "_get_plugins",
+                "_get_ui_plugins",
+                "get_flask_plugins",
+                "get_fastapi_plugins",
+                "_get_extra_operators_links_plugins",
+                "get_timetables_plugins",
+                "get_partition_mapper_plugins",
+                "integrate_macros_plugins",
+                "get_priority_weight_strategy_plugins",
+            }
+        ),
+        # Certified mid-line additions: absent on the earlier CACHED_FUNCTIONS releases,
+        # present (and cleared) from the release named beside each.
+        optional=frozenset(
+            {
+                "get_deadline_references_plugins",  # added in 3.2.2
+                "get_windows_plugins",  # added in 3.3.0
+            }
+        ),
+    ),
+}
+CERTIFIED_SDK_PLUGINS_MANAGER_CACHES: dict[PluginsManagerShape, CertifiedCaches] = {
+    PluginsManagerShape.MODULE_GLOBALS: CertifiedCaches(required=frozenset()),
+    # All three names are present from `apache-airflow-task-sdk==1.2.0` (the wheel
+    # paired with core 3.2.0, the first CACHED_FUNCTIONS release) onward; verified by
+    # reading that wheel's `airflow/sdk/plugins_manager.py` directly. See PROVENANCE.md.
+    PluginsManagerShape.CACHED_FUNCTIONS: CertifiedCaches(
+        required=frozenset(
+            {"_get_plugins", "integrate_macros_plugins", "get_hook_lineage_readers_plugins"}
+        )
+    ),
+}
+# `_get_grouped_entry_points` itself is byte-for-byte identical on every certified
+# release -- only its module location (and, on 3.2+, its duplication into a second,
+# independently-`functools.cache`d Task SDK copy) changes. Verified against the
+# installed 3.3.0 (`airflow._shared.module_loading` and
+# `airflow.sdk._shared.module_loading`, confirmed distinct module objects) and against
+# the installed `apache-airflow-core==3.1.0` wheel (`airflow.utils.entry_points`, the
+# SINGLE-shape module -- 3.1.x's Task SDK has no plugin or listener surface at all, so
+# there is nothing to duplicate). `pytest_airflow_in_a_box._compat.components`'s
+# `_shared_module_loading_modules()` seam returns one module for SINGLE and two for
+# DUPLICATED; this table certifies the one function name common to both.
+CERTIFIED_SHARED_MODULE_LOADING_CACHES: dict[SharedModuleLoading, CertifiedCaches] = {
+    SharedModuleLoading.SINGLE: CertifiedCaches(required=frozenset({"_get_grouped_entry_points"})),
+    SharedModuleLoading.DUPLICATED: CertifiedCaches(
+        required=frozenset({"_get_grouped_entry_points"})
+    ),
+}
 _COMMON_REQUIRED_SYMBOLS = (
     ("airflow.utils.db", "initdb"),
     ("airflow.utils.session", "create_session"),
@@ -455,6 +764,11 @@ _V3_REQUIRED_SYMBOLS = (
     ("airflow.models.dag_version", "DagVersion"),
     ("airflow.models.dagbundle", "DagBundleModel"),
     ("airflow.serialization.serialized_objects", "LazyDeserializedDAG"),
+    # Defined in `serialized_objects` itself on 3.1.x and re-exported there from
+    # `airflow.serialization.encoders`/`decoders` on 3.2+, so this one location is
+    # stable across every certified 3.x release; see PROVENANCE.md.
+    ("airflow.serialization.serialized_objects", "encode_timetable"),
+    ("airflow.serialization.serialized_objects", "decode_timetable"),
     ("airflow.sdk.execution_time.task_runner", "RuntimeTaskInstance"),
     ("airflow.sdk.execution_time.task_runner", "parse"),
     ("airflow.sdk.execution_time.task_runner", "run"),
@@ -1004,6 +1318,100 @@ def _probe_asset_unique_key_location(version: str) -> AssetUniqueKeyLocation:
     return AssetUniqueKeyLocation.SERIALIZATION
 
 
+def _probe_executor_contract(version: str) -> ExecutorContract:
+    """Resolve the certified `BaseExecutor` attribute contract by capability.
+
+    Distinguishes the three certified 3.x executor shapes by attributes Airflow itself
+    added or renamed: 3.1 exposes `supports_sentry: bool`; 3.2 renamed it to
+    `sentry_integration: str` and added `supports_callbacks`/`supports_multi_team`; 3.3
+    additionally added `supports_connection_test`. This is a genuine runtime
+    observation of the installed `BaseExecutor`, not a release-keyed lookup, so a
+    maintainer certifying a new release with the wrong contract is caught here rather
+    than trusted silently.
+
+    Parameters:
+        version: str reported by package metadata.
+
+    Returns:
+        ExecutorContract naming the resolved certified attribute contract.
+
+    Raises:
+        AirflowCompatibilityError: Neither certified sentry flag is present.
+    """
+
+    base_executor = _resolve_symbol("airflow.executors.base_executor", "BaseExecutor", version)
+    if hasattr(base_executor, "supports_sentry"):
+        return ExecutorContract.V3_1
+    if not hasattr(base_executor, "sentry_integration"):
+        error = ValueError("neither `sentry_integration` nor `supports_sentry` is present")
+        _raise_compatibility_error(
+            version,
+            "probing canonical Airflow symbol",
+            "airflow.executors.base_executor.BaseExecutor.sentry_integration",
+            error,
+        )
+    if hasattr(base_executor, "supports_connection_test"):
+        return ExecutorContract.V3_3
+    return ExecutorContract.V3_2
+
+
+def _probe_sdk_listener_manager_available(version: str) -> bool:
+    """Probe whether `airflow.sdk.listener` exposes its own listener manager.
+
+    A missing module or callable observes as False rather than raising: the certified
+    3.x value is True, so `_verify_contract` is what turns a real removal into a loud
+    `AirflowCompatibilityError` instead of this probe raising directly, mirroring how
+    `_probe_dag_bag` falls back instead of raising when the newer location is absent.
+
+    Parameters:
+        version: str reported by package metadata.
+
+    Returns:
+        bool indicating whether a callable `get_listener_manager` was observed.
+
+    Raises:
+        AirflowCompatibilityError: Resolving the module raises something other than
+            an import or attribute failure.
+    """
+
+    try:
+        module = import_module("airflow.sdk.listener")
+        get_listener_manager = module.get_listener_manager
+    except (ImportError, AttributeError):
+        return False
+    except Exception as error:
+        _raise_compatibility_error(
+            version,
+            "probing canonical Airflow symbol",
+            "airflow.sdk.listener.get_listener_manager",
+            error,
+        )
+    return callable(get_listener_manager)
+
+
+def _probe_task_instance_mutation_hook_supports_dag_run(installed_version: str) -> bool:
+    """Probe whether the `task_instance_mutation_hook` hookspec declares `dag_run`.
+
+    Parameters:
+        installed_version: str reported by package metadata.
+
+    Returns:
+        bool indicating whether the real, installed hookspec accepts a `dag_run`
+        parameter.
+
+    Raises:
+        AirflowCompatibilityError: The hookspec cannot be resolved or inspected.
+    """
+
+    hook = _resolve_symbol("airflow.policies", "task_instance_mutation_hook", installed_version)
+    return _signature_has_parameter(
+        hook,
+        "airflow.policies.task_instance_mutation_hook",
+        "dag_run",
+        installed_version,
+    )
+
+
 def _probe_task_instance_runner(task_instance: object, version: str) -> TaskInstanceRunner:
     """Resolve legacy or Task SDK task execution behavior.
 
@@ -1069,6 +1477,9 @@ _PROBED_FIELD_LABELS: dict[str, str] = {
     "startup_details_supports_sentry": "StartupDetails.sentry_integration",
     "runtime_task_instance_supports_queue": "TaskInstance DTO queue",
     "asset_unique_key_location": "Asset unique-key canonical location",
+    "executor_contract": "BaseExecutor attribute contract",
+    "sdk_listener_manager_available": "airflow.sdk.listener manager",
+    "task_instance_mutation_hook_supports_dag_run": "task_instance_mutation_hook.dag_run",
 }
 
 
@@ -1151,6 +1562,9 @@ def _resolve_uncached(
     startup_details_supports_sentry: bool | None = None
     runtime_task_instance_supports_queue: bool | None = None
     asset_unique_key_location: AssetUniqueKeyLocation | None = None
+    executor_contract: ExecutorContract | None = None
+    sdk_listener_manager_available = False
+    task_instance_mutation_hook_supports_dag_run = False
     if is_v3:
         asset_unique_key_location = _probe_asset_unique_key_location(installed_version)
         startup_details = _resolve_symbol(
@@ -1170,6 +1584,11 @@ def _resolve_uncached(
             "airflow.sdk.api.datamodels._generated.TaskInstance",
             "queue",
             installed_version,
+        )
+        executor_contract = _probe_executor_contract(installed_version)
+        sdk_listener_manager_available = _probe_sdk_listener_manager_available(installed_version)
+        task_instance_mutation_hook_supports_dag_run = (
+            _probe_task_instance_mutation_hook_supports_dag_run(installed_version)
         )
     serialized_dag_location = _probe_serialized_dag(installed_version)
 
@@ -1204,6 +1623,13 @@ def _resolve_uncached(
         max_python=None if is_v3 else V2_MAX_PYTHON_BY_RELEASE[release],
         dag_requires_start_date=_dag_requires_start_date(family, release),
         asset_unique_key_location=asset_unique_key_location,
+        executor_contract=executor_contract,
+        sdk_listener_manager_available=sdk_listener_manager_available,
+        task_instance_mutation_hook_supports_dag_run=(
+            task_instance_mutation_hook_supports_dag_run
+        ),
+        plugins_manager=_plugins_manager_shape(release) if is_v3 else None,
+        shared_module_loading=_shared_module_loading(release) if is_v3 else None,
     )
 
     for module_name, symbol_name in _REQUIRED_SYMBOLS_BY_FAMILY[family]:
@@ -1248,8 +1674,11 @@ __all__ = (
     "AssetUniqueKeyLocation",
     "DagBagLocation",
     "DagRunInterface",
+    "ExecutorContract",
     "ParamsLocation",
+    "PluginsManagerShape",
     "SecretsResolution",
+    "SharedModuleLoading",
     "TaskInstanceRunner",
     "TimezoneLocation",
     "installed_family",
