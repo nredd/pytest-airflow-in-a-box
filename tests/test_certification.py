@@ -217,14 +217,29 @@ def test_certification_probe_report_flags_cache_drift_on_a_certified_release(
 ) -> None:
     """Report exit code 2 and the `DRIFT` marker when a certified release drifted.
 
+    The faked drifted modules are `functools.cache`-shaped, so the resolved shape is
+    pinned to `CACHED_FUNCTIONS` explicitly -- on a real 3.1.x compat leg the live
+    contract resolves `MODULE_GLOBALS` and the audit would otherwise (correctly)
+    render presence-diff lines this test does not assert.
+
     Parameters:
-        monkeypatch: pytest.MonkeyPatch faking the live plugins-manager modules.
+        monkeypatch: pytest.MonkeyPatch faking the capabilities and module seams.
     """
 
+    fake_capabilities = replace(
+        resolve_capabilities(),
+        plugins_manager=PluginsManagerShape.CACHED_FUNCTIONS,
+        shared_module_loading=SharedModuleLoading.SINGLE,
+    )
     drifted_core = _fake_cached_module(("surprise_cache",), "fake_drifted_core")
     drifted_sdk = _fake_cached_module((), "fake_drifted_sdk")
+    shared = _fake_cached_module(("_get_grouped_entry_points",), "fake_shared")
+    monkeypatch.setattr(capability_module, "resolve_capabilities", lambda: fake_capabilities)
     monkeypatch.setattr(
         compat_components, "_plugins_manager_modules", lambda: (drifted_core, drifted_sdk)
+    )
+    monkeypatch.setattr(
+        compat_components, "_shared_module_loading_modules", lambda _shape: (shared,)
     )
 
     text, code = certification.certification_probe_report()
