@@ -22,14 +22,9 @@ import pytest_airflow_in_a_box
 
 # Known leaks awaiting their own rerouting PR, keyed by path relative to the package
 # root. The assertion below exact-matches this set, so rerouting a leak without
-# pruning its entry fails loudly -- the allowlist only ever shrinks.
-# `airflow.cli.simple_table` is replaced by an owned renderer in issue #213's
-# follow-up PR.
-_KNOWN_LEAKS: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("smoke.py", "airflow.cli.simple_table"),
-    }
-)
+# pruning its entry fails loudly -- the allowlist only ever shrinks. Empty since the
+# owned renderer replaced `airflow.cli.simple_table` (#213); the seam is sealed.
+_KNOWN_LEAKS: frozenset[tuple[str, str]] = frozenset()
 
 
 def _is_type_checking_guard(test: ast.expr) -> bool:
