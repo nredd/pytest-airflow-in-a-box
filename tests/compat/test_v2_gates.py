@@ -35,6 +35,35 @@ def test_gate_message_names_surface_detail_and_issue(
     assert capability_module.v2_gate_message("run_task", "detail.") is None
 
 
+def test_require_v3_fails_on_v2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Perform the refusal itself on the 2.x family, carrying the full gate message.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch pinning the classified family.
+    """
+
+    monkeypatch.setattr(capability_module, "installed_family", lambda: AirflowFamily.V2)
+
+    with pytest.raises(pytest.fail.Exception) as caught:
+        capability_module.require_v3("run_task", "use `run_ti` instead.")
+
+    assert "`run_task`" in str(caught.value)
+    assert "use `run_ti` instead." in str(caught.value)
+    assert "issues/25" in str(caught.value)
+
+
+def test_require_v3_noop_on_v3(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return without failing off the 2.x family.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch pinning the classified family.
+    """
+
+    monkeypatch.setattr(capability_module, "installed_family", lambda: AirflowFamily.V3)
+
+    capability_module.require_v3("run_task", "detail.")
+
+
 def _drive_fixture(raw: Any, arguments: tuple[Any, ...]) -> None:
     """Run a raw fixture function far enough to reach its family gate.
 
@@ -72,11 +101,11 @@ def test_fixtures_fail_loud_when_gated(
     in-process test that requests it.
     """
 
-    def fake_gate(surface: str, detail: str) -> str:
+    def fake_gate(surface: str, detail: str) -> None:
         del detail
-        return f"gated `{surface}`"
+        pytest.fail(f"gated `{surface}`", pytrace=False)
 
-    monkeypatch.setattr(module, "v2_gate_message", fake_gate)
+    monkeypatch.setattr(module, "require_v3", fake_gate)
     raw = getattr(module, fixture_name).__wrapped__
     # Every fixture named here takes one positional fixture argument (`request` or
     # `pytestconfig`); the gate check runs before that argument is ever touched, so a

@@ -27,7 +27,9 @@ from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 from pytest_airflow_in_a_box._compat.capabilities import (
+    MAX_V3_PYTHON,
     MIN_V2_PYTHON,
+    MIN_V3_PYTHON,
     SUPPORTED_RELEASES_BY_FAMILY,
     AirflowFamily,
     max_v2_python,
@@ -47,12 +49,10 @@ EXIT_TOOLING_ERROR = 2
 
 WORK_DIR_PREFIX = "airflow-migration-diff-"
 # The plugin has no `apache-airflow-core` release above 3.x's certified ceiling to fall
-# back to, so an out-of-range interpreter (this package's own 3.10-3.14 support matrix)
+# back to, so an out-of-range interpreter (outside `MIN_V3_PYTHON`-`MAX_V3_PYTHON`)
 # falls back to a known-good 3.12. The 2.x default clamps to the requested release's own
 # bounds instead, because 2.7/2.8 cap at 3.11 and 2.9+ reach 3.12.
 _FALLBACK_PYTHON = "3.12"
-_MIN_V3_PYTHON = (3, 10)
-_MAX_V3_PYTHON = (3, 14)
 
 
 @dataclass(frozen=True)
@@ -160,10 +160,10 @@ def _default_python_v3(current: tuple[int, int]) -> str:
 
     Returns:
         str containing the current interpreter's `X.Y` version when it falls inside
-        `[3.10, 3.14]`, else the `_FALLBACK_PYTHON` constant.
+        `[MIN_V3_PYTHON, MAX_V3_PYTHON]`, else the `_FALLBACK_PYTHON` constant.
     """
 
-    if _MIN_V3_PYTHON <= current <= _MAX_V3_PYTHON:
+    if MIN_V3_PYTHON <= current <= MAX_V3_PYTHON:
         return f"{current[0]}.{current[1]}"
     return _FALLBACK_PYTHON
 

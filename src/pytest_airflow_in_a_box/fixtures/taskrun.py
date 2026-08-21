@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from pytest_airflow_in_a_box._compat.capabilities import v2_gate_message
+from pytest_airflow_in_a_box._compat.capabilities import require_v3
 from pytest_airflow_in_a_box._compat.in_process import (
     DEFAULT_RUN_ID,
     FakeSupervisorComms,
@@ -101,13 +101,11 @@ def run_task(request: pytest.FixtureRequest) -> RunTask:
         RunTask executing one operator per call with isolated seeded state.
     """
 
-    message = v2_gate_message(
+    require_v3(
         "run_task",
         "it drives the Task SDK in-process runner, which 2.x predates. Use "
         "`dag_maker.run_ti` or `run_task_instance` for DB-backed execution instead.",
     )
-    if message is not None:
-        pytest.fail(message, pytrace=False)
 
     nodeid = request.node.nodeid
     fileloc = str(Path(str(request.node.path)).resolve())

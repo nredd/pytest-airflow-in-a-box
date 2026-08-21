@@ -109,6 +109,17 @@ SUPPORTED_VERSIONS_V2 = tuple(
 # It is interpolated into the over-cap message so the reported range is the usable one.
 # The ceiling is per release -- see `V2_MAX_PYTHON_BY_RELEASE`.
 MIN_V2_PYTHON = (3, 10)
+# This package's own supported CPython range for the Airflow 3.x family. Tied to
+# `pyproject.toml`: `requires-python = ">=3.10"` plus the 3.10-3.14 trove classifiers.
+# Bump these together with that metadata.
+MIN_V3_PYTHON = (3, 10)
+MAX_V3_PYTHON = (3, 14)
+# The first Airflow 3.x release that applies the `create_metadata_engine` override from
+# `airflow_local_settings.py` reliably: 3.1.* and 3.2.0 import the module before
+# creating the metadata engine but do not honor the override, so those releases (and
+# the whole 2.x family, which has no override point at all) need the path-scoped
+# SQLAlchemy listener fallback in `storage/sqlite.py`.
+SQLITE_ENGINE_OVERRIDE_RELIABLE_SINCE: Release = (3, 2, 1)
 AIRFLOW_DISTRIBUTION = AirflowFamily.V3.value
 AIRFLOW_META_DISTRIBUTION = AirflowFamily.V2.value
 # Escape hatch for the fail-closed metadata corruption check: an Airflow source
@@ -1137,6 +1148,73 @@ def v2_gate_message(surface: str, detail: str) -> str | None:
         f"scope is tracked in "
         f"https://github.com/nredd/pytest-airflow-in-a-box/issues/25."
     )
+
+
+def require_v3(surface: str, detail: str) -> None:
+    """Refuse a 3.x-only fixture surface loudly when the 2.x family is installed.
+
+    The performing sibling of `v2_gate_message`: it builds the same message and
+    executes the refusal itself, so a gated fixture cannot forget `pytrace=False` or
+    proceed past a non-None message. Off the 2.x family this returns immediately and
+    stays exactly as cheap as the message probe.
+
+    Parameters:
+        surface: str naming the requested fixture surface.
+        detail: str explaining why 2.x lacks it and what to use instead.
+
+    Raises:
+        pytest.fail.Exception: The 2.x family is installed; the failure carries the
+            `v2_gate_message` text without a traceback.
+    """
+
+    message = v2_gate_message(surface, detail)
+    if message is None:
+        return
+    # Deferred on purpose: `_compat` stays pytest-free at module scope, and the one
+    # gate that needs pytest must not grow the whole compatibility layer a module-level
+    # pytest dependency.
+    import pytest
+
+    pytest.fail(message, pytrace=False)
+
+
+def sqlite_engine_override_reliable() -> bool | None:
+    """Classify whether the installed release applies the SQLite engine override reliably.
+
+    Metadata-only on purpose, like `installed_family()`: the caller
+    (`storage/sqlite.py`'s `install_legacy_sqlite_listener`) runs while Airflow imports
+    the generated ``airflow_local_settings.py``, a context where calling
+    `resolve_capabilities()` would recurse into the very import in progress. This is
+    also deliberately NOT an `AirflowCapabilities` field: the resolved contract would
+    carry a consumer-less duplicate of this single call site's answer.
+
+    Classification compares against `SQLITE_ENGINE_OVERRIDE_RELIABLE_SINCE`, which is
+    exactly "not 3.1.* and not 3.2.0" over the certified set and extrapolates sanely
+    to uncertified releases in either direction.
+
+    Returns:
+        bool | None -- True when the installed 3.x release applies the
+        ``create_metadata_engine`` override reliably, False on the 2.x family (no
+        override point at all) and on 3.x releases below the threshold, or None when
+        no release is classifiable (Airflow-free, unreadable, or unparseable
+        metadata).
+    """
+
+    family = installed_family()
+    if family is AirflowFamily.V2:
+        return False
+    if family is not AirflowFamily.V3:
+        return None
+    try:
+        installed_version = metadata.version(AIRFLOW_DISTRIBUTION)
+    except Exception:
+        # `installed_family()` just classified V3 from this same read, but the
+        # environment can mutate between calls; stay never-raising like the sibling.
+        return None
+    release = _parse_release(installed_version)
+    if release is None:
+        return None
+    return release >= SQLITE_ENGINE_OVERRIDE_RELIABLE_SINCE
 
 
 def _running_python() -> tuple[int, int]:
