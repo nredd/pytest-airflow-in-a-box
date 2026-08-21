@@ -175,11 +175,17 @@ ranges are disjoint.
 The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
 `pytest_plugins` declaration.
 
-The bundled pytest plugins are intentional runtime dependencies. `pytest-xdist` is part of the
-supported execution model: controller bootstrap state and worker-scoped artifacts are coordinated
-for parallel runs. `pytest-timeout` backs up Airflow's per-file Dag parse watchdog with a
-corpus-scaled deadline on every bundled smoke item, so whichever worker produces the shared corpus
-cannot wedge the test session outside the per-file parser boundary.
+`pytest-timeout` is an intentional runtime dependency: it backs up Airflow's per-file Dag parse
+watchdog with a corpus-scaled deadline on every bundled smoke item, so whichever worker produces
+the shared corpus cannot wedge the test session outside the per-file parser boundary.
+
+`pytest-xdist` is not required to use the plugin -- controller bootstrap state and worker-scoped
+artifacts are coordinated whenever xdist happens to be running, but nothing in the plugin imports
+it directly. Install the `xdist` extra to opt into parallel runs:
+
+```console
+pip install "pytest-airflow-in-a-box[xdist]"
+```
 
 The plugin is inert on runs without Airflow-facing tests: session startup only prepares a
 disposable run directory and `AIRFLOW__*` environment variables. Airflow itself is imported and

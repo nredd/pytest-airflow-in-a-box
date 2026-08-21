@@ -180,11 +180,11 @@ jobs:
             uv pip install --python .venv-ci/bin/python \
               --constraint airflow-constraints.txt \
               "apache-airflow==${AIRFLOW_VERSION}"
-            uv pip install --python .venv-ci/bin/python --editable . "pytest>=8,<9"
+            uv pip install --python .venv-ci/bin/python --editable ".[xdist]" "pytest>=8,<9"
           else
             uv pip install --python .venv-ci/bin/python \
               --constraint airflow-constraints.txt \
-              --editable . \
+              --editable ".[xdist]" \
               "apache-airflow-core==${AIRFLOW_VERSION}" \
               "apache-airflow-providers-sqlite>=4.1,<5"
           fi
@@ -244,7 +244,7 @@ jobs:
             --output airflow-constraints.txt
           uv pip install --python .venv-ci/bin/python \
             --constraint airflow-constraints.txt \
-            --editable . \
+            --editable ".[xdist]" \
             "apache-airflow-core==${AIRFLOW_VERSION}" \
             "apache-airflow-providers-sqlite>=4.1,<5"
           uv pip install --python .venv-ci/bin/python coverage

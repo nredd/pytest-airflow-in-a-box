@@ -3641,7 +3641,6 @@ dependencies = [
     { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "pytest-xdist" },
     { name = "sqlalchemy", version = "1.4.54", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-23-pytest-airflow-in-a-box-airflow2') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
     { name = "sqlalchemy", version = "2.0.51", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' or extra != 'extra-23-pytest-airflow-in-a-box-airflow2' or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'extra-23-pytest-airflow-in-a-box-airflow3') or (extra == 'extra-23-pytest-airflow-in-a-box-airflow2' and extra == 'group-23-pytest-airflow-in-a-box-dev')" },
 ]
@@ -3659,6 +3658,9 @@ postgres = [
     { name = "psycopg2-binary" },
     { name = "testcontainers" },
 ]
+xdist = [
+    { name = "pytest-xdist" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -3667,6 +3669,7 @@ dev = [
     { name = "build" },
     { name = "prek" },
     { name = "pytest-cov" },
+    { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "towncrier" },
     { name = "ty" },
@@ -3688,11 +3691,11 @@ requires-dist = [
     { name = "psycopg2-binary", marker = "extra == 'postgres'", specifier = ">=2.9,<3" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-timeout", specifier = ">=2.4" },
-    { name = "pytest-xdist", specifier = ">=3.8" },
+    { name = "pytest-xdist", marker = "extra == 'xdist'", specifier = ">=3.8" },
     { name = "sqlalchemy", specifier = ">=1.4.36,<3" },
     { name = "testcontainers", marker = "extra == 'postgres'", specifier = ">=4.15,<5" },
 ]
-provides-extras = ["airflow3", "airflow2", "postgres"]
+provides-extras = ["airflow3", "airflow2", "postgres", "xdist"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3701,6 +3704,7 @@ dev = [
     { name = "build", specifier = "==1.5.0" },
     { name = "prek", specifier = "==0.4.13" },
     { name = "pytest-cov", specifier = "==7.1.0" },
+    { name = "pytest-xdist", specifier = ">=3.8" },
     { name = "ruff", specifier = "==0.16.2" },
     { name = "towncrier", specifier = "==24.8.0" },
     { name = "ty", specifier = "==0.0.70" },
