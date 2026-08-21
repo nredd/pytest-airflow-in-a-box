@@ -8,6 +8,106 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.9.0] - 2026-08-21
+
+### Added
+
+- Add the `airflow_local_settings` ini option to compose run-wide Airflow cluster policies without editing the generated file.
+  ([#109](https://github.com/nredd/pytest-airflow-in-a-box/issues/109)).
+- Add `check_component` for pure static conformance checks on custom timetables, listeners, and executors, catching shape bugs (a locally defined timetable, a listener hookimpl matching no hookspec or reachable from only one manager, a stale or wrong-type executor attribute) before they reach a scheduler.
+  ([#110](https://github.com/nredd/pytest-airflow-in-a-box/issues/110)).
+- Extend `check_component` to XCom backends, weight strategies, notifiers, secrets backends, policies, plugins, and providers, catching shape bugs (a removed `orm_deserialize_value`, an XCom backend override that cannot accept its real call shape, an unresolved abstract weight strategy or one that never overrides `__hash__`, a notifier missing `notify` or naming an unresolvable `template_fields` entry, a secrets backend getter that cannot return `None` on a miss, a policy hookimpl matching no hookspec or declaring an argument its hookspec does not accept, a plugin missing `name`, and a provider whose info dict fails schema validation, disagrees with its own distribution's name, or is never discovered at all for lack of an entry point) before they reach a scheduler, worker, or the Dag processor.
+  ([#111](https://github.com/nredd/pytest-airflow-in-a-box/issues/111)).
+- Add a `plugins/` directory to the generated `AIRFLOW_HOME`, plus the `airflow_plugins_folder`, `airflow_executor`, `airflow_xcom_backend`, `airflow_secrets_backend`, and `airflow_secrets_backend_kwargs` ini options, so a run can carry a plugins folder, an executor, an XCom backend, and a secrets backend, all fixed in `airflow.cfg` and the pre-import environment before the first Airflow import.
+  ([#112](https://github.com/nredd/pytest-airflow-in-a-box/issues/112)).
+- Add the `airflow_components` fixture yielding a `ComponentRegistry` that registers a custom plugin, listener, policy, secrets backend, or executor for one test and reverts every Airflow global registry it touched afterward, with every registration method running `check_component` first and raising on any conformance problem.
+  ([#113](https://github.com/nredd/pytest-airflow-in-a-box/issues/113)).
+- Add `timetable`, `priority_weight_strategy`, and `serialization_round_trip` methods to the `airflow_components` registry, teach `round_trip` to classify both new kinds, and make `dag_maker(schedule=...)` register a custom Airflow 3 timetable automatically before serialization so the `SerializedDagModel` round trip works without any plugin wiring.
+  ([#114](https://github.com/nredd/pytest-airflow-in-a-box/issues/114)).
+- Add the `airflow_isolated` marker, which runs marked tests in a one-shot child pytest process with a synthetic entry-point distribution on `PYTHONPATH` and `AIRFLOW__*` overrides applied before the first Airflow import, so `airflow.plugins`, `apache_airflow_provider`, and `airflow.policy` entry points -- and import-time-bound settings like a custom XCom backend -- are exercised through Airflow's real `importlib.metadata` discovery instead of monkeypatched caches; identically-marked module-mates share one child invocation.
+  ([#115](https://github.com/nredd/pytest-airflow-in-a-box/issues/115)).
+- Add the DB-free `task_context` fixture, opening a real Task SDK `RuntimeTaskInstance`-backed template context for hand-driven `execute()`/`post_execute()` testing.
+  ([#191](https://github.com/nredd/pytest-airflow-in-a-box/issues/191)).
+- `run_task`, `render_task`, and `task_context` now accept an operator that is not bound to any Dag: the fixture auto-creates and binds a synthetic `airflow.sdk.DAG` in place, named by an explicit `dag_id=` or a deterministic per-test, xdist-safe identifier, removing the `dag=DAG(...)` boilerplate DB-free tests previously required.
+  ([#192](https://github.com/nredd/pytest-airflow-in-a-box/issues/192)).
+- Add the `airflow_config` ini option for repo-wide Airflow configuration, applied as `AIRFLOW__SECTION__KEY` variables during pytest's initial parse -- before any consumer conftest is imported, and therefore before the first `full_dag_bag` parse. Lines are `section.key = value`; options this plugin's bootstrap owns (`database.sql_alchemy_conn`, `core.dags_folder`, and the rest of the isolation surface) are rejected with an error naming the supported knob instead, and `--airflow-doctor` echoes whatever is declared, redacting any value whose option name reads as a credential. `core.dagbag_import_timeout` is additionally rejected when the bundled smoke catalog is enabled, because the catalog pins that same variable from `airflow_dag_parse_timeout`.
+
+  Add the session-scoped `airflow_configure` fixture, yielding a callable that applies `airflow_config` overrides for the rest of the session and restores them at teardown -- the supported form of the `scope="session", autouse=True` wrapper consumer repos were hand-rolling. Prefer the `airflow_config` ini option for anything that must precede the first Dag parse.
+
+  Add the `airflow_home_path` and `airflow_dags_folder_path` fixtures, returning this run's isolated `AIRFLOW_HOME` and the Dag directory `full_dag_bag` parses, so consumer repos no longer import `pytest_airflow_in_a_box.bootstrap` internals to reach paths the plugin already resolves.
+  ([#202](https://github.com/nredd/pytest-airflow-in-a-box/issues/202)).
+- Suppress alembic's `path_separator` `DeprecationWarning` emitted from the plugin's own metadata-database bootstrap through the new `airflow_default_filterwarnings` ini option; redefining the option (even to an empty value) replaces the default filter list wholesale.
+  ([#206](https://github.com/nredd/pytest-airflow-in-a-box/issues/206)).
+
+### Changed
+
+- Scaffold `docs/agents/` config (issue tracker, triage labels, domain docs) and an `## Agent skills` section in `AGENTS.md` for coding-agent tooling.
+  ([#199](https://github.com/nredd/pytest-airflow-in-a-box/issues/199)).
+- Flip release certification to probe-and-degrade: an uncertified Airflow 3.x release at or
+  above the certified floor now resolves capabilities by live probing (`CertificationTier.PROBED`)
+  instead of hard-failing, the component sandbox snapshots/clears unknown plugins-manager caches
+  generically, and the degraded tier is surfaced via a once-per-session `UncertifiedAirflowWarning`,
+  a `DEGRADED:` bullet in `--airflow-doctor`, and the new `ComponentReport.certification` field.
+  The weekly canary now runs an explicit certification probe so a new upstream release files
+  re-certification work before users hit the degraded tier.
+  ([#212](https://github.com/nredd/pytest-airflow-in-a-box/issues/212)).
+- Render the `--airflow-smoke` parse and serialization report tables with an owned plain-text renderer instead of Airflow's unstable `airflow.cli.simple_table.AirflowConsole` CLI internal. Row content, sort order, and log lines are unchanged; long paths are no longer wrapped to a fixed console width, and an empty report renders its header row instead of `No data found`.
+  ([#213](https://github.com/nredd/pytest-airflow-in-a-box/issues/213)).
+- Route the remaining runtime Airflow-internal imports outside `_compat` -- `airflow.utils.session.create_session`, `airflow.models.pool.Pool`, `airflow.configuration.conf`, `airflow.settings.configure_vars`, and `airflow.timetables.base.TimeRestriction` -- through deferred-import seams in `_compat`, and add a seam-guard test that fails on any new runtime `airflow` import outside `_compat`.
+  ([#213](https://github.com/nredd/pytest-airflow-in-a-box/issues/213)).
+- Deepen `v2_gate_message` into `require_v3(surface, detail)`, which performs the 2.x refusal
+  itself (`pytest.fail(..., pytrace=False)`), and migrate all six gated fixtures to it. The
+  remaining version decisions move into `_compat/capabilities.py`: the SQLite engine-override
+  reliability boundary is now `sqlite_engine_override_reliable()` (reliable since Airflow 3.2.1,
+  extrapolating to uncertified releases), and the migration CLI's supported-Python range is now
+  `MIN_V3_PYTHON`/`MAX_V3_PYTHON` beside `MIN_V2_PYTHON`.
+  ([#214](https://github.com/nredd/pytest-airflow-in-a-box/issues/214)).
+- Unify the internals shared by the two component installation channels: both plugins-manager
+  cache-invalidation surfaces (`clear_plugins_manager_caches`, `invalidate_component_lookup_caches`)
+  now route through one private `_drop_caches` mechanic, the three timetable registration policies
+  (strict `airflow_components.timetable`, the lenient `dag_maker(schedule=...)` gate, and
+  `serialization_round_trip`) fold into one `_gate_and_register_timetable` implementation driven by
+  policy data, and the precedence contract between the component ini options, the `airflow_config`
+  overrides, and the `airflow_components` sandbox is now documented ("How the two channels compose"
+  plus "Hazards at the sandbox seam" in the custom-components guide) and pinned by interaction tests:
+  ini-seeded executors, secrets backends, plugins-folder plugins, and plugins-folder listeners all
+  survive sandbox finalize, a sandbox-registered secrets backend stays visible through upstream's
+  `ensure_secrets_loaded()` heuristic, and an `airflow_config` `core.executor` line outranks the
+  `airflow_executor` ini.
+  ([#215](https://github.com/nredd/pytest-airflow-in-a-box/issues/215)).
+- Move `pytest-xdist` from a required runtime dependency to the new `xdist` optional extra (`pip install "pytest-airflow-in-a-box[xdist]"`).
+  ([#217](https://github.com/nredd/pytest-airflow-in-a-box/issues/217)).
+- Run the compat CI matrix under `-n auto --dist loadgroup` by default instead of serially, and add a `make test-xdist` target so contributors can reproduce that configuration locally. `make test` stays serial because the coverage gate depends on it.
+
+### Fixed
+
+- Guard against a foreign `airflow_local_settings` module silently shadowing the generated one and dropping SQLite engine tuning.
+  ([#109](https://github.com/nredd/pytest-airflow-in-a-box/issues/109)).
+- Harden `test_failed_context_body_does_not_persist_metadata` to raise a sentinel exception instead of `RuntimeError`, so an entry-path `DagPersistenceError` can no longer be masked as a `pytest.raises` regex mismatch.
+  ([#153](https://github.com/nredd/pytest-airflow-in-a-box/issues/153)).
+- Tolerate the Airflow 2.x `dag_code.fileloc_hash` UNIQUE-constraint race between
+  pytest-xdist workers sharing one metadata database: the 2.x Dag metadata sync now rolls
+  back and retries a concurrent-writer `IntegrityError` naming `dag_code`, and Dag cleanup
+  no longer deletes the shared per-file `dag_code` row (which re-armed the race on every
+  teardown). Other constraint violations, sessions carrying staged user state, and the 3.x
+  family deliberately keep no retry.
+  ([#157](https://github.com/nredd/pytest-airflow-in-a-box/issues/157)).
+- Retry the Airflow constraints download in CI on transient network failures instead of
+  failing the leg outright.
+  ([#201](https://github.com/nredd/pytest-airflow-in-a-box/issues/201)).
+- The SQLite engine-override version check now compares release tuples instead of string
+  prefixes, so a future Airflow 3.10.x on the probed tier is no longer misclassified as
+  override-unreliable by `startswith("3.1.")` and no longer gets the legacy listener installed
+  on top of the working `create_metadata_engine` override.
+  ([#214](https://github.com/nredd/pytest-airflow-in-a-box/issues/214)).
+- Fix the custom-components guide's executor alias documentation: `airflow_config(executor=...)` is
+  not a real signature, and no configuration surface can select a sandbox executor alias at all --
+  the `airflow_executor` ini is resolved before the first Airflow import, when no alias exists yet,
+  and a `core.executor` override is silently ignored because `ExecutorLoader` has already memoized
+  its config parse by the time the alias exists. The alias resolves through
+  `ExecutorLoader.load_executor(alias)` / `ExecutorLoader.lookup_executor_name_by_str(alias)`.
+  ([#215](https://github.com/nredd/pytest-airflow-in-a-box/issues/215)).
+
 ## [0.8.0] - 2026-08-17
 
 ### Added
