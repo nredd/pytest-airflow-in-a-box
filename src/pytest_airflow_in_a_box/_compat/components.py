@@ -702,12 +702,21 @@ EXECUTOR_MISSING_OVERRIDE = "executor-missing-override"
 EXECUTOR_STALE_ATTRIBUTE = "executor-stale-attribute"
 EXECUTOR_FLAG_WRONG_TYPE = "executor-flag-wrong-type"
 
-# `sync`, `_process_workloads`, `end`, and `terminate` all exist on `BaseExecutor` across
-# the whole certified 3.1-3.3 range with a body that is either a silent no-op (`sync`) or
-# a `raise NotImplementedError` (the other three); none is abstract, so nothing forces a
+# `sync`, `_process_workloads`, and `end` all exist on `BaseExecutor` across the whole
+# certified 3.1-3.3 range with a body that is either a silent no-op (`sync`) or a
+# `raise NotImplementedError` (the other two); none is abstract, so nothing forces a
 # subclass to override them. Verified against the installed 3.3.0, plus 3.1.0 and 3.2.0
 # in isolated environments; see `PROVENANCE.md`.
-_EXECUTOR_REQUIRED_OVERRIDES = ("sync", "_process_workloads", "end", "terminate")
+#
+# `terminate` is deliberately NOT in this table despite sharing the same raising default:
+# reading the installed 3.3.0 scheduler directly (`SchedulerJobRunner._execute`'s
+# `finally` block, `airflow/jobs/scheduler_job_runner.py`) shows only `executor.end()` is
+# ever called on shutdown, including on SIGTERM -- `_exit_gracefully` just calls
+# `sys.exit()`, which unwinds into that same `finally`. No certified-3.x code path (this
+# plugin's own `_compat/executor.py::executor_runtime` included, which drives `start`/
+# `end` only) ever calls `BaseExecutor.terminate`, so requiring it here would flag
+# executors for a failure mode that cannot occur, unlike `end`.
+_EXECUTOR_REQUIRED_OVERRIDES = ("sync", "_process_workloads", "end")
 _OVERRIDE_HINTS: dict[str, str] = {
     "sync": (
         "`BaseExecutor.sync`'s default body does nothing; the heartbeat loop calls it "
@@ -718,12 +727,8 @@ _OVERRIDE_HINTS: dict[str, str] = {
         "the scheduler calls it for every batch of queued work."
     ),
     "end": (
-        "`BaseExecutor.end`'s default body raises `NotImplementedError`; it is called "
-        "once as a run winds down, to wait for outstanding work."
-    ),
-    "terminate": (
-        "`BaseExecutor.terminate`'s default body raises `NotImplementedError`; it is "
-        "called on SIGTERM, to kill outstanding work."
+        "`BaseExecutor.end`'s default body raises `NotImplementedError`; the scheduler "
+        "calls it once as a run winds down, to wait for outstanding work."
     ),
 }
 

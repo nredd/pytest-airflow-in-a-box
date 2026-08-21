@@ -61,9 +61,6 @@ class IniExecutor(BaseExecutor):
     def end(self):
         pass
 
-    def terminate(self):
-        pass
-
 
 class OverrideExecutor(BaseExecutor):
     def sync(self):
@@ -75,9 +72,6 @@ class OverrideExecutor(BaseExecutor):
     def end(self):
         pass
 
-    def terminate(self):
-        pass
-
 
 class SandboxExecutor(BaseExecutor):
     def sync(self):
@@ -87,9 +81,6 @@ class SandboxExecutor(BaseExecutor):
         pass
 
     def end(self):
-        pass
-
-    def terminate(self):
         pass
 '''
 

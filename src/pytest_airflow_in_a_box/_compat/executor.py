@@ -72,14 +72,16 @@ _POLL_INTERVAL_SECONDS = 0.05
 # because resuming from those is a triggerer's or a scheduler's job, not an executor's.
 _IN_FLIGHT_STATE_VALUES = frozenset({"queued", "restarting", "running", "scheduled"})
 
-# `BaseExecutor.start` is a no-op default, but `end` and `terminate` raise
-# `NotImplementedError` outright, so a custom executor that skipped them explodes at
-# teardown *after* a run that otherwise succeeded. Naming the method beats surfacing a
-# bare `NotImplementedError` from inside a `finally`.
+# `BaseExecutor.start` is a no-op default and not required by `check_component`. `end`
+# raises `NotImplementedError` outright and IS required
+# (`_EXECUTOR_REQUIRED_OVERRIDES` in `_compat/components.py`) -- `executor_runtime`'s
+# `check_component` preflight already refuses an executor that never overrode it, before
+# `_lifecycle` ever runs. This translation is therefore the residual guard for an
+# override that exists but calls the raising default itself (directly or via `super()`);
+# naming the method beats surfacing a bare `NotImplementedError` from inside a `finally`.
 _LIFECYCLE_HINT = (
-    "`BaseExecutor.{name}` raises `NotImplementedError` by default, so every executor "
-    "must override it. Add a `{name}` to the executor class; "
-    "`pytest_airflow_in_a_box.check_component` reports the rest of the class shape."
+    "`BaseExecutor.{name}` raises `NotImplementedError` by default. Give the executor a "
+    "real `{name}` that does not call the inherited default."
 )
 
 

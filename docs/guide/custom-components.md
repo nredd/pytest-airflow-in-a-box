@@ -104,9 +104,11 @@ architecture predates the Task SDK's separate manager entirely.
 
 ## Executor checks
 
-- `executor-missing-override` -- `sync`, `_process_workloads`, `end`, or `terminate` is
-  not overridden. None is abstract: `sync`'s default silently does nothing, and the other
-  three's defaults raise `NotImplementedError`
+- `executor-missing-override` -- `sync`, `_process_workloads`, or `end` is not
+  overridden. None is abstract: `sync`'s default silently does nothing, and the other
+  two's defaults raise `NotImplementedError`. `terminate` shares that same raising
+  default but is not checked: no certified 3.x scheduler path ever calls it, SIGTERM
+  included
 - `executor-stale-attribute` -- the executor sets `is_single_threaded`, `supports_pickling`,
   `change_sensitivity`, or `execute_async`. All four are still documented in older material
   but do not exist on `BaseExecutor` in Airflow 3.1-3.3, so Airflow silently ignores them

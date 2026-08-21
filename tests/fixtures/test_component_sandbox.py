@@ -1251,9 +1251,6 @@ def test_registrations_leave_no_trace_across_tests(
             def end(self):
                 pass
 
-            def terminate(self):
-                pass
-
 
         class _IsolationTimetable(Timetable):
             def infer_manual_data_interval(self, *, run_after):
