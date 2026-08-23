@@ -28,6 +28,16 @@ dialect- and concurrency-specific behavior before it ships.
 Plugin contributors can install the optional dependencies with `make install-postgres` (or
 `uv sync --extra postgres`).
 
+## Sessions
+
+The `session` fixture yields a metadata `Session` and rolls back on teardown, so staged
+writes leak nothing between tests. Passing it to `dag_maker(session=...)` routes that
+context's metadata writes through it -- but persistence *commits* the session, so anything
+staged on it at that point commits with it, and the everything-rolls-back guarantee narrows
+to state staged after the last `dag_maker` commit. Rows `dag_maker` itself created are
+removed at fixture teardown either way. See
+[Upstream harness keywords](task-execution.md#upstream-harness-keywords).
+
 ## Cleanup
 
 `clear_db` is a registry-driven whole-database reset for serial setup and teardown contexts:

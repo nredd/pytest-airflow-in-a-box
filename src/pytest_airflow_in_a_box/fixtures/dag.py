@@ -182,6 +182,8 @@ class _DagContext(AbstractContextManager["DAG"]):
         bundle_name: str,
         *,
         serialized: bool,
+        session: Session | None = None,
+        bundle_version: str | None = None,
     ) -> None:
         """Store deferred resources for one context entry.
 
@@ -189,8 +191,11 @@ class _DagContext(AbstractContextManager["DAG"]):
             factory: _DagFactory receiving current state and successful records.
             dag: airflow.sdk.DAG containing the mutable authoring object.
             dag_id: str identifying the Dag.
-            bundle_name: str identifying the isolated metadata bundle.
+            bundle_name: str identifying the metadata bundle.
             serialized: bool indicating whether to expose the scheduler representation.
+            session: sqlalchemy.orm.Session | None borrowed from the caller for all
+                metadata writes, or ``None`` to open a context-owned one on entry.
+            bundle_version: str | None recorded on persisted 3.x metadata rows.
         """
 
         self._factory = factory
@@ -198,6 +203,8 @@ class _DagContext(AbstractContextManager["DAG"]):
         self._dag_id = dag_id
         self._bundle_name = bundle_name
         self._serialized = serialized
+        self._borrowed_session = session
+        self._bundle_version = bundle_version
         self._record: DagPersistenceRecord | None = None
 
     def __enter__(self) -> DAG:
@@ -212,16 +219,22 @@ class _DagContext(AbstractContextManager["DAG"]):
 
         if self._record is not None:
             raise RuntimeError("Dag context cannot be entered more than once")
-        session = open_dag_session(self._dag_id)
+        session_owned = self._borrowed_session is None
+        session = self._borrowed_session
+        if session is None:
+            session = open_dag_session(self._dag_id)
         try:
             ensure_dag_absent(self._dag_id, session)
         except Exception:
-            session.close()
+            if session_owned:
+                session.close()
             raise
         self._record = DagPersistenceRecord(
             dag_id=self._dag_id,
             bundle_name=self._bundle_name,
             session=session,
+            session_owned=session_owned,
+            bundle_version=self._bundle_version,
         )
         self._factory._set_active(self._dag, session)
         return self._dag.__enter__()
@@ -256,8 +269,9 @@ class _DagContext(AbstractContextManager["DAG"]):
             self._record = None
         finally:
             if self._record is not None:
-                self._record.session.rollback()
-                self._record.session.close()
+                if self._record.session_owned:
+                    self._record.session.rollback()
+                    self._record.session.close()
                 self._record = None
 
 
@@ -344,26 +358,59 @@ class _DagFactory:
         dag_id: str | None = None,
         *,
         serialized: bool | None = None,
+        session: Session | None = None,
+        bundle_name: str | None = None,
+        bundle_version: str | None = None,
         **dag_kwargs: Any,
     ) -> AbstractContextManager[DAG]:
         """Create one isolated Dag authoring context.
 
+        The ``session``, ``bundle_name``, and ``bundle_version`` keywords mirror
+        upstream ``tests_common``'s ``dag_maker`` harness contract: they route to the
+        persistence layer and are never forwarded to the ``DAG`` constructor.
+
         Parameters:
             dag_id: str | None containing an explicit identifier or ``None`` for a derived one.
             serialized: bool | None overriding the marker-derived behavior.
+            session: sqlalchemy.orm.Session | None used for all of this context's
+                metadata writes and exposed as ``dag_maker.session``, or ``None`` to
+                open a fixture-owned one. A supplied session is never closed by the
+                fixture, but persistence commits on it -- including anything the
+                caller had staged.
+            bundle_name: str | None overriding the derived per-Dag bundle row name.
+                Supplying one opts out of the unique-name xdist mitigation. Ignored
+                by the 2.x family, which predates bundles.
+            bundle_version: str | None recorded on persisted 3.x metadata rows, or
+                ``None`` for unversioned. Ignored by the 2.x family.
             dag_kwargs: Any forwarded to ``airflow.sdk.DAG``.
 
         Returns:
             contextlib.AbstractContextManager[airflow.sdk.DAG] for task definition.
 
         Raises:
-            TypeError: ``serialized`` is not a boolean or ``None``, or ``schedule``
-                is a custom timetable class rather than an instance.
-            ValueError: An explicit ``dag_id`` is invalid.
+            TypeError: ``serialized`` is not a boolean or ``None``, ``session`` is not
+                a SQLAlchemy session or ``None``, ``bundle_name`` or ``bundle_version``
+                is not a string or ``None``, or ``schedule`` is a custom timetable
+                class rather than an instance.
+            ValueError: An explicit ``dag_id`` is invalid, or ``bundle_name`` is empty.
         """
 
         if serialized is not None and not isinstance(serialized, bool):
             raise TypeError(f"`serialized` must be a boolean or `None`: '{serialized}'")
+        if session is not None:
+            # Deferred with the Airflow imports: SQLAlchemy arrives with Airflow, not
+            # with this plugin.
+            from sqlalchemy.orm import Session as OrmSession
+
+            if not isinstance(session, OrmSession):
+                raise TypeError(f"`session` must be a SQLAlchemy session or `None`: '{session}'")
+        if bundle_name is not None:
+            if not isinstance(bundle_name, str):
+                raise TypeError(f"`bundle_name` must be a string or `None`: '{bundle_name}'")
+            if not bundle_name:
+                raise ValueError("`bundle_name` must be non-empty")
+        if bundle_version is not None and not isinstance(bundle_version, str):
+            raise TypeError(f"`bundle_version` must be a string or `None`: '{bundle_version}'")
         self._invocations += 1
         resolved_dag_id = (
             _default_dag_id(self._nodeid, self._worker, self._invocations)
@@ -384,8 +431,10 @@ class _DagFactory:
             self,
             dag,
             resolved_dag_id,
-            _bundle_name(resolved_dag_id),
+            bundle_name if bundle_name is not None else _bundle_name(resolved_dag_id),
             serialized=self._default_serialized if serialized is None else serialized,
+            session=session,
+            bundle_version=bundle_version,
         )
 
     def _set_active(self, dag: DAG, session: Session) -> None:

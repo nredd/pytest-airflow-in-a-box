@@ -135,7 +135,7 @@ The full reference, with scopes, database behavior, and Airflow-2.x availability
 | Fixture | One-liner |
 | ------- | --------- |
 | `dag_bag` | All Dags parsed from the configured Dag directory, once per worker process |
-| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it |
+| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it; accepts upstream `tests_common` harness kwargs |
 | `run_dag` | Run an externally-authored Dag, e.g. one pulled from `dag_bag` |
 | `run_task` | DB-free in-process runner for a single operator or standalone `@task` |
 | `render_task` | DB-free rendering of an operator's `template_fields`, no `execute()` |

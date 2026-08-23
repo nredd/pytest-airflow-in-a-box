@@ -189,3 +189,30 @@ def test_declared_params_reject_a_bad_pinned_case(dag_maker) -> None:
         validate_dag_params(dag, {"retries": "not-a-number"})
     with pytest.raises(ParamsCaseError, match="declares no params"):
         validate_dag_params(dag, {"undeclared": True})
+
+
+def test_harness_kwargs_route_to_persistence(dag_maker, session) -> None:
+    """Accept the upstream harness keywords without forwarding them to ``DAG``.
+
+    ``session`` routes to persistence and back out as ``dag_maker.session``;
+    ``bundle_name`` and ``bundle_version`` are accepted and ignored on the 2.x
+    family, which predates bundles.
+
+    Parameters:
+        dag_maker: pytest_airflow_in_a_box.types.DagMaker building the Dag under test.
+        session: sqlalchemy.orm.Session borrowed by the Dag context.
+    """
+
+    python_operator = _symbol("airflow.operators.python", "PythonOperator")
+    dag_model_class = _symbol("airflow.models.dag", "DagModel")
+
+    with dag_maker(
+        "airflow2_harness_kwargs",
+        session=session,
+        bundle_name="issue-238-ignored",
+        bundle_version="v238",
+    ):
+        python_operator(task_id="noop", python_callable=lambda: None)
+
+    assert dag_maker.session is session
+    assert session.get(dag_model_class, "airflow2_harness_kwargs") is not None

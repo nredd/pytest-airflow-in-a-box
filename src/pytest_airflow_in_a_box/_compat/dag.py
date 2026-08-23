@@ -74,6 +74,13 @@ class DagPersistenceRecord:
         dag_id: str identifying the fixture-owned Dag.
         bundle_name: str identifying its isolated bundle row.
         session: sqlalchemy.orm.Session used to persist and inspect metadata.
+        session_owned: bool indicating whether the fixture opened ``session`` and may
+            roll back and close it. ``False`` marks a caller-supplied session the
+            fixture must never close; ``cleanup_dag`` replaces it with a fresh owned
+            one, because caller fixtures can finalize first.
+        bundle_version: str | None recorded on persisted 3.x metadata rows, or
+            ``None`` for unversioned. Ignored by the 2.x family, which predates
+            bundles.
         bundle_created: bool indicating whether this fixture inserted the bundle row.
         dag_run_ids: set[int] containing exact fixture-owned DagRun primary keys.
         task_instance_keys: set[tuple[str, str, str, int]] containing owned task identities.
@@ -82,6 +89,8 @@ class DagPersistenceRecord:
     dag_id: str
     bundle_name: str
     session: Session
+    session_owned: bool = True
+    bundle_version: str | None = None
     bundle_created: bool = False
     dag_run_ids: set[int] = field(default_factory=set)
     task_instance_keys: set[tuple[str, str, str, int]] = field(default_factory=set)
@@ -505,7 +514,7 @@ def _sync_dag_model(dag: DAG, record: DagPersistenceRecord) -> None:
     serialized_dag_class = _get_serialized_dag_class()
     serialized_dag_class.bulk_write_to_db(
         record.bundle_name,
-        None,
+        record.bundle_version,
         [dag],
         session=record.session,
     )
@@ -534,7 +543,7 @@ def _write_serialized_dag(dag: DAG, record: DagPersistenceRecord) -> None:
     SerializedDagModel.write_dag(
         lazy_dag,
         bundle_name=record.bundle_name,
-        bundle_version=None,
+        bundle_version=record.bundle_version,
         min_update_interval=0,
         session=record.session,
     )
@@ -569,6 +578,10 @@ def persist_dag(
 
     Successful persistence registers the authoring Dag so task resolution works
     for task instances queried through sessions the factory does not own.
+
+    Commits ``record.session``. On a borrowed session that also commits whatever the
+    caller had staged, and the failure path's ``_cleanup_dag`` commits its deletions on
+    the same still-live handle -- both deliberate, matching upstream ``dag_maker``.
 
     Parameters:
         dag: airflow.sdk.DAG containing the completed task graph.
@@ -946,6 +959,12 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 def cleanup_dag(record: DagPersistenceRecord) -> None:
     """Remove one fixture-owned Dag, deregister its authoring Dag, and close its session.
 
+    A borrowed session (``session_owned=False``) is never touched here: the caller's
+    fixture may already have finalized it by the time this teardown runs, so cleanup
+    replaces it with a fresh owned session first. Every fixture write path commits, so
+    the fresh session sees all owned rows. If even opening that session fails, the dead
+    borrowed handle still receives no rollback or close.
+
     Parameters:
         record: DagPersistenceRecord identifying fixture-owned rows.
 
@@ -954,15 +973,20 @@ def cleanup_dag(record: DagPersistenceRecord) -> None:
     """
 
     try:
+        if not record.session_owned:
+            record.session = open_dag_session(record.dag_id)
+            record.session_owned = True
         _cleanup_dag(record)
     except Exception as error:
-        record.session.rollback()
+        if record.session_owned:
+            record.session.rollback()
         raise DagCleanupError(
             f"Could not clean Airflow Dag metadata for '{record.dag_id}': {error}"
         ) from error
     finally:
         unregister_authoring_dag(record.dag_id)
-        record.session.close()
+        if record.session_owned:
+            record.session.close()
 
 
 __all__ = (
