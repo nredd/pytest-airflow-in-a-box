@@ -62,6 +62,7 @@ def test_implied_groups_expands_transitively() -> None:
         "xcom",
         "task_instances",
         "deadlines",
+        "backfill",
         "runs",
     )
     assert compat_db.implied_groups(("triggers",)) == ("xcom", "task_instances", "triggers")
@@ -69,6 +70,7 @@ def test_implied_groups_expands_transitively() -> None:
         "xcom",
         "task_instances",
         "deadlines",
+        "backfill",
         "runs",
         "serialized_dags",
         "dags",
@@ -159,6 +161,38 @@ def test_clear_db_triggers_clears_referencing_task_instances() -> None:
 
     assert _count(Trigger) == 0
     assert _count(TaskInstance) == 0
+
+
+@SERIAL_ONLY
+def test_clear_db_runs_expansion_clears_backfill_rows(dag_maker: DagMaker) -> None:
+    """Clear backfill rows that reference a DagRun when only runs are requested."""
+
+    # Deferred so backfill construction happens after bootstrap.
+    from airflow.models.backfill import Backfill, BackfillDagRun
+    from airflow.sdk.timezone import utcnow
+
+    with dag_maker(dag_id="clear_db_backfill"):
+        EmptyOperator(task_id="noop")
+    dag_run = dag_maker.create_dagrun()
+
+    with create_session() as session:
+        backfill = Backfill(
+            dag_id="clear_db_backfill",
+            from_date=utcnow(),
+            to_date=utcnow(),
+            max_active_runs=1,
+        )
+        session.add(backfill)
+        session.flush()
+        session.add(BackfillDagRun(backfill_id=backfill.id, dag_run_id=dag_run.id, sort_ordinal=1))
+    assert _count(Backfill) >= 1
+    assert _count(BackfillDagRun) >= 1
+
+    clear_db(tables={TableGroup.RUNS})
+
+    assert _count(DagRun) == 0
+    assert _count(Backfill) == 0
+    assert _count(BackfillDagRun) == 0
 
 
 @SERIAL_ONLY

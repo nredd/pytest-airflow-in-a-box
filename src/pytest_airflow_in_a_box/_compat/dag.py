@@ -885,6 +885,14 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 
     session = record.session
     session.rollback()
+    if not _is_v2():
+        # Backfill rows arrived in 3.x and FK-reference `dag_run.id`; deleting a
+        # referenced DagRun without clearing them first raises a FK violation.
+        from airflow.models.backfill import BackfillDagRun
+
+        session.execute(
+            delete(BackfillDagRun).where(BackfillDagRun.dag_run_id.in_(record.dag_run_ids))
+        )
     for dag_run_id in record.dag_run_ids:
         dag_run = session.get(DagRun, dag_run_id)
         if dag_run is not None:

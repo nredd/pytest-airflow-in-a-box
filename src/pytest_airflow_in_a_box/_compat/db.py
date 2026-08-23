@@ -12,7 +12,7 @@ the compat suite pins expected presence per release.
 
 The registry is family-parallel: ``_V2_TABLE_REGISTRY`` mirrors the 3.x group
 sequence exactly (so ``TableGroup`` stays family-independent) with ``assets``
-mapped to the renamed 2.x ``dataset*`` tables, ``deadlines``/``bundles``
+mapped to the renamed 2.x ``dataset*`` tables, ``deadlines``/``backfill``/``bundles``
 vacuously satisfied, and its own optional-spec set for symbols that arrived in
 2.10. ``clear_tables`` selects the registry from the resolved family.
 
@@ -55,6 +55,13 @@ _TABLE_REGISTRY: Registry = (
         ),
     ),
     ("deadlines", (("airflow.models.deadline", "Deadline"),)),
+    (
+        "backfill",
+        (
+            ("airflow.models.backfill", "BackfillDagRun"),
+            ("airflow.models.backfill", "Backfill"),
+        ),
+    ),
     (
         "runs",
         (
@@ -117,7 +124,7 @@ _IMPLIED: dict[str, tuple[str, ...]] = {
     "bundles": ("dags",),
     "dags": ("serialized_dags", "runs"),
     "serialized_dags": ("runs",),
-    "runs": ("deadlines", "task_instances"),
+    "runs": ("deadlines", "task_instances", "backfill"),
     "task_instances": ("xcom",),
     "triggers": ("task_instances",),
 }
@@ -153,6 +160,7 @@ _V2_TABLE_REGISTRY: Registry = (
         ),
     ),
     ("deadlines", ()),
+    ("backfill", ()),
     (
         "runs",
         (

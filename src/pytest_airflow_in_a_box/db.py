@@ -25,6 +25,7 @@ class TableGroup(str, Enum):
     """Clearable groups of Airflow metadata tables."""
 
     ASSETS = "assets"
+    BACKFILL = "backfill"
     BUNDLES = "bundles"
     CONNECTIONS = "connections"
     DAGS = "dags"
@@ -42,8 +43,8 @@ def clear_db(*, tables: Collection[TableGroup] | None = None) -> None:
     """Clear the requested table groups plus every transitively implied group.
 
     Requesting a group also clears the groups whose rows reference it (for
-    example ``RUNS`` clears deadlines, task instances, and XCom rows, and
-    ``TRIGGERS`` clears the task instances that reference triggers), because
+    example ``RUNS`` clears deadlines, task instances, backfill rows, and XCom
+    rows, and ``TRIGGERS`` clears the task instances that reference triggers), because
     the tuned test database does not enforce foreign keys. Clearing
     ``CONNECTIONS`` recreates Airflow's default connections. Clearing ``DAGS``
     without ``ASSETS`` deliberately leaves asset definitions and their Dag

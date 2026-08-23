@@ -18,6 +18,7 @@ import pytest
 from airflow.models.dag import DagModel
 from airflow.models.dag_version import DagVersion
 from airflow.models.dagbundle import DagBundleModel
+from airflow.models.dagrun import DagRun
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.timetables.base import Timetable
@@ -350,6 +351,56 @@ def test_low_level_cleanup_preserves_referenced_shared_bundle() -> None:
     dag_compat.cleanup_dag(second_record)
     with create_session() as session:
         assert session.get(DagBundleModel, bundle_name) is None
+
+
+def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
+    """Delete backfill rows that FK-reference an owned DagRun before deleting the run.
+
+    Regression test for issue #240: a leaked `BackfillDagRun` row referencing a
+    fixture-owned DagRun used to make cleanup raise `sqlite3.IntegrityError: FOREIGN
+    KEY constraint failed` instead of `DagCleanupError` wrapping a real failure.
+    """
+
+    from airflow.models.backfill import Backfill, BackfillDagRun
+    from airflow.sdk.timezone import utcnow
+
+    session = dag_compat.open_dag_session("backfill_cleanup")
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="backfill_cleanup",
+        bundle_name=_bundle_name("backfill_cleanup"),
+        session=session,
+    )
+    dag = dag_compat.build_dag("backfill_cleanup", __file__, {})
+    scheduler_dag = dag_compat.persist_dag(dag, record)
+    dag_run = dag_compat.create_dag_run(
+        scheduler_dag,
+        dag,
+        record,
+        run_id="backfill_cleanup_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+    )
+
+    with create_session() as setup_session:
+        backfill = Backfill(
+            dag_id="backfill_cleanup",
+            from_date=utcnow(),
+            to_date=utcnow(),
+            max_active_runs=1,
+        )
+        setup_session.add(backfill)
+        setup_session.flush()
+        setup_session.add(
+            BackfillDagRun(backfill_id=backfill.id, dag_run_id=dag_run.id, sort_ordinal=1)
+        )
+
+    dag_compat.cleanup_dag(record)
+
+    with create_session() as verify_session:
+        assert verify_session.get(DagRun, dag_run.id) is None
+        assert verify_session.scalar(select(func.count()).select_from(BackfillDagRun)) == 0
 
 
 def test_cleanup_accepts_missing_owned_rows() -> None:
