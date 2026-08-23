@@ -14,8 +14,9 @@ from typing import Any
 
 import pytest
 
-from pytest_airflow_in_a_box import plugin
+from pytest_airflow_in_a_box import plugin, smoke
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError
+from pytest_airflow_in_a_box.bootstrap import XDIST_WORKER_ENVIRONMENT_VARIABLE
 from pytest_airflow_in_a_box.fixtures.dagbag import DAG_BAG_XDIST_GROUP
 
 
@@ -383,3 +384,249 @@ def test_colocation_fails_open_on_an_unparsable_mark_expression(pytester: pytest
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     output = result.stdout.str() + result.stderr.str()
     assert "INTERNALERROR" not in output
+
+
+def test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped(
+    pytester: pytest.Pytester,
+) -> None:
+    """Warn when every `dag_bag` consumer already carries its own `xdist_group`.
+
+    Regression test for issue #242. `docs/guide/seeding.md` and `_compat/seed.py`
+    actively tell users to hand-write `xdist_group` to avoid metadata-database seed
+    collisions, so a suite where *every* consumer is pre-grouped is a realistic
+    outcome of following the documentation -- and it leaves the catalog with no
+    eligible anchor. The pre-existing behavior was to return silently, costing one
+    extra full Dag parse with no signal at all.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xdist_group(name="user-group")
+        def test_pre_grouped(dag_bag):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=11)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" in output
+    assert "carries an explicit `xdist_group` marker" in output
+    assert "adding one full Dag parse to this run" in output
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group is None for group in smoke_groups.values())
+    pre_grouped_group = next(
+        group for name, group in groups.items() if name.endswith("::test_pre_grouped")
+    )
+    assert pre_grouped_group == "user-group"
+
+
+def test_missing_anchor_warns_when_the_mark_expression_drops_every_dag_bag_consumer(
+    pytester: pytest.Pytester,
+) -> None:
+    """Warn when `-m` is about to deselect every `dag_bag` consumer in the run.
+
+    Companion to `test_colocation_skips_a_dag_bag_consumer_dropped_by_mark_expression`,
+    which pins the *grouping* decision; this pins the diagnostic that decision now
+    emits. `-m smoke` is the documented way to run just the catalog, so this is the
+    case a user most easily stumbles into.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makepyfile(
+        """
+        def test_consumer(dag_bag):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "--dist=loadgroup",
+        "--airflow-smoke",
+        "--dag-folder",
+        str(dag_folder),
+        "-m",
+        "smoke",
+    )
+
+    result.assert_outcomes(passed=10)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" in output
+    assert "is about to be deselected by the active `-m` expression" in output
+
+
+def test_missing_anchor_is_silent_when_the_run_has_no_dag_bag_consumer(
+    pytester: pytest.Pytester,
+) -> None:
+    """Stay silent when the run has no `dag_bag` consumer to co-locate with at all.
+
+    The branch that keeps issue #242's diagnostic from firing on every ordinary
+    smoke-only run: with no consumer anywhere, the catalog's corpus builder owns the
+    only Dag parse in the run, so there is nothing to share a worker with and nothing
+    lost. Warning here would be pure noise.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makepyfile(
+        """
+        def test_no_fixtures():
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=11)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" not in output
+
+
+def test_a_derived_fixture_consumer_still_anchors_the_smoke_catalog(
+    pytester: pytest.Pytester,
+) -> None:
+    """Anchor the catalog on a test reaching `dag_bag` through a project fixture.
+
+    Issue #242 reported that migrating tests off the literal `dag_bag` fixture and
+    onto scoped, derived fixtures left the catalog with no anchor. It does not:
+    `plugin._requires_dag_bag` reads `item.fixturenames`, which pytest assigns from
+    the full fixture *closure* (`fixtureinfo.names_closure`), so a project fixture
+    declaring `dag_bag` as a parameter puts `dag_bag` in every consuming test's
+    closure. This pins that reported repro as *not* reproducing.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(
+        _XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir))
+        + """
+
+    @pytest.fixture
+    def subdir_bag(dag_bag):
+        return dag_bag
+"""
+    )
+    pytester.makepyfile(
+        """
+        def test_derived_consumer(subdir_bag):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=11)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" not in output
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group == DAG_BAG_XDIST_GROUP for group in smoke_groups.values())
+    derived_group = next(
+        group for name, group in groups.items() if name.endswith("::test_derived_consumer")
+    )
+    assert derived_group == DAG_BAG_XDIST_GROUP
+
+
+def test_missing_anchor_warning_names_every_distinct_reason_once() -> None:
+    """Join distinct disqualification reasons and drop repeats, preserving order.
+
+    A suite can disqualify several consumers for the same reason; repeating it once
+    per consumer would make the message scale with suite size instead of with the
+    number of distinct problems. `dict.fromkeys` dedupes without sorting, so the
+    message reads in the order collection actually hit the reasons.
+    """
+
+    with pytest.warns(smoke.SmokeColocationWarning) as caught:
+        plugin._warn_missing_dag_bag_anchor(
+            (
+                plugin._PRE_GROUPED_ANCHOR_REASON,
+                plugin._DESELECTED_ANCHOR_REASON,
+                plugin._PRE_GROUPED_ANCHOR_REASON,
+            )
+        )
+
+    message = str(caught[0].message)
+    assert message.count(plugin._PRE_GROUPED_ANCHOR_REASON) == 1
+    assert message.count(plugin._DESELECTED_ANCHOR_REASON) == 1
+    assert f"{plugin._PRE_GROUPED_ANCHOR_REASON} or {plugin._DESELECTED_ANCHOR_REASON}" in message
+
+
+@pytest.mark.parametrize(
+    ("worker", "loadgroup", "expected"),
+    [
+        (None, False, False),
+        (None, True, False),
+        ("gw0", False, True),
+        ("gw0", True, False),
+    ],
+)
+def test_xdist_worker_without_loadgroup_detects_a_distributing_worker(
+    monkeypatch: pytest.MonkeyPatch,
+    pytestconfig: pytest.Config,
+    worker: str | None,
+    loadgroup: bool,
+    expected: bool,
+) -> None:
+    """Detect a distributing worker whose dist mode makes `xdist_group` inert.
+
+    `xdist.remote.setup_config` resets a worker's `dist` option to `"no"`, keeping only
+    the synthetic `loadgroup` boolean, so the worker environment variable is the only
+    surviving evidence that the run is distributed at all. Both halves matter: without
+    the environment variable a plain serial run would be reported as degraded, and
+    without the `loadgroup` check a correctly-configured `loadgroup` worker would be.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch setting or clearing the xdist worker variable.
+        pytestconfig: pytest.Config providing a real config to override options on.
+        worker: str | None naming the simulated xdist worker, or None when serial.
+        loadgroup: bool simulating xdist's surviving `loadgroup` option on a worker.
+        expected: bool naming the expected detection result.
+    """
+
+    if worker is None:
+        monkeypatch.delenv(XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    else:
+        monkeypatch.setenv(XDIST_WORKER_ENVIRONMENT_VARIABLE, worker)
+    # Mirror what `xdist.remote.setup_config` leaves behind on a real worker: `dist`
+    # reset to `"no"`, with the original choice surviving only as `loadgroup`.
+    monkeypatch.setattr(pytestconfig.option, "dist", "no", raising=False)
+    monkeypatch.setattr(pytestconfig.option, "loadgroup", loadgroup, raising=False)
+
+    assert plugin._xdist_worker_without_loadgroup(pytestconfig) is expected

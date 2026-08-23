@@ -50,6 +50,27 @@ if TYPE_CHECKING:
     from pytest_airflow_in_a_box.types import SerializedDag
 
 
+class UnsetType:
+    """Mark an argument as omitted, distinct from an explicitly-passed ``None``.
+
+    ``create_dag_run`` needs the distinction for ``logical_date``: omission keeps the
+    current-UTC default, while an explicit ``None`` requests a 3.x run with no logical
+    date at all (the shape asset-triggered runs take).
+    """
+
+    def __repr__(self) -> str:
+        """Render the module-level singleton's name.
+
+        Returns:
+            str containing the canonical ``UNSET`` spelling.
+        """
+
+        return "UNSET"
+
+
+UNSET = UnsetType()
+
+
 class DagPersistenceError(RuntimeError):
     """Report failure to create or persist fixture-owned Airflow Dag metadata."""
 
@@ -74,6 +95,13 @@ class DagPersistenceRecord:
         dag_id: str identifying the fixture-owned Dag.
         bundle_name: str identifying its isolated bundle row.
         session: sqlalchemy.orm.Session used to persist and inspect metadata.
+        session_owned: bool indicating whether the fixture opened ``session`` and may
+            roll back and close it. ``False`` marks a caller-supplied session the
+            fixture must never close; ``cleanup_dag`` replaces it with a fresh owned
+            one, because caller fixtures can finalize first.
+        bundle_version: str | None recorded on persisted 3.x metadata rows, or
+            ``None`` for unversioned. Ignored by the 2.x family, which predates
+            bundles.
         bundle_created: bool indicating whether this fixture inserted the bundle row.
         dag_run_ids: set[int] containing exact fixture-owned DagRun primary keys.
         task_instance_keys: set[tuple[str, str, str, int]] containing owned task identities.
@@ -82,6 +110,8 @@ class DagPersistenceRecord:
     dag_id: str
     bundle_name: str
     session: Session
+    session_owned: bool = True
+    bundle_version: str | None = None
     bundle_created: bool = False
     dag_run_ids: set[int] = field(default_factory=set)
     task_instance_keys: set[tuple[str, str, str, int]] = field(default_factory=set)
@@ -403,6 +433,93 @@ def time_restriction_type() -> Any:
     return TimeRestriction
 
 
+def empty_operator_class() -> Any:
+    """Resolve Airflow's ``EmptyOperator`` for the installed family.
+
+    A plain deferred-import seam, not a capability probe: 3.x relocated the operator
+    into the standard provider, and this wrapper only centralizes the family split
+    behind ``_compat``.
+
+    Returns:
+        Any containing the family-specific ``EmptyOperator`` class.
+
+    Raises:
+        ImportError: Airflow (or the standard provider on 3.x) is not importable.
+    """
+
+    module_name = (
+        "airflow.operators.empty" if _is_v2() else "airflow.providers.standard.operators.empty"
+    )
+    return import_module(module_name).EmptyOperator
+
+
+def coerce_run_type(value: Any) -> Any:
+    """Coerce a run-type spelling to Airflow's ``DagRunType`` member.
+
+    A plain deferred-import seam, not a capability probe: the enum's location is
+    stable across every certified family, and coercion is idempotent for members, so
+    upstream-parity fixtures can accept ``DagRunType`` members and plain strings alike
+    without importing Airflow outside ``_compat``.
+
+    Parameters:
+        value: Any containing a ``DagRunType`` member or its string value.
+
+    Returns:
+        Any containing the ``DagRunType`` member.
+
+    Raises:
+        ValueError: ``value`` names no ``DagRunType`` member.
+    """
+
+    # Deferred to preserve pre-bootstrap plugin import safety.
+    from airflow.utils.types import DagRunType
+
+    return DagRunType(value)
+
+
+def ensure_shared_bundle(name: str) -> None:
+    """Create one shared Dag bundle row when absent, never deleting it afterward.
+
+    Unlike ``_ensure_bundle``, which owns an isolated per-Dag bundle row and cleans it
+    up, this row is deliberately shared across tests and xdist workers on one metadata
+    database and is left in place for the whole run: a conditional teardown delete
+    would race another worker's in-flight ``DagModel.bundle_name`` reference, the
+    plugin never reads the row back, and the metadata database is disposable per run
+    (the same reasoning that keeps 2.x ``dag_code`` rows in place, issue #157).
+
+    Parameters:
+        name: str identifying the shared bundle row.
+
+    Raises:
+        DagPersistenceError: Airflow cannot query or insert the bundle row.
+    """
+
+    # Deferred to preserve pre-bootstrap plugin import safety.
+    from sqlalchemy.exc import IntegrityError
+
+    session = open_dag_session(name)
+    try:
+        # Deferred private model access is isolated in the compatibility package.
+        from airflow.models.dagbundle import DagBundleModel
+
+        if session.get(DagBundleModel, name) is not None:
+            return
+        session.add(DagBundleModel(name=name))
+        try:
+            session.commit()
+        except IntegrityError:
+            # Two workers can both pass the absence check; the loser's UNIQUE
+            # violation means the row now exists, which is the goal state.
+            session.rollback()
+    except Exception as error:
+        session.rollback()
+        raise DagPersistenceError(
+            f"Could not ensure the shared Dag bundle '{name}': {error}"
+        ) from error
+    finally:
+        session.close()
+
+
 def _ensure_bundle(record: DagPersistenceRecord) -> None:
     """Create the fixture's isolated Dag bundle when absent.
 
@@ -505,7 +622,7 @@ def _sync_dag_model(dag: DAG, record: DagPersistenceRecord) -> None:
     serialized_dag_class = _get_serialized_dag_class()
     serialized_dag_class.bulk_write_to_db(
         record.bundle_name,
-        None,
+        record.bundle_version,
         [dag],
         session=record.session,
     )
@@ -534,7 +651,7 @@ def _write_serialized_dag(dag: DAG, record: DagPersistenceRecord) -> None:
     SerializedDagModel.write_dag(
         lazy_dag,
         bundle_name=record.bundle_name,
-        bundle_version=None,
+        bundle_version=record.bundle_version,
         min_update_interval=0,
         session=record.session,
     )
@@ -569,6 +686,10 @@ def persist_dag(
 
     Successful persistence registers the authoring Dag so task resolution works
     for task instances queried through sessions the factory does not own.
+
+    Commits ``record.session``. On a borrowed session that also commits whatever the
+    caller had staged, and the failure path's ``_cleanup_dag`` commits its deletions on
+    the same still-live handle -- both deliberate, matching upstream ``dag_maker``.
 
     Parameters:
         dag: airflow.sdk.DAG containing the completed task graph.
@@ -614,7 +735,7 @@ def create_dag_run(
     record: DagPersistenceRecord,
     *,
     run_id: str,
-    logical_date: datetime | None,
+    logical_date: datetime | UnsetType | None,
     run_after: datetime | None,
     start_date: datetime | None,
     dag_run_kwargs: dict[str, Any],
@@ -626,7 +747,9 @@ def create_dag_run(
         authoring_dag: airflow.sdk.DAG containing executable task objects.
         record: DagPersistenceRecord receiving exact metadata ownership.
         run_id: str containing the validated collision-safe run identifier.
-        logical_date: datetime.datetime | None overriding the current UTC logical date.
+        logical_date: datetime.datetime | UnsetType | None overriding the current UTC
+            logical date, where an explicit ``None`` requests a 3.x run with no logical
+            date at all; rejected on the 2.x family, which cannot express one.
         run_after: datetime.datetime | None overriding the current UTC run-after date;
             rejected on the 2.x family, which has no run-after concept.
         start_date: datetime.datetime | None overriding the current UTC start date.
@@ -636,7 +759,8 @@ def create_dag_run(
         airflow.models.dagrun.DagRun committed with verified task instances.
 
     Raises:
-        ValueError: `run_after` was passed on the Airflow 2.x family.
+        ValueError: `run_after` or an explicit ``logical_date=None`` was passed on the
+            Airflow 2.x family.
         DagRunCreationError: Airflow cannot create or verify the DagRun metadata.
     """
 
@@ -645,6 +769,12 @@ def create_dag_run(
             "`run_after` is an Airflow 3.x scheduling concept with no 2.x equivalent; "
             "silently ignoring it would change run semantics between families. Pass "
             "`logical_date` on the 2.x family instead."
+        )
+    if logical_date is None and _is_v2():
+        raise ValueError(
+            "An explicit `logical_date=None` requests a run with no logical date, an "
+            "Airflow 3.x concept with no 2.x equivalent; every 2.x run carries an "
+            "execution date. Omit the argument to use the current UTC date instead."
         )
 
     # The 2.x module is dynamically resolved so static checking stays valid against an
@@ -660,7 +790,13 @@ def create_dag_run(
     operation = "resolving UTC dates"
     try:
         now = utcnow()
-        resolved_logical_date = convert_to_utc(coerce_datetime(logical_date or now))
+        resolved_logical_date = (
+            None
+            if logical_date is None
+            else convert_to_utc(
+                coerce_datetime(now if isinstance(logical_date, UnsetType) else logical_date)
+            )
+        )
         resolved_start_date = convert_to_utc(coerce_datetime(start_date or now))
         dag_version: Any = None
         if not is_v2:
@@ -674,7 +810,9 @@ def create_dag_run(
                 )
 
         kwargs = dict(dag_run_kwargs)
-        if "data_interval" not in kwargs:
+        # A run without a logical date has no interval to infer; leave `data_interval`
+        # to the caller (or absent) exactly as Airflow's asset-triggered runs do.
+        if "data_interval" not in kwargs and resolved_logical_date is not None:
             kwargs["data_interval"] = scheduler_dag.timetable.infer_manual_data_interval(
                 run_after=resolved_logical_date
             )
@@ -885,11 +1023,29 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 
     session = record.session
     session.rollback()
+    if not _is_v2():
+        # Backfill rows arrived in 3.x. `BackfillDagRun` FK-references `dag_run.id`, so
+        # deleting a referenced DagRun without clearing it first raises a FK violation.
+        from airflow.models.backfill import BackfillDagRun
+
+        session.execute(
+            delete(BackfillDagRun).where(BackfillDagRun.dag_run_id.in_(record.dag_run_ids))
+        )
     for dag_run_id in record.dag_run_ids:
         dag_run = session.get(DagRun, dag_run_id)
         if dag_run is not None:
             session.delete(dag_run)
     session.flush()
+
+    if not _is_v2():
+        # `dag_run.backfill_id` FK-references `backfill.id` with no `ondelete` action,
+        # so the Backfill parent can only go after every DagRun that might reference it
+        # is gone -- the delete loop and flush above. Deleted too (not just its
+        # `BackfillDagRun` children) so a fixture-owned Dag leaves no backfill metadata
+        # behind, matching `clear_db`'s `backfill` group.
+        from airflow.models.backfill import Backfill
+
+        session.execute(delete(Backfill).where(Backfill.dag_id == record.dag_id))
 
     if _is_v2():
         # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id`. The
@@ -946,6 +1102,12 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 def cleanup_dag(record: DagPersistenceRecord) -> None:
     """Remove one fixture-owned Dag, deregister its authoring Dag, and close its session.
 
+    A borrowed session (``session_owned=False``) is never touched here: the caller's
+    fixture may already have finalized it by the time this teardown runs, so cleanup
+    replaces it with a fresh owned session first. Every fixture write path commits, so
+    the fresh session sees all owned rows. If even opening that session fails, the dead
+    borrowed handle still receives no rollback or close.
+
     Parameters:
         record: DagPersistenceRecord identifying fixture-owned rows.
 
@@ -954,28 +1116,38 @@ def cleanup_dag(record: DagPersistenceRecord) -> None:
     """
 
     try:
+        if not record.session_owned:
+            record.session = open_dag_session(record.dag_id)
+            record.session_owned = True
         _cleanup_dag(record)
     except Exception as error:
-        record.session.rollback()
+        if record.session_owned:
+            record.session.rollback()
         raise DagCleanupError(
             f"Could not clean Airflow Dag metadata for '{record.dag_id}': {error}"
         ) from error
     finally:
         unregister_authoring_dag(record.dag_id)
-        record.session.close()
+        if record.session_owned:
+            record.session.close()
 
 
 __all__ = (
+    "UNSET",
     "DagCleanupError",
     "DagPersistenceError",
     "DagPersistenceRecord",
     "DagRunCreationError",
     "TaskInstanceCreationError",
+    "UnsetType",
     "build_dag",
     "cleanup_dag",
+    "coerce_run_type",
     "create_dag_run",
     "custom_schedule_timetables",
+    "empty_operator_class",
     "ensure_dag_absent",
+    "ensure_shared_bundle",
     "expand_mapped_task_instances",
     "is_custom_timetable_instance",
     "open_dag_session",

@@ -11,7 +11,9 @@ the 2.x alternative.
 | Fixture | Scope | DB | Airflow | Returns |
 | ------- | ----- | -- | ------- | ------- |
 | `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Task execution](../guide/task-execution.md#testing-a-dag-defined-elsewhere)) |
-| `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution ([Task execution](../guide/task-execution.md)) |
+| `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution; accepts upstream `tests_common`'s `session`/`bundle_name`/`bundle_version` harness keywords ([Task execution](../guide/task-execution.md#upstream-harness-keywords)) |
+| `create_task_instance` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a `TaskInstance` with its Dag and DagRun rows, composed over `dag_maker`. Returns the plain ORM instance -- no `ti.run()` wrapper ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
+| `create_dummy_dag` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a persisted single-`EmptyOperator` Dag plus, by default, a scheduled DagRun ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
 | `run_dag` | function | yes | 2.x + 3.x | A runner for externally-authored Dags, e.g. ones pulled from `dag_bag`. `executor=` drives the run through a real executor instead of in-process, 3.x only ([Task execution](../guide/task-execution.md#executor-driven-runs)) |
 | `run_task` | function | no | 3.x only | A DB-free in-process Task SDK runner for a single operator or standalone `@task` ([DB-free task execution](../guide/db-free-execution.md)) |
 | `render_task` | function | no | 3.x only | A DB-free in-process renderer for an operator's `template_fields`, without calling `execute()` ([DB-free task execution](../guide/db-free-execution.md)) |
@@ -25,6 +27,7 @@ the 2.x alternative.
 | `airflow_variables` | function | yes | 2.x + 3.x | A seeder persisting Airflow Variables for one test, deleted on teardown ([Seeding](../guide/seeding.md)) |
 | `airflow_connections` | function | yes | 2.x + 3.x | A seeder persisting Airflow Connections for one test, deleted on teardown ([Seeding](../guide/seeding.md)) |
 | `airflow_parse_secrets` | function | yes | 2.x + 3.x | Nothing -- requesting it resolves top-level `Variable.get` / `Connection.get` lookups in Dag files for the whole test ([Seeding](../guide/seeding.md)) |
+| `testing_dag_bundle` | function | yes | 3.x only | Nothing -- requesting it registers the shared `testing` Dag bundle row upstream core tests bulk-write metadata against. Idempotent, never deleted at teardown -- a conditional delete would race other xdist workers and the per-run database is disposable ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
 
 ## Configuration and paths
 
@@ -50,6 +53,6 @@ per-run root created below it.
 | `cap_structlog` | function | no | 3.x only | A capture recording structlog events emitted during the test ([Structlog capture](../guide/structlog.md)) |
 
 Return types are the typed contracts in `pytest_airflow_in_a_box.types` (`DagMaker`,
-`RunDag`, `RunTask`, `RenderTask`, `TaskContext`, `AirflowVariables`, `AirflowConnections`,
-`AirflowConfigure`, `ComponentRegistry`), so fixture-parameter annotations autocomplete and
+`CreateTaskInstance`, `CreateDummyDag`, `RunDag`, `RunTask`, `RenderTask`, `TaskContext`,
+`AirflowVariables`, `AirflowConnections`, `AirflowConfigure`, `ComponentRegistry`), so fixture-parameter annotations autocomplete and
 type-check in consumer suites.

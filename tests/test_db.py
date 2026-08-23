@@ -77,6 +77,18 @@ def test_implied_groups_expands_transitively() -> None:
     assert compat_db.implied_groups(()) == ()
 
 
+def test_implied_groups_expands_backfill_to_runs_first() -> None:
+    """Expand `backfill` to clear `runs` first, the reverse of every other entry."""
+
+    assert compat_db.implied_groups(("backfill",)) == (
+        "xcom",
+        "task_instances",
+        "deadlines",
+        "runs",
+        "backfill",
+    )
+
+
 def test_implied_groups_rejects_unknown_names() -> None:
     """Reject group names absent from the registry."""
 
@@ -159,6 +171,97 @@ def test_clear_db_triggers_clears_referencing_task_instances() -> None:
 
     assert _count(Trigger) == 0
     assert _count(TaskInstance) == 0
+
+
+def _add_backfill(*, dag_id: str, dag_run_id: Any, link_dag_run: bool) -> None:
+    """Insert one committed Backfill and a BackfillDagRun linking it to a DagRun.
+
+    Parameters:
+        dag_id: str identifying the owning Dag.
+        dag_run_id: Any containing the DagRun primary key to link.
+        link_dag_run: bool setting `DagRun.backfill_id`, exercising the FK with no
+            `ondelete` action that requires `runs` to clear before `backfill`.
+    """
+
+    # Deferred so backfill construction happens after bootstrap.
+    from airflow.models.backfill import Backfill, BackfillDagRun
+    from airflow.models.dagrun import DagRun
+    from airflow.sdk.timezone import utcnow
+    from sqlalchemy import update
+
+    with create_session() as session:
+        backfill = Backfill(
+            dag_id=dag_id,
+            from_date=utcnow(),
+            to_date=utcnow(),
+            max_active_runs=1,
+        )
+        session.add(backfill)
+        session.flush()
+        session.add(
+            BackfillDagRun(
+                backfill_id=backfill.id,
+                dag_run_id=dag_run_id,
+                sort_ordinal=1,
+                logical_date=utcnow(),
+            )
+        )
+        if link_dag_run:
+            session.execute(
+                update(DagRun).where(DagRun.id == dag_run_id).values(backfill_id=backfill.id)
+            )
+
+
+@SERIAL_ONLY
+def test_clear_db_runs_expansion_clears_backfill_dag_run_rows(dag_maker: DagMaker) -> None:
+    """Clear the `BackfillDagRun` join rows when only `runs` is requested.
+
+    `Backfill` itself is deliberately left in place: its rows are referenced BY `runs`
+    (`dag_run.backfill_id`), not the reverse, so clearing `RUNS` alone must not touch it.
+    """
+
+    # Deferred so backfill construction happens after bootstrap.
+    from airflow.models.backfill import Backfill, BackfillDagRun
+
+    with dag_maker(dag_id="clear_db_backfill_join"):
+        EmptyOperator(task_id="noop")
+    dag_run = dag_maker.create_dagrun()
+    _add_backfill(dag_id="clear_db_backfill_join", dag_run_id=dag_run.id, link_dag_run=False)
+    assert _count(Backfill) >= 1
+    assert _count(BackfillDagRun) >= 1
+
+    try:
+        clear_db(tables={TableGroup.RUNS})
+
+        assert _count(DagRun) == 0
+        assert _count(BackfillDagRun) == 0
+        assert _count(Backfill) >= 1
+    finally:
+        clear_db(tables={TableGroup.BACKFILL})
+
+
+@SERIAL_ONLY
+def test_clear_db_backfill_clears_runs_first(dag_maker: DagMaker) -> None:
+    """Clear `runs` before `backfill` so a DagRun's `backfill_id` never dangles.
+
+    `dag_run.backfill_id` FK-references `backfill.id` with no `ondelete` action, so
+    deleting a Backfill row while a DagRun still references it raises a FK violation
+    unless `runs` clears first.
+    """
+
+    # Deferred so backfill construction happens after bootstrap.
+    from airflow.models.backfill import Backfill, BackfillDagRun
+
+    with dag_maker(dag_id="clear_db_backfill_hard"):
+        EmptyOperator(task_id="noop")
+    dag_run = dag_maker.create_dagrun()
+    _add_backfill(dag_id="clear_db_backfill_hard", dag_run_id=dag_run.id, link_dag_run=True)
+
+    clear_db(tables={TableGroup.BACKFILL})
+
+    assert _count(DagRun) == 0
+    assert _count(Backfill) == 0
+    assert _count(BackfillDagRun) == 0
 
 
 @SERIAL_ONLY

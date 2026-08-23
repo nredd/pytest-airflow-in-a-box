@@ -120,6 +120,8 @@ def test_public_surface_is_explicit() -> None:
         "api_client",
         "api_server_url",
         "cap_structlog",
+        "create_dummy_dag",
+        "create_task_instance",
         "dag_bag",
         "dag_maker",
         "render_task",
@@ -127,6 +129,7 @@ def test_public_surface_is_explicit() -> None:
         "run_task",
         "session",
         "task_context",
+        "testing_dag_bundle",
     )
     assert logging.__all__ == ("StructlogCapture", "TestContextFilter", "ensure_handlers")
     assert markers.__all__ == (
@@ -179,6 +182,8 @@ def test_public_surface_is_explicit() -> None:
         "api_client",
         "api_server_url",
         "cap_structlog",
+        "create_dummy_dag",
+        "create_task_instance",
         "dag_bag",
         "dag_maker",
         "get_bootstrap_state",
@@ -187,6 +192,7 @@ def test_public_surface_is_explicit() -> None:
         "run_task",
         "session",
         "task_context",
+        "testing_dag_bundle",
     )
     assert reporting.__all__ == (
         "configure_report_dir",
@@ -234,10 +240,13 @@ def test_public_surface_is_explicit() -> None:
         "validate_smoke_conflict",
     )
     assert types.__all__ == (
+        "UNSET",
         "AirflowConfigure",
         "AirflowConnections",
         "AirflowVariables",
         "ComponentRegistry",
+        "CreateDummyDag",
+        "CreateTaskInstance",
         "DagMaker",
         "RenderTask",
         "RunDag",
@@ -246,6 +255,7 @@ def test_public_surface_is_explicit() -> None:
         "TaskContext",
         "TaskContextHandle",
         "TaskRunResult",
+        "UnsetType",
     )
     assert _compat.__all__ == (
         "AirflowCapabilities",
