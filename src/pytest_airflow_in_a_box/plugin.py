@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 
-from pytest_airflow_in_a_box import _airflow_home, baseline, record
+from pytest_airflow_in_a_box import _airflow_home, baseline, record, smoke
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
@@ -92,7 +92,6 @@ from pytest_airflow_in_a_box.migration_strict import (
 )
 from pytest_airflow_in_a_box.reporting import configure_report_dir, configure_reporting
 from pytest_airflow_in_a_box.results import assertrepr_compare
-from pytest_airflow_in_a_box.smoke import SmokeColocationWarning, collect_smoke_items
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -270,137 +269,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type="bool",
         default=False,
     )
-    group.addoption(
-        "--airflow-smoke",
-        action="store_true",
-        default=None,
-        dest="airflow_smoke",
-        help="Enable the bundled opt-in `smoke` test catalog.",
-    )
-    parser.addini(
-        "airflow_smoke",
-        "Enable the bundled opt-in `smoke` test catalog.",
-        type="bool",
-        default=False,
-    )
-    parser.addini(
-        "airflow_dag_parse_timeout",
-        "Per-file Dag parse timeout in seconds for the smoke integrity test.",
-        default="30",
-    )
-    parser.addini(
-        "airflow_dag_parse_slowpoke_ratio",
-        "Fraction of the parse timeout above which a file is a slowpoke.",
-        default="0.75",
-    )
-    parser.addini(
-        "airflow_dag_id_pattern",
-        "Regex every collected dag_id must match, checked by the smoke catalog.",
-        default="",
-    )
-    parser.addini(
-        "airflow_required_dag_tags",
-        "Tags every collected Dag must carry, checked by the smoke catalog.",
-        type="linelist",
-        default=[],
-    )
-    parser.addini(
-        "airflow_smoke_disable",
-        "Bundled smoke item names to drop from the catalog (e.g. `test_schedule_sanity`).",
-        type="linelist",
-        default=[],
-    )
-    parser.addini(
-        "airflow_forbid_default_owner",
-        "Fail Dags whose tasks are owned by the stock `airflow` owner.",
-        type="bool",
-        default=False,
-    )
-    group.addoption(
-        "--airflow-smoke-update",
-        action="store_true",
-        default=None,
-        dest="airflow_smoke_update",
-        help="Regenerate committed Dag serialization snapshots instead of diffing them.",
-    )
-    parser.addini(
-        "airflow_dag_snapshot_dir",
-        "Directory of committed Dag serialization snapshots, checked by the smoke catalog.",
-        default="",
-    )
-    parser.addini(
-        "airflow_serialization_sample_size",
-        "Number of Dags the serialization smoke checks cover; 0 covers every Dag.",
-        default="0",
-    )
-    parser.addini(
-        "airflow_serialization_sample_seed",
-        "Seed for deterministic selection of the serialization smoke sample.",
-        default="0",
-    )
-    parser.addini(
-        "airflow_forbid_top_level_variable_access",
-        "Fail Dag files that fetch Variables or Connections at import time.",
-        type="bool",
-        default=True,
-    )
-    parser.addini(
-        "airflow_forbid_top_level_io",
-        "Fail Dag files that call into known I/O modules at import time.",
-        type="bool",
-        default=True,
-    )
-    parser.addini(
-        "airflow_top_level_io_modules",
-        "Module prefixes the top-level I/O smoke check flags; replaces the built-in list.",
-        type="linelist",
-        default=[],
-    )
-    parser.addini(
-        "airflow_dag_parse_budget_ratio",
-        "Fail Dag files parsing slower than this multiple of the corpus median; 0 disables.",
-        default="10",
-    )
-    parser.addini(
-        "airflow_forbid_catchup",
-        "Fail Dags that enable catchup.",
-        type="bool",
-        default=True,
-    )
-    parser.addini(
-        "airflow_forbid_unbounded_expand",
-        "Fail mapped tasks expanding over runtime data without max_active_tis_per_dag.",
-        type="bool",
-        default=True,
-    )
-    group.addoption(
-        "--airflow-dag-bag-fanout",
-        action="store_true",
-        default=None,
-        dest="airflow_dag_bag_fanout",
-        help="Fan the smoke corpus's Dag parse out across subprocess workers.",
-    )
-    parser.addini(
-        "airflow_dag_bag_fanout",
-        "Fan the smoke corpus's Dag parse out across subprocess workers for large corpora.",
-        type="bool",
-        default=False,
-    )
-    parser.addini(
-        "airflow_dag_bag_fanout_workers",
-        "Subprocess worker count for Dag bag fan-out; 0 auto-selects a CPU-based default.",
-        default="0",
-    )
-    parser.addini(
-        "airflow_dag_bag_fanout_min_files",
-        "Minimum discovered Dag file count below which fan-out is skipped even when enabled.",
-        default="200",
-    )
-    parser.addini(
-        "airflow_dag_bag_fanout_timeout",
-        "Seconds the whole Dag bag fan-out may take before falling back to a serial parse.",
-        default="600",
-    )
+    smoke.register_options(parser)
     group.addoption(
         "--airflow-doctor",
         action="store_true",
@@ -623,7 +492,7 @@ def pytest_collection_modifyitems(
 
     prune_duplicate_items(config, items)
     smoke_start = len(items)
-    collect_smoke_items(session, config, items)
+    smoke.collect_smoke_items(session, config, items)
     # `collect_smoke_items` only ever appends (`items.extend(...)`), so the smoke
     # catalog is exactly this tail slice -- captured by id here, before
     # `apply_selection_and_xfail` can deselect some of it, and re-filtered against the
@@ -782,7 +651,7 @@ def _warn_missing_dag_bag_anchor(reasons: Sequence[str]) -> None:
         return
     joined = " or ".join(dict.fromkeys(reasons))
     warnings.warn(
-        SmokeColocationWarning(
+        smoke.SmokeColocationWarning(
             f"Smoke catalog left ungrouped under `--dist loadgroup`: every test using "
             f"the `{DAG_BAG_FIXTURE_NAME}` fixture in this run {joined}, so none can "
             f"anchor the `{DAG_BAG_XDIST_GROUP}` group. The catalog's corpus builder "
@@ -812,7 +681,7 @@ def _warn_loadgroup_would_colocate() -> None:
     if not _warns_for_this_process():
         return
     warnings.warn(
-        SmokeColocationWarning(
+        smoke.SmokeColocationWarning(
             f"Smoke catalog cannot share a worker with `{DAG_BAG_FIXTURE_NAME}` under "
             f"this dist mode: `xdist_group` only affects scheduling under "
             f"`--dist loadgroup`, and a plain `-n` run distributes with `--dist load`. "
