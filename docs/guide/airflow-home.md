@@ -68,7 +68,7 @@ want it:
 
 ```console
 =============================== airflow-in-a-box ===============================
-Retained AIRFLOW_HOME (retention policy: failed): /dev/shm/pytest-airflow-in-a-box-8f2a1c
+Retained AIRFLOW_HOME (retention policy: failed; 2 other retained roots kept): /dev/shm/pytest-airflow-in-a-box-8f2a1c
 WARNING: '/dev/shm' is RAM-backed, so this directory holds memory until it is removed or the machine reboots. Pass `--airflow-home=PATH` to put the run on durable storage instead.
 ```
 
@@ -93,10 +93,20 @@ Retention never leaks a database server. The `--airflow-db-backend=postgres` con
 stopped on every policy, `all` included; only the directory removal is conditional. A retained
 Postgres run therefore keeps its `airflow.cfg` and logs but not a live database.
 
-Nothing else changes with the policy: cleaning up a retained directory is your job. There is no
-retention *count* the way pytest caps `tmp_path` directories at `tmp_path_retention_count`, so a
-long CI matrix under `--airflow-home-retention=all`, or a stubbornly red suite under `failed`,
-will fill a disk (or, on `/dev/shm`, memory) if nothing prunes it.
+Retained roots are also bounded, mirroring pytest's own `tmp_path_retention_count`:
+
+```console
+pytest --airflow-home-retention-count=5
+```
+
+or persistently via the `airflow_home_retention_count` ini option, default `3`. Whenever a run
+keeps its directory, anything past the `N` most recently retained roots under the same storage
+base is removed -- so the count above appears in the announce/summary line for exactly this
+reason, to make the accumulation visible before it grows unbounded. Only directories that
+finished and were themselves retained ever count against the bound; a run still in progress,
+including another invocation sharing the same base concurrently, is never a candidate. Without
+this bound a long CI matrix under `--airflow-home-retention=all`, or a stubbornly red suite
+under `failed`, would fill a disk (or, on `/dev/shm`, memory) with nothing ever pruning it.
 
 One known gap: pytest raises the exit status to `MAX_WARNINGS_ERROR` after every
 `pytest_sessionfinish` hook has already run, so a run that fails only because it breached

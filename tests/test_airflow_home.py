@@ -34,6 +34,8 @@ def _config(
     *,
     airflow_home_retention: object = None,
     ini_retention: object = "failed",
+    airflow_home_retention_count: object = None,
+    ini_retention_count: object = "3",
     stash: pytest.Stash | None = None,
 ) -> Any:
     """Create a minimal configuration double for retention config-reader tests.
@@ -42,6 +44,10 @@ def _config(
         airflow_home_retention: object containing the parsed
             ``--airflow-home-retention`` option value.
         ini_retention: object containing the ``airflow_home_retention_policy`` ini value.
+        airflow_home_retention_count: object containing the parsed
+            ``--airflow-home-retention-count`` option value.
+        ini_retention_count: object containing the ``airflow_home_retention_count`` ini
+            value.
         stash: pytest.Stash | None containing a pre-populated stash; defaults to an
             empty one.
 
@@ -50,8 +56,14 @@ def _config(
         as ``Any`` for the ``pytest.Config`` call sites.
     """
 
-    option_values: dict[str, object] = {"airflow_home_retention": airflow_home_retention}
-    ini_values: dict[str, object] = {"airflow_home_retention_policy": ini_retention}
+    option_values: dict[str, object] = {
+        "airflow_home_retention": airflow_home_retention,
+        "airflow_home_retention_count": airflow_home_retention_count,
+    }
+    ini_values: dict[str, object] = {
+        "airflow_home_retention_policy": ini_retention,
+        "airflow_home_retention_count": ini_retention_count,
+    }
     return SimpleNamespace(
         getoption=lambda name: option_values[name],
         getini=lambda name: ini_values[name],
@@ -227,6 +239,92 @@ def test_resolve_retention_policy_rejects_a_blank_value(ini_retention: object) -
         _airflow_home.resolve_retention_policy(config)
 
 
+# --- resolve_retention_count --------------------------------------------------------
+
+
+def test_resolve_retention_count_prefers_cli_option() -> None:
+    """Give the CLI option precedence over the ini value."""
+
+    config = _config(airflow_home_retention_count="5", ini_retention_count="2")
+
+    assert _airflow_home.resolve_retention_count(config) == 5
+
+
+def test_resolve_retention_count_reads_ini_when_cli_absent() -> None:
+    """Fall back to the ini value when the CLI option is unset."""
+
+    config = _config(ini_retention_count="7")
+
+    assert _airflow_home.resolve_retention_count(config) == 7
+
+
+def test_resolve_retention_count_defaults_to_three() -> None:
+    """Resolve the house default when neither channel overrides it."""
+
+    config = _config()
+
+    assert _airflow_home.resolve_retention_count(config) == _airflow_home.DEFAULT_RETENTION_COUNT
+    assert _airflow_home.DEFAULT_RETENTION_COUNT == 3
+
+
+def test_resolve_retention_count_caches_resolution() -> None:
+    """Resolve the count once and serve later calls from the stash."""
+
+    reads: list[str] = []
+    config = _config(airflow_home_retention_count="5")
+    original_getoption = config.getoption
+    config.getoption = lambda name: (reads.append(name), original_getoption(name))[1]
+
+    assert _airflow_home.resolve_retention_count(config) == 5
+    assert _airflow_home.resolve_retention_count(config) == 5
+    assert reads == ["airflow_home_retention_count"]
+
+
+@pytest.mark.parametrize(
+    "ini_retention_count", ["0", "-1", "nope"], ids=["zero", "negative", "non-integer"]
+)
+def test_resolve_retention_count_rejects_an_invalid_value(ini_retention_count: str) -> None:
+    """Reject a non-positive or non-integer ini value.
+
+    Parameters:
+        ini_retention_count: str containing the malformed ini value under test.
+    """
+
+    config = _config(ini_retention_count=ini_retention_count)
+
+    with pytest.raises(pytest.UsageError, match="must be a positive integer"):
+        _airflow_home.resolve_retention_count(config)
+
+
+@pytest.mark.parametrize("ini_retention_count", ["", None], ids=["empty", "non-string"])
+def test_resolve_retention_count_rejects_a_blank_value(ini_retention_count: object) -> None:
+    """Reject an empty or non-string ini value before ``int`` coercion sees it.
+
+    Parameters:
+        ini_retention_count: object containing the malformed ini value under test.
+    """
+
+    config = _config(ini_retention_count=ini_retention_count)
+
+    with pytest.raises(pytest.UsageError, match="must be a positive integer"):
+        _airflow_home.resolve_retention_count(config)
+
+
+def test_retention_count_reads_the_resolved_stash_value() -> None:
+    """Read the resolved count back from the stash, without re-parsing anything."""
+
+    stash = pytest.Stash()
+    stash[_airflow_home.RETENTION_COUNT_KEY] = 9
+
+    assert _airflow_home.retention_count(_config(stash=stash)) == 9
+
+
+def test_retention_count_falls_back_to_the_default() -> None:
+    """Apply the documented default when the session died before `pytest_configure`."""
+
+    assert _airflow_home.retention_count(_config()) == _airflow_home.DEFAULT_RETENTION_COUNT
+
+
 # --- session outcome and the retention decision -----------------------------------
 
 
@@ -337,6 +435,98 @@ def test_retain_airflow_home_falls_back_to_the_default_policy() -> None:
     assert _airflow_home.retain_airflow_home(_config(stash=stash)) is True
 
 
+# --- mark_root_retained and prune_retained_roots -----------------------------------
+
+
+def _make_run_dir(base: Path, suffix: str, *, retained_mtime: float | None = None) -> Path:
+    """Create one fake run directory under a base, optionally marked as retained.
+
+    Parameters:
+        base: pathlib.Path containing the storage base to create the directory under.
+        suffix: str appended to `RUN_DIRECTORY_PREFIX` to name the directory.
+        retained_mtime: float | None setting the retained marker's modification time
+            when given; the directory is left unmarked -- an "active" run -- when `None`.
+
+    Returns:
+        pathlib.Path containing the newly created run directory.
+    """
+
+    root = base / f"{RUN_DIRECTORY_PREFIX}{suffix}"
+    root.mkdir()
+    if retained_mtime is not None:
+        marker = root / _airflow_home.RETAINED_MARKER_NAME
+        marker.touch()
+        os.utime(marker, (retained_mtime, retained_mtime))
+    return root
+
+
+def test_mark_root_retained_writes_the_marker(tmp_path: Path) -> None:
+    """Touch the sentinel file inside the run directory."""
+
+    root = tmp_path / f"{RUN_DIRECTORY_PREFIX}kept"
+    root.mkdir()
+
+    _airflow_home.mark_root_retained(root)
+
+    assert (root / _airflow_home.RETAINED_MARKER_NAME).is_file()
+
+
+def test_prune_retained_roots_keeps_the_most_recent_marked_siblings(tmp_path: Path) -> None:
+    """Remove marked siblings past the `keep` most recent, by marker mtime."""
+
+    oldest = _make_run_dir(tmp_path, "1", retained_mtime=1.0)
+    middle = _make_run_dir(tmp_path, "2", retained_mtime=2.0)
+    newest = _make_run_dir(tmp_path, "3", retained_mtime=3.0)
+
+    _airflow_home.prune_retained_roots(tmp_path, keep=2)
+
+    assert not oldest.exists()
+    assert middle.exists()
+    assert newest.exists()
+
+
+def test_prune_retained_roots_never_touches_an_unmarked_directory(tmp_path: Path) -> None:
+    """Leave an active run's directory alone regardless of `keep`.
+
+    An unmarked sibling has no way to prove it is finished rather than in-flight -- this
+    process's own about-to-be-created root, or another concurrent invocation sharing the
+    same base. `keep=0` forces maximum pruning to prove the marker check, not the count,
+    is what protects it.
+    """
+
+    active = _make_run_dir(tmp_path, "active")
+    _make_run_dir(tmp_path, "1", retained_mtime=1.0)
+
+    _airflow_home.prune_retained_roots(tmp_path, keep=0)
+
+    assert active.exists()
+    assert _run_roots_matching(tmp_path) == {active}
+
+
+def test_prune_retained_roots_ignores_directories_outside_the_run_prefix(tmp_path: Path) -> None:
+    """Leave a directory that does not match `RUN_DIRECTORY_PREFIX` untouched."""
+
+    unrelated = tmp_path / "not-a-run-directory"
+    unrelated.mkdir()
+
+    _airflow_home.prune_retained_roots(tmp_path, keep=0)
+
+    assert unrelated.exists()
+
+
+def _run_roots_matching(base: Path) -> set[Path]:
+    """List every run directory still present under a base.
+
+    Parameters:
+        base: pathlib.Path containing the storage base to scan.
+
+    Returns:
+        set[pathlib.Path] containing the run directories present right now.
+    """
+
+    return set(base.glob(f"{RUN_DIRECTORY_PREFIX}*"))
+
+
 # --- report_header ----------------------------------------------------------------
 
 
@@ -369,10 +559,10 @@ def test_report_header_is_silent_on_an_xdist_worker() -> None:
 # --- terminal_summary -------------------------------------------------------------
 
 
-def test_terminal_summary_reports_a_retained_root() -> None:
+def test_terminal_summary_reports_a_retained_root(tmp_path: Path) -> None:
     """Name the surviving directory and the policy that kept it."""
 
-    root = Path("/tmp/pytest-airflow-in-a-box-kept")
+    root = tmp_path / f"{RUN_DIRECTORY_PREFIX}kept"
     stash = pytest.Stash()
     stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
     reporter = _terminal_reporter()
@@ -381,18 +571,39 @@ def test_terminal_summary_reports_a_retained_root() -> None:
 
     assert reporter.lines == [
         "= airflow-in-a-box",
-        f"Retained AIRFLOW_HOME (retention policy: all): {root}",
+        f"Retained AIRFLOW_HOME (retention policy: all; 0 other retained roots kept): {root}",
     ]
 
 
-def test_terminal_summary_warns_about_a_retained_shared_memory_root() -> None:
-    """Flag a retained `/dev/shm` root as RAM the run holds until it is removed."""
+def test_terminal_summary_reports_the_number_of_already_retained_roots(tmp_path: Path) -> None:
+    """Count pre-existing marked siblings under the same base, not this run's own root."""
+
+    _make_run_dir(tmp_path, "1", retained_mtime=1.0)
+    _make_run_dir(tmp_path, "2", retained_mtime=2.0)
+    root = tmp_path / f"{RUN_DIRECTORY_PREFIX}new"
+    stash = pytest.Stash()
+    stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
+    reporter = _terminal_reporter()
+
+    _airflow_home.terminal_summary(reporter, _config(stash=stash), _state(root=root))
+
+    assert reporter.lines[-1] == (
+        f"Retained AIRFLOW_HOME (retention policy: all; 2 other retained roots kept): {root}"
+    )
+
+
+def test_terminal_summary_warns_about_a_retained_shared_memory_root(tmp_path: Path) -> None:
+    """Flag a retained `/dev/shm` root as RAM the run holds until it is removed.
+
+    Only `storage_reason` -- not the root's actual location -- triggers the warning, so
+    this stays off the real `/dev/shm` and scans an isolated `tmp_path` base instead.
+    """
 
     stash = pytest.Stash()
     stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.ALL
     reporter = _terminal_reporter()
     state = _state(
-        root=SHARED_MEMORY_PATH / "pytest-airflow-in-a-box-8f2a1c",
+        root=tmp_path / f"{RUN_DIRECTORY_PREFIX}8f2a1c",
         storage_reason=StorageReason.SHARED_MEMORY,
     )
 
@@ -441,15 +652,20 @@ def test_terminal_summary_is_silent_on_an_xdist_worker() -> None:
 
 
 def test_announce_retained_root_names_the_directory_on_stderr(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Write the surviving path to `stderr` when no terminal summary reported it.
 
+    Only `storage_reason` -- not the root's actual location -- triggers the RAM warning,
+    so this stays off the real `/dev/shm` and scans an isolated `tmp_path` base instead.
+
     Parameters:
+        tmp_path: pathlib.Path providing an isolated storage base to scan.
         capsys: pytest.CaptureFixture capturing the announcement stream.
     """
 
-    root = SHARED_MEMORY_PATH / "pytest-airflow-in-a-box-8f2a1c"
+    root = tmp_path / f"{RUN_DIRECTORY_PREFIX}8f2a1c"
     stash = pytest.Stash()
     stash[_airflow_home.RETENTION_POLICY_KEY] = RetentionPolicy.FAILED
     config = _config(stash=stash)
@@ -460,7 +676,7 @@ def test_announce_retained_root_names_the_directory_on_stderr(
     assert captured.out == ""
     assert (
         f"pytest-airflow-in-a-box: Retained AIRFLOW_HOME "
-        f"(retention policy: failed): {root}" in captured.err
+        f"(retention policy: failed; 0 other retained roots kept): {root}" in captured.err
     )
     assert f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed" in captured.err
     assert stash[_airflow_home.RETENTION_ANNOUNCED_KEY] is True
@@ -538,7 +754,7 @@ def test_retention_matrix_end_to_end(
     assert root.is_dir() is survives
     if survives:
         result.stdout.fnmatch_lines(
-            [f"Retained AIRFLOW_HOME (retention policy: {policy}): {root}"]
+            [f"Retained AIRFLOW_HOME (retention policy: {policy}; 0 other retained roots kept):*"]
         )
     else:
         assert "Retained AIRFLOW_HOME" not in result.stdout.str()
@@ -557,6 +773,88 @@ def test_default_policy_keeps_a_failing_run_directory(pytester: pytest.Pytester)
 
     result.assert_outcomes(failed=1)
     assert _header_root(result).is_dir()
+
+
+def test_retention_count_bounds_retained_roots_across_runs(pytester: pytest.Pytester) -> None:
+    """Prune retained roots down to the configured count, oldest first.
+
+    Five failing runs in a row against the same `pytester.path` base with
+    `--airflow-home-retention-count=3`: only the 3 most recently created run
+    directories survive, no matter how many failing runs came before them.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makepyfile(test_suite=_FAILING_SUITE)
+
+    roots: list[Path] = []
+    for _ in range(5):
+        result = pytester.runpytest_subprocess(
+            "--airflow-home-retention=failed", "--airflow-home-retention-count=3"
+        )
+        result.assert_outcomes(failed=1)
+        roots.append(_header_root(result))
+
+    assert _run_roots(pytester) == set(roots[-3:])
+
+
+def test_retention_count_default_keeps_three(pytester: pytest.Pytester) -> None:
+    """Bound retained roots to the documented default of 3 with no option or ini value.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makepyfile(test_suite=_FAILING_SUITE)
+
+    roots: list[Path] = []
+    for _ in range(4):
+        result = pytester.runpytest_subprocess("--airflow-home-retention=failed")
+        result.assert_outcomes(failed=1)
+        roots.append(_header_root(result))
+
+    assert _run_roots(pytester) == set(roots[-3:])
+
+
+def test_unknown_cli_retention_count_is_rejected(pytester: pytest.Pytester) -> None:
+    """Reject a non-integer `--airflow-home-retention-count` value.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makepyfile(test_suite=_PASSING_SUITE)
+
+    result = pytester.runpytest_subprocess("--airflow-home-retention-count=nope")
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    assert "must be a positive integer" in result.stdout.str() + result.stderr.str()
+
+
+def test_blank_ini_retention_count_is_rejected(pytester: pytest.Pytester) -> None:
+    """Fail loudly at configure time on an empty retention-count ini value.
+
+    Mirrors `test_blank_ini_policy_is_rejected`: the aborted session never reaches
+    `pytest_sessionstart`, so nothing marks it as a started run and cleanup discards the
+    bootstrap directory rather than accumulating one per failed attempt.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makeini("[pytest]\nairflow_home_retention_count =\n")
+    pytester.makepyfile(test_suite=_PASSING_SUITE)
+    before = _run_roots(pytester)
+
+    result = pytester.runpytest_subprocess()
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    output = result.stdout.str() + result.stderr.str()
+    assert "`airflow_home_retention_count` must be a positive integer" in output
+    assert "INTERNALERROR" not in output
+    assert "Retained AIRFLOW_HOME" not in output
+    assert _run_roots(pytester) == before
 
 
 _CRASHING_SESSIONSTART_CONFTEST = """
@@ -601,7 +899,10 @@ def test_a_crash_before_sessionfinish_retains_the_root(pytester: pytest.Pytester
     root = Path(record_path.read_text(encoding="utf-8"))
     assert root.is_dir()
     assert "AIRFLOW_HOME=" not in result.stdout.str()
-    assert f"Retained AIRFLOW_HOME (retention policy: failed): {root}" in (result.stderr.str())
+    assert (
+        f"Retained AIRFLOW_HOME (retention policy: failed; 0 other retained roots kept): {root}"
+        in result.stderr.str()
+    )
 
 
 _RECORDING_PROVISIONER_PLUGIN = """
