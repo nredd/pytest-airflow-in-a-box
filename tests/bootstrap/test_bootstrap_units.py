@@ -415,6 +415,49 @@ def test_owner_state_cleans_up_after_a_provisioner_usage_error(
     assert len(cleanups) == 1
 
 
+def _drift_config(policy: str = "error") -> Any:
+    """Create a configuration double answering only the drift-policy ini option.
+
+    Parameters:
+        policy: str containing the `airflow_worker_env_drift` ini value.
+
+    Returns:
+        Any duck-typed as the `pytest.Config` slice `load_initial_state` reads.
+    """
+
+    return SimpleNamespace(getini=lambda _name: policy, stash=pytest.Stash())
+
+
+def _inherit(
+    state: BootstrapState,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    role_variable: str = bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE,
+    role_value: str = "gw0",
+) -> None:
+    """Install the environment a worker-shaped child inherits from its controller.
+
+    Parameters:
+        state: BootstrapState the pretend controller exported.
+        monkeypatch: pytest.MonkeyPatch installing the inherited environment.
+        role_variable: str naming the variable marking this process's role.
+        role_value: str identifying this process within its role.
+    """
+
+    monkeypatch.delenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.delenv(bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setenv(role_variable, role_value)
+    monkeypatch.setenv(
+        STATE_ENVIRONMENT_VARIABLE,
+        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
+    )
+    for name, value in bootstrap._environment(state).items():
+        monkeypatch.setenv(name, value)
+    # The early-import guard fires first in-process; the worker path under test
+    # begins after it.
+    monkeypatch.delitem(sys.modules, "airflow", raising=False)
+
+
 def test_worker_environment_mismatch_fails_loudly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -422,19 +465,10 @@ def test_worker_environment_mismatch_fails_loudly(
     """Name every mismatched variable when the worker environment disagrees."""
 
     state = _artifact_state(tmp_path / "run")
-    monkeypatch.setenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, "gw0")
-    monkeypatch.setenv(
-        STATE_ENVIRONMENT_VARIABLE,
-        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
-    )
-    for name, value in bootstrap._environment(state).items():
-        monkeypatch.setenv(name, value)
+    _inherit(state, monkeypatch)
     monkeypatch.setenv("AIRFLOW_HOME", "/somewhere/else")
-    # The early-import guard fires first in-process; the worker path under
-    # test begins after it.
-    monkeypatch.delitem(sys.modules, "airflow", raising=False)
 
-    config: Any = SimpleNamespace()
+    config: Any = _drift_config()
 
     with pytest.raises(pytest.UsageError, match="disagrees with state: `AIRFLOW_HOME`"):
         bootstrap.load_initial_state(config, [])
@@ -447,17 +481,10 @@ def test_worker_environment_mismatch_on_plugins_folder_fails_loudly(
     """Name a plugins-folder disagreement between inherited state and environment."""
 
     state = _artifact_state(tmp_path / "run")
-    monkeypatch.setenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, "gw0")
-    monkeypatch.setenv(
-        STATE_ENVIRONMENT_VARIABLE,
-        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
-    )
-    for name, value in bootstrap._environment(state).items():
-        monkeypatch.setenv(name, value)
+    _inherit(state, monkeypatch)
     monkeypatch.setenv("AIRFLOW__CORE__PLUGINS_FOLDER", "/somewhere/else")
-    monkeypatch.delitem(sys.modules, "airflow", raising=False)
 
-    config: Any = SimpleNamespace()
+    config: Any = _drift_config()
 
     with pytest.raises(
         pytest.UsageError, match="disagrees with state: `AIRFLOW__CORE__PLUGINS_FOLDER`"
@@ -477,15 +504,12 @@ def test_isolated_child_inherits_state_through_the_environment(
     """
 
     state = _artifact_state(tmp_path / "run")
-    monkeypatch.delenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
-    monkeypatch.setenv(bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
-    monkeypatch.setenv(
-        STATE_ENVIRONMENT_VARIABLE,
-        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
+    _inherit(
+        state,
+        monkeypatch,
+        role_variable=bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
+        role_value="iso-1234abcd",
     )
-    for name, value in bootstrap._environment(state).items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.delitem(sys.modules, "airflow", raising=False)
 
     config: Any = SimpleNamespace()
 
@@ -504,23 +528,261 @@ def test_isolated_child_environment_mismatch_names_the_role(
     """
 
     state = _artifact_state(tmp_path / "run")
-    monkeypatch.delenv(bootstrap.XDIST_WORKER_ENVIRONMENT_VARIABLE, raising=False)
-    monkeypatch.setenv(bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE, "iso-1234abcd")
-    monkeypatch.setenv(
-        STATE_ENVIRONMENT_VARIABLE,
-        json.dumps(state.to_payload(), sort_keys=True, separators=(",", ":")),
+    _inherit(
+        state,
+        monkeypatch,
+        role_variable=bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
+        role_value="iso-1234abcd",
     )
-    for name, value in bootstrap._environment(state).items():
-        monkeypatch.setenv(name, value)
     monkeypatch.setenv("AIRFLOW_HOME", "/somewhere/else")
-    monkeypatch.delitem(sys.modules, "airflow", raising=False)
 
-    config: Any = SimpleNamespace()
+    config: Any = _drift_config()
 
     with pytest.raises(
         pytest.UsageError, match="for the isolated child disagrees with state: `AIRFLOW_HOME`"
     ):
         bootstrap.load_initial_state(config, [])
+
+
+def test_worker_environment_mismatch_diagnoses_a_foreign_mutator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Point at the likely cause and the escape hatch, not just the variable list.
+
+    A conftest-imported plugin that writes `AIRFLOW__*` at module scope mutates the
+    controller after bootstrap exported its state, so every worker inherits the result
+    and aborts. The variable names alone never lead anyone to that.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the mismatched environment.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/241
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    _inherit(state, monkeypatch)
+    monkeypatch.setenv("AIRFLOW__CORE__FERNET_KEY", "not-this-run-s-key")
+
+    with pytest.raises(pytest.UsageError) as failure:
+        bootstrap.load_initial_state(_drift_config(), [])
+
+    message = str(failure.value)
+    assert "another pytest plugin or conftest likely mutated `AIRFLOW__*`" in message
+    assert "module-scope `os.environ` write" in message
+    assert f"`{bootstrap.WORKER_ENV_DRIFT_INI} = repair`" in message
+
+
+def test_worker_environment_mismatch_names_every_variable_sorted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """List multiple drifted variables in one message, sorted.
+
+    A foreign mutator rewrites a whole family of variables at once, so the single-name
+    rendering is the exception rather than the rule.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the mismatched environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    _inherit(state, monkeypatch)
+    monkeypatch.setenv("AIRFLOW__CORE__PLUGINS_FOLDER", "/somewhere/else")
+    monkeypatch.setenv("AIRFLOW_HOME", "/somewhere/else")
+
+    with pytest.raises(pytest.UsageError) as failure:
+        bootstrap.load_initial_state(_drift_config(), [])
+
+    assert "disagrees with state: `AIRFLOW_HOME`, `AIRFLOW__CORE__PLUGINS_FOLDER` --" in str(
+        failure.value
+    )
+
+
+def test_worker_environment_drift_counts_an_absent_variable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a scrubbed variable as drift, not only a rewritten one.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the mismatched environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    _inherit(state, monkeypatch)
+    monkeypatch.delenv("AIRFLOW__CORE__FERNET_KEY")
+
+    with pytest.raises(
+        pytest.UsageError, match="disagrees with state: `AIRFLOW__CORE__FERNET_KEY`"
+    ):
+        bootstrap.load_initial_state(_drift_config(), [])
+
+
+def test_repair_policy_reinstalls_the_run_environment_on_a_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Put a drifted worker back into the state its controller had at the same point.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the mismatched environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    _inherit(state, monkeypatch)
+    monkeypatch.setenv("AIRFLOW_HOME", "/somewhere/else")
+    monkeypatch.setenv("AIRFLOW__CORE__FERNET_KEY", "not-this-run-s-key")
+    config = _drift_config("repair")
+
+    assert bootstrap.load_initial_state(config, []) == state
+
+    expected = bootstrap._environment(state)
+    assert {name: os.environ.get(name) for name in expected} == expected
+    assert config.stash[bootstrap.WORKER_ENV_REPAIRED_KEY] == (
+        "AIRFLOW_HOME",
+        "AIRFLOW__CORE__FERNET_KEY",
+    )
+
+
+def test_repair_policy_covers_the_isolated_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repair the isolated child too; it inherits the same clobbered controller env.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the mismatched environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    _inherit(
+        state,
+        monkeypatch,
+        role_variable=bootstrap.ISOLATED_WORKER_ENVIRONMENT_VARIABLE,
+        role_value="iso-1234abcd",
+    )
+    monkeypatch.setenv("AIRFLOW_HOME", "/somewhere/else")
+    config = _drift_config("repair")
+
+    assert bootstrap.load_initial_state(config, []) == state
+
+    assert os.environ["AIRFLOW_HOME"] == str(state.root)
+    assert config.stash[bootstrap.WORKER_ENV_REPAIRED_KEY] == ("AIRFLOW_HOME",)
+
+
+def test_repair_policy_leaves_an_undrifted_worker_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stash nothing when the inherited environment agrees, so nothing warns later.
+
+    Parameters:
+        tmp_path: pathlib.Path receiving the run artifact layout.
+        monkeypatch: pytest.MonkeyPatch installing the inherited environment.
+    """
+
+    state = _artifact_state(tmp_path / "run")
+    _inherit(state, monkeypatch)
+    config = _drift_config("repair")
+
+    assert bootstrap.load_initial_state(config, []) == state
+
+    assert bootstrap.WORKER_ENV_REPAIRED_KEY not in config.stash
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("error", bootstrap.WorkerEnvDriftPolicy.ERROR),
+        ("repair", bootstrap.WorkerEnvDriftPolicy.REPAIR),
+        ("", bootstrap.WorkerEnvDriftPolicy.ERROR),
+    ],
+)
+def test_worker_env_drift_policy_reads_the_ini_option(
+    value: str,
+    expected: bootstrap.WorkerEnvDriftPolicy,
+) -> None:
+    """Resolve every accepted value, treating an empty option as the default.
+
+    Parameters:
+        value: str containing the raw ini value.
+        expected: bootstrap.WorkerEnvDriftPolicy the value resolves to.
+    """
+
+    assert bootstrap._worker_env_drift_policy(_drift_config(value)) is expected
+
+
+@pytest.mark.parametrize("value", ["maybe", ["repair"], None])
+def test_worker_env_drift_policy_rejects_an_unsupported_value(value: object) -> None:
+    """Reject an unknown policy and a non-string ini value with one message.
+
+    A `pyproject.toml` `[tool.pytest.ini_options]` table can supply a list directly,
+    which never resolves to a policy either.
+
+    Parameters:
+        value: object containing the raw ini value.
+    """
+
+    config: Any = SimpleNamespace(getini=lambda _name: value)
+
+    with pytest.raises(
+        pytest.UsageError,
+        match=f"Ini option `{bootstrap.WORKER_ENV_DRIFT_INI}` must be `error` or `repair`",
+    ):
+        bootstrap._worker_env_drift_policy(config)
+
+
+def test_repair_warning_names_the_repaired_variables() -> None:
+    """Warn at configure time with the variables and the ownership caveat."""
+
+    warnings: list[tuple[Warning, int]] = []
+    config: Any = SimpleNamespace(
+        stash=pytest.Stash(),
+        issue_config_time_warning=lambda warning, stacklevel: warnings.append(
+            (warning, stacklevel)
+        ),
+    )
+    config.stash[bootstrap.WORKER_ENV_REPAIRED_KEY] = ("AIRFLOW_HOME", "AIRFLOW__CORE__FERNET_KEY")
+
+    bootstrap.warn_if_worker_env_repaired(config)
+
+    assert len(warnings) == 1
+    warning, stacklevel = warnings[0]
+    assert isinstance(warning, bootstrap.WorkerEnvironmentDriftWarning)
+    assert stacklevel == 2
+    message = str(warning)
+    assert "Re-installed 2 inherited Airflow variable(s)" in message
+    assert "`AIRFLOW_HOME`, `AIRFLOW__CORE__FERNET_KEY`" in message
+    assert "isolation past bootstrap is your harness's responsibility" in message
+
+
+@pytest.mark.parametrize("repaired", [None, ()])
+def test_repair_warning_is_silent_without_a_repair(repaired: tuple[str, ...] | None) -> None:
+    """Stay silent on a controller and on a worker that needed no repair.
+
+    Parameters:
+        repaired: tuple[str, ...] | None containing the stashed names, or `None` to
+            leave the key unset entirely.
+    """
+
+    warnings: list[Warning] = []
+    config: Any = SimpleNamespace(
+        stash=pytest.Stash(),
+        issue_config_time_warning=lambda warning, _stacklevel: warnings.append(warning),
+    )
+    if repaired is not None:
+        config.stash[bootstrap.WORKER_ENV_REPAIRED_KEY] = repaired
+
+    bootstrap.warn_if_worker_env_repaired(config)
+
+    assert warnings == []
 
 
 def test_environment_always_sets_the_plugins_folder(tmp_path: Path) -> None:

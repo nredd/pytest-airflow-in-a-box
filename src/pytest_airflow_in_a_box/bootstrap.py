@@ -35,6 +35,7 @@ from pytest_airflow_in_a_box.storage import (
     validate_local_settings_module_shape,
     write_local_settings,
 )
+from pytest_airflow_in_a_box.storage.locate import StrEnum
 from pytest_airflow_in_a_box.storage.provision import DbBackend, select_provisioner
 
 STATE_VERSION = 5
@@ -46,9 +47,21 @@ PASSWORDS = '{"admin": "admin"}\n'
 SQL_ALCHEMY_CONN_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
 SQL_ALCHEMY_POOL_ENABLED_ENVIRONMENT_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_ENABLED"
 EXECUTOR_ENVIRONMENT_VARIABLE = "AIRFLOW__CORE__EXECUTOR"
+WORKER_ENV_DRIFT_INI = "airflow_worker_env_drift"
 
 JsonPrimitive = str | int | bool
 StatePayload = dict[str, JsonPrimitive]
+
+
+class WorkerEnvDriftPolicy(StrEnum):
+    """Response to an inherited Airflow environment that disagrees with bootstrap state."""
+
+    ERROR = "error"
+    REPAIR = "repair"
+
+
+class WorkerEnvironmentDriftWarning(RuntimeWarning):
+    """Warn that a worker-shaped process re-installed drifted Airflow variables."""
 
 
 @dataclass(frozen=True)
@@ -133,6 +146,7 @@ class BootstrapState:
 
 
 STATE_KEY = pytest.StashKey[BootstrapState]()
+WORKER_ENV_REPAIRED_KEY = pytest.StashKey[tuple[str, ...]]()
 
 
 @runtime_checkable
@@ -586,6 +600,34 @@ def _db_backend(config: pytest.Config, args: list[str]) -> DbBackend:
         ) from error
 
 
+def _worker_env_drift_policy(config: pytest.Config) -> WorkerEnvDriftPolicy:
+    """Resolve what a worker-shaped process does about a drifted inherited environment.
+
+    Ini-only by design: this selects a mode a project adopts deliberately for every run,
+    not a one-off local escape, and the value has to reach an xdist worker, which parses
+    the same configuration file rather than the controller's command line.
+
+    Parameters:
+        config: pytest.Config containing parsed ini values.
+
+    Returns:
+        WorkerEnvDriftPolicy selecting the response to environment drift.
+
+    Raises:
+        pytest.UsageError: The configured value is not a supported policy.
+    """
+
+    value: object = config.getini(WORKER_ENV_DRIFT_INI)
+    if isinstance(value, str) and not value:
+        return WorkerEnvDriftPolicy.ERROR
+    try:
+        return WorkerEnvDriftPolicy(value)
+    except ValueError as error:
+        raise pytest.UsageError(
+            f"Ini option `{WORKER_ENV_DRIFT_INI}` must be `error` or `repair`: '{value}'"
+        ) from error
+
+
 def _local_settings_module(config: pytest.Config) -> str | None:
     """Read and shape-validate the ini-configured cluster-policy module, if any.
 
@@ -902,12 +944,74 @@ def _environment_names() -> tuple[str, ...]:
     )
 
 
+def _repair_worker_environment(
+    config: pytest.Config,
+    expected_environment: dict[str, str],
+    mismatched: list[str],
+) -> None:
+    """Re-install this run's Airflow variables over a drifted inherited environment.
+
+    What this promises, precisely: the process is put back into the state its controller
+    was in at the *same* point in its own lifecycle -- bootstrap finished, no conftest
+    imported yet. It does not promise that the drift stays repaired. Whatever mutated the
+    environment on the controller almost always does so in this process too (an import-time
+    ``os.environ`` write in a conftest-loaded plugin runs once per process), so the
+    variables are clobbered again a moment later, exactly as they are on the controller.
+
+    That symmetry is the whole point of the mode: a parallel run ends up behaving like the
+    serial run that already worked, rather than aborting every worker. This plugin owns the
+    environment through bootstrap and makes no claim over it afterwards, so a consumer
+    opting in is accepting that their own harness, not this one, decides what Airflow reads.
+
+    Parameters:
+        config: pytest.Config whose stash carries the repaired names to `pytest_configure`.
+        expected_environment: dict[str, str] containing this run's Airflow variables.
+        mismatched: list[str] naming the drifted variables, sorted.
+    """
+
+    os.environ.update(expected_environment)
+    config.stash[WORKER_ENV_REPAIRED_KEY] = tuple(mismatched)
+
+
+def warn_if_worker_env_repaired(config: pytest.Config) -> None:
+    """Warn once, at configure time, that a drifted inherited environment was repaired.
+
+    A bare ``warnings.warn`` from a plugin hook is not captured by pytest's warnings
+    machinery, and the repair itself happens during the initial parse, long before a
+    warnings context exists; ``issue_config_time_warning`` is the documented seam, and
+    xdist relays the resulting ``pytest_warning_recorded`` from the worker that repaired
+    to the controller's summary.
+
+    Parameters:
+        config: pytest.Config for the active test session.
+    """
+
+    repaired = config.stash.get(WORKER_ENV_REPAIRED_KEY, ())
+    if not repaired:
+        return
+    names = ", ".join(f"`{name}`" for name in repaired)
+    config.issue_config_time_warning(
+        WorkerEnvironmentDriftWarning(
+            f"Re-installed {len(repaired)} inherited Airflow variable(s) something had already "
+            f"mutated: {names}. `{WORKER_ENV_DRIFT_INI} = repair` keeps the run alive, but "
+            "whatever mutated them will mutate them again in this process; isolation past "
+            "bootstrap is your harness's responsibility."
+        ),
+        2,
+    )
+
+
 def load_initial_state(config: pytest.Config, args: list[str]) -> BootstrapState:
     """Create owner state or load state inherited by a worker-shaped child process.
 
     Two process kinds inherit rather than bootstrap: a local xdist worker, and the
     one-shot child an `airflow_isolated` batch spawns -- structurally an xdist worker
     of one, reusing the identical environment channel (see `isolated.py`).
+
+    Drift between the inherited environment and the inherited state is normally fatal,
+    because it means something outside this plugin now owns variables the run depends on.
+    The `airflow_worker_env_drift` ini option selects the other answer -- see
+    ``_repair_worker_environment`` for what coexistence actually promises.
 
     Parameters:
         config: pytest.Config active during initial conftest loading.
@@ -917,7 +1021,8 @@ def load_initial_state(config: pytest.Config, args: list[str]) -> BootstrapState
         BootstrapState containing this process's run state.
 
     Raises:
-        pytest.UsageError: Airflow was imported too early or state is invalid.
+        pytest.UsageError: Airflow was imported too early, state is invalid, or the
+            inherited environment drifted under the default `error` policy.
     """
 
     if "airflow" in sys.modules:
@@ -933,14 +1038,23 @@ def load_initial_state(config: pytest.Config, args: list[str]) -> BootstrapState
         return _owner_state(config, args)
     state = _state_from_environment(role)
     expected_environment = _environment(state)
-    mismatched = [
+    mismatched = sorted(
         name for name, value in expected_environment.items() if os.environ.get(name) != value
-    ]
+    )
     if mismatched:
-        names = ", ".join(f"`{name}`" for name in sorted(mismatched))
-        raise pytest.UsageError(
-            f"Inherited Airflow environment for the {role} disagrees with state: {names}"
-        )
+        # Resolved only on the drift path: a healthy run must not be aborted by a
+        # malformed value for an option that would never have been consulted.
+        if _worker_env_drift_policy(config) is WorkerEnvDriftPolicy.REPAIR:
+            _repair_worker_environment(config, expected_environment, mismatched)
+        else:
+            names = ", ".join(f"`{name}`" for name in mismatched)
+            raise pytest.UsageError(
+                f"Inherited Airflow environment for the {role} disagrees with state: {names} -- "
+                "another pytest plugin or conftest likely mutated `AIRFLOW__*` after bootstrap "
+                "exported it, and a module-scope `os.environ` write is the usual suspect. Set "
+                f"the `{WORKER_ENV_DRIFT_INI} = repair` ini option to re-install this run's "
+                "values and continue."
+            )
     return state
 
 
@@ -1023,9 +1137,13 @@ def validate_configure(config: pytest.Config) -> None:
 __all__ = (
     "ISOLATED_WORKER_ENVIRONMENT_VARIABLE",
     "STATE_ENVIRONMENT_VARIABLE",
+    "WORKER_ENV_DRIFT_INI",
     "BootstrapState",
+    "WorkerEnvDriftPolicy",
+    "WorkerEnvironmentDriftWarning",
     "configure_node",
     "get_bootstrap_state",
     "load_initial_state",
     "validate_configure",
+    "warn_if_worker_env_repaired",
 )

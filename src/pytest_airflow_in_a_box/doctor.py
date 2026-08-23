@@ -28,7 +28,13 @@ from pytest_airflow_in_a_box._compat import (
 )
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, CertificationTier
 from pytest_airflow_in_a_box._compat.settings import airflow_conf
-from pytest_airflow_in_a_box.bootstrap import BootstrapState, get_bootstrap_state
+from pytest_airflow_in_a_box.bootstrap import (
+    WORKER_ENV_DRIFT_INI,
+    BootstrapState,
+    WorkerEnvDriftPolicy,
+    _worker_env_drift_policy,
+    get_bootstrap_state,
+)
 from pytest_airflow_in_a_box.certification import LAST_CERTIFIED_VERSION
 from pytest_airflow_in_a_box.collection import collection_folder
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
@@ -259,6 +265,25 @@ def _migration_strict_section(config: pytest.Config, state: BootstrapState) -> l
     return ["- `--airflow-migration-strict`: enabled"]
 
 
+def _worker_env_drift_section(config: pytest.Config) -> list[str]:
+    """Render the configured response to a drifted inherited worker environment.
+
+    Parameters:
+        config: pytest.Config containing plugin ini values.
+
+    Returns:
+        list[str] containing one Markdown bullet line.
+    """
+
+    policy = _worker_env_drift_policy(config)
+    if policy is WorkerEnvDriftPolicy.REPAIR:
+        return [
+            f"- `{WORKER_ENV_DRIFT_INI}`: `repair` -- a worker re-installs this run's "
+            "variables and continues; isolation past bootstrap is not guaranteed"
+        ]
+    return [f"- `{WORKER_ENV_DRIFT_INI}`: `error`"]
+
+
 def _cov_sources(config: pytest.Config) -> list[object] | None:
     """Read `pytest-cov`'s parsed `--cov` sources without importing `pytest_cov`.
 
@@ -480,6 +505,7 @@ def render_doctor_report(config: pytest.Config) -> str:
         ("Versions and capabilities", _version_section()),
         ("Executor", _executor_section(state)),
         ("Migration-strict", _migration_strict_section(config, state)),
+        ("Worker environment drift", _worker_env_drift_section(config)),
         ("Dag coverage", _coverage_section(config, state)),
         ("API server", _api_server_section()),
     )
