@@ -19,7 +19,9 @@ certification, and names the remedy), the resolved `core.executor` (flagging a 2
 overrides the plugin's `SequentialExecutor` default with a multi-threaded executor, which
 Airflow's `ready_to_reschedule` dependency rejects), whether
 [`--airflow-migration-strict`](../guide/migration-strict.md) is enabled (flagging it as a no-op
-off the Airflow 2.x family), [Dag coverage](../guide/dag-coverage.md) readiness (the resolved
+off the Airflow 2.x family), the configured
+[`airflow_worker_env_drift`](../guide/configuration.md#coexisting-with-another-plugin) policy,
+[Dag coverage](../guide/dag-coverage.md) readiness (the resolved
 Dag and collection folders, whether `pytest-cov` is installed and active, and whether the Dag
 folder sits inside a configured `--cov` source, with a copy-pasteable fix when it does not),
 and API server state. The API server section always reads "not
