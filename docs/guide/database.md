@@ -40,4 +40,5 @@ clear_db(tables={TableGroup.VARIABLES})  # one group
 ```
 
 Requesting a group also clears the groups whose rows reference it (`RUNS` clears task instances
-and XCom rows), and clearing `CONNECTIONS` recreates Airflow's default connections.
+and XCom rows, and `BACKFILL` -- the one group referenced BY `RUNS` rather than the reverse --
+clears `RUNS` first), and clearing `CONNECTIONS` recreates Airflow's default connections.
