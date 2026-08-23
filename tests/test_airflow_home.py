@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -503,6 +504,63 @@ def test_prune_retained_roots_never_touches_an_unmarked_directory(tmp_path: Path
     assert _run_roots_matching(tmp_path) == {active}
 
 
+def test_prune_retained_roots_never_touches_another_users_marked_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skip a marked sibling owned by a different uid, never pruning or counting it.
+
+    `/dev/shm` and system temp are typically world-writable, so a marker this process
+    did not create belongs to another user on the same host -- neither a removal
+    candidate (permission denied) nor a directory this run's "other retained roots"
+    count should claim credit for.
+
+    Parameters:
+        tmp_path: pathlib.Path providing an isolated storage base to scan.
+        monkeypatch: pytest.MonkeyPatch simulating a different owning uid.
+    """
+
+    other = _make_run_dir(tmp_path, "other-user", retained_mtime=1.0)
+    real_uid = (other / _airflow_home.RETAINED_MARKER_NAME).stat().st_uid
+    monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
+
+    assert _airflow_home._retained_siblings(tmp_path) == []
+
+    _airflow_home.prune_retained_roots(tmp_path, keep=0)
+
+    assert other.exists()
+
+
+def test_prune_retained_roots_logs_a_removal_failure_instead_of_swallowing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log a warning when a stale directory cannot be removed, rather than ignoring it.
+
+    A silently swallowed removal failure would let the `keep` bound stop holding with
+    nothing anywhere saying so.
+
+    Parameters:
+        tmp_path: pathlib.Path providing an isolated storage base to scan.
+        monkeypatch: pytest.MonkeyPatch simulating an `OSError` from `shutil.rmtree`.
+        caplog: pytest.LogCaptureFixture capturing the warning.
+    """
+
+    stale = _make_run_dir(tmp_path, "1", retained_mtime=1.0)
+    _make_run_dir(tmp_path, "2", retained_mtime=2.0)
+
+    def _raise(path: Path) -> None:
+        del path
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(_airflow_home.shutil, "rmtree", _raise)
+    caplog.set_level(logging.WARNING, logger=_airflow_home.LOGGER.name)
+
+    _airflow_home.prune_retained_roots(tmp_path, keep=1)
+
+    assert f"Could not prune retained AIRFLOW_HOME '{stale}'" in caplog.text
+
+
 def test_prune_retained_roots_ignores_directories_outside_the_run_prefix(tmp_path: Path) -> None:
     """Leave a directory that does not match `RUN_DIRECTORY_PREFIX` untouched."""
 
@@ -797,6 +855,33 @@ def test_retention_count_bounds_retained_roots_across_runs(pytester: pytest.Pyte
         roots.append(_header_root(result))
 
     assert _run_roots(pytester) == set(roots[-3:])
+
+
+def test_retention_count_message_matches_what_survives(pytester: pytest.Pytester) -> None:
+    """Report the count that will actually be on disk once this run's cleanup finishes.
+
+    `_retained_lines` runs before `bootstrap`'s cleanup closure marks and prunes, so a
+    naive pre-prune sibling count would announce roots this same cleanup pass is about to
+    delete. With `--airflow-home-retention-count=1` every run's announce line must say
+    "0 other retained roots kept", never "1" -- and exactly one directory must survive
+    each time.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    pytester.makepyfile(test_suite=_FAILING_SUITE)
+
+    for _ in range(3):
+        result = pytester.runpytest_subprocess(
+            "--airflow-home-retention=failed", "--airflow-home-retention-count=1"
+        )
+        result.assert_outcomes(failed=1)
+        root = _header_root(result)
+        result.stdout.fnmatch_lines(
+            ["Retained AIRFLOW_HOME (retention policy: failed; 0 other retained roots kept):*"]
+        )
+        assert _run_roots(pytester) == {root}
 
 
 def test_retention_count_default_keeps_three(pytester: pytest.Pytester) -> None:

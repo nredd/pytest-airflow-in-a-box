@@ -101,12 +101,14 @@ pytest --airflow-home-retention-count=5
 
 or persistently via the `airflow_home_retention_count` ini option, default `3`. Whenever a run
 keeps its directory, anything past the `N` most recently retained roots under the same storage
-base is removed -- so the count above appears in the announce/summary line for exactly this
-reason, to make the accumulation visible before it grows unbounded. Only directories that
-finished and were themselves retained ever count against the bound; a run still in progress,
-including another invocation sharing the same base concurrently, is never a candidate. Without
-this bound a long CI matrix under `--airflow-home-retention=all`, or a stubbornly red suite
-under `failed`, would fill a disk (or, on `/dev/shm`, memory) with nothing ever pruning it.
+base and owned by the same user is removed -- so the count above appears in the announce/summary
+line for exactly this reason, to make the accumulation visible before it grows unbounded. Only
+directories that finished and were themselves retained ever count against the bound; a run still
+in progress, including another invocation sharing the same base concurrently, is never a
+candidate, and neither is a root some other user on the same host retained on a shared base like
+`/dev/shm`. Without this bound a long CI matrix under `--airflow-home-retention=all`, or a
+stubbornly red suite under `failed`, would fill a disk (or, on `/dev/shm`, memory) with nothing
+ever pruning it.
 
 One known gap: pytest raises the exit status to `MAX_WARNINGS_ERROR` after every
 `pytest_sessionfinish` hook has already run, so a run that fails only because it breached

@@ -397,7 +397,13 @@ def mark_root_retained(root: Path) -> None:
 
 
 def _retained_siblings(base: Path) -> list[Path]:
-    """List marked-retained run directories under a storage base, newest first.
+    """List this user's marked-retained run directories under a storage base, newest first.
+
+    Restricted to the current uid: ``/dev/shm`` and system temp are typically
+    world-writable, shared by every user on the host, so a marker owned by someone else
+    is neither a candidate to prune (permission denied, and not this user's to remove)
+    nor a directory whose existence this run should claim credit for in its "other
+    retained roots" count.
 
     Parameters:
         base: pathlib.Path containing the storage base to scan.
@@ -407,13 +413,16 @@ def _retained_siblings(base: Path) -> list[Path]:
         modification time, most recent first.
     """
 
+    uid = os.getuid()
     dated: list[tuple[float, Path]] = []
     for entry in base.glob(f"{RUN_DIRECTORY_PREFIX}*"):
         try:
-            mtime = (entry / RETAINED_MARKER_NAME).stat().st_mtime
+            info = (entry / RETAINED_MARKER_NAME).stat()
         except OSError:
             continue
-        dated.append((mtime, entry))
+        if info.st_uid != uid:
+            continue
+        dated.append((info.st_mtime, entry))
     dated.sort(key=lambda pair: pair[0], reverse=True)
     return [entry for _, entry in dated]
 
@@ -421,9 +430,12 @@ def _retained_siblings(base: Path) -> list[Path]:
 def prune_retained_roots(base: Path, *, keep: int) -> None:
     """Remove retained run directories beyond the ``keep`` most recent under a base.
 
-    Only directories carrying the ``RETAINED_MARKER_NAME`` sentinel are ever a GC
-    candidate, so an active run -- this process's own about-to-be-created root, or
-    another concurrent invocation sharing the same base -- is never touched.
+    Only directories carrying the ``RETAINED_MARKER_NAME`` sentinel and owned by the
+    current user are ever a GC candidate, so an active run -- this process's own
+    about-to-be-created root, or another concurrent invocation sharing the same base --
+    is never touched. A removal failure is logged rather than swallowed: silently
+    ignoring it would let the ``keep`` bound quietly stop holding without anything
+    saying so.
 
     Parameters:
         base: pathlib.Path containing the storage base to prune.
@@ -431,7 +443,10 @@ def prune_retained_roots(base: Path, *, keep: int) -> None:
     """
 
     for stale in _retained_siblings(base)[keep:]:
-        shutil.rmtree(stale, ignore_errors=True)
+        try:
+            shutil.rmtree(stale)
+        except OSError as error:
+            LOGGER.warning(f"Could not prune retained AIRFLOW_HOME '{stale}': {error}")
 
 
 def _retained_lines(
@@ -441,8 +456,15 @@ def _retained_lines(
 
     Shared by both announcement channels so the wording cannot drift between them.
 
+    Both channels call this before ``bootstrap``'s cleanup closure has marked or pruned
+    ``root`` -- see that closure's docstring -- so the reported count is capped at
+    ``keep - 1`` rather than the raw pre-prune sibling count: pruning is about to trim
+    marked siblings plus this run's own root down to ``keep`` total, and reporting the
+    pre-prune count would name directories this same cleanup pass is seconds away from
+    removing.
+
     Parameters:
-        config: pytest.Config carrying the resolved retention policy.
+        config: pytest.Config carrying the resolved retention policy and count.
         root: pathlib.Path containing the surviving run directory.
         storage_reason: str naming the storage-ladder rung that chose the base.
         base: pathlib.Path containing the storage base ``root`` was created under.
@@ -452,7 +474,8 @@ def _retained_lines(
     """
 
     policy = config.stash.get(RETENTION_POLICY_KEY, DEFAULT_RETENTION_POLICY)
-    existing = len(_retained_siblings(base))
+    keep = retention_count(config)
+    existing = min(len(_retained_siblings(base)), keep - 1)
     plural = "" if existing == 1 else "s"
     lines = [
         f"Retained AIRFLOW_HOME (retention policy: {policy}; {existing} other retained "
