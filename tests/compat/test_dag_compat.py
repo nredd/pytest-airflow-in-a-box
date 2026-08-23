@@ -363,6 +363,138 @@ def test_dagrun_creation_wraps_airflow_failure(monkeypatch: pytest.MonkeyPatch) 
     assert session.rollbacks == 1
 
 
+@pytest.mark.parametrize("key", ["run_id", "start_date", "session", "logical_date", "run_after"])
+def test_dagrun_creation_rejects_reserved_dag_run_kwargs_on_v3(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    """Refuse a `dag_run_kwargs` entry that would double-pass a keyword to Airflow."""
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V3),
+    )
+
+    scheduler_dag: Any = object()
+    authoring_dag: Any = object()
+    with pytest.raises(ValueError, match=r"`dag_run_kwargs` cannot set"):
+        dag_compat.create_dag_run(
+            scheduler_dag,
+            authoring_dag,
+            _record(_Session()),
+            run_id="reserved_kwargs_run",
+            logical_date=None,
+            run_after=None,
+            start_date=None,
+            dag_run_kwargs={key: object()},
+        )
+
+
+def test_dagrun_creation_rejects_session_with_a_session_specific_remedy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Point a caller-supplied `session` at `dag_maker.session`, not a nonexistent keyword.
+
+    `session` has no dedicated keyword argument anywhere in the public API -- it is
+    fixture-owned. A generic "use the dedicated keyword argument instead" remedy would
+    send a caller looking for something that does not exist.
+    """
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V3),
+    )
+
+    scheduler_dag: Any = object()
+    authoring_dag: Any = object()
+    with pytest.raises(ValueError, match=r"dag_maker\.session") as caught:
+        dag_compat.create_dag_run(
+            scheduler_dag,
+            authoring_dag,
+            _record(_Session()),
+            run_id="reserved_kwargs_run",
+            logical_date=None,
+            run_after=None,
+            start_date=None,
+            dag_run_kwargs={"session": object()},
+        )
+
+    assert "dedicated keyword argument" not in str(caught.value)
+
+
+def test_dagrun_creation_allows_triggered_by_through_dag_run_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Let a caller-supplied `triggered_by` reach Airflow instead of rejecting it.
+
+    `triggered_by` is set with `kwargs.setdefault`, not double-passed, so it must stay
+    outside the reserved set that `test_dagrun_creation_rejects_reserved_dag_run_kwargs_on_v3`
+    exercises.
+    """
+
+    from airflow.models.dag_version import DagVersion
+    from airflow.utils.types import DagRunTriggeredByType
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(
+            family=AirflowFamily.V3,
+            timezone_location=TimezoneLocation.SDK,
+            secrets_resolution=SecretsResolution.SUPERVISOR_COMMS,
+            refresh_from_task_supports_dag_run=False,
+        ),
+    )
+    monkeypatch.setattr(
+        DagVersion,
+        "get_latest_version",
+        staticmethod(lambda _dag_id, **_kwargs: SimpleNamespace(id="current")),
+    )
+    session = _Session()
+    record = _record(session)
+    ti = SimpleNamespace(
+        dag_id="compat_dag",
+        run_id="compat_run",
+        task_id="task",
+        map_index=-1,
+        refresh_from_task=lambda _task: None,
+    )
+    dag_run: Any = SimpleNamespace(
+        id=11,
+        run_id="compat_run",
+        created_dag_version_id="current",
+        verify_integrity=lambda **_kwargs: None,
+        get_task_instances=lambda **_kwargs: [ti],
+    )
+    created_kwargs: dict[str, Any] = {}
+
+    def fake_create_dagrun(**kwargs: Any) -> Any:
+        """Record the exact kwargs the scheduler Dag receives."""
+
+        created_kwargs.update(kwargs)
+        return dag_run
+
+    scheduler_dag = SimpleNamespace(
+        timetable=SimpleNamespace(infer_manual_data_interval=lambda **_kwargs: None),
+        create_dagrun=fake_create_dagrun,
+    )
+    authoring_dag: Any = SimpleNamespace(get_task=lambda _task_id: object())
+
+    dag_compat.create_dag_run(
+        scheduler_dag,
+        authoring_dag,
+        record,
+        run_id="compat_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={"triggered_by": DagRunTriggeredByType.CLI},
+    )
+
+    assert created_kwargs["triggered_by"] is DagRunTriggeredByType.CLI
+
+
 def test_task_instance_selection_wraps_query_failure() -> None:
     """Name task-instance selection and retain its metadata query cause."""
 
