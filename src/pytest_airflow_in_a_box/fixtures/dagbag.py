@@ -116,7 +116,10 @@ def dag_bag(request: pytest.FixtureRequest, pytestconfig: pytest.Config) -> DagB
     each paying their own parse. That reuse still depends on collection order placing a
     `dag_bag` consumer before the catalog within the shared worker -- true today
     because the catalog is always collected last -- not on a contract `xdist_group`
-    itself makes.
+    itself makes. Consumers are found through pytest's full fixture closure, so a
+    project fixture declaring `dag_bag` as a parameter anchors that group like a direct
+    consumer does; one reaching the bag only via `request.getfixturevalue` is outside
+    the closure and will not be found.
 
     Parameters:
         request: pytest.FixtureRequest used to reach the session-scoped DagBag cache.
