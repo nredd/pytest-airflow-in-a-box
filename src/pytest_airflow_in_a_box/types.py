@@ -102,6 +102,23 @@ class SerializedDag(Protocol):
         """Return the task with the requested identifier."""
 
 
+class DagModelRow(Protocol):
+    """Public structural view of one persisted ``DagModel`` metadata row.
+
+    The concrete object is the live ORM row attached to ``dag_maker.session``:
+    reads observe committed scheduler metadata, and mutations are visible to
+    Airflow. Only the attributes present on every certified family are part of
+    the contract.
+    """
+
+    dag_id: str
+    is_paused: bool
+    next_dagrun: datetime | None
+    next_dagrun_create_after: datetime | None
+    next_dagrun_data_interval_start: datetime | None
+    next_dagrun_data_interval_end: datetime | None
+
+
 class DagMaker(Protocol):
     """Build and persist isolated Airflow Dags for one pytest test.
 
@@ -109,10 +126,11 @@ class DagMaker(Protocol):
     authoring Dag object -- ``airflow.sdk.DAG`` on the 3.x family,
     ``airflow.models.dag.DAG`` on the certified 2.x family -- so operators and decorated
     tasks can be defined naturally. Metadata is persisted only after a successful context
-    exit. When ``serialized=True`` or the ``need_serialized_dag`` marker requests
-    serialization, ``serialized_dag`` exposes Airflow's persisted scheduler
-    representation after exit; no mutable proxy or task execution behavior is implied.
-    Metadata remains available until the function-scoped fixture is finalized.
+    exit, and every Dag is serialized as part of persistence: ``serialized_dag``,
+    ``dag_model``, and ``sync_dagbag_to_db`` expose the scheduler-side state after exit
+    without changing what the context yields (see ``docs/adr/0002``); no mutable proxy
+    or task execution behavior is implied. Metadata remains available until the
+    function-scoped fixture is finalized.
     """
 
     @property
@@ -129,7 +147,36 @@ class DagMaker(Protocol):
 
     @property
     def serialized_dag(self) -> SerializedDag | None:
-        """Return the requested persisted scheduler Dag, or ``None`` when not requested."""
+        """Return the latest persisted scheduler Dag.
+
+        ``None`` only while no Dag has been persisted yet -- inside an open context,
+        or before the factory's first successful context exit.
+        """
+
+    @property
+    def dag_model(self) -> DagModelRow:
+        """Return the live ``DagModel`` metadata row for the latest persisted Dag.
+
+        Raises:
+            RuntimeError: No successful Dag context has been persisted.
+        """
+
+    def sync_dagbag_to_db(self) -> SerializedDag:
+        """Re-persist the current authoring Dag's scheduler metadata.
+
+        The upstream ``tests_common`` mutate-then-resync shape: after the test body
+        mutates ``dag``, re-run the persistence sequence so metadata rows reflect the
+        mutation, then refresh and return ``serialized_dag``. Commits the metadata
+        session -- on a borrowed ``session=`` that also commits anything the caller
+        had staged. On the Airflow 3.x family each resync records a new DagVersion;
+        DagRuns created before the resync keep the version they were created with.
+
+        Returns:
+            SerializedDag reloaded from the re-committed metadata.
+
+        Raises:
+            RuntimeError: No successful Dag context has been persisted.
+        """
 
     def __call__(
         self,
@@ -150,7 +197,10 @@ class DagMaker(Protocol):
         Parameters:
             dag_id: str | None containing an explicit bounded identifier, or ``None`` for a
                 deterministic test- and worker-specific identifier.
-            serialized: bool | None overriding the ``need_serialized_dag`` marker when supplied.
+            serialized: bool | None accepted for upstream ``tests_common`` contract
+                compatibility. Every Dag is serialized as part of persistence, so the
+                flag (and the ``need_serialized_dag`` marker it overrides) no longer
+                changes behavior.
             session: sqlalchemy.orm.Session | None used for all of this context's
                 metadata writes and exposed as ``session``, or ``None`` to open a
                 fixture-owned one. A supplied session is never closed by the fixture,
@@ -881,6 +931,7 @@ __all__ = (
     "CreateDummyDag",
     "CreateTaskInstance",
     "DagMaker",
+    "DagModelRow",
     "RenderTask",
     "RunDag",
     "RunTask",

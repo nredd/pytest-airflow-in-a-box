@@ -22,7 +22,8 @@ MARKER_DESCRIPTIONS = (
     "compat: exercise the public plugin surface across certified runtimes",
     "db_test: require the isolated Airflow metadata database (triggers lazy database init)",
     "environment(name): run only when the named environment's sentinel path exists",
-    "need_serialized_dag([enabled]): request serialized Dag behavior",
+    "need_serialized_dag([enabled]): accepted for upstream compatibility; every Dag "
+    "serializes at persistence, so `dag_maker.serialized_dag` no longer needs it",
     "postgres: require a provisioned Postgres metadata database",
     "requires_airflow2: run only on the Airflow 2.x family; auto-skipped elsewhere",
     "requires_airflow3: run only on the Airflow 3.x family; auto-skipped elsewhere",

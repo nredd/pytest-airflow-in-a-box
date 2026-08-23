@@ -9,7 +9,8 @@
   `AIRFLOW__API__BASE_URL` for the test's duration (triggers lazy database initialization)
 - `postgres`: requires a provisioned Postgres metadata database (the `postgres` extra plus Docker)
 - `compat`: end-user tests exercised across the version matrix
-- `need_serialized_dag([enabled])`: request serialized Dag behavior from `dag_maker`
+- `need_serialized_dag([enabled])`: accepted for upstream compatibility; every Dag
+  serializes at persistence, so `dag_maker.serialized_dag` no longer needs it
 - `environment(name)`: run only when the named environment's sentinel path exists, configured via
   the `airflow_environments` ini line list (`lab = /opt/lab/sentinel`)
 - `requires_airflow2` / `requires_airflow3`: run only on the named Airflow family,

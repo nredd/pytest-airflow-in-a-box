@@ -34,8 +34,10 @@ from pytest_airflow_in_a_box._compat.dag import (
     custom_schedule_timetables,
     ensure_dag_absent,
     expand_mapped_task_instances,
+    get_dag_model,
     open_dag_session,
     persist_dag,
+    resync_dag,
     select_task_instance,
 )
 from pytest_airflow_in_a_box._compat.executor import (
@@ -183,7 +185,6 @@ class _DagContext(AbstractContextManager["DAG"]):
         dag_id: str,
         bundle_name: str,
         *,
-        serialized: bool,
         session: Session | None = None,
         bundle_version: str | None = None,
     ) -> None:
@@ -194,7 +195,6 @@ class _DagContext(AbstractContextManager["DAG"]):
             dag: airflow.sdk.DAG containing the mutable authoring object.
             dag_id: str identifying the Dag.
             bundle_name: str identifying the metadata bundle.
-            serialized: bool indicating whether to expose the scheduler representation.
             session: sqlalchemy.orm.Session | None borrowed from the caller for all
                 metadata writes, or ``None`` to open a context-owned one on entry.
             bundle_version: str | None recorded on persisted 3.x metadata rows.
@@ -204,7 +204,6 @@ class _DagContext(AbstractContextManager["DAG"]):
         self._dag = dag
         self._dag_id = dag_id
         self._bundle_name = bundle_name
-        self._serialized = serialized
         self._borrowed_session = session
         self._bundle_version = bundle_version
         self._record: DagPersistenceRecord | None = None
@@ -263,11 +262,7 @@ class _DagContext(AbstractContextManager["DAG"]):
             if error_type is not None:
                 return
             scheduler_dag = persist_dag(self._dag, record)
-            self._factory._finish(
-                record,
-                scheduler_dag,
-                scheduler_dag if self._serialized else None,
-            )
+            self._factory._finish(record, scheduler_dag)
             self._record = None
         finally:
             if self._record is not None:
@@ -286,16 +281,14 @@ class _DagFactory:
         fileloc: str,
         worker: str,
         *,
-        serialized: bool,
         register_timetable: Callable[[Any], None] | None = None,
     ) -> None:
-        """Store deterministic identity inputs and marker defaults.
+        """Store deterministic identity inputs.
 
         Parameters:
             nodeid: str containing pytest's stable test identifier.
             fileloc: str naming the consumer test module.
             worker: str containing the xdist worker identity.
-            serialized: bool containing the marker-derived default.
             register_timetable: Callable[[Any], None] | None registering one custom
                 timetable instance before its Dag is built, or None to skip
                 registration entirely (direct construction in unit tests).
@@ -305,7 +298,6 @@ class _DagFactory:
         self._nodeid = nodeid
         self._fileloc = fileloc
         self._worker = worker
-        self._default_serialized = serialized
         self._invocations = 0
         self._run_invocations = 0
         self._dag: DAG | None = None
@@ -347,13 +339,56 @@ class _DagFactory:
 
     @property
     def serialized_dag(self) -> SerializedDag | None:
-        """Return the requested persisted scheduler Dag.
+        """Return the latest persisted scheduler Dag.
 
         Returns:
-            pytest_airflow_in_a_box.types.SerializedDag | None for the latest persisted Dag.
+            pytest_airflow_in_a_box.types.SerializedDag | None for the latest persisted
+            Dag, or ``None`` while no Dag has been persisted yet -- inside an open
+            context, or before the first successful context exit.
         """
 
         return self._serialized_dag
+
+    @property
+    def dag_model(self) -> Any:
+        """Return the live ``DagModel`` metadata row for the latest persisted Dag.
+
+        Returns:
+            pytest_airflow_in_a_box.types.DagModelRow attached to ``session``. Reads
+            observe committed scheduler metadata; mutations are visible to Airflow.
+
+        Raises:
+            RuntimeError: No successful Dag context has been persisted.
+        """
+
+        record, _ = self._require_persisted()
+        return get_dag_model(record)
+
+    def sync_dagbag_to_db(self) -> SerializedDag:
+        """Re-persist the current authoring Dag's scheduler metadata.
+
+        The upstream ``tests_common`` mutate-then-resync shape: after the test body
+        mutates ``dag``, re-run the persistence sequence so metadata rows reflect
+        the mutation, then refresh and return ``serialized_dag``. Commits the
+        metadata session -- on a borrowed ``session=`` that also commits anything
+        the caller had staged. On the Airflow 3.x family each resync records a new
+        DagVersion; DagRuns created before the resync keep their original version.
+
+        Returns:
+            pytest_airflow_in_a_box.types.SerializedDag reloaded from the
+            re-committed metadata.
+
+        Raises:
+            RuntimeError: No successful Dag context has been persisted.
+            pytest_airflow_in_a_box._compat.dag.DagPersistenceError: A persistence
+                operation failed; the Dag's rows stay in place for fixture teardown.
+        """
+
+        record, _ = self._require_persisted()
+        scheduler_dag = resync_dag(self.dag, record)
+        self._scheduler_dag = scheduler_dag
+        self._serialized_dag = scheduler_dag
+        return scheduler_dag
 
     def __call__(
         self,
@@ -373,7 +408,10 @@ class _DagFactory:
 
         Parameters:
             dag_id: str | None containing an explicit identifier or ``None`` for a derived one.
-            serialized: bool | None overriding the marker-derived behavior.
+            serialized: bool | None accepted for upstream ``tests_common`` contract
+                compatibility. Every Dag is serialized as part of persistence, so the
+                flag (and the ``need_serialized_dag`` marker) no longer changes
+                behavior.
             session: sqlalchemy.orm.Session | None used for all of this context's
                 metadata writes and exposed as ``dag_maker.session``, or ``None`` to
                 open a fixture-owned one. A supplied session is never closed by the
@@ -434,7 +472,6 @@ class _DagFactory:
             dag,
             resolved_dag_id,
             bundle_name if bundle_name is not None else _bundle_name(resolved_dag_id),
-            serialized=self._default_serialized if serialized is None else serialized,
             session=session,
             bundle_version=bundle_version,
         )
@@ -454,20 +491,19 @@ class _DagFactory:
         self,
         record: DagPersistenceRecord,
         scheduler_dag: SerializedDag,
-        serialized_dag: SerializedDag | None,
     ) -> None:
         """Track one successful context for fixture finalization.
 
         Parameters:
             record: DagPersistenceRecord containing owned metadata.
-            scheduler_dag: SerializedDag used internally for scheduler operations.
-            serialized_dag: SerializedDag | None exposed by requested semantics.
+            scheduler_dag: SerializedDag persisted at context exit, exposed as
+                ``serialized_dag`` and used for scheduler operations.
         """
 
         self._records.append(record)
         self._current_record = record
         self._scheduler_dag = scheduler_dag
-        self._serialized_dag = serialized_dag
+        self._serialized_dag = scheduler_dag
 
     def _require_persisted(self) -> tuple[DagPersistenceRecord, SerializedDag]:
         """Return the latest persisted Dag resources.
@@ -867,7 +903,9 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
     """
 
     ensure_database(get_bootstrap_state(request.config).root)
-    marker_default = read_bool_marker(request.node, "need_serialized_dag", default=False)
+    # Exposure no-op since every Dag serializes at persistence (docs/adr/0002), read
+    # so a malformed marker argument still fails loudly.
+    read_bool_marker(request.node, "need_serialized_dag", default=False)
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
     fileloc = str(Path(str(request.node.path)).resolve())
 
@@ -898,7 +936,6 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
         request.node.nodeid,
         fileloc,
         worker,
-        serialized=marker_default,
         register_timetable=register_timetable,
     )
     try:

@@ -177,12 +177,13 @@ def test_ensure_bundle_is_vacuous_on_v2() -> None:
 
 
 class _RollbackRecordingSession:
-    """Count `rollback` calls and expose an empty pending-state surface."""
+    """Count `rollback` and `commit` calls and expose an empty pending-state surface."""
 
     def __init__(self) -> None:
-        """Initialize the rollback counter and the empty identity sets."""
+        """Initialize the lifecycle counters and the empty identity sets."""
 
         self.rollbacks = 0
+        self.commits = 0
         self.new: set[Any] = set()
         self.dirty: set[Any] = set()
         self.deleted: set[Any] = set()
@@ -191,6 +192,14 @@ class _RollbackRecordingSession:
         """Record one rollback."""
 
         self.rollbacks += 1
+
+    def commit(self) -> None:
+        """Record one commit."""
+
+        self.commits += 1
+
+    def expire_all(self) -> None:
+        """Accept the identity-map expiry `resync_dag` issues before reloading."""
 
 
 def _fake_authoring_dag(failures: list[IntegrityError]) -> tuple[Any, list[tuple[Any, ...]]]:
@@ -361,6 +370,50 @@ def test_persist_dag_reports_exhausted_dag_code_retries(
         dag_module.persist_dag(dag, _record(session=session))
 
     assert isinstance(caught.value.__cause__, IntegrityError)
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_resync_dag_routes_through_the_v2_writers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-persist through the bundle-free 2.x writer pair and reload the result."""
+
+    dag, sync_calls = _fake_authoring_dag([])
+    write_calls: list[dict[str, Any]] = []
+    reloaded: Any = object()
+
+    class FakeSerializedDagModel:
+        """Record 2.x `write_dag` calls and serve the reloaded scheduler Dag."""
+
+        @staticmethod
+        def write_dag(dag: Any, min_update_interval: int, session: Any) -> None:
+            write_calls.append(
+                {"dag": dag, "min_update_interval": min_update_interval, "session": session}
+            )
+
+        @staticmethod
+        def get_dag(dag_id: str, session: Any) -> Any:
+            del dag_id, session
+            return reloaded
+
+    monkeypatch.setitem(
+        sys.modules,
+        "airflow.models.serialized_dag",
+        SimpleNamespace(SerializedDagModel=FakeSerializedDagModel),
+    )
+    registered: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        dag_module, "register_authoring_dag", lambda dag_id, dag: registered.append((dag_id, dag))
+    )
+    session = _RollbackRecordingSession()
+    record = _record(session=session)
+
+    result = dag_module.resync_dag(dag, record)
+
+    assert result is reloaded
+    assert sync_calls == [((dag,), session)]
+    assert write_calls == [{"dag": dag, "min_update_interval": 0, "session": session}]
+    assert session.commits == 1
+    assert session.rollbacks == 0
+    assert registered == [("fake_dag", dag)]
 
 
 @pytest.mark.usefixtures("v2_capabilities")

@@ -125,6 +125,42 @@ def test_existing_dag_check_wraps_query_failure() -> None:
     assert caught.value.__cause__ is failure
 
 
+def test_get_dag_model_wraps_query_failure() -> None:
+    """Name the row lookup and retain its SQLAlchemy failure."""
+
+    failure = OSError("query failed")
+
+    class FailingSession:
+        """Raise one representative metadata query failure."""
+
+        def get(self, model: object, dag_id: str) -> None:
+            """Raise after accepting the model and identifier."""
+
+            del model, dag_id
+            raise failure
+
+    with pytest.raises(DagPersistenceError, match="Could not load the DagModel row") as caught:
+        dag_compat.get_dag_model(_record(FailingSession()))
+
+    assert caught.value.__cause__ is failure
+
+
+def test_get_dag_model_requires_an_existing_row() -> None:
+    """Treat a vanished `DagModel` row for a persisted Dag as a real failure."""
+
+    class EmptySession:
+        """Return no row for any lookup."""
+
+        def get(self, model: object, dag_id: str) -> None:
+            """Return the missing-row shape."""
+
+            del model, dag_id
+            return
+
+    with pytest.raises(DagPersistenceError, match="No DagModel row exists for Dag 'compat_dag'"):
+        dag_compat.get_dag_model(_record(EmptySession()))
+
+
 @pytest.mark.parametrize(
     ("release", "expected_module"),
     [

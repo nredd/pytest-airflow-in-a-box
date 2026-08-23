@@ -129,7 +129,9 @@ def test_default_id_context_and_required_metadata(
     assert len(dag.dag_id) <= DAG_ID_MAX_LENGTH
     assert _row_counts(dag.dag_id) == (1, 1, 1, 1)
     assert dag_maker.session.get(DagModel, dag.dag_id) is not None
-    assert dag_maker.serialized_dag is None
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert serialized_dag.dag_id == dag.dag_id
 
 
 def test_default_id_is_bounded_and_worker_specific() -> None:
@@ -188,6 +190,10 @@ def test_properties_require_factory_progress(dag_maker: DagMaker) -> None:
     assert dag_maker.serialized_dag is None
     with pytest.raises(RuntimeError, match="has not persisted a Dag"):
         dag_maker.create_dagrun()
+    with pytest.raises(RuntimeError, match="has not persisted a Dag"):
+        _ = dag_maker.dag_model
+    with pytest.raises(RuntimeError, match="has not persisted a Dag"):
+        dag_maker.sync_dagbag_to_db()
 
 
 def test_context_cannot_exit_before_entry(dag_maker: DagMaker) -> None:
@@ -237,19 +243,21 @@ def test_marker_exposes_persisted_scheduler_dag(dag_maker: DagMaker) -> None:
 
 
 @pytest.mark.need_serialized_dag
-def test_explicit_false_overrides_serialized_marker(dag_maker: DagMaker) -> None:
-    """Give an explicit false factory argument precedence over a true marker."""
+def test_explicit_false_serialized_is_an_exposure_noop(dag_maker: DagMaker) -> None:
+    """Expose the scheduler Dag even when `serialized=False` is passed (docs/adr/0002)."""
 
     with dag_maker(dag_id="serialized_override_false", serialized=False):
-        EmptyOperator(task_id="not_exposed")
+        EmptyOperator(task_id="still_exposed")
 
-    assert dag_maker.serialized_dag is None
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert serialized_dag.task_ids == ["still_exposed"]
     assert _row_counts("serialized_override_false") == (1, 1, 1, 1)
 
 
 @pytest.mark.need_serialized_dag(False)
-def test_explicit_true_overrides_false_serialized_marker(dag_maker: DagMaker) -> None:
-    """Give an explicit true factory argument precedence over a false marker."""
+def test_false_serialized_marker_is_an_exposure_noop(dag_maker: DagMaker) -> None:
+    """Expose the scheduler Dag even under a false marker (docs/adr/0002)."""
 
     with dag_maker(dag_id="serialized_override_true", serialized=True):
         EmptyOperator(task_id="exposed")
@@ -362,6 +370,85 @@ def test_borrowed_session_routes_persistence_and_is_exposed(
     assert _row_counts("borrowed_session") == (1, 1, 1, 1)
     dag_run = dag_maker.create_dagrun()
     assert dag_run.run_id.startswith("manual__pytest-airflow-in-a-box")
+
+
+def test_dag_model_returns_the_live_metadata_row(dag_maker: DagMaker) -> None:
+    """Expose the persisted `DagModel` row on the factory's metadata session."""
+
+    with dag_maker(dag_id="dag_model_handle"):
+        EmptyOperator(task_id="empty")
+
+    dag_model = dag_maker.dag_model
+    assert dag_model.dag_id == "dag_model_handle"
+    assert dag_model.is_paused is False
+    assert dag_model is dag_maker.session.get(DagModel, "dag_model_handle")
+
+
+def test_sync_dagbag_to_db_republishes_a_mutated_dag(dag_maker: DagMaker) -> None:
+    """Re-persist the mutated authoring Dag and refresh the scheduler handles."""
+
+    with dag_maker(dag_id="resync_mutation") as dag:
+        EmptyOperator(task_id="original")
+
+    before = dag_maker.serialized_dag
+    assert before is not None
+    assert before.task_ids == ["original"]
+
+    EmptyOperator(task_id="added", dag=dag)
+    reloaded = dag_maker.sync_dagbag_to_db()
+
+    assert reloaded is dag_maker.serialized_dag
+    assert sorted(reloaded.task_ids) == ["added", "original"]
+    # DagRun creation revalidates against the latest DagVersion, which the resync
+    # just advanced -- the round trip proves the handles stay coherent.
+    dag_run = dag_maker.create_dagrun()
+    assert sorted(ti.task_id for ti in dag_run.task_instances) == ["added", "original"]
+
+
+def test_sync_dagbag_to_db_on_a_borrowed_session_commits_staged_state(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Commit caller-staged metadata alongside the resync, as persistence does."""
+
+    with dag_maker(dag_id="resync_borrowed", session=session):
+        EmptyOperator(task_id="empty")
+
+    dag_maker.dag_model.is_paused = True
+    dag_maker.sync_dagbag_to_db()
+
+    with create_session() as verification_session:
+        persisted = verification_session.get(DagModel, "resync_borrowed")
+        assert persisted is not None
+        assert persisted.is_paused is True
+
+
+def test_sync_dagbag_to_db_failure_leaves_rows_for_teardown(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wrap a resync failure without deleting the already-persisted metadata rows."""
+
+    with dag_maker(dag_id="resync_failure"):
+        EmptyOperator(task_id="empty")
+    failure = OSError("serialized read failed")
+
+    def fail_load(record: dag_compat.DagPersistenceRecord) -> None:
+        """Fail after the resync transaction has committed."""
+
+        del record
+        raise failure
+
+    monkeypatch.setattr(dag_compat, "_load_serialized_dag", fail_load)
+
+    with pytest.raises(
+        DagPersistenceError,
+        match="Could not resync Airflow Dag 'resync_failure'",
+    ) as caught:
+        dag_maker.sync_dagbag_to_db()
+
+    assert caught.value.__cause__ is failure
+    assert _row_counts("resync_failure") == (1, 1, 1, 1)
 
 
 def test_borrowed_session_survives_context_body_error(
@@ -630,10 +717,10 @@ def test_factory_cleanup_continues_after_one_failure(monkeypatch: pytest.MonkeyP
     session: Any = object()
     first = dag_compat.DagPersistenceRecord("first", "first_bundle", session)
     second = dag_compat.DagPersistenceRecord("second", "second_bundle", session)
-    factory = _DagFactory("node", __file__, "master", serialized=False)
+    factory = _DagFactory("node", __file__, "master")
     scheduler_dag: Any = object()
-    factory._finish(first, scheduler_dag, None)
-    factory._finish(second, scheduler_dag, None)
+    factory._finish(first, scheduler_dag)
+    factory._finish(second, scheduler_dag)
     attempted: list[str] = []
 
     def cleanup(record: dag_compat.DagPersistenceRecord) -> None:
@@ -1018,7 +1105,7 @@ def test_dag_maker_registers_even_for_an_unserialized_dag(
     with dag_maker(schedule=ExampleTimetable(hours=5), serialized=False) as dag:
         EmptyOperator(task_id="unserialized")
 
-    assert dag_maker.serialized_dag is None
+    assert dag_maker.serialized_dag is not None
     assert type(dag.timetable) is ExampleTimetable
 
 
@@ -1031,9 +1118,7 @@ def test_dag_factory_hook_fires_only_for_custom_timetable_instances(
     # `import_module` on purpose; see the transparent-registration test above.
     ExampleTimetable = import_module("provider_package").ExampleTimetable
     registered: list[Any] = []
-    factory = _DagFactory(
-        "node", __file__, "master", serialized=False, register_timetable=registered.append
-    )
+    factory = _DagFactory("node", __file__, "master", register_timetable=registered.append)
 
     factory("hook_none_schedule")
     factory("hook_string_schedule", schedule="@daily")
@@ -1046,7 +1131,7 @@ def test_dag_factory_hook_fires_only_for_custom_timetable_instances(
 def test_dag_factory_without_the_hook_skips_registration() -> None:
     """Build a custom-timetable Dag with no hook wired, for direct factory users."""
 
-    factory = _DagFactory("node", __file__, "master", serialized=False)
+    factory = _DagFactory("node", __file__, "master")
 
     from airflow.timetables.base import Timetable
 

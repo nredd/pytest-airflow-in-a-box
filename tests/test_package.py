@@ -248,6 +248,7 @@ def test_public_surface_is_explicit() -> None:
         "CreateDummyDag",
         "CreateTaskInstance",
         "DagMaker",
+        "DagModelRow",
         "RenderTask",
         "RunDag",
         "RunTask",

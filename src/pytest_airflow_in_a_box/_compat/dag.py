@@ -746,6 +746,86 @@ def persist_dag(
         ) from error
 
 
+def resync_dag(dag: DAG, record: DagPersistenceRecord) -> SerializedDag:
+    """Re-persist an already-persisted authoring Dag's scheduler metadata.
+
+    The upstream ``tests_common`` ``sync_dagbag_to_db`` shape: after the test body
+    mutates the authoring Dag, re-run the same sync/serialize sequence
+    ``persist_dag`` used, on the same record, so the metadata rows reflect the
+    mutation. Unlike ``persist_dag``, failure never runs ``_cleanup_dag`` -- the Dag
+    was persisted successfully once, so a transient resync failure must not delete
+    rows mid-test; fixture finalization still owns teardown.
+
+    Commits ``record.session``. On a borrowed session that also commits whatever the
+    caller had staged -- the same documented semantics as ``persist_dag``. On the 2.x
+    family the internal writers already route through that family's equivalents, so
+    the method works there even though upstream 2.x never grew it.
+
+    Parameters:
+        dag: airflow.sdk.DAG containing the mutated task graph.
+        record: DagPersistenceRecord identifying the previously persisted resources.
+
+    Returns:
+        pytest_airflow_in_a_box.types.SerializedDag reloaded from committed metadata.
+
+    Raises:
+        DagPersistenceError: Any Airflow persistence operation fails. The record's
+            rows are left in place for fixture finalization.
+    """
+
+    operation = "creating DagBundleModel metadata"
+    try:
+        _ensure_bundle(record)
+        operation = "syncing DagModel metadata"
+        _sync_dag_model(dag, record)
+        operation = "writing DagVersion and SerializedDagModel metadata"
+        _write_serialized_dag(dag, record)
+        operation = "committing Dag metadata"
+        record.session.commit()
+        operation = "loading persisted serialized Dag metadata"
+        # 3.x `write_dag` reuses the latest DagVersion when nothing references it and
+        # rewrites the serialized row with a bulk UPDATE, which bypasses the session's
+        # identity map -- expire cached state so the reload observes the new payload.
+        record.session.expire_all()
+        serialized_dag = _load_serialized_dag(record)
+        register_authoring_dag(record.dag_id, dag)
+        return serialized_dag
+    except Exception as error:
+        record.session.rollback()
+        raise DagPersistenceError(
+            f"Could not resync Airflow Dag '{record.dag_id}' while {operation}: {error}"
+        ) from error
+
+
+def get_dag_model(record: DagPersistenceRecord) -> Any:
+    """Return the live ``DagModel`` metadata row for one persisted Dag.
+
+    Parameters:
+        record: DagPersistenceRecord identifying the persisted Dag and its session.
+
+    Returns:
+        Any containing the ORM ``DagModel`` row attached to ``record.session``.
+
+    Raises:
+        DagPersistenceError: Airflow cannot query the row, or the row no longer
+            exists -- a persisted Dag losing its ``DagModel`` row mid-test is a real
+            failure, not an empty result.
+    """
+
+    try:
+        # Deferred private model access is isolated in the compatibility package.
+        from airflow.models.dag import DagModel
+
+        dag_model = record.session.get(DagModel, record.dag_id)
+    except Exception as error:
+        raise DagPersistenceError(
+            f"Could not load the DagModel row for Dag '{record.dag_id}': {error}"
+        ) from error
+    if dag_model is None:
+        raise DagPersistenceError(f"No DagModel row exists for Dag '{record.dag_id}'")
+    return dag_model
+
+
 def create_dag_run(
     scheduler_dag: Any,
     authoring_dag: DAG,
@@ -1181,9 +1261,11 @@ __all__ = (
     "ensure_dag_absent",
     "ensure_shared_bundle",
     "expand_mapped_task_instances",
+    "get_dag_model",
     "is_custom_timetable_instance",
     "open_dag_session",
     "persist_dag",
+    "resync_dag",
     "select_task_instance",
     "task_is_mapped",
     "time_restriction_type",
