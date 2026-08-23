@@ -256,6 +256,40 @@ def test_upstream_style(dag_maker, session):
   Both bundle keywords are accepted and ignored on the certified 2.x family, which predates
   bundles.
 
+## Scheduler-side handles
+
+The context always yields the mutable *authoring* Dag; scheduler-side state is exposed
+through opt-in handles on the factory instead (the design decision is recorded in
+[ADR 0002](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/docs/adr/0002-authoring-yield-with-scheduler-handles.md)):
+
+```python
+def test_scheduler_state(dag_maker):
+    with dag_maker("scheduler_state") as dag:
+        EmptyOperator(task_id="original")
+
+    assert dag_maker.serialized_dag.task_ids == ["original"]
+    assert dag_maker.dag_model.is_paused is False
+
+    EmptyOperator(task_id="added", dag=dag)
+    reloaded = dag_maker.sync_dagbag_to_db()
+
+    assert sorted(reloaded.task_ids) == ["added", "original"]
+```
+
+- `serialized_dag` returns the persisted scheduler representation after every successful
+  context exit. Every Dag serializes as part of persistence, so the `serialized=` keyword
+  and the `need_serialized_dag` marker are accepted for upstream compatibility but no
+  longer change behavior
+- `dag_model` returns the live `DagModel` ORM row on `dag_maker.session` (typed as the
+  structural `DagModelRow` protocol). Reads observe committed scheduler metadata --
+  `is_paused`, the `next_dagrun*` columns -- and mutations are visible to Airflow
+- `sync_dagbag_to_db()` mirrors upstream `tests_common`'s mutate-then-resync shape:
+  re-persists the current authoring Dag, refreshes `serialized_dag`, and returns it.
+  It commits the metadata session (on a borrowed `session=` that includes anything the
+  caller had staged, exactly like persistence at context exit). On 3.x a resync may
+  record a new DagVersion; DagRuns created before the resync keep their original version.
+  Works on the certified 2.x family too, through that family's writers
+
 ## Upstream one-call factories
 
 `create_task_instance` and `create_dummy_dag` mirror upstream Airflow's

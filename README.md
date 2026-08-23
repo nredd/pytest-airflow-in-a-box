@@ -135,7 +135,7 @@ The full reference, with scopes, database behavior, and Airflow-2.x availability
 | Fixture | One-liner |
 | ------- | --------- |
 | `dag_bag` | All Dags parsed from the configured Dag directory, once per worker process |
-| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it; accepts upstream `tests_common` harness kwargs |
+| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it; upstream `tests_common` harness kwargs plus scheduler-side `serialized_dag`/`dag_model`/`sync_dagbag_to_db()` handles |
 | `create_task_instance` | One call: a `TaskInstance` with its Dag and DagRun rows, upstream-parity |
 | `create_dummy_dag` | One call: a single-`EmptyOperator` Dag plus a scheduled DagRun, upstream-parity |
 | `run_dag` | Run an externally-authored Dag, e.g. one pulled from `dag_bag` |
@@ -167,7 +167,7 @@ The full reference, with argument grammar and gating behavior, lives at
 | `api_test` | Starts the isolated REST API server, publishes its base URL |
 | `postgres` | Requires a provisioned Postgres metadata database |
 | `compat` | End-user tests exercised across the version matrix |
-| `need_serialized_dag([enabled])` | Request serialized Dag behavior from `dag_maker` |
+| `need_serialized_dag([enabled])` | Accepted for upstream compatibility; every Dag serializes at persistence |
 | `environment(name)` | Run only when the named environment's sentinel path exists |
 | `requires_airflow2` / `requires_airflow3` | Run only on the named Airflow family, auto-skipped elsewhere |
 | `smoke` | Bundled zero-boilerplate check, opt in with `airflow_smoke` |
