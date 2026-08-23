@@ -8,6 +8,111 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.11.0] - 2026-08-23
+
+### Added
+
+- Add upstream `tests_common` parity fixtures: `create_task_instance` (one call: a `TaskInstance` with its Dag and DagRun rows), `create_dummy_dag` (a persisted single-`EmptyOperator` Dag plus a scheduled DagRun), and `testing_dag_bundle` (the shared `testing` Dag bundle row upstream core tests write against, 3.x only). Same names, parameters, and defaults as upstream, so upstream-style tests call them the same way; the deliberate deviations are documented in the task-execution guide.
+  ([#237](https://github.com/nredd/pytest-airflow-in-a-box/issues/237)).
+- `dag_maker` now exposes the scheduler-side handles upstream `tests_common` tests rely on: `dag_model` returns the live `DagModel` row (typed as the new `DagModelRow` protocol) and `sync_dagbag_to_db()` re-persists the current authoring Dag after mutation and returns the refreshed `serialized_dag`. The yield stays the authoring Dag by design -- see `docs/adr/0002`.
+  ([#238](https://github.com/nredd/pytest-airflow-in-a-box/issues/238)).
+- Accept and route upstream `tests_common`'s `dag_maker` harness keywords -- `session`,
+  `bundle_name`, and `bundle_version` -- instead of forwarding them to `DAG.__init__`. A
+  supplied `session` is used (and never closed) for all of the context's metadata writes and
+  returned by `dag_maker.session`; `bundle_name` overrides the derived per-Dag bundle row;
+  `bundle_version` is recorded on persisted 3.x metadata and ignored on the 2.x family.
+  ([#238](https://github.com/nredd/pytest-airflow-in-a-box/issues/238)).
+- Add the `airflow_worker_env_drift` ini option (`error`, the default, or `repair`) for coexisting
+  with a pytest plugin or conftest that writes `AIRFLOW__*` at import time. Under `repair`, an xdist
+  worker or `airflow_isolated` child that inherits a rewritten environment re-installs this run's
+  variables and continues, warning once with the names it repaired, instead of aborting -- which
+  made every worker crash and the run execute nothing. The repair puts the process into the state
+  its controller was in at the same point in its own lifecycle; it does not stop the foreign write
+  from happening again in that process, so isolation past bootstrap stays the consumer's
+  responsibility. `--airflow-doctor` reports the configured policy.
+  ([#241](https://github.com/nredd/pytest-airflow-in-a-box/issues/241)).
+- Warn with `SmokeColocationWarning` when the bundled smoke catalog cannot be put on the same xdist worker as a `dag_bag` consumer, naming the reason and the extra full Dag parse it costs. Covers a run distributing without `--dist loadgroup` (the default `-n auto` case, where `xdist_group` is inert), and a `loadgroup` run in which every consumer is ineligible because each already carries its own `xdist_group` or each is about to be deselected by `-m`. A run with no `dag_bag` consumer at all stays silent, since the catalog then owns the only Dag parse in the run.
+  ([#242](https://github.com/nredd/pytest-airflow-in-a-box/issues/242)).
+- Fan the smoke catalog's Dag parse out across subprocess workers on large corpora
+  (`airflow_dag_bag_fanout`, opt-in). A single walk of the true configured Dag folder
+  discovers every file once, so `.airflowignore` resolution stays identical to a serial
+  parse; only the expensive import work is distributed. Falls back to the existing
+  single-process parse on any fan-out failure, and stays off (serializing every Dag) when
+  `airflow_serialization_sample_size` is nonzero. Does not change the `dag_bag` fixture,
+  whose public contract is the real Airflow `DagBag` class and cannot cross a process
+  boundary.
+  ([#243](https://github.com/nredd/pytest-airflow-in-a-box/issues/243)).
+- Add a full markers reference table to the README, mirroring the existing Fixtures table.
+
+### Changed
+
+- Rewrite the bundled smoke catalog as data instead of 14 hand-synced `pytest.Item`
+  subclasses: `SmokeCheck` + `SMOKE_CATALOG` + a generic `_CatalogItem` replace the per-check
+  classes, `SmokeCollector.collect()`'s if-chain, and the hand-maintained
+  `_SMOKE_ITEM_NAMES`/`_SMOKE_ITEM_MARK_SETS` tables, which are now derived. Move the smoke
+  catalog's `addini`/`addoption` registrations out of `plugin.py` into
+  `smoke.register_options()`, matching the `register_options(parser)` idiom already used by
+  `_airflow_home`, `record`, and `baseline`. The same 14 checks collect in the same order
+  under the same `airflow_smoke_disable`/ini gating; the one observable change is that a
+  failing check's terminal output no longer carries a pytest-internal traceback for the 12
+  checks that previously lacked their own `repr_failure` override -- `_CatalogItem` now
+  renders every check's `SmokeCheckFailure` the same way `DagBagIntegrityItem` and
+  `DagSerializationRoundtripItem` already did.
+  ([#232](https://github.com/nredd/pytest-airflow-in-a-box/issues/232)).
+- `dag_maker.create_dagrun` and `run_dag` now distinguish an omitted `logical_date` (still the current UTC date) from an explicit `logical_date=None`, which creates a 3.x run with no logical date at all (the shape asset-triggered runs take) and raises `ValueError` on the 2.x family. The omission default is exposed as `pytest_airflow_in_a_box.types.UNSET`.
+  ([#237](https://github.com/nredd/pytest-airflow-in-a-box/issues/237)).
+- `dag_maker.serialized_dag` is now always populated after a successful context exit. The `serialized=` keyword and the `need_serialized_dag` marker are still accepted but no longer change behavior -- they were pure exposure gates over a row persistence always wrote, so a suite can no longer assert "not serialized" via `serialized_dag is None` after exit.
+  ([#238](https://github.com/nredd/pytest-airflow-in-a-box/issues/238)).
+- Diagnose the likely cause in the inherited-environment drift error instead of only listing the
+  mismatched variables: another pytest plugin or conftest mutating `AIRFLOW__*` after bootstrap
+  exported its state, with a module-scope `os.environ` write named as the usual suspect, and the
+  `airflow_worker_env_drift` escape hatch named as the alternative.
+  ([#241](https://github.com/nredd/pytest-airflow-in-a-box/issues/241)).
+- Bound retained `AIRFLOW_HOME` roots to the `N` most recently retained per storage base
+  and owning user (`airflow_home_retention_count` ini / `--airflow-home-retention-count`,
+  default `3`), mirroring pytest's own `tmp_path_retention_count`. Pruning only ever
+  removes a directory that finished and was itself retained, so an in-progress run -- this
+  process's own, or another invocation sharing the same base -- is never a candidate,
+  and neither is a directory another user retained on a shared base like `/dev/shm`. The
+  retained-root announce and terminal-summary lines now also report how many other
+  retained roots will still exist once this run's own cleanup finishes, so accumulation is
+  visible well before it grows unbounded.
+  ([#244](https://github.com/nredd/pytest-airflow-in-a-box/issues/244)).
+- Bump the `python-development` dependency group (`prek`, `ruff`, `towncrier`, `ty`, `uv`,
+  `uv-build`) and regenerate `uv.lock` to match; `ruff`'s `required-version` pin moves to
+  `0.16.3` alongside it.
+
+### Removed
+
+- Remove the 14 public `smoke.py` `pytest.Item` subclasses (`DagBagIntegrityItem`,
+  `DagSerializationRoundtripItem`, `NoDuplicateDagIdsItem`, `ScheduleSanityItem`,
+  `PoolReferencesExistItem`, `TopLevelVariableAccessItem`, `TopLevelIOItem`,
+  `DagParseBudgetItem`, `ForbidCatchupItem`, `UnboundedExpandItem`, `DagIdPatternItem`,
+  `RequiredDagTagsItem`, `ForbidDefaultOwnerItem`, `SerializedDagSnapshotItem`), and the
+  `smoke._smoke_dag_bag` alias of `smoke._smoke_corpus`. Collapsed into the generic
+  `_CatalogItem` driven by `SMOKE_CATALOG`; nothing outside `smoke.py`/`tests/test_smoke.py`
+  imported these names. No deprecation aliases, matching this repo's existing hard-rename
+  convention.
+  ([#232](https://github.com/nredd/pytest-airflow-in-a-box/issues/232)).
+
+### Fixed
+
+- `create_dagrun`/`run_dag`'s `dag_run_kwargs` now raises a clear `ValueError` when it sets a
+  key (`session`, `run_id`, `start_date`, and the family-specific `logical_date`/`run_after`
+  or `execution_date`) that pytest-airflow-in-a-box already supplies, instead of an opaque
+  `TypeError` three frames deep inside Airflow's own `create_dagrun`.
+  ([#239](https://github.com/nredd/pytest-airflow-in-a-box/issues/239)).
+- `clear_db` and `dag_maker` fixture teardown now clear `Backfill`/`BackfillDagRun` rows in
+  FK-safe order instead of raising `sqlite3.IntegrityError: FOREIGN KEY constraint failed`.
+  `BackfillDagRun` clears alongside its `DagRun`, and the new `TableGroup.BACKFILL` clears
+  the `Backfill` row that DagRun's own `backfill_id` references (Airflow 3.x only, where
+  backfill tables exist).
+  ([#240](https://github.com/nredd/pytest-airflow-in-a-box/issues/240)).
+- `scripts/check_changelog_fragment.py` now also skips `towncrier check` for commits
+  authored by `dependabot[bot]`. The check previously flagged any branch with no new
+  fragment regardless of which files changed, so a Dependabot workflow-file or lockfile-only
+  bump failed a check meant to gate `src`/`tests` changes, blocking auto-merge.
+
 ## [0.10.0] - 2026-08-21
 
 ### Added
