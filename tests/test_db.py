@@ -198,7 +198,14 @@ def _add_backfill(*, dag_id: str, dag_run_id: Any, link_dag_run: bool) -> None:
         )
         session.add(backfill)
         session.flush()
-        session.add(BackfillDagRun(backfill_id=backfill.id, dag_run_id=dag_run_id, sort_ordinal=1))
+        session.add(
+            BackfillDagRun(
+                backfill_id=backfill.id,
+                dag_run_id=dag_run_id,
+                sort_ordinal=1,
+                logical_date=utcnow(),
+            )
+        )
         if link_dag_run:
             session.execute(
                 update(DagRun).where(DagRun.id == dag_run_id).values(backfill_id=backfill.id)

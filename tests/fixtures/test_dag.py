@@ -396,7 +396,12 @@ def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
         setup_session.add(backfill)
         setup_session.flush()
         setup_session.add(
-            BackfillDagRun(backfill_id=backfill.id, dag_run_id=dag_run.id, sort_ordinal=1)
+            BackfillDagRun(
+                backfill_id=backfill.id,
+                dag_run_id=dag_run.id,
+                sort_ordinal=1,
+                logical_date=utcnow(),
+            )
         )
         setup_session.execute(
             update(DagRun).where(DagRun.id == dag_run.id).values(backfill_id=backfill.id)
