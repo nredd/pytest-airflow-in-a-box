@@ -496,6 +496,28 @@ def test_create_dag_run_rejects_run_after_on_v2() -> None:
 
 
 @pytest.mark.usefixtures("v2_capabilities")
+@pytest.mark.parametrize("key", ["run_id", "start_date", "session", "execution_date"])
+def test_create_dag_run_rejects_reserved_dag_run_kwargs_on_v2(key: str) -> None:
+    """Refuse a `dag_run_kwargs` entry that would double-pass a keyword to Airflow."""
+
+    record = _record(session=None)
+    scheduler_dag: Any = SimpleNamespace()
+    authoring_dag: Any = SimpleNamespace()
+
+    with pytest.raises(ValueError, match=r"`dag_run_kwargs` cannot set"):
+        dag_module.create_dag_run(
+            scheduler_dag,
+            authoring_dag,
+            record,
+            run_id="run-1",
+            logical_date=None,
+            run_after=None,
+            start_date=None,
+            dag_run_kwargs={key: object()},
+        )
+
+
+@pytest.mark.usefixtures("v2_capabilities")
 def test_expand_mapped_task_uses_the_operator_method_on_v2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

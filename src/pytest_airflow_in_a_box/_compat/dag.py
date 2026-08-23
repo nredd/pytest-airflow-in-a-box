@@ -40,6 +40,14 @@ _V2_SCHEDULING_KEYWORDS = ("schedule_interval", "timetable")
 # file (issue #157). Each retry independently re-checks, so one attempt is consumed
 # only by a genuinely concurrent insert.
 _V2_DAG_CODE_SYNC_ATTEMPTS = 3
+# Keywords `create_dag_run` itself always assigns to the scheduler Dag's `create_dagrun`
+# call (never `setdefault`) on every certified release. A caller-supplied `dag_run_kwargs`
+# entry with one of these names would double-pass it and blow up three frames down inside
+# Airflow with an opaque `TypeError` (issue #239); the family-specific sets add the two
+# scheduling keywords whose spelling differs between families.
+_RESERVED_DAG_RUN_KWARGS_COMMON = frozenset({"run_id", "start_date", "session"})
+_RESERVED_DAG_RUN_KWARGS_V2 = _RESERVED_DAG_RUN_KWARGS_COMMON | {"execution_date"}
+_RESERVED_DAG_RUN_KWARGS_V3 = _RESERVED_DAG_RUN_KWARGS_COMMON | {"logical_date", "run_after"}
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -636,15 +644,26 @@ def create_dag_run(
         airflow.models.dagrun.DagRun committed with verified task instances.
 
     Raises:
-        ValueError: `run_after` was passed on the Airflow 2.x family.
+        ValueError: `run_after` was passed on the Airflow 2.x family, or `dag_run_kwargs`
+            sets a key `create_dag_run` already assigns from its own parameters.
         DagRunCreationError: Airflow cannot create or verify the DagRun metadata.
     """
 
-    if run_after is not None and _is_v2():
+    is_v2 = _is_v2()
+    if run_after is not None and is_v2:
         raise ValueError(
             "`run_after` is an Airflow 3.x scheduling concept with no 2.x equivalent; "
             "silently ignoring it would change run semantics between families. Pass "
             "`logical_date` on the 2.x family instead."
+        )
+    reserved = _RESERVED_DAG_RUN_KWARGS_V2 if is_v2 else _RESERVED_DAG_RUN_KWARGS_V3
+    conflicting = sorted(reserved & dag_run_kwargs.keys())
+    if conflicting:
+        raise ValueError(
+            f"`dag_run_kwargs` cannot set {conflicting}: pytest-airflow-in-a-box already "
+            f"supplies {'these' if len(conflicting) > 1 else 'it'} from create_dag_run's own "
+            f"parameters -- passing them again would double-pass the keyword to Airflow's "
+            f"`create_dagrun`. Use the dedicated keyword argument instead."
         )
 
     # The 2.x module is dynamically resolved so static checking stays valid against an
@@ -656,7 +675,6 @@ def create_dag_run(
     from airflow.utils.state import DagRunState
     from airflow.utils.types import DagRunType
 
-    is_v2 = _is_v2()
     operation = "resolving UTC dates"
     try:
         now = utcnow()
