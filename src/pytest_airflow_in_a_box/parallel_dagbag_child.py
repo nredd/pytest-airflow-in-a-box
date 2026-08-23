@@ -60,9 +60,25 @@ def main() -> int:
     spec_path = os.environ.get(SHARD_SPEC_PATH_ENVIRONMENT_VARIABLE)
     output_path = os.environ.get(SHARD_OUTPUT_PATH_ENVIRONMENT_VARIABLE)
     if not spec_path or not output_path:
+        # Written directly to stderr, not logged: this runs before any Airflow import,
+        # so no logging configuration is guaranteed to exist yet, and the parent's
+        # `_log_tail` reads exactly this process's redirected stdout/stderr as its one
+        # diagnostic channel on failure -- a message that silently went missing there
+        # is a message that never reaches the smoke run's failure output at all.
+        sys.stderr.write(
+            f"`{SHARD_SPEC_PATH_ENVIRONMENT_VARIABLE}` and "
+            f"`{SHARD_OUTPUT_PATH_ENVIRONMENT_VARIABLE}` must both be set; this script is "
+            "only invoked by `parallel_dagbag.fan_out_dag_bag`\n"
+        )
         return _EXIT_FAILURE
     try:
         spec = shard_from_payload(json.loads(Path(spec_path).read_text(encoding="utf-8")))
+        # A fresh interpreter's sys.path lacks whatever rootdir/conftest/pythonpath-ini
+        # entries pytest inserted into the parent's; without them, a Dag file importing
+        # a sibling package under a typical `dags/` + shared-package layout would fail
+        # here while succeeding in a serial parse. Prepend only entries this
+        # interpreter doesn't already carry, preserving relative order.
+        sys.path[:0] = [entry for entry in spec.sys_path if entry not in sys.path]
         state = _state_from_environment(role="Dag bag fan-out shard")
         os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] = str(spec.dagbag_import_timeout)
         comms = ParseTimeComms(run_root=state.root) if spec.needs_comms else None
@@ -70,9 +86,14 @@ def main() -> int:
         with record_secrets_lookups(dag_folder) as recorded:
             dag_bag, stats = build_partial_dag_bag(dag_folder, spec.file_paths, comms=comms)
         payload = encode_shard(
-            dag_bag.dags, dag_bag.import_errors, stats, tuple(dict.fromkeys(recorded))
+            dag_bag.dags,
+            dag_bag.import_errors,
+            stats,
+            tuple(dict.fromkeys(recorded)),
+            serialize=spec.serialize,
         )
-    except Exception:
+    except Exception as error:
+        sys.stderr.write(f"Dag bag fan-out shard failed: {error}\n")
         return _EXIT_FAILURE
     _write_payload(Path(output_path), payload)
     return _EXIT_OK

@@ -20,20 +20,29 @@ from pytest_airflow_in_a_box.parallel_dagbag import (
 
 
 def test_main_fails_without_required_environment_variables(
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Exit with failure when the shard spec/output env vars are unset."""
+    """Exit with failure and name the missing variables on stderr.
+
+    Written directly to `sys.stderr`, not logged: `_log_tail` in `parallel_dagbag.py`
+    reads exactly this process's redirected stdout/stderr as its one diagnostic channel
+    on failure, and this runs before any Airflow import could configure logging.
+    """
 
     monkeypatch.delenv(SHARD_SPEC_PATH_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.delenv(SHARD_OUTPUT_PATH_ENVIRONMENT_VARIABLE, raising=False)
 
     assert parallel_dagbag_child.main() == parallel_dagbag_child._EXIT_FAILURE
+    assert SHARD_SPEC_PATH_ENVIRONMENT_VARIABLE in capsys.readouterr().err
 
 
 def test_main_fails_when_shard_processing_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Exit with failure and print a message when building the shard payload raises."""
+    """Exit with failure and write the exception to stderr when building the payload raises."""
 
     output_path = tmp_path / "output.json"
     spec_path = tmp_path / "spec.json"
@@ -43,3 +52,4 @@ def test_main_fails_when_shard_processing_raises(
 
     assert parallel_dagbag_child.main() == parallel_dagbag_child._EXIT_FAILURE
     assert not output_path.exists()
+    assert "Dag bag fan-out shard failed" in capsys.readouterr().err

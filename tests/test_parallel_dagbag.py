@@ -20,6 +20,7 @@ def _config(
     min_files: object = "200",
     timeout: object = "600",
     parse_timeout: object = "30",
+    rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for fan-out config-reader tests.
 
@@ -30,6 +31,7 @@ def _config(
         min_files: object containing the `airflow_dag_bag_fanout_min_files` ini value.
         timeout: object containing the `airflow_dag_bag_fanout_timeout` ini value.
         parse_timeout: object containing the `airflow_dag_parse_timeout` ini value.
+        rootpath: pathlib.Path used as the child's working directory.
 
     Returns:
         types.SimpleNamespace shaped like the configuration surface under test.
@@ -46,6 +48,7 @@ def _config(
     return SimpleNamespace(
         getoption=lambda name: option_values[name],
         getini=lambda name: ini_values[name],
+        rootpath=rootpath,
     )
 
 
@@ -204,6 +207,8 @@ def test_shard_spec_payload_round_trips() -> None:
         file_paths=("/dags/a.py", "/dags/b.py"),
         needs_comms=True,
         dagbag_import_timeout=30.0,
+        sys_path=("/repo", "/repo/helpers"),
+        serialize=True,
     )
 
     restored = parallel_dagbag.shard_from_payload(spec.to_payload())
@@ -307,7 +312,9 @@ def test_encode_shard_includes_every_dag_task_and_stat(monkeypatch: pytest.Monke
     )
     lookup = SimpleNamespace(kind="variable", key="v", file="alpha.py", line=3)
 
-    payload = parallel_dagbag.encode_shard({"alpha": dag}, {"broken.py": "boom"}, [stat], [lookup])
+    payload = parallel_dagbag.encode_shard(
+        {"alpha": dag}, {"broken.py": "boom"}, [stat], [lookup], serialize=True
+    )
 
     assert payload["import_errors"] == {"broken.py": "boom"}
     assert payload["dagbag_stats"] == [
@@ -346,21 +353,40 @@ def test_encode_dag_records_serialization_failure(monkeypatch: pytest.MonkeyPatc
     )
     dag = _FakeDag(dag_id="alpha", tasks=())
 
-    payload = parallel_dagbag.encode_shard({"alpha": dag}, {}, [], [])
+    payload = parallel_dagbag.encode_shard({"alpha": dag}, {}, [], [], serialize=True)
 
     encoded_dag = payload["dags"]["alpha"]
     assert encoded_dag["serialized"] is None
     assert encoded_dag["serialization_error"] == "cannot serialize 'alpha'"
 
 
+def test_encode_shard_skips_the_serializer_entirely_when_not_needed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never resolve or call the Dag serializer when `serialize` is `False`."""
+
+    def _fail_if_called() -> Any:
+        raise AssertionError("_get_dag_serializer must not run when serialize=False")
+
+    monkeypatch.setattr(parallel_dagbag, "_get_dag_serializer", _fail_if_called)
+    dag = _FakeDag(dag_id="alpha", tasks=())
+
+    payload = parallel_dagbag.encode_shard({"alpha": dag}, {}, [], [], serialize=False)
+
+    encoded_dag = payload["dags"]["alpha"]
+    assert encoded_dag["serialized"] is None
+    assert encoded_dag["serialization_error"] is None
+    assert encoded_dag["serialization_seconds"] == 0.0
+
+
 def test_merge_shard_payloads_with_no_collisions() -> None:
     """Merge disjoint shards without touching either shard's dags or errors."""
 
     shard_one = parallel_dagbag.encode_shard(
-        {"alpha": _FakeDag(dag_id="alpha", tasks=())}, {}, [], []
+        {"alpha": _FakeDag(dag_id="alpha", tasks=())}, {}, [], [], serialize=True
     )
     shard_two = parallel_dagbag.encode_shard(
-        {"beta": _FakeDag(dag_id="beta", tasks=())}, {"broken.py": "boom"}, [], []
+        {"beta": _FakeDag(dag_id="beta", tasks=())}, {"broken.py": "boom"}, [], [], serialize=True
     )
 
     merged = parallel_dagbag.merge_shard_payloads([shard_one, shard_two])
@@ -372,10 +398,12 @@ def test_merge_shard_payloads_with_no_collisions() -> None:
 def test_merge_shard_payloads_synthesizes_duplicate_id_error() -> None:
     """Keep the first-seen `dag_id` and synthesize a marked import error for the loser."""
 
-    first = parallel_dagbag.encode_shard({"dup": _FakeDag(dag_id="dup", tasks=())}, {}, [], [])
+    first = parallel_dagbag.encode_shard(
+        {"dup": _FakeDag(dag_id="dup", tasks=())}, {}, [], [], serialize=True
+    )
     second_dag = _FakeDag(dag_id="dup", tasks=())
     second_dag.fileloc = "/dags/other/dup.py"
-    second = parallel_dagbag.encode_shard({"dup": second_dag}, {}, [], [])
+    second = parallel_dagbag.encode_shard({"dup": second_dag}, {}, [], [], serialize=True)
 
     merged = parallel_dagbag.merge_shard_payloads([first, second])
 
@@ -385,8 +413,8 @@ def test_merge_shard_payloads_synthesizes_duplicate_id_error() -> None:
     assert "also found in /dags/dup.py" in message
 
 
-def test_merge_shard_payloads_concatenates_stats_and_dedupes_lookups() -> None:
-    """Concatenate stats across shards and dedupe identical lookups across shards."""
+def test_merge_shard_payloads_concatenates_and_sorts_stats_slowest_first() -> None:
+    """Concatenate stats across shards, sorted slowest first, and dedupe lookups."""
 
     lookup = {"kind": "variable", "key": "v", "file": "a.py", "line": 1}
     shard_one = {
@@ -404,9 +432,12 @@ def test_merge_shard_payloads_concatenates_stats_and_dedupes_lookups() -> None:
 
     merged = parallel_dagbag.merge_shard_payloads([shard_one, shard_two])
 
+    # `smoke._log_stats_table` renders `dagbag_stats` as a slowest-first report without
+    # re-sorting, matching Airflow's own `collect_dags()`; shard_two's `b.py` (2.0s)
+    # must sort ahead of shard_one's `a.py` (1.0s) despite merging second.
     assert merged["dagbag_stats"] == [
-        {"file": "a.py", "duration": 1.0, "dag_num": 1, "task_num": 1},
         {"file": "b.py", "duration": 2.0, "dag_num": 1, "task_num": 1},
+        {"file": "a.py", "duration": 1.0, "dag_num": 1, "task_num": 1},
     ]
     assert merged["runtime_lookups"] == [lookup]
 
@@ -437,18 +468,24 @@ def test_log_tail_reports_a_placeholder_when_unreadable(tmp_path: Path) -> None:
 
 
 class _FakeProcess:
-    """`subprocess.Popen` double for `fan_out_dag_bag` failure-path tests."""
+    """`subprocess.Popen` double for `fan_out_dag_bag` failure-path tests.
+
+    Mirrors real `Popen`'s `returncode` semantics -- `None` until `wait()` actually
+    completes -- since `_kill_all` reads `returncode` to decide whether a process is
+    still worth signaling.
+    """
 
     def __init__(self, *, returncode: int = 0, timeout_first: bool = False) -> None:
-        """Create a fake process.
+        """Create a fake process, not yet "exited".
 
         Parameters:
-            returncode: int the fake process reports once it "exits".
+            returncode: int the fake process reports once `wait()` completes.
             timeout_first: bool making the first `wait()` call raise `TimeoutExpired`.
         """
 
         self.pid = 999_999
-        self.returncode = returncode
+        self.returncode: int | None = None
+        self._configured_returncode = returncode
         self._timeout_first = timeout_first
         self._waited_once = False
 
@@ -469,6 +506,7 @@ class _FakeProcess:
         if self._timeout_first and not self._waited_once:
             self._waited_once = True
             raise subprocess.TimeoutExpired(cmd="child", timeout=timeout)
+        self.returncode = self._configured_returncode
         return self.returncode
 
 
@@ -498,10 +536,58 @@ def test_fan_out_dag_bag_returns_empty_payload_for_no_files(tmp_path: Path) -> N
     state = SimpleNamespace(root=tmp_path, logs_folder=tmp_path)
 
     result = parallel_dagbag.fan_out_dag_bag(
-        config=config, state=state, dag_folder=tmp_path, file_paths=[], comms_needed=False
+        config=config,
+        state=state,
+        dag_folder=tmp_path,
+        file_paths=[],
+        comms_needed=False,
+        serialize=True,
     )
 
     assert result == {"import_errors": {}, "dagbag_stats": [], "runtime_lookups": [], "dags": {}}
+
+
+def test_fan_out_dag_bag_raises_and_kills_already_spawned_on_popen_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raise `DagBagFanoutError` and kill already-spawned shards when `Popen` itself fails.
+
+    Regression: a `subprocess.Popen` failure part-way through the spawn loop (fd or
+    process-table exhaustion is a real risk when `worker_count` defaults to the CPU
+    count) used to propagate straight past `smoke.py`'s `except DagBagFanoutError`
+    fallback, escaping as a bare `OSError`, and orphan whatever shards had already
+    started.
+    """
+
+    config = _config(workers="2")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    state = SimpleNamespace(root=tmp_path, logs_folder=logs)
+    spawned = _FakeProcess(returncode=0)
+    killed: list[int] = []
+    call_count = [0]
+
+    def fake_popen(command: Any, **kwargs: Any) -> _FakeProcess:
+        del command, kwargs
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return spawned
+        raise OSError("could not fork: resource temporarily unavailable")
+
+    monkeypatch.setattr(parallel_dagbag.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(parallel_dagbag.os, "killpg", lambda pid, _sig: killed.append(pid))
+
+    with pytest.raises(parallel_dagbag.DagBagFanoutError, match="Could not spawn"):
+        parallel_dagbag.fan_out_dag_bag(
+            config=config,
+            state=state,
+            dag_folder=tmp_path,
+            file_paths=["a.py", "b.py"],
+            comms_needed=False,
+            serialize=True,
+        )
+
+    assert killed == [999_999]
 
 
 def test_fan_out_dag_bag_raises_and_kills_siblings_on_nonzero_exit(
@@ -533,6 +619,7 @@ def test_fan_out_dag_bag_raises_and_kills_siblings_on_nonzero_exit(
             dag_folder=tmp_path,
             file_paths=["a.py", "b.py"],
             comms_needed=False,
+            serialize=True,
         )
 
     assert killed == [999_999]
@@ -562,6 +649,7 @@ def test_fan_out_dag_bag_raises_on_timeout(
             dag_folder=tmp_path,
             file_paths=["a.py", "b.py"],
             comms_needed=False,
+            serialize=True,
         )
 
     assert killed == [999_999, 999_999]
@@ -589,4 +677,5 @@ def test_fan_out_dag_bag_raises_on_undecodable_output(
             dag_folder=tmp_path,
             file_paths=["a.py"],
             comms_needed=False,
+            serialize=True,
         )

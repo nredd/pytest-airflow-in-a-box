@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import logging
 import os
 import signal
 import subprocess
@@ -39,8 +38,6 @@ from pytest_airflow_in_a_box._compat.introspection import mapped_expansion
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-LOGGER = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -85,12 +82,21 @@ class ShardSpec:
         file_paths: tuple[str, ...] naming this shard's files.
         needs_comms: bool indicating whether parse-time secrets resolution is active.
         dagbag_import_timeout: float bounding a single file's import in the child.
+        sys_path: tuple[str, ...] containing the parent's `sys.path` at fan-out time --
+            a fresh child interpreter's own `sys.path` has none of the rootdir/conftest/
+            `pythonpath`-ini entries pytest inserted into the parent's, without which a
+            Dag file importing a sibling package (a common repo layout) would fail in
+            the child while succeeding in a serial parse.
+        serialize: bool indicating whether any still-collected smoke item needs a
+            serialized Dag; `False` skips the Dag serializer entirely.
     """
 
     dag_folder: str
     file_paths: tuple[str, ...]
     needs_comms: bool
     dagbag_import_timeout: float
+    sys_path: tuple[str, ...]
+    serialize: bool
 
     def to_payload(self) -> dict[str, Any]:
         """Serialize to JSON-compatible primitives.
@@ -104,6 +110,8 @@ class ShardSpec:
             "file_paths": list(self.file_paths),
             "needs_comms": self.needs_comms,
             "dagbag_import_timeout": self.dagbag_import_timeout,
+            "sys_path": list(self.sys_path),
+            "serialize": self.serialize,
         }
 
 
@@ -122,6 +130,8 @@ def shard_from_payload(payload: dict[str, Any]) -> ShardSpec:
         file_paths=tuple(payload["file_paths"]),
         needs_comms=payload["needs_comms"],
         dagbag_import_timeout=payload["dagbag_import_timeout"],
+        sys_path=tuple(payload["sys_path"]),
+        serialize=payload["serialize"],
     )
 
 
@@ -325,16 +335,21 @@ def _encode_task(task: Any) -> dict[str, Any]:
     }
 
 
-def _encode_dag(dag: Any, *, serializer: Any) -> dict[str, Any]:
+def _encode_dag(dag: Any, *, serializer: Any | None) -> dict[str, Any]:
     """Encode one live Dag's portable smoke-check metadata, including serialization.
 
-    Every fan-out shard serializes every Dag it parses: fan-out only ever activates when
-    `airflow_serialization_sample_size` is `0` (serialize every Dag), since a seed-keyed
-    sample needs the whole corpus's `dag_id` set, which no single shard has.
+    Every fan-out shard serializes every Dag it parses whenever serialization is needed
+    at all: fan-out only ever serializes when `airflow_serialization_sample_size` is `0`
+    (serialize every Dag), since a seed-keyed sample needs the whole corpus's `dag_id`
+    set, which no single shard has. `serializer=None` skips serialization entirely,
+    matching the serial path's own `_smoke_serialization_needed` short-circuit -- fan-out
+    still parallelizes the (usually dominant) import cost even when no still-collected
+    smoke item needs a serialized Dag.
 
     Parameters:
         dag: Any containing the live parsed Dag.
-        serializer: Any containing the resolved Dag serializer class.
+        serializer: Any | None containing the resolved Dag serializer class, or `None`
+            when no still-collected smoke item needs a serialized Dag.
 
     Returns:
         dict[str, Any] matching `smoke._smoke_corpus_payload`'s `dags` entry shape.
@@ -342,13 +357,15 @@ def _encode_dag(dag: Any, *, serializer: Any) -> dict[str, Any]:
 
     serialized: dict[str, Any] | None = None
     serialization_error: str | None = None
-    started = time.perf_counter()
-    try:
-        encoded = serializer.serialize_dag(dag)
-        serialized = json.loads(json.dumps(encoded))
-    except Exception as error:
-        serialization_error = str(error)
-    serialization_seconds = time.perf_counter() - started
+    serialization_seconds = 0.0
+    if serializer is not None:
+        started = time.perf_counter()
+        try:
+            encoded = serializer.serialize_dag(dag)
+            serialized = json.loads(json.dumps(encoded))
+        except Exception as error:
+            serialization_error = str(error)
+        serialization_seconds = time.perf_counter() - started
     return {
         "tags": sorted(dag.tags),
         "tasks": [_encode_task(task) for task in dag.tasks],
@@ -366,6 +383,8 @@ def encode_shard(
     import_errors: dict[str, str],
     stats: Sequence[Any],
     runtime_lookups: Sequence[Any],
+    *,
+    serialize: bool,
 ) -> dict[str, Any]:
     """Encode one shard's parse results as the JSON-compatible payload a child writes.
 
@@ -377,12 +396,16 @@ def encode_shard(
             shard file.
         runtime_lookups: Sequence[Any] containing this shard's deduplicated
             `_compat.introspection.SecretsLookup`-shaped secrets lookups.
+        serialize: bool indicating whether any still-collected smoke item needs a
+            serialized Dag (`smoke._smoke_serialization_needed`); `False` skips
+            resolving and calling the Dag serializer entirely, matching the serial
+            path's own short-circuit.
 
     Returns:
         dict[str, Any] containing the shard's portable payload.
     """
 
-    serializer = _get_dag_serializer()
+    serializer = _get_dag_serializer() if serialize and dags else None
     return {
         "import_errors": dict(import_errors),
         "dagbag_stats": [
@@ -446,15 +469,34 @@ def merge_shard_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 continue
             losing_fileloc = encoded["fileloc"]
             winning_fileloc = existing["fileloc"]
-            # Matches AirflowDagDuplicatedIdException's own `__str__`, prefixed the same
-            # way `DagBag.process_file` prefixes any bagging exception it catches
-            # (`f"{type(e).__name__}: {e}"`), so this is byte-identical to what a
-            # single-process parse would have written to `import_errors` for the same
-            # collision.
+            # Message shape matches AirflowDagDuplicatedIdException's own `__str__`,
+            # prefixed the same way `DagBag.process_file` prefixes any bagging
+            # exception it catches (`f"{type(e).__name__}: {e}"`) -- byte-identical
+            # formatting to what a single-process parse would have written. WHICH
+            # file lands as winner vs. loser is NOT guaranteed to match a serial
+            # parse's choice: shards merge in shard-index order here, which tracks
+            # each file's shard assignment, not its original discovery position, so a
+            # file discovered earlier can still merge later than a file discovered
+            # after it (e.g. worker_count=2, files f0..f3, shard 0 = [f0, f2], shard 1
+            # = [f1, f3] -- f2 merges before f1 despite f1 being discovered first).
+            # Deliberately not "fixed" by preserving discovery order end to end: doing
+            # so would mean either abandoning round-robin sharding (a real
+            # load-balancing loss -- see `shard_file_paths`) or tracking each file's
+            # global discovery index through to merge time purely to pick a winner
+            # that is otherwise inert -- the check that consumes this message
+            # (`smoke.NoDuplicateDagIdsItem`) only greps for `DUPLICATE_ID_MARKER`, so
+            # both files are equally "the fix" from the user's side regardless of
+            # which one is named loser. Both paths promise only that a collision is
+            # detected and named, never a specific winner.
             merged_import_errors[losing_fileloc] = (
                 f"{DUPLICATE_ID_MARKER}: Ignoring DAG {dag_id} from {losing_fileloc} "
                 f"- also found in {winning_fileloc}"
             )
+    # Airflow's own `collect_dags()` ends with `sorted(stats, key=..., reverse=True)`;
+    # `smoke._log_stats_table` renders `dagbag_stats` as a slowest-first report without
+    # re-sorting, so concatenation order alone (shard, then per-shard processing order)
+    # would silently break that ordering on a merged corpus.
+    merged_stats.sort(key=lambda stat: stat["duration"], reverse=True)
     return {
         "import_errors": merged_import_errors,
         "dagbag_stats": merged_stats,
@@ -484,14 +526,20 @@ def _log_tail(path: Path) -> str:
 def _kill_all(processes: Sequence[subprocess.Popen[bytes]]) -> None:
     """Kill and reap every still-running shard process.
 
+    Skips any process whose `returncode` is already set: `Popen.wait()` reaps on
+    success, freeing that PID for OS reuse, so signaling it again would target
+    whatever unrelated process (a sibling shard is itself a `start_new_session=True`
+    process-group leader) the OS has since assigned that PID to.
+
     Parameters:
         processes: Sequence[subprocess.Popen[bytes]] naming the shard processes.
     """
 
-    for process in processes:
+    running = [process for process in processes if process.returncode is None]
+    for process in running:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-    for process in processes:
+    for process in running:
         process.wait()
 
 
@@ -502,6 +550,7 @@ def fan_out_dag_bag(
     dag_folder: Path,
     file_paths: Sequence[str],
     comms_needed: bool,
+    serialize: bool,
 ) -> dict[str, Any]:
     """Fan a whole-corpus Dag parse out across subprocess workers and merge the result.
 
@@ -512,6 +561,13 @@ def fan_out_dag_bag(
     when `comms_needed` is `True`, exactly as the serial path does today: letting each
     child race its own migration would corrupt a fresh SQLite database.
 
+    Each shard inherits the parent's `sys.path` (rootdir/conftest/`pythonpath`-ini
+    entries a fresh child interpreter would not otherwise have) and runs with
+    `config.rootpath` as its working directory, matching `isolated.py`'s own child-
+    process convention -- without this a Dag file importing a sibling package under a
+    typical `dags/` + shared-package repo layout would import cleanly in a serial parse
+    and fail only under fan-out.
+
     Parameters:
         config: pytest.Config containing plugin options and ini values.
         state: RunRoot providing the run root and log directory.
@@ -519,6 +575,8 @@ def fan_out_dag_bag(
         file_paths: Sequence[str] naming every file to shard, from
             `_compat.list_dag_file_paths(dag_folder)`.
         comms_needed: bool indicating whether parse-time secrets resolution is active.
+        serialize: bool indicating whether any still-collected smoke item needs a
+            serialized Dag (`smoke._smoke_serialization_needed`).
 
     Returns:
         dict[str, Any] containing the merged payload, shaped for
@@ -526,8 +584,8 @@ def fan_out_dag_bag(
         `version`/`producer_pid`/`producer_worker`.
 
     Raises:
-        DagBagFanoutError: A child process failed, timed out, or wrote an undecodable
-            output.
+        DagBagFanoutError: A shard could not be spawned, or a spawned child process
+            failed, timed out, or wrote an undecodable output.
     """
 
     if not file_paths:
@@ -538,34 +596,41 @@ def fan_out_dag_bag(
     scratch = state.root / _FANOUT_SCRATCH_DIRNAME
     scratch.mkdir(parents=True, exist_ok=True)
     import_timeout = dagbag_import_timeout(config)
+    parent_sys_path = tuple(sys.path)
     processes: list[tuple[subprocess.Popen[bytes], Path, Path]] = []
     env = os.environ.copy()
     deadline = time.monotonic() + _fanout_timeout(config)
-    for index, shard in enumerate(shards):
-        spec = ShardSpec(
-            dag_folder=str(dag_folder),
-            file_paths=tuple(shard),
-            needs_comms=comms_needed,
-            dagbag_import_timeout=import_timeout,
-        )
-        spec_path = scratch / f"shard-{index}-spec.json"
-        output_path = scratch / f"shard-{index}-output.json"
-        output_path.unlink(missing_ok=True)
-        spec_path.write_text(json.dumps(spec.to_payload()), encoding="utf-8")
-        shard_env = env.copy()
-        shard_env[SHARD_SPEC_PATH_ENVIRONMENT_VARIABLE] = str(spec_path)
-        shard_env[SHARD_OUTPUT_PATH_ENVIRONMENT_VARIABLE] = str(output_path)
-        log_path = state.logs_folder / f"dagbag-fanout-shard-{index}-{os.getpid()}.log"
-        with log_path.open("wb") as log_stream:
-            process = subprocess.Popen(
-                [sys.executable, "-m", "pytest_airflow_in_a_box.parallel_dagbag_child"],
-                stdout=log_stream,
-                stderr=subprocess.STDOUT,
-                env=shard_env,
-                cwd=state.root,
-                start_new_session=True,
+    try:
+        for index, shard in enumerate(shards):
+            spec = ShardSpec(
+                dag_folder=str(dag_folder),
+                file_paths=tuple(shard),
+                needs_comms=comms_needed,
+                dagbag_import_timeout=import_timeout,
+                sys_path=parent_sys_path,
+                serialize=serialize,
             )
-        processes.append((process, output_path, log_path))
+            spec_path = scratch / f"shard-{index}-spec.json"
+            output_path = scratch / f"shard-{index}-output.json"
+            output_path.unlink(missing_ok=True)
+            spec_path.write_text(json.dumps(spec.to_payload()), encoding="utf-8")
+            shard_env = env.copy()
+            shard_env[SHARD_SPEC_PATH_ENVIRONMENT_VARIABLE] = str(spec_path)
+            shard_env[SHARD_OUTPUT_PATH_ENVIRONMENT_VARIABLE] = str(output_path)
+            log_path = state.logs_folder / f"dagbag-fanout-shard-{index}-{os.getpid()}.log"
+            with log_path.open("wb") as log_stream:
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "pytest_airflow_in_a_box.parallel_dagbag_child"],
+                    stdout=log_stream,
+                    stderr=subprocess.STDOUT,
+                    env=shard_env,
+                    cwd=config.rootpath,
+                    start_new_session=True,
+                )
+            processes.append((process, output_path, log_path))
+    except OSError as error:
+        _kill_all([item[0] for item in processes])
+        raise DagBagFanoutError(f"Could not spawn a Dag bag fan-out shard: {error}") from error
 
     payloads: list[dict[str, Any]] = []
     for process, output_path, log_path in processes:
@@ -578,7 +643,7 @@ def fan_out_dag_bag(
                 f"Dag bag fan-out exceeded its {_fanout_timeout(config)}s timeout"
             ) from None
         if process.returncode != _NORMAL_EXIT_STATUS:
-            _kill_all([item[0] for item in processes if item[0] is not process])
+            _kill_all([item[0] for item in processes])
             raise DagBagFanoutError(
                 f"A Dag bag fan-out shard exited with status {process.returncode}; last "
                 f"output:\n{_log_tail(log_path)}"
@@ -586,7 +651,7 @@ def fan_out_dag_bag(
         try:
             payloads.append(json.loads(output_path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError) as error:
-            _kill_all([item[0] for item in processes if item[0] is not process])
+            _kill_all([item[0] for item in processes])
             raise DagBagFanoutError(
                 f"Could not read Dag bag fan-out shard output '{output_path}': {error}"
             ) from error

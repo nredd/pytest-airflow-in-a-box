@@ -875,8 +875,14 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         # `fanout_enabled` is checked first and is filesystem-free, so the default
         # (disabled) case never pays for a Dag file walk it will not use. A seed-keyed
         # serialization sample needs the whole corpus's `dag_id` set, which no single
-        # fan-out shard has, so fan-out only ever activates when every Dag is
-        # serialized anyway -- the "serialize everything" default.
+        # fan-out shard can see, so a nonzero sample size blocks fan-out entirely (a
+        # shard cannot decide on its own whether one of its Dags falls inside the
+        # sample) -- this is unrelated to whether serialization is needed at all, which
+        # `serialize=_smoke_serialization_needed(config)` below decides independently:
+        # even at the default sample size (0, "serialize everything"),
+        # `airflow_smoke_disable` covering every serialization-consuming item means
+        # nothing needs a serialized Dag, and fan-out still parallelizes the (usually
+        # dominant) import cost without ever resolving or calling the Dag serializer.
         if fanout_enabled(config) and _serialization_sample_size(config) == 0:
             file_paths = list_dag_file_paths(dag_folder)
             if should_fan_out(len(file_paths), config):
@@ -887,6 +893,7 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
                         dag_folder=dag_folder,
                         file_paths=file_paths,
                         comms_needed=comms is not None,
+                        serialize=_smoke_serialization_needed(config),
                     )
                 except DagBagFanoutError as error:
                     LOGGER.warning(

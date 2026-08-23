@@ -124,6 +124,14 @@ def test_fanout_pool_spawns_exactly_once_under_xdist(pytester: pytest.Pytester) 
     guarantees only one xdist worker ever builds the corpus at all; fan-out lives
     entirely inside that elected build, so it must never spawn
     `fanout-workers * xdist-worker-count` processes -- only `fanout-workers`, once.
+
+    Asserted against the per-electing-worker-PID-qualified shard *logs*
+    (`dagbag-fanout-shard-{index}-{electing_pid}.log`), not the shard output
+    artifacts: those are named `shard-{index}-output.json` with no producer
+    qualifier, so a regressed election (both workers fanning out) would have the
+    second producer silently overwrite the first's `shard-0`/`shard-1` files and
+    this test would still see exactly 2 -- the logs are the one artifact that
+    actually distinguishes which worker produced them.
     """
 
     pytester.makeini(_FANOUT_INI)
@@ -145,5 +153,55 @@ def test_fanout_pool_spawns_exactly_once_under_xdist(pytester: pytest.Pytester) 
     result.assert_outcomes(passed=10)
     # `--airflow-home` names a base directory; the run root is a generated subdirectory
     # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
-    outputs = sorted(home.glob("*/dagbag-fanout/shard-*-output.json"))
-    assert len(outputs) == 2
+    logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
+    assert len(logs) == 2
+
+
+_USES_SIBLING_PACKAGE_DAG = """
+    from shared_util import CONSTANT
+    from airflow.sdk import dag, task
+
+
+    @dag(schedule=None)
+    def uses_sibling_package() -> None:
+        @task
+        def emit() -> str:
+            return CONSTANT
+
+        emit()
+
+
+    uses_sibling_package()
+"""
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_fanout_children_inherit_the_parents_sys_path(pytester: pytest.Pytester) -> None:
+    """Import a helper package reachable only via a `pythonpath` ini entry, in a shard.
+
+    Regression: a fresh child interpreter's own `sys.path` carries none of the
+    rootdir/conftest/`pythonpath`-ini entries pytest inserted into the parent's, so a
+    Dag file importing a sibling package -- a common `dags/` + shared-package repo
+    layout -- would import cleanly in a serial parse and fail only under fan-out,
+    unless the parent's `sys.path` is threaded through `ShardSpec`.
+    """
+
+    helpers_dir = pytester.path / "helpers"
+    helpers_dir.mkdir()
+    (helpers_dir / "shared_util.py").write_text("CONSTANT = 'ok'\n", encoding="utf-8")
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "uses_helper.py").write_text(dedent(_USES_SIBLING_PACKAGE_DAG), encoding="utf-8")
+    pytester.makeini(
+        "[pytest]\n"
+        "pythonpath = helpers\n"
+        "airflow_dag_bag_fanout_min_files = 0\n"
+        "airflow_dag_bag_fanout_workers = 2\n"
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", f"--dag-folder={dag_folder}", "--airflow-dag-bag-fanout"
+    )
+
+    result.assert_outcomes(passed=10)
+    assert "ModuleNotFoundError" not in result.stdout.str()

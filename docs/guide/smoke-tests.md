@@ -74,14 +74,24 @@ files, and merges their results:
 airflow_dag_bag_fanout = true
 ```
 
+Each worker reproduces the parse environment, not only `.airflowignore`: it inherits the
+parent's `sys.path` (any `pythonpath` ini entries, rootdir/conftest insertions) and runs
+with the same working directory, so a Dag file importing a sibling package -- a common
+`dags/` + shared-package repo layout -- resolves identically whether or not fan-out is on.
+
 Below `airflow_dag_bag_fanout_min_files` (default `200`) files, fan-out is skipped even
 when enabled -- subprocess spawn and a fresh Airflow import per worker cost real time a
 small corpus would never recoup. `airflow_dag_bag_fanout_timeout` (default `600`
-seconds) bounds the whole fanned-out parse; any fan-out failure -- a timeout, a crashed
-worker, an undecodable result -- logs a warning and falls back to the existing
-single-process parse rather than failing the run. Fan-out only ever activates when
+seconds) bounds the whole fanned-out parse; any fan-out failure -- a shard that could not
+be spawned, timed out, crashed, or wrote an undecodable result -- logs a warning and
+falls back to the existing single-process parse rather than failing the run. Fan-out
+itself activates independently of serialization, but only ever *serializes* when
 `airflow_serialization_sample_size` is `0` (serialize every Dag): a seed-keyed sample
-needs the whole corpus's `dag_id` set, which no single worker's shard has on its own.
+needs the whole corpus's `dag_id` set, which no single worker's shard has on its own; a
+nonzero sample size falls back to the serial path entirely. Within that, fan-out still
+skips the Dag serializer whenever no still-collected smoke item needs a serialized Dag at
+all (e.g. every serialization-backed item disabled via `airflow_smoke_disable`), the same
+short-circuit the serial path already applies.
 
 Does not extend to the `dag_bag` fixture: its public contract is the real Airflow
 `DagBag` class, and there is no format that hands one of those back across a process
