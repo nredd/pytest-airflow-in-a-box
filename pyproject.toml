@@ -107,7 +107,7 @@ conflicts = [
 ]
 
 [tool.ruff]
-required-version = "==0.16.2"
+required-version = "==0.16.3"
 target-version = "py310"
 line-length = 99
 unsafe-fixes = true
