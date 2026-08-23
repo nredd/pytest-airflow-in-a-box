@@ -365,6 +365,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
         return None
     sys.stdout.write(render_doctor_report(config))
     _airflow_home.resolve_retention_policy(config)
+    _airflow_home.resolve_retention_count(config)
     return 0
 
 
@@ -378,17 +379,19 @@ def pytest_configure(config: pytest.Config) -> None:
     destination derived from ``--airflow-report-dir`` is scoped per xdist worker
     exactly like a user-supplied one.
 
-    The ``AIRFLOW_HOME`` retention policy is resolved first and its value discarded:
-    resolution caches onto the config stash, so a malformed ini value aborts the session
-    with an actionable usage error instead of raising from the cleanup callback that
-    reads it at unconfigure time, and an explicit ``--airflow-home-retention`` still
-    governs cleanup when a later configure step fails.
+    The ``AIRFLOW_HOME`` retention policy and its retention count are resolved first and
+    their values discarded: resolution caches onto the config stash, so a malformed ini
+    value aborts the session with an actionable usage error instead of raising from the
+    cleanup callback that reads it at unconfigure time, and an explicit
+    ``--airflow-home-retention``/``--airflow-home-retention-count`` still governs cleanup
+    when a later configure step fails.
 
     Parameters:
         config: pytest.Config for the active test session.
     """
 
     _airflow_home.resolve_retention_policy(config)
+    _airflow_home.resolve_retention_count(config)
     register_markers(config)
     validate_configure(config)
     validate_smoke_conflict(config)

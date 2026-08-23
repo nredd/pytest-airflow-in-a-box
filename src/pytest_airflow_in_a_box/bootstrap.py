@@ -20,7 +20,13 @@ from typing import Protocol, runtime_checkable
 
 import pytest
 
-from pytest_airflow_in_a_box._airflow_home import announce_retained_root, retain_airflow_home
+from pytest_airflow_in_a_box._airflow_home import (
+    announce_retained_root,
+    mark_root_retained,
+    prune_retained_roots,
+    retain_airflow_home,
+    retention_count,
+)
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 from pytest_airflow_in_a_box.airflow_cfg import (
     SIMPLE_AUTH_MANAGER,
@@ -780,7 +786,14 @@ def _owner_state(config: pytest.Config, args: list[str]) -> BootstrapState:
                 else:
                     os.environ[name] = value
             if retain:
+                # Announced first so its "N other retained roots" count reads the
+                # pre-existing siblings only -- `root` itself is not yet marked, which
+                # keeps this line's count consistent with `terminal_summary`'s, computed
+                # earlier from the same unmarked state. Pruning runs last, after marking,
+                # so it always keeps this run's own root (the newest by construction).
                 announce_retained_root(config, root, str(location.reason))
+                mark_root_retained(root)
+                prune_retained_roots(root.parent, keep=retention_count(config))
             else:
                 shutil.rmtree(root, ignore_errors=True)
 
