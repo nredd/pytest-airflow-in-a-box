@@ -17,7 +17,13 @@ from pytest_airflow_in_a_box._compat.capabilities import (
     TaskInstanceRunner,
     resolve_capabilities,
 )
-from pytest_airflow_in_a_box._compat.dagbag import DagBagConstructionError, build_dag_bag
+from pytest_airflow_in_a_box._compat.dagbag import (
+    DagBagConstructionError,
+    DagBagShardStat,
+    build_dag_bag,
+    build_partial_dag_bag,
+    list_dag_file_paths,
+)
 from pytest_airflow_in_a_box._compat.database import (
     DatabaseInitializationError,
     ensure_database,
@@ -55,6 +61,7 @@ __all__ = (
     "AirflowCompatibilityError",
     "DagBagConstructionError",
     "DagBagLocation",
+    "DagBagShardStat",
     "DatabaseCleanupError",
     "DatabaseInitializationError",
     "FakeSupervisorComms",
@@ -67,11 +74,13 @@ __all__ = (
     "SeedRecord",
     "TaskInstanceRunner",
     "build_dag_bag",
+    "build_partial_dag_bag",
     "cleanup_seeds",
     "clear_tables",
     "ensure_database",
     "implied_groups",
     "initialize_database",
+    "list_dag_file_paths",
     "open_seed_session",
     "parse_time_supervision",
     "render_task_in_process",

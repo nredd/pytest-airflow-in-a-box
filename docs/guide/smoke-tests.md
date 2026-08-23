@@ -59,6 +59,37 @@ chosen or overwritten. `-k` deselection is not predicted the way `-m` is, so a `
 consumer dropped only by `-k` may still be chosen. A smoke-only run with no `dag_bag` consumer
 is unaffected and keeps distributing the catalog across workers as described above.
 
+### Fanning the parse out across subprocess workers
+
+For a large corpus (thousands of files), the corpus builder's own single-process parse
+can become the dominant cost. `airflow_dag_bag_fanout` (default off) fans the parse out
+across subprocess workers instead: the corpus builder walks the Dag folder once from its
+true configured root -- so `.airflowignore` resolution is identical to the serial
+path -- then shards the discovered files across `airflow_dag_bag_fanout_workers`
+(default `0`, auto-detected from the CPU count) subprocesses, each importing only its own
+files, and merges their results:
+
+```ini
+[pytest]
+airflow_dag_bag_fanout = true
+```
+
+Below `airflow_dag_bag_fanout_min_files` (default `200`) files, fan-out is skipped even
+when enabled -- subprocess spawn and a fresh Airflow import per worker cost real time a
+small corpus would never recoup. `airflow_dag_bag_fanout_timeout` (default `600`
+seconds) bounds the whole fanned-out parse; any fan-out failure -- a timeout, a crashed
+worker, an undecodable result -- logs a warning and falls back to the existing
+single-process parse rather than failing the run. Fan-out only ever activates when
+`airflow_serialization_sample_size` is `0` (serialize every Dag): a seed-keyed sample
+needs the whole corpus's `dag_id` set, which no single worker's shard has on its own.
+
+Does not extend to the `dag_bag` fixture: its public contract is the real Airflow
+`DagBag` class, and there is no format that hands one of those back across a process
+boundary. A `dag_bag`-only test on a large corpus still pays for one full parse per
+xdist worker that runs it -- the colocation described above (forcing the catalog and one
+`dag_bag` consumer onto the same worker under `--dist loadgroup`) remains the mitigation
+for that case.
+
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
