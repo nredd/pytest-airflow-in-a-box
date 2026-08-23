@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from pytest_airflow_in_a_box import plugin
+from pytest_airflow_in_a_box import plugin, smoke
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError
 from pytest_airflow_in_a_box.bootstrap import XDIST_WORKER_ENVIRONMENT_VARIABLE
 from pytest_airflow_in_a_box.fixtures.dagbag import DAG_BAG_XDIST_GROUP
@@ -573,7 +573,7 @@ def test_missing_anchor_warning_names_every_distinct_reason_once() -> None:
     message reads in the order collection actually hit the reasons.
     """
 
-    with pytest.warns(plugin.SmokeColocationWarning) as caught:
+    with pytest.warns(smoke.SmokeColocationWarning) as caught:
         plugin._warn_missing_dag_bag_anchor(
             (
                 plugin._PRE_GROUPED_ANCHOR_REASON,
