@@ -13,7 +13,7 @@ import os
 import sys
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pytest
 
@@ -92,10 +92,10 @@ from pytest_airflow_in_a_box.migration_strict import (
 )
 from pytest_airflow_in_a_box.reporting import configure_report_dir, configure_reporting
 from pytest_airflow_in_a_box.results import assertrepr_compare
-from pytest_airflow_in_a_box.smoke import collect_smoke_items
+from pytest_airflow_in_a_box.smoke import SmokeColocationWarning, collect_smoke_items
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
 __all__ = (
     "airflow_components",
@@ -663,6 +663,140 @@ def _survives_markexpr(item: pytest.Item, config: pytest.Config) -> bool:
         return True
 
 
+_PRE_GROUPED_ANCHOR_REASON: Final[str] = "carries an explicit `xdist_group` marker"
+_DESELECTED_ANCHOR_REASON: Final[str] = "is about to be deselected by the active `-m` expression"
+
+
+def _anchor_disqualification(item: pytest.Item, config: pytest.Config) -> str | None:
+    """Report why one `dag_bag` consumer cannot anchor the smoke catalog's xdist group.
+
+    Returning the reason rather than a bool is what lets co-location collect both the
+    chosen anchor and, when there is none, the distinct reasons worth naming -- in a
+    single pass over the collected items.
+
+    Parameters:
+        item: pytest.Item already known to require the `dag_bag` fixture.
+        config: pytest.Config used to predict `-m` deselection.
+
+    Returns:
+        str | None naming the disqualifying reason, or None when the item is eligible.
+    """
+
+    if item.get_closest_marker("xdist_group") is not None:
+        return _PRE_GROUPED_ANCHOR_REASON
+    if not _survives_markexpr(item, config):
+        return _DESELECTED_ANCHOR_REASON
+    return None
+
+
+def _xdist_worker_without_loadgroup(config: pytest.Config) -> bool:
+    """Report whether this process is an xdist worker whose dist mode ignores groups.
+
+    `xdist.remote.setup_config` resets a worker's `dist` option to `"no"` and its
+    `numprocesses` to `None`, preserving only the synthetic `loadgroup` boolean, so the
+    worker environment variable is the only remaining evidence that the run is being
+    distributed at all. Checking the controller's `dist` string instead would be both
+    unreachable and wrong: under real xdist the controller never runs
+    `pytest_collection_modifyitems` (each worker collects for itself), and `--dist=load`
+    passed without `-n` leaves `dist == "load"` while `tx` stays empty and nothing is
+    actually distributed.
+
+    Parameters:
+        config: pytest.Config inspected for the surviving `loadgroup` signal.
+
+    Returns:
+        bool reporting whether groups are inert on a genuinely distributing worker.
+
+    References:
+        https://github.com/pytest-dev/pytest-xdist/blob/v3.8.0/src/xdist/remote.py#L392-L400
+    """
+
+    if os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE) is None:
+        return False
+    return not _loadgroup_dist_active(config)
+
+
+def _warns_for_this_process() -> bool:
+    """Report whether this process is the one that should record a co-location warning.
+
+    Every xdist worker collects in its own process, so an unguarded warning issued from
+    a collection hook is recorded once per worker -- N identical entries describing one
+    run-wide condition. `gw0` always exists in a distributing run, so electing it loses
+    no signal. A serial or in-process run has no worker variable at all and always
+    reports.
+
+    Returns:
+        bool reporting whether this process should issue the warning.
+    """
+
+    worker = os.environ.get(XDIST_WORKER_ENVIRONMENT_VARIABLE)
+    return worker is None or worker == "gw0"
+
+
+def _warn_missing_dag_bag_anchor(reasons: Sequence[str]) -> None:
+    """Warn that every `dag_bag` consumer is disqualified from anchoring the catalog.
+
+    Issued from `pytest_collection_modifyitems` so pytest's own collection warnings
+    context captures it into the terminal summary; `config.issue_config_time_warning`,
+    used elsewhere in this plugin, is configure-time only and cannot reach this hook.
+    Deliberately never issued for a run with no `dag_bag` consumer at all: the catalog
+    then owns the only Dag parse in the run, so there is nothing to co-locate with and
+    nothing lost -- warning there would fire on every ordinary smoke-only run.
+
+    Parameters:
+        reasons: Sequence[str] naming each disqualification, in discovery order.
+
+    Returns:
+        None. Issues at most one `SmokeColocationWarning`.
+    """
+
+    if not _warns_for_this_process():
+        return
+    joined = " or ".join(dict.fromkeys(reasons))
+    warnings.warn(
+        SmokeColocationWarning(
+            f"Smoke catalog left ungrouped under `--dist loadgroup`: every test using "
+            f"the `{DAG_BAG_FIXTURE_NAME}` fixture in this run {joined}, so none can "
+            f"anchor the `{DAG_BAG_XDIST_GROUP}` group. The catalog's corpus builder "
+            f"will parse the Dag folder itself, adding one full Dag parse to this run. "
+            f"Leave one `{DAG_BAG_FIXTURE_NAME}` consumer ungrouped and selected to "
+            f"avoid it, or silence this with "
+            f"`-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
+        ),
+        stacklevel=1,
+    )
+
+
+def _warn_loadgroup_would_colocate() -> None:
+    """Warn that the active dist mode makes the catalog's xdist grouping inert.
+
+    `--dist` defaults to `no`, and a plain `-n auto` promotes it to `load`, never
+    `loadgroup` -- so the common parallel invocation silently forgoes co-location even
+    though this run has a `dag_bag` consumer to share a worker with.
+
+    Returns:
+        None. Issues at most one `SmokeColocationWarning`.
+
+    References:
+        https://github.com/pytest-dev/pytest-xdist/blob/v3.8.0/src/xdist/plugin.py#L318-L321
+    """
+
+    if not _warns_for_this_process():
+        return
+    warnings.warn(
+        SmokeColocationWarning(
+            f"Smoke catalog cannot share a worker with `{DAG_BAG_FIXTURE_NAME}` under "
+            f"this dist mode: `xdist_group` only affects scheduling under "
+            f"`--dist loadgroup`, and a plain `-n` run distributes with `--dist load`. "
+            f"This run has at least one `{DAG_BAG_FIXTURE_NAME}` consumer to reuse a "
+            f"parse from, so the catalog's corpus builder will parse the Dag folder a "
+            f"second time. Pass `--dist loadgroup` to avoid it, or silence this with "
+            f"`-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
+        ),
+        stacklevel=1,
+    )
+
+
 def _colocate_smoke_catalog_with_dag_bag(
     items: list[pytest.Item], smoke_items: list[pytest.Item], config: pytest.Config
 ) -> None:
@@ -686,30 +820,48 @@ def _colocate_smoke_catalog_with_dag_bag(
     `--strict-markers` would abort the run with an unregistered-marker error instead of
     a no-op.
 
+    Consumers are found through pytest's full fixture *closure*, not a test's own
+    signature, so a project fixture that itself declares `dag_bag` anchors the catalog
+    exactly like a direct consumer. A consumer reaching the bag only through
+    `request.getfixturevalue` is outside that closure, is invisible here, and gets no
+    warning either. Every case where co-location is wanted but unreachable is reported
+    with `SmokeColocationWarning`; a run with no `dag_bag` consumer at all is silent by
+    design, because the catalog then owns the only Dag parse in the run and loses
+    nothing.
+
     Parameters:
         items: list[pytest.Item] surviving collection, inspected for `dag_bag` use.
         smoke_items: list[pytest.Item] containing the synthesized smoke catalog items.
         config: pytest.Config used to detect `--dist=loadgroup` and predict `-m`.
 
     Returns:
-        None. Mutates matching items in place by adding an `xdist_group` marker.
+        None. Mutates matching items in place by adding an `xdist_group` marker, and
+        may issue `SmokeColocationWarning` when co-location is unreachable.
     """
 
-    if not smoke_items or not _loadgroup_dist_active(config):
+    if not smoke_items:
         return
-    dag_bag_item = next(
-        (
-            item
-            for item in items
-            if _requires_dag_bag(item)
-            and item.get_closest_marker("xdist_group") is None
-            and _survives_markexpr(item, config)
-        ),
-        None,
-    )
-    if dag_bag_item is None:
+    if not _loadgroup_dist_active(config):
+        if _xdist_worker_without_loadgroup(config) and any(
+            _requires_dag_bag(item) for item in items
+        ):
+            _warn_loadgroup_would_colocate()
         return
-    for item in (*smoke_items, dag_bag_item):
+    anchor: pytest.Item | None = None
+    disqualifications: list[str] = []
+    for item in items:
+        if not _requires_dag_bag(item):
+            continue
+        reason = _anchor_disqualification(item, config)
+        if reason is None:
+            anchor = item
+            break
+        disqualifications.append(reason)
+    if anchor is None:
+        if disqualifications:
+            _warn_missing_dag_bag_anchor(disqualifications)
+        return
+    for item in (*smoke_items, anchor):
         item.add_marker(pytest.mark.xdist_group(name=DAG_BAG_XDIST_GROUP))
 
 

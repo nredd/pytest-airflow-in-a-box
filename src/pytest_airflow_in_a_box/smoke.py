@@ -162,6 +162,10 @@ class SlowDagParseWarning(RuntimeWarning):
     """Warn that a Dag file's parse duration crossed the slowpoke ratio."""
 
 
+class SmokeColocationWarning(RuntimeWarning):
+    """Warn that the smoke catalog could not share an xdist worker with `dag_bag`."""
+
+
 class SmokeCheckFailure(Exception):
     """Report a bundled smoke check failure with a preformatted message.
 
@@ -2482,6 +2486,7 @@ __all__ = (
     "SlowDagParseWarning",
     "SmokeCheckFailure",
     "SmokeCollector",
+    "SmokeColocationWarning",
     "TopLevelIOItem",
     "TopLevelVariableAccessItem",
     "UnboundedExpandItem",
