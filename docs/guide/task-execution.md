@@ -220,8 +220,8 @@ bounded by `trigger_timeout` seconds.
 
 `create_task_instance` and `create_dummy_dag` mirror upstream Airflow's
 `tests_common.pytest_plugin` fixtures of the same names -- same parameters and defaults --
-so upstream-style tests run unchanged, and they double as the shortest path to "give me a
-task instance" when the Dag's content does not matter:
+so upstream-style tests call them the same way, and they double as the shortest path to
+"give me a task instance" when the Dag's content does not matter:
 
 ```python
 def test_one_call(create_task_instance):
@@ -236,12 +236,28 @@ and cleaned up exactly as `dag_maker`'s are, and `**dag_kwargs` (including `seri
 route to `dag_maker` unchanged. `testing_dag_bundle` registers the shared `testing` Dag
 bundle row upstream core tests bulk-write metadata against (Airflow 3.x only).
 
-Two deliberate deviations from upstream. `create_task_instance` returns the plain ORM
-`TaskInstance` with `ti.task` carrying the *authoring* operator -- there is no `ti.run()`
-wrapper; execute through `dag_maker.run_ti` or `run_task` instead. And
-`testing_dag_bundle` never deletes the shared row at teardown: a conditional delete would
-race another `pytest-xdist` worker's in-flight `DagModel.bundle_name` reference, and the
-per-run metadata database is disposable anyway.
+Deliberate deviations from upstream, all rooted in this plugin's own persistence
+machinery rather than upstream's:
+
+- `create_task_instance` returns the plain ORM `TaskInstance` with `ti.task` carrying the
+  *authoring* operator -- there is no `ti.run()` wrapper; execute through
+  `dag_maker.run_ti` or `run_task` instead
+- `testing_dag_bundle` never deletes the shared row at teardown: a conditional delete
+  would race another `pytest-xdist` worker's in-flight `DagModel.bundle_name` reference,
+  and the per-run metadata database is disposable anyway
+- Derived run identifiers keep this plugin's collision-safe
+  `manual__pytest-airflow-in-a-box-...` spelling, not upstream's `test` /
+  `scheduled__<timestamp>` forms -- pass `run_id=` where a test asserts on it
+- `create_dummy_dag`'s default scheduled run carries the current UTC logical date, not
+  upstream's `next_dagrun_info`-derived schedule-aligned one -- pass `logical_date=` where
+  alignment matters
+- Reusing one `dag_id` across two factory calls in the same test raises `ValueError`
+  (this plugin refuses to overwrite Dag metadata it already owns); upstream re-syncs
+  silently. Use distinct identifiers
+- `run_after` on the Airflow 2.x family raises `ValueError` instead of upstream's silent
+  drop, matching `dag_maker.create_dagrun`
+- `dag_maker`-routed keywords upstream supports (`session=`, `bundle_name=`,
+  `bundle_version=`) follow whatever `dag_maker(...)` itself accepts
 
 Upstream's `dag_id="dag"` default is kept verbatim, so two concurrent tests relying on it
 contend on the shared metadata database exactly like any repeated `dag_id` -- keep such

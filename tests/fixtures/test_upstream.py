@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import pytest
 
 from pytest_airflow_in_a_box.fixtures.upstream import TESTING_BUNDLE_NAME
+from pytest_airflow_in_a_box.types import CreateDummyDag, CreateTaskInstance, DagMaker
 
 pytestmark = pytest.mark.db_test
 
 
-def test_create_task_instance_defaults(create_task_instance: Any) -> None:
+def test_create_task_instance_defaults(create_task_instance: CreateTaskInstance) -> None:
     """Create one refreshed default task instance with a single call.
 
     Parameters:
@@ -28,10 +28,13 @@ def test_create_task_instance_defaults(create_task_instance: Any) -> None:
     assert ti.state is None
     assert ti.task is not None
     assert ti.task.task_id == "op1"
+    # Upstream forwards `state=None` into DagRun creation, so the run carries
+    # Airflow's column default rather than this plugin's `running` default.
+    assert str(ti.dag_run.state) == "queued"
 
 
 def test_create_task_instance_upstream_defaults_use_upstream_dag_id(
-    create_task_instance: Any,
+    create_task_instance: CreateTaskInstance,
 ) -> None:
     """Keep upstream's ``dag_id="dag"`` / ``task_id="op1"`` defaults verbatim.
 
@@ -46,7 +49,7 @@ def test_create_task_instance_upstream_defaults_use_upstream_dag_id(
 
 
 def test_create_task_instance_assigns_every_instance_attribute(
-    create_task_instance: Any,
+    create_task_instance: CreateTaskInstance,
 ) -> None:
     """Land each task-instance attribute argument on the returned instance.
 
@@ -75,7 +78,9 @@ def test_create_task_instance_assigns_every_instance_attribute(
     assert ti.last_heartbeat_at == heartbeat
 
 
-def test_create_task_instance_forwards_run_arguments(create_task_instance: Any) -> None:
+def test_create_task_instance_forwards_run_arguments(
+    create_task_instance: CreateTaskInstance,
+) -> None:
     """Forward run identity, type, state, and interval onto the created DagRun.
 
     Parameters:
@@ -89,7 +94,7 @@ def test_create_task_instance_forwards_run_arguments(create_task_instance: Any) 
         dag_id="cti_run_arguments",
         run_id="explicit_run_237",
         run_type="scheduled",
-        dagrun_state="queued",
+        dagrun_state="running",
         logical_date=logical_date,
         data_interval=interval,
     )
@@ -97,12 +102,14 @@ def test_create_task_instance_forwards_run_arguments(create_task_instance: Any) 
 
     assert ti.run_id == "explicit_run_237"
     assert str(dag_run.run_type) == "scheduled"
-    assert str(dag_run.state) == "queued"
+    assert str(dag_run.state) == "running"
     assert dag_run.logical_date == logical_date
     assert (dag_run.data_interval_start, dag_run.data_interval_end) == interval
 
 
-def test_create_task_instance_explicit_none_logical_date(create_task_instance: Any) -> None:
+def test_create_task_instance_explicit_none_logical_date(
+    create_task_instance: CreateTaskInstance,
+) -> None:
     """Create a run with no logical date at all from an explicit ``None``.
 
     Parameters:
@@ -116,7 +123,7 @@ def test_create_task_instance_explicit_none_logical_date(create_task_instance: A
 
 
 def test_create_task_instance_omitted_logical_date_defaults_to_now(
-    create_task_instance: Any,
+    create_task_instance: CreateTaskInstance,
 ) -> None:
     """Keep the omission default: a current-UTC logical date with an interval.
 
@@ -130,7 +137,9 @@ def test_create_task_instance_omitted_logical_date_defaults_to_now(
     assert ti.dag_run.data_interval_end is not None
 
 
-def test_create_task_instance_adopts_a_supplied_task(create_task_instance: Any) -> None:
+def test_create_task_instance_adopts_a_supplied_task(
+    create_task_instance: CreateTaskInstance,
+) -> None:
     """Bind a caller-constructed operator instead of building an ``EmptyOperator``.
 
     Parameters:
@@ -149,8 +158,8 @@ def test_create_task_instance_adopts_a_supplied_task(create_task_instance: Any) 
 
 
 def test_create_task_instance_forwards_dag_kwargs_and_serialized(
-    create_task_instance: Any,
-    dag_maker: Any,
+    create_task_instance: CreateTaskInstance,
+    dag_maker: DagMaker,
 ) -> None:
     """Route ``**dag_kwargs`` to ``dag_maker``, including its ``serialized`` toggle.
 
@@ -161,14 +170,17 @@ def test_create_task_instance_forwards_dag_kwargs_and_serialized(
 
     ti = create_task_instance(dag_id="cti_dag_kwargs", max_active_runs=1, serialized=True)
 
-    assert ti.task.dag.max_active_runs == 1
+    task = ti.task
+    assert task is not None
+    assert task.dag is not None
+    assert task.dag.max_active_runs == 1
     assert dag_maker.serialized_dag is not None
     assert "op1" in dag_maker.serialized_dag.task_ids
 
 
 def test_create_dummy_dag_returns_dag_and_operator_with_scheduled_run(
-    create_dummy_dag: Any,
-    dag_maker: Any,
+    create_dummy_dag: CreateDummyDag,
+    dag_maker: DagMaker,
 ) -> None:
     """Author the single-operator Dag and create its default scheduled DagRun.
 
@@ -194,8 +206,8 @@ def test_create_dummy_dag_returns_dag_and_operator_with_scheduled_run(
 
 
 def test_create_dummy_dag_skips_the_run_when_type_is_none(
-    create_dummy_dag: Any,
-    dag_maker: Any,
+    create_dummy_dag: CreateDummyDag,
+    dag_maker: DagMaker,
 ) -> None:
     """Create no DagRun at all for ``with_dagrun_type=None``.
 

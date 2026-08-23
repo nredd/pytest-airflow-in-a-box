@@ -2,8 +2,9 @@
 
 Upstream Airflow's core unit tests request ``create_task_instance``,
 ``create_dummy_dag``, and ``testing_dag_bundle`` by name; these fixtures mirror the
-upstream names, parameters, and defaults so such tests run unchanged, and double as
-one-call conveniences for plugin users. Everything here is composition over
+upstream names, parameters, and defaults so such tests call them the same way
+(documented deviations live in the task-execution guide), and double as one-call
+conveniences for plugin users. Everything here is composition over
 ``dag_maker`` and the compatibility layer -- no new persistence machinery.
 
 References:
@@ -236,13 +237,15 @@ def create_task_instance(dag_maker: DagMaker) -> CreateTaskInstance:
             },
             dag_kwargs=dag_kwargs,
         )
-        dag_run_kwargs: dict[str, Any] = {}
+        # `state` is forwarded even when None, exactly as upstream does: an explicit
+        # None reaches Airflow's DagRun constructor, which skips state assignment and
+        # leaves the column default (`queued`). Filtering it here would silently turn
+        # upstream's default into this plugin's `running` default.
+        dag_run_kwargs: dict[str, Any] = {"state": dagrun_state}
         if run_type is not None:
             dag_run_kwargs["run_type"] = coerce_run_type(run_type)
         if data_interval is not None:
             dag_run_kwargs["data_interval"] = data_interval
-        if dagrun_state is not None:
-            dag_run_kwargs["state"] = dagrun_state
         dag_run = dag_maker.create_dagrun(
             run_id=run_id,
             logical_date=logical_date,

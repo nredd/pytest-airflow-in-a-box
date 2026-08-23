@@ -162,7 +162,7 @@ class DagMaker(Protocol):
         Parameters:
             run_id: str | None containing an explicit identifier, or ``None`` for a
                 derived one.
-            logical_date: datetime.datetime | None | UnsetType overriding the current
+            logical_date: datetime.datetime | UnsetType | None overriding the current
                 UTC logical date. An explicit ``None`` requests a run with no logical
                 date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
                 and no ``data_interval`` is inferred for it; the 2.x family cannot
@@ -231,7 +231,8 @@ class CreateDummyDag(Protocol):
     """Author one single-``EmptyOperator`` Dag and, by default, a scheduled DagRun.
 
     Mirrors upstream Airflow's ``tests_common.pytest_plugin.create_dummy_dag`` fixture
-    -- same name, parameters, and defaults -- so upstream-style tests run unchanged.
+    -- same name, parameters, and defaults -- so upstream-style tests call it the same
+    way (documented deviations live in the task-execution guide).
     Composition over ``dag_maker``: the Dag, DagModel, and DagRun rows are owned and
     cleaned up exactly as ``dag_maker``'s are. Use ``dag_maker`` directly when the
     DagRun or the Dag's task graph needs to be anything but this single operator.
@@ -336,14 +337,15 @@ class CreateTaskInstance(Protocol):
         """Author, persist, run-create, and return one refreshed task instance.
 
         Parameters:
-            logical_date: datetime.datetime | None | UnsetType overriding the DagRun's
+            logical_date: datetime.datetime | UnsetType | None overriding the DagRun's
                 current UTC logical date. An explicit ``None`` requests a run with no
                 logical date at all -- Airflow 3.x only; the 2.x family raises
                 ``ValueError``.
             run_after: datetime.datetime | None overriding the DagRun's current UTC
                 run-after date. Airflow 3.x only.
-            dagrun_state: str | None overriding the DagRun's state; ``None`` keeps the
-                fixture default (``running``).
+            dagrun_state: str | None assigned to the DagRun's state, forwarded even
+                when ``None`` exactly as upstream does -- Airflow then leaves its
+                column default (``queued``).
             state: str | None assigned to the task instance's state.
             run_id: str | None containing an explicit run identifier, or ``None`` for
                 a derived collision-safe one.
@@ -425,7 +427,7 @@ class RunDag(Protocol):
                 (the 2.x ``airflow.models.dag.DAG`` on that family).
             run_id: str | None containing an explicit identifier, or ``None`` for a
                 derived one.
-            logical_date: datetime.datetime | None | UnsetType overriding the current
+            logical_date: datetime.datetime | UnsetType | None overriding the current
                 UTC logical date. An explicit ``None`` requests a run with no logical
                 date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
                 and no ``data_interval`` is inferred for it; the 2.x family cannot

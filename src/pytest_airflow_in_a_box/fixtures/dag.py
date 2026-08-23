@@ -448,7 +448,7 @@ class _DagFactory:
 
         Parameters:
             run_id: str | None containing an explicit identifier or ``None`` for a derived one.
-            logical_date: datetime.datetime | None | UnsetType overriding the current
+            logical_date: datetime.datetime | UnsetType | None overriding the current
                 UTC logical date. An explicit ``None`` requests a run with no logical
                 date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
                 and no ``data_interval`` is inferred for it; rejected with
@@ -690,7 +690,7 @@ class _DagRunner:
             dag: airflow.sdk.DAG containing the completed, externally-authored task graph.
             run_id: str | None containing an explicit identifier, or ``None`` for a
                 derived one.
-            logical_date: datetime.datetime | None | UnsetType overriding the current
+            logical_date: datetime.datetime | UnsetType | None overriding the current
                 UTC logical date. An explicit ``None`` requests a run with no logical
                 date at all -- Airflow 3.x only; rejected with ``ValueError`` on the
                 2.x family.

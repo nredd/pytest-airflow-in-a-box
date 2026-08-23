@@ -485,10 +485,12 @@ def ensure_shared_bundle(name: str) -> None:
         DagPersistenceError: Airflow cannot query or insert the bundle row.
     """
 
+    # Deferred to preserve pre-bootstrap plugin import safety.
     from sqlalchemy.exc import IntegrityError
 
     session = open_dag_session(name)
     try:
+        # Deferred private model access is isolated in the compatibility package.
         from airflow.models.dagbundle import DagBundleModel
 
         if session.get(DagBundleModel, name) is not None:
@@ -732,7 +734,7 @@ def create_dag_run(
         authoring_dag: airflow.sdk.DAG containing executable task objects.
         record: DagPersistenceRecord receiving exact metadata ownership.
         run_id: str containing the validated collision-safe run identifier.
-        logical_date: datetime.datetime | None | UnsetType overriding the current UTC
+        logical_date: datetime.datetime | UnsetType | None overriding the current UTC
             logical date, where an explicit ``None`` requests a 3.x run with no logical
             date at all; rejected on the 2.x family, which cannot express one.
         run_after: datetime.datetime | None overriding the current UTC run-after date;
