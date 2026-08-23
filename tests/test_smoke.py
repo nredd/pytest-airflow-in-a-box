@@ -2772,6 +2772,35 @@ def test_smoke_disable_rejects_unknown_item_name_even_when_out_of_scope(
     result.stderr.fnmatch_lines(["*`airflow_smoke_disable` names unknown smoke item(s)*"])
 
 
+def test_smoke_disable_still_validates_the_disabled_checks_own_ini(
+    pytester: pytest.Pytester,
+) -> None:
+    """Reject a disabled check's own malformed ini value instead of skipping it silently.
+
+    `SmokeCollector.collect()` calls `check.enable(config)` for every catalog entry before
+    testing whether it's disabled: `enable` is also a check's only ini validation, and a
+    malformed value must be rejected even when `airflow_smoke_disable` names it -- looping in
+    disabled-check order would silently accept `airflow_dag_parse_budget_ratio = -1` (or any
+    other check's bad value) as long as the check naming it never collects.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_smoke_disable =\n"
+        "    test_dag_parse_budget\n"
+        "    test_dag_id_pattern\n"
+        "airflow_dag_parse_budget_ratio = -1\n"
+        "airflow_dag_id_pattern = [\n"
+    )
+
+    result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
+
+    assert result.ret != 0
+    result.stderr.fnmatch_lines(["*`airflow_dag_parse_budget_ratio` must be non-negative: '-1'*"])
+
+
 def test_smoke_disable_every_known_item_empties_the_catalog(pytester: pytest.Pytester) -> None:
     """Recognize and drop every name in `_SMOKE_ITEM_NAMES`, leaving nothing collected.
 
@@ -3182,11 +3211,12 @@ def test_markexpr_override_reaches_every_conditional_smoke_item(
 ) -> None:
     """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 10.
 
-    `_SMOKE_ITEM_MARK_SETS` is hand-synced with the `add_marker` calls scattered across
-    fourteen `pytest.Item` subclasses; the other `-m`-override regression tests only enable
-    the ten default-enabled items. Enabling all four opt-in ini-gated policies too (every
-    item, like every other, carries only `smoke` + `timeout`) would catch a future item
-    adding a marker `_SMOKE_ITEM_MARK_SETS` doesn't yet know about. The Dag sets an explicit
+    `_SMOKE_ITEM_MARK_SETS` is derived from `SMOKE_CATALOG`'s `marks` fields, not
+    hand-maintained -- but this test still pins that the derived sets match the marks a real
+    collected item carries at runtime. The other `-m`-override regression tests only enable
+    the ten default-enabled checks; enabling all four opt-in ini-gated policies too (every
+    item, like every other, carries only `smoke` + `timeout`) would catch a future check
+    adding a mark `SMOKE_CATALOG` doesn't declare. The Dag sets an explicit
     non-stock owner so `airflow_forbid_default_owner` passes rather than exercising its
     failure path.
     """

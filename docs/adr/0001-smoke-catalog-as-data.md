@@ -22,8 +22,10 @@ of hand-maintained. `smoke.register_options(parser)` now owns the checks' `addin
 Consequences: the 14 public `*Item` classes (`DagBagIntegrityItem`, `ScheduleSanityItem`,
 etc.) are removed from `smoke.py`'s public surface -- a breaking change for anyone importing
 them directly, documented in `changelog.d/232.removed.md`. Tests construct a `SmokeContext`
-and call a check's `run` directly instead of monkeypatching `smoke` internals, retiring ~79
-monkeypatch sites.
+and call a check's `run` directly instead of monkeypatching `smoke` internals, retiring 26 of
+the 79 `monkeypatch.setattr(smoke, "_private_fn", ...)` sites `tests/test_smoke.py` carried
+before this change -- the rest belong to `_build_smoke_corpus` and its collaborators, out of
+this change's scope.
 
 Reviewed and intentionally left alone in the same pass (2026-08-21 architecture review):
 `db.py`, the `_compat` registries, the `assets.py` facade, `_compat/settings.py`, `types.py`,

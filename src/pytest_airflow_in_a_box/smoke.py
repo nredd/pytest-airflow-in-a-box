@@ -2536,16 +2536,20 @@ class SmokeCollector(pytest.Collector):
     def collect(self) -> Iterator[pytest.Item]:
         """Yield one item per enabled `SMOKE_CATALOG` entry.
 
+        `enable` runs before the `disabled` check, not after, even though its result is
+        about to be discarded for a disabled entry: `enable` is also this check's only ini
+        validation, and a malformed value must be rejected even for a check the user has
+        named in `airflow_smoke_disable` -- silently accepting it there would be a worse
+        surprise than the wasted read.
+
         Returns:
             Iterator[pytest.Item] containing the collected smoke items.
         """
 
         disabled = _disabled_smoke_items(self.config)
         for check in SMOKE_CATALOG:
-            if check.name in disabled:
-                continue
             payload = check.enable(self.config)
-            if payload is None:
+            if check.name in disabled or payload is None:
                 continue
             yield _CatalogItem.from_parent(self, name=check.name, check=check, payload=payload)
 

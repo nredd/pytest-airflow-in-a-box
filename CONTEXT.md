@@ -9,8 +9,9 @@ instances, and a live REST API.
 **Smoke check**:
 One bundled, opt-in policy assertion over a parsed Dag corpus (e.g. "no Dag enables
 `catchup`", "every `dag_id` matches a configured pattern"). Declared as a `SmokeCheck` entry
-in `SMOKE_CATALOG` (`smoke.py`), not a hand-written test function.
-_Avoid_: Smoke item (the pre-catalog name for a check's dedicated `pytest.Item` subclass)
+in `SMOKE_CATALOG` (`smoke.py`); collected as a "smoke item" -- the term still used in
+`airflow_smoke_disable`'s help text and error messages, since that option names collected
+items, not catalog entries.
 
 **Smoke catalog**:
 The full set of bundled smoke checks (`SMOKE_CATALOG`), collected as a synthetic `smoke`
