@@ -25,6 +25,16 @@ test database -- and simplify the attached-events query to omit the real schedul
 at the previous asset/dataset-triggered run of the same consumer. Neither file's license header
 is copied verbatim; both are reimplementations against the same public/private model surface.
 
+`src/pytest_airflow_in_a_box/fixtures/upstream.py`'s `create_task_instance`, `create_dummy_dag`,
+and `testing_dag_bundle` fixtures mirror the names, parameter lists, defaults, and observable
+semantics of the fixtures of the same names in Apache Airflow
+`devel-common/src/tests_common/pytest_plugin.py` (read at Airflow `main`, August 2026). The
+bodies are independently authored compositions over this project's own `dag_maker` and
+compatibility layer -- no upstream function body is copied -- and deliberately deviate where
+documented: the returned `TaskInstance` is the plain ORM object (no `TaskInstanceWrapper`),
+`None`-valued operator arguments are dropped before construction, and the shared `testing`
+bundle row is never deleted at teardown.
+
 `ordered_task_instances`, all DagMaker extensions, and `evaluate_asset_schedules` (the family
 dispatcher in `asset_schedule.py`) are independently authored for this project.
 

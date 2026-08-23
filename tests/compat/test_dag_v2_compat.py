@@ -248,6 +248,20 @@ def test_sync_dag_model_uses_the_authoring_writer_on_v2() -> None:
 
 
 @pytest.mark.usefixtures("v2_capabilities")
+def test_sync_dag_model_ignores_bundle_version_on_v2() -> None:
+    """Keep the bundle-free 2.x writer shape when a bundle version is recorded."""
+
+    dag, calls = _fake_authoring_dag([])
+    session = _RollbackRecordingSession()
+    record = _record(session=session)
+    record.bundle_version = "v238"
+
+    dag_module._sync_dag_model(dag, record)
+
+    assert calls == [((dag,), session)]
+
+
+@pytest.mark.usefixtures("v2_capabilities")
 def test_sync_dag_model_retries_a_concurrent_dag_code_insert(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -456,7 +470,7 @@ def test_create_dag_run_uses_the_execution_date_interface(
         authoring_stub,
         record,
         run_id="run-1",
-        logical_date=None,
+        logical_date=dag_module.UNSET,
         run_after=None,
         start_date=None,
         dag_run_kwargs={},
@@ -510,7 +524,7 @@ def test_create_dag_run_rejects_reserved_dag_run_kwargs_on_v2(key: str) -> None:
             authoring_dag,
             record,
             run_id="run-1",
-            logical_date=None,
+            logical_date=dag_module.UNSET,
             run_after=None,
             start_date=None,
             dag_run_kwargs={key: object()},
@@ -537,7 +551,7 @@ def test_create_dag_run_rejects_execution_date_with_a_logical_date_remedy() -> N
             authoring_dag,
             record,
             run_id="run-1",
-            logical_date=None,
+            logical_date=dag_module.UNSET,
             run_after=None,
             start_date=None,
             dag_run_kwargs={"execution_date": object()},

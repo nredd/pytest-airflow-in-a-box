@@ -133,7 +133,9 @@ whose option name reads as a credential, since that report is meant to be pasted
 reports.
 
 Under `xdist` the overrides reach every worker: workers inherit the controller's environment and
-re-apply the identical values.
+re-apply the identical values -- and a worker cross-checks what it inherited against the
+controller's state, which is where [a foreign plugin's own `AIRFLOW__*` writes
+surface](#coexisting-with-another-plugin).
 
 ## Session-scoped overrides
 
@@ -173,6 +175,56 @@ session-scoped `dag_bag` that the same test requests. But that guarantee is per 
 So use the ini option for anything that must precede the first parse unconditionally, and this
 fixture for the rest. And do not reconfigure anything the API server already inherited -- the
 warning about `api_client`/`api_server_url` above applies here too, for the whole session.
+
+## Coexisting with another plugin
+
+This plugin owns `AIRFLOW__*` **through bootstrap** and makes no claim over it afterwards.
+Bootstrap runs from `pytest_load_initial_conftests`, so its variables are in place before your
+`conftest.py` is imported -- and anything that `conftest.py` imports is free to write over them
+a moment later. Some test harnesses do exactly that: an `import` with a module-scope
+`os.environ` assignment is a common shape (Airflow's own `tests_common/pytest_plugin.py` is one).
+
+Serially that usually goes unnoticed. Under `xdist` it does not. Each worker is spawned with a
+copy of the controller's environment -- by then already rewritten -- and re-runs bootstrap, which
+compares what it inherited against the state the controller exported. The mismatch is fatal:
+
+```console
+ERROR: Inherited Airflow environment for the local xdist worker disagrees with state:
+`AIRFLOW__API_AUTH__JWT_SECRET`, `AIRFLOW__CORE__AUTH_MANAGER` -- another pytest plugin or
+conftest likely mutated `AIRFLOW__*` after bootstrap exported it, and a module-scope
+`os.environ` write is the usual suspect. Set the `airflow_worker_env_drift = repair` ini option
+to re-install this run's values and continue.
+```
+
+Every worker fails the same way, so the run ends as `xdist: maximum crashed workers reached`
+with nothing executed. The check is doing its job -- the JWT secret, auth manager, Dag folder and
+Fernet key really are no longer this run's.
+
+The first thing to try is stopping the foreign write, because then every guarantee holds. When
+that is not yours to change, opt into the other answer:
+
+```ini
+# pytest.ini
+[pytest]
+airflow_worker_env_drift = repair
+```
+
+A worker that finds drift then re-installs this run's variables and continues, warning once with
+the names it repaired. What that buys, precisely: the worker is put back into the state its
+controller was in at the *same* point in its own lifecycle -- bootstrap done, no conftest
+imported yet. It does not promise the repair sticks. Whatever rewrote the environment on the
+controller runs again in the worker process and rewrites it again there, exactly as it does
+serially. The mode makes a parallel run behave like the serial run that already worked; it does
+not restore isolation the foreign write took away. Past bootstrap, what Airflow reads is your
+harness's business, not this plugin's.
+
+`repair` covers the [`airflow_isolated`](isolated-tests.md) child process too, which inherits the
+same rewritten environment for the same reason. It never overwrites an override you asked for:
+an `environment=` payload naming a variable bootstrap owns is rejected outright when the marker
+is parsed, long before any child starts.
+
+`--airflow-doctor` echoes the configured policy back, so a bug report shows which mode produced
+the run.
 
 ## Where the run lives
 

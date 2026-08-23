@@ -215,3 +215,90 @@ covers that whole-DagRun case directly. The `DagMaker` protocol additionally exp
 demand; upstream-XCom mapping works after its producer has run in the same DagRun. Passing
 `run_triggerer=True` runs the persisted trigger event and resumes a deferred task inline,
 bounded by `trigger_timeout` seconds.
+
+## Upstream harness keywords
+
+`dag_maker(...)` forwards unknown keyword arguments to the authoring `DAG` constructor, with
+three exceptions mirroring upstream `tests_common`'s `dag_maker` harness contract:
+`session`, `bundle_name`, and `bundle_version` route to the persistence layer instead of the
+constructor. A suite migrating off Airflow's internal test harness keeps those call sites
+unchanged:
+
+```python
+from airflow.models.dag import DagModel
+
+
+def test_upstream_style(dag_maker, session):
+    with dag_maker("upstream_style", session=session):
+
+        @task
+        def answer():
+            return 42
+
+        answer()
+
+    assert dag_maker.session is session
+    assert session.get(DagModel, "upstream_style") is not None
+```
+
+- `session=` supplies the metadata session used for every write the context makes
+  (persistence, `create_dagrun`, `create_ti`), and `dag_maker.session` returns it. The
+  fixture never closes a supplied session; teardown cleanup opens its own. Persistence
+  *commits* on it, though -- anything already staged commits too, so combining it with the
+  rollback-isolated `session` fixture narrows that fixture's everything-rolls-back
+  guarantee to state staged after the last `dag_maker` commit (see
+  [Database](database.md#sessions)).
+- `bundle_name=` overrides the derived per-Dag bundle row name. The derived name is unique
+  per Dag on purpose -- it is the mitigation for cross-worker bundle-row contention under
+  `pytest-xdist` -- so supplying your own opts out of that isolation. A shared row is still
+  cleaned up once the last Dag referencing it is gone.
+- `bundle_version=` is recorded on the persisted 3.x metadata rows (`dag`, `dag_version`).
+  Both bundle keywords are accepted and ignored on the certified 2.x family, which predates
+  bundles.
+
+## Upstream one-call factories
+
+`create_task_instance` and `create_dummy_dag` mirror upstream Airflow's
+`tests_common.pytest_plugin` fixtures of the same names -- same parameters and defaults --
+so upstream-style tests call them the same way, and they double as the shortest path to
+"give me a task instance" when the Dag's content does not matter:
+
+```python
+def test_one_call(create_task_instance):
+    ti = create_task_instance(dag_id="one_call", state="queued", pool="default_pool")
+
+    assert ti.task_id == "op1"
+    assert ti.pool == "default_pool"
+```
+
+Both are composition over `dag_maker`: the Dag, DagRun, and task-instance rows are owned
+and cleaned up exactly as `dag_maker`'s are, and `**dag_kwargs` (including `serialized=`)
+route to `dag_maker` unchanged. `testing_dag_bundle` registers the shared `testing` Dag
+bundle row upstream core tests bulk-write metadata against (Airflow 3.x only).
+
+Deliberate deviations from upstream, all rooted in this plugin's own persistence
+machinery rather than upstream's:
+
+- `create_task_instance` returns the plain ORM `TaskInstance` with `ti.task` carrying the
+  *authoring* operator -- there is no `ti.run()` wrapper; execute through
+  `dag_maker.run_ti` or `run_task` instead
+- `testing_dag_bundle` never deletes the shared row at teardown: a conditional delete
+  would race another `pytest-xdist` worker's in-flight `DagModel.bundle_name` reference,
+  and the per-run metadata database is disposable anyway
+- Derived run identifiers keep this plugin's collision-safe
+  `manual__pytest-airflow-in-a-box-...` spelling, not upstream's `test` /
+  `scheduled__<timestamp>` forms -- pass `run_id=` where a test asserts on it
+- `create_dummy_dag`'s default scheduled run carries the current UTC logical date, not
+  upstream's `next_dagrun_info`-derived schedule-aligned one -- pass `logical_date=` where
+  alignment matters
+- Reusing one `dag_id` across two factory calls in the same test raises `ValueError`
+  (this plugin refuses to overwrite Dag metadata it already owns); upstream re-syncs
+  silently. Use distinct identifiers
+- `run_after` on the Airflow 2.x family raises `ValueError` instead of upstream's silent
+  drop, matching `dag_maker.create_dagrun`
+- `dag_maker`-routed keywords upstream supports (`session=`, `bundle_name=`,
+  `bundle_version=`) follow whatever `dag_maker(...)` itself accepts
+
+Upstream's `dag_id="dag"` default is kept verbatim, so two concurrent tests relying on it
+contend on the shared metadata database exactly like any repeated `dag_id` -- keep such
+tests on one worker via `pytest.mark.xdist_group`, or pass explicit identifiers.

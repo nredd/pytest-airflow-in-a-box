@@ -25,6 +25,11 @@ from pytest_airflow_in_a_box.fixtures.seed import (
 )
 from pytest_airflow_in_a_box.fixtures.session import session
 from pytest_airflow_in_a_box.fixtures.taskrun import run_task
+from pytest_airflow_in_a_box.fixtures.upstream import (
+    create_dummy_dag,
+    create_task_instance,
+    testing_dag_bundle,
+)
 
 DATABASE_FIXTURE_NAMES = frozenset(
     {
@@ -33,10 +38,13 @@ DATABASE_FIXTURE_NAMES = frozenset(
         "airflow_variables",
         "api_client",
         "api_server_url",
+        "create_dummy_dag",
+        "create_task_instance",
         "dag_maker",
         "dag_bag",
         "run_dag",
         "session",
+        "testing_dag_bundle",
     }
 )
 
@@ -52,6 +60,8 @@ __all__ = (
     "api_client",
     "api_server_url",
     "cap_structlog",
+    "create_dummy_dag",
+    "create_task_instance",
     "dag_bag",
     "dag_maker",
     "render_task",
@@ -59,4 +69,5 @@ __all__ = (
     "run_task",
     "session",
     "task_context",
+    "testing_dag_bundle",
 )
