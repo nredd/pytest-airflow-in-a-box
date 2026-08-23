@@ -455,6 +455,12 @@ class _DagFactory:
 
         Returns:
             airflow.models.dagrun.DagRun containing committed task instances.
+
+        Raises:
+            ValueError: `run_after` was passed on the Airflow 2.x family, or
+                `dag_run_kwargs` sets a key this method already supplies from its own
+                parameters (e.g. `session`, `execution_date`) -- see the message for the
+                exact remedy.
         """
 
         record, scheduler_dag = self._require_persisted()
@@ -701,8 +707,11 @@ class _DagRunner:
             pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
 
         Raises:
-            ValueError: ``dag.dag_id`` already has persisted Dag metadata, or
-                ``run_triggerer`` was combined with ``executor``.
+            ValueError: ``dag.dag_id`` already has persisted Dag metadata,
+                ``run_triggerer`` was combined with ``executor``, ``run_after`` was
+                passed on the Airflow 2.x family, or ``dag_run_kwargs`` sets a key this
+                method already supplies from its own parameters (e.g. ``session``,
+                ``execution_date``) -- see the message for the exact remedy.
             ExecutorRunError: ``executor`` cannot be resolved or driven to a result, or
                 ``dag`` is not defined in a file inside the Dag folder.
             ComponentContractError: ``executor``'s class shape is broken.

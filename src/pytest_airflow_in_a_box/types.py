@@ -171,7 +171,10 @@ class DagMaker(Protocol):
             dag_run_kwargs: Any forwarded to Airflow's scheduler Dag creation method.
 
         Raises:
-            ValueError: ``run_after`` was passed on the Airflow 2.x family.
+            ValueError: ``run_after`` was passed on the Airflow 2.x family, or
+                ``dag_run_kwargs`` sets a key ``create_dagrun`` already supplies from its
+                own parameters (e.g. ``session``, ``execution_date``) -- see the message
+                for the exact remedy.
         """
 
     def create_ti(
@@ -294,8 +297,10 @@ class RunDag(Protocol):
 
         Raises:
             ValueError: ``dag.dag_id`` already has persisted metadata, ``run_after`` was
-                passed on the Airflow 2.x family, or ``run_triggerer`` was combined with
-                ``executor``.
+                passed on the Airflow 2.x family, ``run_triggerer`` was combined with
+                ``executor``, or ``dag_run_kwargs`` sets a key this method already
+                supplies from its own parameters (e.g. ``session``, ``execution_date``) --
+                see the message for the exact remedy.
             ExecutorRunError: ``executor`` cannot be resolved, started, or driven to a
                 result within ``--airflow-executor-timeout``, or ``dag`` is not defined
                 in a file inside the Dag folder.

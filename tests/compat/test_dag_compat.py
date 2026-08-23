@@ -390,6 +390,39 @@ def test_dagrun_creation_rejects_reserved_dag_run_kwargs_on_v3(
         )
 
 
+def test_dagrun_creation_rejects_session_with_a_session_specific_remedy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Point a caller-supplied `session` at `dag_maker.session`, not a nonexistent keyword.
+
+    `session` has no dedicated keyword argument anywhere in the public API -- it is
+    fixture-owned. A generic "use the dedicated keyword argument instead" remedy would
+    send a caller looking for something that does not exist.
+    """
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V3),
+    )
+
+    scheduler_dag: Any = object()
+    authoring_dag: Any = object()
+    with pytest.raises(ValueError, match=r"dag_maker\.session") as caught:
+        dag_compat.create_dag_run(
+            scheduler_dag,
+            authoring_dag,
+            _record(_Session()),
+            run_id="reserved_kwargs_run",
+            logical_date=None,
+            run_after=None,
+            start_date=None,
+            dag_run_kwargs={"session": object()},
+        )
+
+    assert "dedicated keyword argument" not in str(caught.value)
+
+
 def test_dagrun_creation_allows_triggered_by_through_dag_run_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

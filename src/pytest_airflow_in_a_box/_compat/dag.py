@@ -48,6 +48,15 @@ _V2_DAG_CODE_SYNC_ATTEMPTS = 3
 _RESERVED_DAG_RUN_KWARGS_COMMON = frozenset({"run_id", "start_date", "session"})
 _RESERVED_DAG_RUN_KWARGS_V2 = _RESERVED_DAG_RUN_KWARGS_COMMON | {"execution_date"}
 _RESERVED_DAG_RUN_KWARGS_V3 = _RESERVED_DAG_RUN_KWARGS_COMMON | {"logical_date", "run_after"}
+# Two of the reserved keys have no same-named public keyword to redirect a caller to:
+# `session` is fixture-owned and never accepted as a parameter, and 2.x's `execution_date`
+# is spelled `logical_date` everywhere in the public API. Every other reserved key already
+# matches its own dedicated parameter name one-for-one, so the generic remedy is correct
+# for those.
+_RESERVED_DAG_RUN_KWARGS_REMEDY = {
+    "session": "the run is created on the fixture-owned session -- use `dag_maker.session`",
+    "execution_date": "pass `logical_date` instead; this shim maps it to 2.x's `execution_date`",
+}
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -659,11 +668,16 @@ def create_dag_run(
     reserved = _RESERVED_DAG_RUN_KWARGS_V2 if is_v2 else _RESERVED_DAG_RUN_KWARGS_V3
     conflicting = sorted(reserved & dag_run_kwargs.keys())
     if conflicting:
+        hints = "; ".join(
+            f"`{key}`: "
+            + _RESERVED_DAG_RUN_KWARGS_REMEDY.get(key, f"pass `{key}` as its own keyword argument")
+            for key in conflicting
+        )
         raise ValueError(
             f"`dag_run_kwargs` cannot set {conflicting}: pytest-airflow-in-a-box already "
             f"supplies {'these' if len(conflicting) > 1 else 'it'} from create_dag_run's own "
             f"parameters -- passing them again would double-pass the keyword to Airflow's "
-            f"`create_dagrun`. Use the dedicated keyword argument instead."
+            f"`create_dagrun`. {hints}."
         )
 
     # The 2.x module is dynamically resolved so static checking stays valid against an

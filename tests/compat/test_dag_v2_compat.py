@@ -518,6 +518,35 @@ def test_create_dag_run_rejects_reserved_dag_run_kwargs_on_v2(key: str) -> None:
 
 
 @pytest.mark.usefixtures("v2_capabilities")
+def test_create_dag_run_rejects_execution_date_with_a_logical_date_remedy() -> None:
+    """Point a caller-supplied `execution_date` at `logical_date`, not a nonexistent keyword.
+
+    `execution_date` is not a public keyword anywhere in this plugin's API -- its
+    2.x-era name for the 3.x-spelled `logical_date`. A generic "use the dedicated
+    keyword argument instead" remedy would send a caller looking for something that
+    does not exist.
+    """
+
+    record = _record(session=None)
+    scheduler_dag: Any = SimpleNamespace()
+    authoring_dag: Any = SimpleNamespace()
+
+    with pytest.raises(ValueError, match=r"pass `logical_date` instead") as caught:
+        dag_module.create_dag_run(
+            scheduler_dag,
+            authoring_dag,
+            record,
+            run_id="run-1",
+            logical_date=None,
+            run_after=None,
+            start_date=None,
+            dag_run_kwargs={"execution_date": object()},
+        )
+
+    assert "dedicated keyword argument" not in str(caught.value)
+
+
+@pytest.mark.usefixtures("v2_capabilities")
 def test_expand_mapped_task_uses_the_operator_method_on_v2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
