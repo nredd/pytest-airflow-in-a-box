@@ -41,6 +41,18 @@ never reaches ``pytest_terminal_summary`` -- so ``announce_retained_root`` write
 path to ``stderr`` from cleanup whenever neither channel got there first. A kept
 directory is never kept silently.
 
+Retained roots are also bounded. Whenever cleanup decides to keep a directory it calls
+``mark_root_retained`` -- writing the ``RETAINED_MARKER_NAME`` sentinel -- and then
+``prune_retained_roots``, which removes everything past the ``keep`` most recently
+retained siblings under the same storage base, mirroring pytest's own
+``tmp_path_retention_count``. Pruning only ever considers a marked sibling, so an
+in-flight run (this process's own about-to-be-created root, or another concurrent
+invocation sharing the same base) is never a candidate -- unlike pytest's numbered dirs,
+``tempfile.mkdtemp`` gives these roots no sequence number or lock file to tell "finished
+and kept" apart from "still running" any other way. The invariant holds immediately after
+every retaining run, not just eventually: the directory that was just retained is always
+the newest marked entry, so pruning never removes it.
+
 References:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.hookspec.pytest_report_header
     https://docs.pytest.org/en/stable/reference/reference.html#confval-tmp_path_retention_policy
@@ -51,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -58,6 +71,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pytest_airflow_in_a_box.storage.locate import (
+    RUN_DIRECTORY_PREFIX,
     SHARED_MEMORY_PATH,
     StorageReason,
     StrEnum,
@@ -72,8 +86,11 @@ LOGGER = logging.getLogger(__name__)
 
 RETENTION_INI = "airflow_home_retention_policy"
 RETENTION_OPTION = "airflow_home_retention"
+RETENTION_COUNT_INI = "airflow_home_retention_count"
+RETENTION_COUNT_OPTION = "airflow_home_retention_count"
 HEADER_PREFIX = "pytest-airflow-in-a-box"
 SUMMARY_TITLE = "airflow-in-a-box"
+RETAINED_MARKER_NAME = ".retained"
 
 
 class RetentionPolicy(StrEnum):
@@ -85,8 +102,10 @@ class RetentionPolicy(StrEnum):
 
 
 DEFAULT_RETENTION_POLICY = RetentionPolicy.FAILED
+DEFAULT_RETENTION_COUNT = 3
 
 RETENTION_POLICY_KEY = pytest.StashKey[RetentionPolicy]()
+RETENTION_COUNT_KEY = pytest.StashKey[int]()
 SESSION_FAILED_KEY = pytest.StashKey[bool]()
 RETENTION_ANNOUNCED_KEY = pytest.StashKey[bool]()
 
@@ -123,6 +142,23 @@ def register_options(parser: pytest.Parser) -> None:
         RETENTION_INI,
         "Which runs keep the isolated Airflow run directory: `all`, `failed`, or `none`.",
         default=str(DEFAULT_RETENTION_POLICY),
+    )
+    group.addoption(
+        "--airflow-home-retention-count",
+        action="store",
+        default=None,
+        dest=RETENTION_COUNT_OPTION,
+        metavar="N",
+        help=(
+            "Keep at most N retained Airflow run directories per storage base, "
+            f"garbage-collecting older ones whenever a run is retained (default: "
+            f"{DEFAULT_RETENTION_COUNT})."
+        ),
+    )
+    parser.addini(
+        RETENTION_COUNT_INI,
+        "Maximum number of retained Airflow run directories to keep per storage base.",
+        default=str(DEFAULT_RETENTION_COUNT),
     )
 
 
@@ -163,6 +199,46 @@ def resolve_retention_policy(config: pytest.Config) -> RetentionPolicy:
         raise pytest.UsageError(message) from error
     config.stash[RETENTION_POLICY_KEY] = policy
     return policy
+
+
+def resolve_retention_count(config: pytest.Config) -> int:
+    """Resolve and cache the maximum number of retained run directories to keep.
+
+    Same option-wins-else-ini resolution as ``resolve_retention_policy``, called
+    eagerly for the same reason: a malformed value aborts the session with an
+    actionable usage error instead of raising from inside the cleanup closure that
+    reads it back via ``retention_count`` at unconfigure time.
+
+    Parameters:
+        config: pytest.Config containing plugin options and ini values.
+
+    Returns:
+        int containing the maximum number of retained run directories to keep.
+
+    Raises:
+        pytest.UsageError: The resolved value is not a positive integer.
+    """
+
+    if RETENTION_COUNT_KEY in config.stash:
+        return config.stash[RETENTION_COUNT_KEY]
+
+    option_value: object = config.getoption(RETENTION_COUNT_OPTION)
+    raw: object = (
+        option_value
+        if isinstance(option_value, str) and option_value
+        else config.getini(RETENTION_COUNT_INI)
+    )
+    message = f"Ini/option `{RETENTION_COUNT_INI}` must be a positive integer: '{raw}'"
+    if not isinstance(raw, str) or not raw:
+        raise pytest.UsageError(message)
+    try:
+        count = int(raw)
+    except ValueError as error:
+        raise pytest.UsageError(message) from error
+    if count < 1:
+        raise pytest.UsageError(message)
+    config.stash[RETENTION_COUNT_KEY] = count
+    return count
 
 
 def mark_session_started(config: pytest.Config) -> None:
@@ -245,6 +321,27 @@ def retain_airflow_home(config: pytest.Config) -> bool:
     return session_failed(config)
 
 
+def retention_count(config: pytest.Config) -> int:
+    """Read the resolved retained-root count, or the documented default.
+
+    Reads the count from the stash only, mirroring ``retain_airflow_home``'s pattern:
+    ``plugin.pytest_configure`` resolves and caches it eagerly, so a malformed value has
+    already failed the session loudly by the time cleanup calls this; an empty stash
+    means the session died before ``pytest_configure``, and the documented default
+    applies. Deliberately does not call ``resolve_retention_count`` -- re-parsing a still
+    malformed value from a ``config.add_cleanup`` callback would raise a second time with
+    nowhere useful for the error to go.
+
+    Parameters:
+        config: pytest.Config carrying the resolved retention count.
+
+    Returns:
+        int containing the maximum number of retained run directories to keep.
+    """
+
+    return config.stash.get(RETENTION_COUNT_KEY, DEFAULT_RETENTION_COUNT)
+
+
 def _owns_run_root(state: BootstrapState) -> bool:
     """Report whether this process created the run directory it is about to describe.
 
@@ -284,22 +381,106 @@ def report_header(state: BootstrapState) -> list[str]:
     ]
 
 
-def _retained_lines(config: pytest.Config, root: Path, storage_reason: str) -> list[str]:
+def mark_root_retained(root: Path) -> None:
+    """Mark a run directory as finished and retained, for ``prune_retained_roots`` to see.
+
+    Written by ``bootstrap``'s cleanup closure at the moment it decides to keep a
+    directory instead of removing it. Its absence is what keeps ``prune_retained_roots``
+    from ever touching an in-flight run: only a directory whose owning process reached
+    this call is a GC candidate.
+
+    Parameters:
+        root: pathlib.Path containing the run directory to mark.
+    """
+
+    (root / RETAINED_MARKER_NAME).touch()
+
+
+def _retained_siblings(base: Path) -> list[Path]:
+    """List this user's marked-retained run directories under a storage base, newest first.
+
+    Restricted to the current uid: ``/dev/shm`` and system temp are typically
+    world-writable, shared by every user on the host, so a marker owned by someone else
+    is neither a candidate to prune (permission denied, and not this user's to remove)
+    nor a directory whose existence this run should claim credit for in its "other
+    retained roots" count.
+
+    Parameters:
+        base: pathlib.Path containing the storage base to scan.
+
+    Returns:
+        list[pathlib.Path] containing retained run directories, sorted by the marker's
+        modification time, most recent first.
+    """
+
+    uid = os.getuid()
+    dated: list[tuple[float, Path]] = []
+    for entry in base.glob(f"{RUN_DIRECTORY_PREFIX}*"):
+        try:
+            info = (entry / RETAINED_MARKER_NAME).stat()
+        except OSError:
+            continue
+        if info.st_uid != uid:
+            continue
+        dated.append((info.st_mtime, entry))
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    return [entry for _, entry in dated]
+
+
+def prune_retained_roots(base: Path, *, keep: int) -> None:
+    """Remove retained run directories beyond the ``keep`` most recent under a base.
+
+    Only directories carrying the ``RETAINED_MARKER_NAME`` sentinel and owned by the
+    current user are ever a GC candidate, so an active run -- this process's own
+    about-to-be-created root, or another concurrent invocation sharing the same base --
+    is never touched. A removal failure is logged rather than swallowed: silently
+    ignoring it would let the ``keep`` bound quietly stop holding without anything
+    saying so.
+
+    Parameters:
+        base: pathlib.Path containing the storage base to prune.
+        keep: int containing the maximum number of retained directories to keep.
+    """
+
+    for stale in _retained_siblings(base)[keep:]:
+        try:
+            shutil.rmtree(stale)
+        except OSError as error:
+            LOGGER.warning(f"Could not prune retained AIRFLOW_HOME '{stale}': {error}")
+
+
+def _retained_lines(
+    config: pytest.Config, root: Path, storage_reason: str, base: Path
+) -> list[str]:
     """Render the lines describing one surviving run directory.
 
     Shared by both announcement channels so the wording cannot drift between them.
 
+    Both channels call this before ``bootstrap``'s cleanup closure has marked or pruned
+    ``root`` -- see that closure's docstring -- so the reported count is capped at
+    ``keep - 1`` rather than the raw pre-prune sibling count: pruning is about to trim
+    marked siblings plus this run's own root down to ``keep`` total, and reporting the
+    pre-prune count would name directories this same cleanup pass is seconds away from
+    removing.
+
     Parameters:
-        config: pytest.Config carrying the resolved retention policy.
+        config: pytest.Config carrying the resolved retention policy and count.
         root: pathlib.Path containing the surviving run directory.
         storage_reason: str naming the storage-ladder rung that chose the base.
+        base: pathlib.Path containing the storage base ``root`` was created under.
 
     Returns:
         list[str] containing the retention line plus, on ``/dev/shm``, a RAM warning.
     """
 
     policy = config.stash.get(RETENTION_POLICY_KEY, DEFAULT_RETENTION_POLICY)
-    lines = [f"Retained AIRFLOW_HOME (retention policy: {policy}): {root}"]
+    keep = retention_count(config)
+    existing = min(len(_retained_siblings(base)), keep - 1)
+    plural = "" if existing == 1 else "s"
+    lines = [
+        f"Retained AIRFLOW_HOME (retention policy: {policy}; {existing} other retained "
+        f"root{plural} kept): {root}"
+    ]
     if storage_reason == StorageReason.SHARED_MEMORY:
         lines.append(
             f"WARNING: '{SHARED_MEMORY_PATH}' is RAM-backed, so this directory holds "
@@ -334,7 +515,7 @@ def terminal_summary(
     if not _owns_run_root(state) or not retain_airflow_home(config):
         return
     terminalreporter.write_sep("=", SUMMARY_TITLE)
-    for line in _retained_lines(config, state.root, state.storage_reason):
+    for line in _retained_lines(config, state.root, state.storage_reason, state.root.parent):
         terminalreporter.write_line(line)
     config.stash[RETENTION_ANNOUNCED_KEY] = True
     LOGGER.debug(f"Retained isolated Airflow run directory: '{state.root}'")
@@ -359,7 +540,7 @@ def announce_retained_root(config: pytest.Config, root: Path, storage_reason: st
 
     if config.stash.get(RETENTION_ANNOUNCED_KEY, False):
         return
-    for line in _retained_lines(config, root, storage_reason):
+    for line in _retained_lines(config, root, storage_reason, root.parent):
         sys.stderr.write(f"{HEADER_PREFIX}: {line}\n")
     config.stash[RETENTION_ANNOUNCED_KEY] = True
     LOGGER.debug(f"Announced retained Airflow run directory on stderr: '{root}'")
@@ -367,17 +548,25 @@ def announce_retained_root(config: pytest.Config, root: Path, storage_reason: st
 
 __all__ = (
     "CLEAN_EXIT_STATUSES",
+    "DEFAULT_RETENTION_COUNT",
     "DEFAULT_RETENTION_POLICY",
+    "RETAINED_MARKER_NAME",
+    "RETENTION_COUNT_INI",
+    "RETENTION_COUNT_OPTION",
     "RETENTION_INI",
     "RETENTION_OPTION",
     "RetentionPolicy",
     "announce_retained_root",
+    "mark_root_retained",
     "mark_session_started",
+    "prune_retained_roots",
     "record_session_outcome",
     "register_options",
     "report_header",
+    "resolve_retention_count",
     "resolve_retention_policy",
     "retain_airflow_home",
+    "retention_count",
     "session_failed",
     "terminal_summary",
 )
