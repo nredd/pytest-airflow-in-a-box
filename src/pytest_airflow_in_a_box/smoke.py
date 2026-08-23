@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database
+from pytest_airflow_in_a_box._compat import build_dag_bag, ensure_database, list_dag_file_paths
 from pytest_airflow_in_a_box._compat.dag import _get_dag_serializer, time_restriction_type
 from pytest_airflow_in_a_box._compat.db import create_session, get_pool_model
 from pytest_airflow_in_a_box._compat.introspection import (
@@ -52,6 +52,13 @@ from pytest_airflow_in_a_box.fixtures.dagbag import (
     LIVE_DAG_BAG_LOOKUPS_KEY,
     _dag_folder,
 )
+from pytest_airflow_in_a_box.parallel_dagbag import (
+    DUPLICATE_ID_MARKER,
+    DagBagFanoutError,
+    fan_out_dag_bag,
+    fanout_enabled,
+    should_fan_out,
+)
 from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
@@ -68,7 +75,6 @@ SMOKE_CORPUS_ARTIFACT_NAME = ".airflow-smoke-corpus.json"
 SMOKE_CORPUS_LOCK_NAME = ".airflow-smoke-corpus.lock"
 SERIALIZED_DAG_CACHE_KEY = pytest.StashKey[dict[str, "SerializedDagEntry"]]()
 DEFAULT_OWNER = "airflow"
-DUPLICATE_ID_MARKER = "AirflowDagDuplicatedIdException"
 RUN_DEPENDENT_SERIALIZED_DAG_KEYS = frozenset(
     {"_processor_dags_folder", "fileloc", "relative_fileloc"}
 )
@@ -856,6 +862,7 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
         # survives only for a bag parsed outside that path.
         runtime_lookups = session.stash.get(LIVE_DAG_BAG_LOOKUPS_KEY, None)
     else:
+        dag_folder = _dag_folder(config)
         comms = parse_time_comms(config)
         if comms is not None:
             # Several smoke items are deliberately not `db_test`, so nothing has
@@ -865,8 +872,44 @@ def _build_smoke_corpus(session: pytest.Session, config: pytest.Config) -> Smoke
             # serialization alone. `--airflow-parse-secrets=off` keeps the build
             # database-free.
             ensure_database(get_bootstrap_state(config).root)
-        with record_secrets_lookups(_dag_folder(config)) as recorded:
-            dag_bag = build_dag_bag(_dag_folder(config), comms=comms)
+        # `fanout_enabled` is checked first and is filesystem-free, so the default
+        # (disabled) case never pays for a Dag file walk it will not use. A seed-keyed
+        # serialization sample needs the whole corpus's `dag_id` set, which no single
+        # fan-out shard can see, so a nonzero sample size blocks fan-out entirely (a
+        # shard cannot decide on its own whether one of its Dags falls inside the
+        # sample) -- this is unrelated to whether serialization is needed at all, which
+        # `serialize=_smoke_serialization_needed(config)` below decides independently:
+        # even at the default sample size (0, "serialize everything"),
+        # `airflow_smoke_disable` covering every serialization-consuming item means
+        # nothing needs a serialized Dag, and fan-out still parallelizes the (usually
+        # dominant) import cost without ever resolving or calling the Dag serializer.
+        if fanout_enabled(config) and _serialization_sample_size(config) == 0:
+            file_paths = list_dag_file_paths(dag_folder)
+            if should_fan_out(len(file_paths), config):
+                try:
+                    payload = fan_out_dag_bag(
+                        config=config,
+                        state=get_bootstrap_state(config),
+                        dag_folder=dag_folder,
+                        file_paths=file_paths,
+                        comms_needed=comms is not None,
+                        serialize=_smoke_serialization_needed(config),
+                    )
+                except DagBagFanoutError as error:
+                    LOGGER.warning(
+                        f"Dag bag fan-out failed, falling back to a single-process parse: {error}"
+                    )
+                else:
+                    return _smoke_corpus_from_payload(
+                        {
+                            **payload,
+                            "version": SMOKE_CORPUS_VERSION,
+                            "producer_pid": os.getpid(),
+                            "producer_worker": os.environ.get("PYTEST_XDIST_WORKER", "master"),
+                        }
+                    )
+        with record_secrets_lookups(dag_folder) as recorded:
+            dag_bag = build_dag_bag(dag_folder, comms=comms)
         runtime_lookups = tuple(dict.fromkeys(recorded))
     serializer: Any | None = None
     selected = _select_serialization_sample(config, dag_bag.dags)

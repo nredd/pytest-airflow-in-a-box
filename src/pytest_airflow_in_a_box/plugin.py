@@ -374,6 +374,34 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=True,
     )
     group.addoption(
+        "--airflow-dag-bag-fanout",
+        action="store_true",
+        default=None,
+        dest="airflow_dag_bag_fanout",
+        help="Fan the smoke corpus's Dag parse out across subprocess workers.",
+    )
+    parser.addini(
+        "airflow_dag_bag_fanout",
+        "Fan the smoke corpus's Dag parse out across subprocess workers for large corpora.",
+        type="bool",
+        default=False,
+    )
+    parser.addini(
+        "airflow_dag_bag_fanout_workers",
+        "Subprocess worker count for Dag bag fan-out; 0 auto-selects a CPU-based default.",
+        default="0",
+    )
+    parser.addini(
+        "airflow_dag_bag_fanout_min_files",
+        "Minimum discovered Dag file count below which fan-out is skipped even when enabled.",
+        default="200",
+    )
+    parser.addini(
+        "airflow_dag_bag_fanout_timeout",
+        "Seconds the whole Dag bag fan-out may take before falling back to a serial parse.",
+        default="600",
+    )
+    group.addoption(
         "--airflow-doctor",
         action="store_true",
         default=False,
