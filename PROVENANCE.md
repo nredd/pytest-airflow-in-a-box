@@ -323,6 +323,52 @@ that no-op while the global is non-None, which is why the 3.1 invalidation reset
 Upstream's `qualname()` helper (`airflow/_shared/module_loading.py`, installed 3.3.0) keys a class by
 `__module__.__name__`, not `__qualname__`.
 
+`src/pytest_airflow_in_a_box/_compat/dagbag.py::list_dag_file_paths`/`build_partial_dag_bag`
+(issue #243) call, rather than adapt, two of Airflow's own file-discovery/import entry points per
+certified `DagBagLocation`; `build_partial_dag_bag`'s per-file stat-accumulation loop adapts the
+body of `DagBag.collect_dags`. On `DagBagLocation.DAG_PROCESSING` (3.2+), `list_dag_file_paths`
+calls `get_importer_registry().list_dag_files()`
+(`airflow/dag_processing/importers/base.py::DagImporterRegistry.list_dag_files`, line 222 on the
+installed 3.3.0, delegating to `AbstractDagImporter.list_dag_files`, line 128) -- the exact function
+`DagBag.collect_dags` itself calls internally (confirmed by reading
+`airflow/dag_processing/dagbag.py::collect_dags`, line 442 on the installed 3.3.0, directly: `registry
+= get_importer_registry(); files_to_parse = registry.list_dag_files(dag_folder, safe_mode=safe_mode)`).
+On `DagBagLocation.MODELS` (3.1.x), it calls `airflow.utils.file.list_py_file_paths` instead --
+confirmed present with an identical signature and body on the installed `apache-airflow-core==3.1.0`
+wheel's `airflow/utils/file.py`, line 244, delegating to `find_dag_file_paths` (line 268) and
+`find_path_from_directory` (line 223), predating the importer-registry split entirely. Both walk-only
+functions still exist unmodified on the installed 3.3.0 (`list_py_file_paths` at
+`airflow/utils/file.py`, mirrored at `find_dag_file_paths`), so calling either unconditionally on
+every release was considered and rejected: doing so on 3.2+ would silently miss any Dag file that
+only a plugin-registered custom `DagImporter` (an importer-registry-only concept) surfaces, a
+regression `list_dag_file_paths` avoids by dispatching on the same certified location `build_dag_bag`
+already does.
+
+`build_partial_dag_bag`'s per-file loop -- construct with `collect_dags=False`, call
+`process_file(path, only_if_updated=True, safe_mode=False)` per shard path, and hand-build a
+`DagBagShardStat` per file -- is adapted from the body of `DagBag.collect_dags` on both certified
+locations (`airflow/dag_processing/dagbag.py`, line 442, and `airflow/models/dagbag.py`, line 574 on
+the installed 3.1.0 wheel; both confirmed to construct `FileLoadStat`-equivalent entries only inside
+this method, meaning a `collect_dags=False` instance never populates `dagbag_stats` at all). The
+adaptation drops `only_if_updated`'s practical effect (always `True`, but a fan-out shard's `DagBag`
+is always freshly constructed, so `self.file_last_changed` starts empty and every file is parsed
+regardless), the `include_examples`-driven `example_dags` extension present only on `MODELS`, and the
+per-release-divergent relative-file computation: 3.1.0's `collect_dags` computes
+`filepath.replace(settings.DAGS_FOLDER, "")`, while 3.2.0 (confirmed identical on the installed
+`apache-airflow-core==3.2.0` wheel's `airflow/dag_processing/dagbag.py`, line 494 -- this is a
+3.2-module-split-era change, not one introduced later within `DAG_PROCESSING`'s own lifetime) and
+3.3.0 both compute `Path(filepath).relative_to(Path(self.dag_folder)).as_posix()`, falling back to
+`Path(filepath).as_posix()` on `ValueError`. `build_partial_dag_bag` uses the latter, 3.2+ shape
+unconditionally on every certified release: the `file` field is consumed only for slowpoke/budget
+display strings by `smoke.py`'s corpus checks, never as a correctness-critical merge key (`import_errors`
+and `dags` key on the file's real absolute path and `dag_id` respectively, both untouched by this
+choice), so one consistent computation is a deliberate simplification, not a compatibility gap.
+`DagBag.process_file`'s own signature and return behavior (a plain list of bagged Dags, `import_errors`
+populated internally and keyed on the file's relative fileloc, which falls back to the raw absolute
+path whenever `bundle_path` is unset -- confirmed unset by both `build_dag_bag` and
+`build_partial_dag_bag` alike) is identical on the installed 3.1.0, 3.2.0, and 3.3.0, so no
+per-release branch was needed there.
+
 No proprietary source code, credentials, hostnames, internal paths, or private repository history
 may be included in this project.
 
@@ -370,3 +416,6 @@ may be included in this project.
 - pytest plugin documentation: https://docs.pytest.org/en/stable/how-to/writing_plugins.html
 - `apache-airflow-core` 3.1.0 wheel (module-globals plugins-manager shape; downloaded and introspected directly, not browsed on GitHub): https://pypi.org/project/apache-airflow-core/3.1.0/#files
 - `apache-airflow-task-sdk` 1.1.0 wheel (no `plugins_manager.py`/`listener.py` at all, paired with `apache-airflow-core` 3.1.0 per its own `Requires-Dist`; downloaded and introspected directly): https://pypi.org/project/apache-airflow-task-sdk/1.1.0/#files
+- Dag processing, `DagBag.collect_dags`/`process_file` and the importer registry (3.3.0, installed): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/dag_processing/dagbag.py and https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/dag_processing/importers/base.py
+- Dag processing, `DagBag.collect_dags`' relative-fileloc computation (3.2.0, downloaded and introspected directly): https://pypi.org/project/apache-airflow-core/3.2.0/#files
+- Models `DagBag.collect_dags`/`process_file` and `airflow.utils.file.list_py_file_paths`/`find_dag_file_paths` (3.1.0, downloaded and introspected directly): https://pypi.org/project/apache-airflow-core/3.1.0/#files

@@ -41,6 +41,11 @@ def _config(
     forbid_catchup: object = True,
     forbid_unbounded_expand: object = True,
     disable: object = (),
+    fanout: object = None,
+    ini_fanout: object = False,
+    fanout_workers: object = "0",
+    fanout_min_files: object = "200",
+    fanout_timeout: object = "600",
     rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for smoke config-reader tests.
@@ -67,6 +72,11 @@ def _config(
         forbid_unbounded_expand: object containing the ``airflow_forbid_unbounded_expand``
             ini value.
         disable: object containing the ``airflow_smoke_disable`` ini value.
+        fanout: object containing the parsed ``--airflow-dag-bag-fanout`` option value.
+        ini_fanout: object containing the ``airflow_dag_bag_fanout`` ini value.
+        fanout_workers: object containing the ``airflow_dag_bag_fanout_workers`` ini value.
+        fanout_min_files: object containing the ``airflow_dag_bag_fanout_min_files`` ini value.
+        fanout_timeout: object containing the ``airflow_dag_bag_fanout_timeout`` ini value.
         rootpath: pathlib.Path used to resolve a relative snapshot directory.
 
     Returns:
@@ -99,11 +109,16 @@ def _config(
         # `tests/enduser/test_parse_time_secrets.py`; the corpus builder is under test
         # here, so the shim stays out of the way.
         "airflow_parse_secrets": "off",
+        "airflow_dag_bag_fanout": ini_fanout,
+        "airflow_dag_bag_fanout_workers": fanout_workers,
+        "airflow_dag_bag_fanout_min_files": fanout_min_files,
+        "airflow_dag_bag_fanout_timeout": fanout_timeout,
     }
     option_values = {
         "airflow_smoke": airflow_smoke,
         "airflow_smoke_update": airflow_smoke_update,
         "airflow_parse_secrets": None,
+        "airflow_dag_bag_fanout": fanout,
     }
     return SimpleNamespace(
         getoption=lambda name: option_values[name],
@@ -2288,6 +2303,70 @@ def test_smoke_corpus_build_extracts_portable_data(monkeypatch: pytest.MonkeyPat
     assert corpus.dags["broken"].tasks[0].pool == "custom"
     assert corpus.producer_worker == "gw2"
     assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "12.5"
+
+
+def test_smoke_corpus_falls_back_to_serial_parse_when_fanout_fails(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Log a warning and still build a correct corpus when fan-out itself fails."""
+
+    good = SimpleNamespace(tags=set(), tasks=[], timetable=SimpleNamespace(can_be_scheduled=True))
+    dag_bag = SimpleNamespace(dags={"good": good}, import_errors={}, dagbag_stats=[])
+
+    def explode(**_kwargs: object) -> Any:
+        raise smoke.DagBagFanoutError("no workers available")
+
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(
+        smoke, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
+    )
+    monkeypatch.setattr(smoke, "list_dag_file_paths", lambda _folder: ["dags/good.py"])
+    monkeypatch.setattr(smoke, "fan_out_dag_bag", explode)
+    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
+    monkeypatch.setattr(smoke, "record_secrets_lookups", _fake_recorder([]))
+    monkeypatch.setattr(
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=lambda _dag: {})
+    )
+
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+    with caplog.at_level(logging.WARNING):
+        corpus = smoke._build_smoke_corpus(
+            session, _config(parse_timeout="1", fanout=True, fanout_min_files="0")
+        )
+
+    assert set(corpus.dags) == {"good"}
+    assert "no workers available" in caplog.text
+
+
+def test_smoke_corpus_skips_fanout_below_the_minimum_file_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parse serially, without ever calling `fan_out_dag_bag`, below the file-count floor."""
+
+    good = SimpleNamespace(tags=set(), tasks=[], timetable=SimpleNamespace(can_be_scheduled=True))
+    dag_bag = SimpleNamespace(dags={"good": good}, import_errors={}, dagbag_stats=[])
+
+    def _fail_if_called(**_kwargs: object) -> Any:
+        raise AssertionError("fan_out_dag_bag must not run below the minimum file count")
+
+    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(
+        smoke, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
+    )
+    monkeypatch.setattr(smoke, "list_dag_file_paths", lambda _folder: ["dags/good.py"])
+    monkeypatch.setattr(smoke, "fan_out_dag_bag", _fail_if_called)
+    monkeypatch.setattr(smoke, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
+    monkeypatch.setattr(smoke, "record_secrets_lookups", _fake_recorder([]))
+    monkeypatch.setattr(
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=lambda _dag: {})
+    )
+
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+    corpus = smoke._build_smoke_corpus(
+        session, _config(parse_timeout="1", fanout=True, fanout_min_files="2")
+    )
+
+    assert set(corpus.dags) == {"good"}
 
 
 def _fake_recorder(lookups: list[SecretsLookup]) -> Any:
