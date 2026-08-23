@@ -215,3 +215,34 @@ covers that whole-DagRun case directly. The `DagMaker` protocol additionally exp
 demand; upstream-XCom mapping works after its producer has run in the same DagRun. Passing
 `run_triggerer=True` runs the persisted trigger event and resumes a deferred task inline,
 bounded by `trigger_timeout` seconds.
+
+## Upstream one-call factories
+
+`create_task_instance` and `create_dummy_dag` mirror upstream Airflow's
+`tests_common.pytest_plugin` fixtures of the same names -- same parameters and defaults --
+so upstream-style tests run unchanged, and they double as the shortest path to "give me a
+task instance" when the Dag's content does not matter:
+
+```python
+def test_one_call(create_task_instance):
+    ti = create_task_instance(dag_id="one_call", state="queued", pool="default_pool")
+
+    assert ti.task_id == "op1"
+    assert ti.pool == "default_pool"
+```
+
+Both are composition over `dag_maker`: the Dag, DagRun, and task-instance rows are owned
+and cleaned up exactly as `dag_maker`'s are, and `**dag_kwargs` (including `serialized=`)
+route to `dag_maker` unchanged. `testing_dag_bundle` registers the shared `testing` Dag
+bundle row upstream core tests bulk-write metadata against (Airflow 3.x only).
+
+Two deliberate deviations from upstream. `create_task_instance` returns the plain ORM
+`TaskInstance` with `ti.task` carrying the *authoring* operator -- there is no `ti.run()`
+wrapper; execute through `dag_maker.run_ti` or `run_task` instead. And
+`testing_dag_bundle` never deletes the shared row at teardown: a conditional delete would
+race another `pytest-xdist` worker's in-flight `DagModel.bundle_name` reference, and the
+per-run metadata database is disposable anyway.
+
+Upstream's `dag_id="dag"` default is kept verbatim, so two concurrent tests relying on it
+contend on the shared metadata database exactly like any repeated `dag_id` -- keep such
+tests on one worker via `pytest.mark.xdist_group`, or pass explicit identifiers.

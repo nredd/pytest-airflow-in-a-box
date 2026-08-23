@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
+from pytest_airflow_in_a_box._compat.dag import UNSET, UnsetType
 from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT
 from pytest_airflow_in_a_box.config import ConfigOverrides, EnvOverrides
 
@@ -151,7 +152,7 @@ class DagMaker(Protocol):
         self,
         *,
         run_id: str | None = None,
-        logical_date: datetime | None = None,
+        logical_date: datetime | UnsetType | None = UNSET,
         run_after: datetime | None = None,
         start_date: datetime | None = None,
         **dag_run_kwargs: Any,
@@ -161,8 +162,11 @@ class DagMaker(Protocol):
         Parameters:
             run_id: str | None containing an explicit identifier, or ``None`` for a
                 derived one.
-            logical_date: datetime.datetime | None overriding the current UTC logical
-                date.
+            logical_date: datetime.datetime | None | UnsetType overriding the current
+                UTC logical date. An explicit ``None`` requests a run with no logical
+                date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
+                and no ``data_interval`` is inferred for it; the 2.x family cannot
+                express one and raises ``ValueError``.
             run_after: datetime.datetime | None overriding the current UTC run-after
                 date. Airflow 3.x only -- the 2.x family has no run-after concept, and
                 passing it there raises ``ValueError`` rather than silently changing
@@ -171,7 +175,8 @@ class DagMaker(Protocol):
             dag_run_kwargs: Any forwarded to Airflow's scheduler Dag creation method.
 
         Raises:
-            ValueError: ``run_after`` was passed on the Airflow 2.x family.
+            ValueError: ``run_after`` or an explicit ``logical_date=None`` was passed
+                on the Airflow 2.x family.
         """
 
     def create_ti(
@@ -222,6 +227,169 @@ class DagMaker(Protocol):
         """
 
 
+class CreateDummyDag(Protocol):
+    """Author one single-``EmptyOperator`` Dag and, by default, a scheduled DagRun.
+
+    Mirrors upstream Airflow's ``tests_common.pytest_plugin.create_dummy_dag`` fixture
+    -- same name, parameters, and defaults -- so upstream-style tests run unchanged.
+    Composition over ``dag_maker``: the Dag, DagModel, and DagRun rows are owned and
+    cleaned up exactly as ``dag_maker``'s are. Use ``dag_maker`` directly when the
+    DagRun or the Dag's task graph needs to be anything but this single operator.
+    """
+
+    def __call__(
+        self,
+        dag_id: str = "dag",
+        task_id: str = "op1",
+        task_display_name: str | None = None,
+        max_active_tis_per_dag: int = 16,
+        max_active_tis_per_dagrun: int | None = None,
+        pool: str = "default_pool",
+        executor_config: dict[str, Any] | None = None,
+        trigger_rule: str = "all_done",
+        on_success_callback: Callable[..., object] | None = None,
+        on_execute_callback: Callable[..., object] | None = None,
+        on_failure_callback: Callable[..., object] | None = None,
+        on_retry_callback: Callable[..., object] | None = None,
+        email: str | None = None,
+        with_dagrun_type: str | None = "scheduled",
+        **dag_kwargs: Any,
+    ) -> tuple[DAG, Any]:
+        """Author the Dag, persist it, and create its DagRun when requested.
+
+        Parameters:
+            dag_id: str identifying the Dag. The upstream-parity default ``"dag"``
+                contends across concurrent tests on one metadata database exactly like
+                any repeated ``dag_id`` -- keep such tests on one ``pytest-xdist``
+                worker (``pytest.mark.xdist_group``) or pass explicit identifiers.
+            task_id: str identifying the single ``EmptyOperator``.
+            task_display_name: str | None containing the operator's display name.
+            max_active_tis_per_dag: int limiting concurrent instances per Dag.
+            max_active_tis_per_dagrun: int | None limiting concurrent instances per run.
+            pool: str naming the operator's pool.
+            executor_config: dict[str, Any] | None forwarded to the operator.
+            trigger_rule: str selecting the operator's trigger rule.
+            on_success_callback: Callable[..., object] | None operator success callback.
+            on_execute_callback: Callable[..., object] | None operator execute callback.
+            on_failure_callback: Callable[..., object] | None operator failure callback.
+            on_retry_callback: Callable[..., object] | None operator retry callback.
+            email: str | None containing the operator's notification address.
+            with_dagrun_type: str | None selecting the created DagRun's run type, or
+                ``None`` to skip DagRun creation entirely.
+            dag_kwargs: Any forwarded to the authoring ``DAG`` constructor -- operator
+                arguments beyond the ones above go through ``default_args``.
+
+        Returns:
+            tuple[airflow.sdk.DAG, Any] containing the persisted authoring Dag and its
+            single ``EmptyOperator``.
+        """
+
+
+class CreateTaskInstance(Protocol):
+    """Create one TaskInstance, with its Dag and DagRun rows, in a single call.
+
+    Mirrors upstream Airflow's ``tests_common.pytest_plugin.create_task_instance``
+    fixture -- same name, parameters, and defaults -- so upstream-style tests run
+    unchanged. Composition over ``dag_maker``: one ``EmptyOperator`` Dag (or the
+    supplied ``task``) is authored, persisted, and given a DagRun whose single task
+    instance is returned. Two deliberate deviations from upstream: the return value is
+    the plain ORM ``TaskInstance`` (no ``ti.run()`` wrapper -- use ``dag_maker.run_ti``
+    or ``run_task`` to execute), and ``ti.task`` carries the authoring operator rather
+    than its serialized counterpart.
+    """
+
+    def __call__(
+        self,
+        logical_date: datetime | UnsetType | None = UNSET,
+        run_after: datetime | None = None,
+        dagrun_state: str | None = None,
+        state: str | None = None,
+        run_id: str | None = None,
+        run_type: str | None = None,
+        data_interval: Any | None = None,
+        external_executor_id: str | None = None,
+        dag_id: str = "dag",
+        task_id: str = "op1",
+        task_display_name: str | None = None,
+        max_active_tis_per_dag: int = 16,
+        max_active_tis_per_dagrun: int | None = None,
+        pool: str = "default_pool",
+        executor_config: dict[str, Any] | None = None,
+        trigger_rule: str = "all_done",
+        on_success_callback: Callable[..., object] | None = None,
+        on_execute_callback: Callable[..., object] | None = None,
+        on_failure_callback: Callable[..., object] | None = None,
+        on_retry_callback: Callable[..., object] | None = None,
+        on_skipped_callback: Callable[..., object] | None = None,
+        inlets: Any | None = None,
+        outlets: Any | None = None,
+        email: str | None = None,
+        map_index: int = -1,
+        hostname: str | None = None,
+        pid: int | None = None,
+        last_heartbeat_at: datetime | None = None,
+        task: Any | None = None,
+        start_from_trigger: bool = False,
+        start_trigger_args: Any | None = None,
+        **dag_kwargs: Any,
+    ) -> TaskInstance:
+        """Author, persist, run-create, and return one refreshed task instance.
+
+        Parameters:
+            logical_date: datetime.datetime | None | UnsetType overriding the DagRun's
+                current UTC logical date. An explicit ``None`` requests a run with no
+                logical date at all -- Airflow 3.x only; the 2.x family raises
+                ``ValueError``.
+            run_after: datetime.datetime | None overriding the DagRun's current UTC
+                run-after date. Airflow 3.x only.
+            dagrun_state: str | None overriding the DagRun's state; ``None`` keeps the
+                fixture default (``running``).
+            state: str | None assigned to the task instance's state.
+            run_id: str | None containing an explicit run identifier, or ``None`` for
+                a derived collision-safe one.
+            run_type: str | None overriding the DagRun's run type; ``None`` keeps the
+                fixture default (``manual``).
+            data_interval: Any | None containing an explicit DagRun data interval.
+            external_executor_id: str | None assigned to the task instance.
+            dag_id: str identifying the Dag. The upstream-parity default ``"dag"``
+                contends across concurrent tests on one metadata database exactly like
+                any repeated ``dag_id`` -- keep such tests on one ``pytest-xdist``
+                worker (``pytest.mark.xdist_group``) or pass explicit identifiers.
+            task_id: str identifying the single ``EmptyOperator`` -- ignored when
+                ``task`` supplies its own identifier.
+            task_display_name: str | None containing the operator's display name.
+            max_active_tis_per_dag: int limiting concurrent instances per Dag.
+            max_active_tis_per_dagrun: int | None limiting concurrent instances per run.
+            pool: str naming the operator's pool.
+            executor_config: dict[str, Any] | None forwarded to the operator.
+            trigger_rule: str selecting the operator's trigger rule.
+            on_success_callback: Callable[..., object] | None operator success callback.
+            on_execute_callback: Callable[..., object] | None operator execute callback.
+            on_failure_callback: Callable[..., object] | None operator failure callback.
+            on_retry_callback: Callable[..., object] | None operator retry callback.
+            on_skipped_callback: Callable[..., object] | None operator skipped callback.
+            inlets: Any | None containing the operator's inlets.
+            outlets: Any | None containing the operator's outlets.
+            email: str | None containing the operator's notification address.
+            map_index: int assigned to the task instance.
+            hostname: str | None assigned to the task instance (``""`` when ``None``).
+            pid: int | None assigned to the task instance.
+            last_heartbeat_at: datetime.datetime | None assigned to the task instance.
+            task: Any | None containing an already-constructed operator to bind into
+                the Dag instead of building an ``EmptyOperator``.
+            start_from_trigger: bool assigned to the operator.
+            start_trigger_args: Any | None assigned to the operator.
+            **dag_kwargs: Any forwarded to the authoring ``DAG`` constructor.
+
+        Returns:
+            airflow.models.taskinstance.TaskInstance refreshed from its authoring task.
+
+        Raises:
+            ValueError: ``run_after`` or an explicit ``logical_date=None`` was passed
+                on the Airflow 2.x family.
+        """
+
+
 class RunDag(Protocol):
     """Persist and execute one externally-authored Dag through a full DagRun.
 
@@ -242,7 +410,7 @@ class RunDag(Protocol):
         dag: DAG,
         *,
         run_id: str | None = None,
-        logical_date: datetime | None = None,
+        logical_date: datetime | UnsetType | None = UNSET,
         run_after: datetime | None = None,
         start_date: datetime | None = None,
         dag_run_kwargs: dict[str, Any] | None = None,
@@ -257,8 +425,11 @@ class RunDag(Protocol):
                 (the 2.x ``airflow.models.dag.DAG`` on that family).
             run_id: str | None containing an explicit identifier, or ``None`` for a
                 derived one.
-            logical_date: datetime.datetime | None overriding the current UTC logical
-                date.
+            logical_date: datetime.datetime | None | UnsetType overriding the current
+                UTC logical date. An explicit ``None`` requests a run with no logical
+                date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
+                and no ``data_interval`` is inferred for it; the 2.x family cannot
+                express one and raises ``ValueError``.
             run_after: datetime.datetime | None overriding the current UTC run-after
                 date. Airflow 3.x only -- the 2.x family has no run-after concept, and
                 passing it there raises ``ValueError`` rather than silently changing run
@@ -671,10 +842,13 @@ class ComponentRegistry(Protocol):
 
 
 __all__ = (
+    "UNSET",
     "AirflowConfigure",
     "AirflowConnections",
     "AirflowVariables",
     "ComponentRegistry",
+    "CreateDummyDag",
+    "CreateTaskInstance",
     "DagMaker",
     "RenderTask",
     "RunDag",
@@ -683,4 +857,5 @@ __all__ = (
     "TaskContext",
     "TaskContextHandle",
     "TaskRunResult",
+    "UnsetType",
 )

@@ -353,7 +353,7 @@ def test_dagrun_creation_wraps_airflow_failure(monkeypatch: pytest.MonkeyPatch) 
             authoring_dag,
             _record(session),
             run_id="failed_run",
-            logical_date=None,
+            logical_date=dag_compat.UNSET,
             run_after=None,
             start_date=None,
             dag_run_kwargs={},
@@ -418,7 +418,7 @@ def test_dagrun_creation_requires_current_version(monkeypatch: pytest.MonkeyPatc
             authoring_dag,
             _record(session),
             run_id="missing_version",
-            logical_date=None,
+            logical_date=dag_compat.UNSET,
             run_after=None,
             start_date=None,
             dag_run_kwargs={},
@@ -457,7 +457,7 @@ def test_dagrun_creation_rejects_stale_version_linkage(monkeypatch: pytest.Monke
             authoring_dag,
             _record(session),
             run_id="stale_version",
-            logical_date=None,
+            logical_date=dag_compat.UNSET,
             run_after=None,
             start_date=None,
             dag_run_kwargs={},
@@ -529,7 +529,7 @@ def test_legacy_refresh_and_explicit_data_interval(monkeypatch: pytest.MonkeyPat
         authoring_dag,
         record,
         run_id="compat_run",
-        logical_date=None,
+        logical_date=dag_compat.UNSET,
         run_after=None,
         start_date=None,
         dag_run_kwargs={"data_interval": (object(), object())},
@@ -771,3 +771,180 @@ def test_time_restriction_type_resolves_the_installed_class() -> None:
     timetables_base = importlib.import_module("airflow.timetables.base")
 
     assert dag_compat.time_restriction_type() is timetables_base.TimeRestriction
+
+
+def test_unset_sentinel_reprs_as_its_name() -> None:
+    """Render the omission sentinel by its canonical spelling."""
+
+    assert repr(dag_compat.UNSET) == "UNSET"
+    assert isinstance(dag_compat.UNSET, dag_compat.UnsetType)
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_module"),
+    [
+        (AirflowFamily.V2, "airflow.operators.empty"),
+        (AirflowFamily.V3, "airflow.providers.standard.operators.empty"),
+    ],
+)
+def test_empty_operator_location_branching(
+    monkeypatch: pytest.MonkeyPatch,
+    family: AirflowFamily,
+    expected_module: str,
+) -> None:
+    """Resolve only the family-specific `EmptyOperator` location.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch pinning the classified family and importer.
+        family: AirflowFamily selecting the certified branch.
+        expected_module: str naming the module the branch must import.
+    """
+
+    sentinel = object()
+    imported: list[str] = []
+
+    def import_module(module_name: str) -> SimpleNamespace:
+        """Record and return one fake operator module."""
+
+        imported.append(module_name)
+        return SimpleNamespace(EmptyOperator=sentinel)
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=family),
+    )
+    monkeypatch.setattr(dag_compat, "import_module", import_module)
+
+    assert dag_compat.empty_operator_class() is sentinel
+    assert imported == [expected_module]
+
+
+class _BundleSession(_Session):
+    """Fake metadata session driving `ensure_shared_bundle` branch by branch."""
+
+    def __init__(self, *, existing: bool = False, commit_error: Exception | None = None) -> None:
+        """Configure the queried row and an optional commit failure.
+
+        Parameters:
+            existing: bool answering the absence check with a present row.
+            commit_error: Exception | None raised by the first commit call.
+        """
+
+        super().__init__()
+        self.existing = existing
+        self.commit_error = commit_error
+        self.added: list[Any] = []
+
+    def get(self, _model: Any, _name: str) -> Any | None:
+        """Answer the absence check from the configured state."""
+
+        return object() if self.existing else None
+
+    def add(self, row: Any) -> None:
+        """Record one staged bundle row."""
+
+        self.added.append(row)
+
+    def commit(self) -> None:
+        """Record one commit, raising the configured failure first."""
+
+        if self.commit_error is not None:
+            error, self.commit_error = self.commit_error, None
+            raise error
+        super().commit()
+
+
+def test_ensure_shared_bundle_inserts_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Insert and commit the shared row exactly once, then close the session."""
+
+    session = _BundleSession()
+    monkeypatch.setattr(dag_compat, "open_dag_session", lambda _name: session)
+
+    dag_compat.ensure_shared_bundle("testing")
+
+    assert len(session.added) == 1
+    assert session.commits == 1
+    assert session.closes == 1
+
+
+def test_ensure_shared_bundle_returns_on_present_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage nothing when the shared row already exists."""
+
+    session = _BundleSession(existing=True)
+    monkeypatch.setattr(dag_compat, "open_dag_session", lambda _name: session)
+
+    dag_compat.ensure_shared_bundle("testing")
+
+    assert session.added == []
+    assert session.commits == 0
+    assert session.closes == 1
+
+
+def test_ensure_shared_bundle_absorbs_the_concurrent_insert_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treat a concurrent worker's UNIQUE violation as the goal state."""
+
+    from sqlalchemy.exc import IntegrityError
+
+    session = _BundleSession(
+        commit_error=IntegrityError("INSERT INTO dag_bundle", None, Exception("duplicate"))
+    )
+    monkeypatch.setattr(dag_compat, "open_dag_session", lambda _name: session)
+
+    dag_compat.ensure_shared_bundle("testing")
+
+    assert session.rollbacks == 1
+    assert session.closes == 1
+
+
+def test_ensure_shared_bundle_wraps_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Name the operation and retain the cause for any non-race failure."""
+
+    failure = RuntimeError("bundle table is broken")
+    session = _BundleSession(commit_error=failure)
+    monkeypatch.setattr(dag_compat, "open_dag_session", lambda _name: session)
+
+    with pytest.raises(DagPersistenceError, match="shared Dag bundle 'testing'") as caught:
+        dag_compat.ensure_shared_bundle("testing")
+
+    assert caught.value.__cause__ is failure
+    assert session.rollbacks == 1
+    assert session.closes == 1
+
+
+def test_create_dag_run_rejects_explicit_none_logical_date_on_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refuse the 3.x no-logical-date run shape loudly on the 2.x family."""
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V2),
+    )
+    authoring_dag: Any = object()
+
+    with pytest.raises(ValueError, match="logical_date=None"):
+        dag_compat.create_dag_run(
+            object(),
+            authoring_dag,
+            _record(_Session()),
+            run_id="rejected",
+            logical_date=None,
+            run_after=None,
+            start_date=None,
+            dag_run_kwargs={},
+        )
+
+
+def test_coerce_run_type_accepts_members_and_strings() -> None:
+    """Coerce both a plain string and an existing member to the enum."""
+
+    from airflow.utils.types import DagRunType
+
+    assert dag_compat.coerce_run_type("scheduled") is DagRunType.SCHEDULED
+    assert dag_compat.coerce_run_type(DagRunType.MANUAL) is DagRunType.MANUAL
