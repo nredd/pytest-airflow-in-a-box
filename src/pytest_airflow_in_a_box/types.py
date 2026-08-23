@@ -121,7 +121,11 @@ class DagMaker(Protocol):
 
     @property
     def session(self) -> Session:
-        """Return the metadata session for the active or most recently persisted Dag."""
+        """Return the metadata session for the active or most recently persisted Dag.
+
+        When the context was created with an explicit ``session=``, that borrowed
+        session is returned.
+        """
 
     @property
     def serialized_dag(self) -> SerializedDag | None:
@@ -132,14 +136,33 @@ class DagMaker(Protocol):
         dag_id: str | None = None,
         *,
         serialized: bool | None = None,
+        session: Session | None = None,
+        bundle_name: str | None = None,
+        bundle_version: str | None = None,
         **dag_kwargs: Any,
     ) -> AbstractContextManager[DAG]:
         """Create one context manager accepting authoring ``DAG`` keyword arguments.
+
+        The ``session``, ``bundle_name``, and ``bundle_version`` keywords mirror
+        upstream ``tests_common``'s ``dag_maker`` harness contract: they route to the
+        persistence layer and are never forwarded to the ``DAG`` constructor.
 
         Parameters:
             dag_id: str | None containing an explicit bounded identifier, or ``None`` for a
                 deterministic test- and worker-specific identifier.
             serialized: bool | None overriding the ``need_serialized_dag`` marker when supplied.
+            session: sqlalchemy.orm.Session | None used for all of this context's
+                metadata writes and exposed as ``session``, or ``None`` to open a
+                fixture-owned one. A supplied session is never closed by the fixture,
+                but persistence commits on it -- including anything the caller had
+                staged, so combining it with the rollback-isolated ``session`` fixture
+                narrows that fixture's everything-rolls-back guarantee.
+            bundle_name: str | None overriding the derived per-Dag bundle row name.
+                Supplying one opts out of the unique-name xdist mitigation and shares
+                the row's ownership semantics with every Dag using it. Ignored by the
+                2.x family, which predates bundles.
+            bundle_version: str | None recorded on persisted 3.x metadata rows, or
+                ``None`` for unversioned. Ignored by the 2.x family.
             dag_kwargs: Any containing keyword arguments forwarded to the installed
                 family's authoring ``DAG`` constructor.
 

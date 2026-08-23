@@ -24,6 +24,7 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.timetables.base import Timetable
 from airflow.utils.session import create_session
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
 from pytest_airflow_in_a_box._compat.dag import DagCleanupError, DagPersistenceError
@@ -320,6 +321,200 @@ def test_repeated_factory_calls_are_independent(dag_maker: DagMaker) -> None:
     assert _row_counts(second.dag_id) == (1, 1, 1, 1)
 
 
+def test_harness_kwargs_are_not_forwarded_to_dag_init(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Route the upstream harness keywords to persistence, not ``DAG.__init__``.
+
+    Upstream ``tests_common``'s ``dag_maker`` swallows ``session``, ``bundle_name``,
+    and ``bundle_version`` before building the ``DAG``; forwarding them raised
+    ``TypeError`` here and was the single biggest divergence class in issue #238.
+    """
+
+    with dag_maker(
+        dag_id="harness_kwargs",
+        session=session,
+        bundle_name="issue-238-bundle",
+        bundle_version="v238",
+        description="still a Dag kwarg",
+    ) as dag:
+        EmptyOperator(task_id="empty")
+        assert dag.description == "still a Dag kwarg"
+
+    dag_model = session.get(DagModel, "harness_kwargs")
+    assert dag_model is not None
+    assert dag_model.bundle_name == "issue-238-bundle"
+    assert dag_model.bundle_version == "v238"
+
+
+def test_borrowed_session_routes_persistence_and_is_exposed(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Use a caller-supplied session for every metadata write and expose it."""
+
+    with dag_maker(dag_id="borrowed_session", session=session):
+        EmptyOperator(task_id="empty")
+
+    assert dag_maker.session is session
+    assert session.get(DagModel, "borrowed_session") is not None
+    assert _row_counts("borrowed_session") == (1, 1, 1, 1)
+    dag_run = dag_maker.create_dagrun()
+    assert dag_run.run_id.startswith("manual__pytest-airflow-in-a-box")
+
+
+def test_borrowed_session_survives_context_body_error(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Leave a caller-supplied session open and usable after a failed body."""
+
+    class BodyFailedError(Exception):
+        """Sentinel raised by the context body; never raised by the plugin itself."""
+
+    with (
+        pytest.raises(BodyFailedError, match="body failed"),
+        dag_maker(dag_id="borrowed_failed", session=session),
+    ):
+        raise BodyFailedError("body failed")
+
+    assert session.get(DagModel, "borrowed_failed") is None
+    assert _row_counts("borrowed_failed") == (0, 0, 0, 0)
+
+
+def test_borrowed_session_not_closed_when_dag_id_exists(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Refuse an owned identifier without closing the caller-supplied session."""
+
+    with dag_maker(dag_id="borrowed_duplicate"):
+        EmptyOperator(task_id="original")
+
+    with (
+        pytest.raises(ValueError, match="already exists"),
+        dag_maker(dag_id="borrowed_duplicate", session=session),
+    ):
+        EmptyOperator(task_id="replacement")
+
+    assert session.get(DagModel, "borrowed_duplicate") is not None
+    assert _row_counts("borrowed_duplicate") == (1, 1, 1, 1)
+
+
+def test_bundle_name_override_routes_to_all_metadata(dag_maker: DagMaker) -> None:
+    """Record a caller-supplied bundle name instead of the derived one."""
+
+    with dag_maker(dag_id="bundle_override", bundle_name="issue-238-named-bundle"):
+        EmptyOperator(task_id="empty")
+
+    with create_session() as check:
+        assert check.get(DagBundleModel, "issue-238-named-bundle") is not None
+        assert check.get(DagBundleModel, _bundle_name("bundle_override")) is None
+        dag_model = check.get(DagModel, "bundle_override")
+        assert dag_model is not None
+        assert dag_model.bundle_name == "issue-238-named-bundle"
+        version = check.scalar(select(DagVersion).where(DagVersion.dag_id == "bundle_override"))
+        assert version is not None
+        assert version.bundle_name == "issue-238-named-bundle"
+
+
+def test_rejects_invalid_harness_argument_types(dag_maker: DagMaker) -> None:
+    """Reject harness keyword values outside the typed public call contract."""
+
+    invalid_session: Any = 42
+    invalid_name: Any = 42
+    invalid_version: Any = 42
+
+    with pytest.raises(TypeError, match="`session` must be a SQLAlchemy session"):
+        dag_maker(session=invalid_session)
+    with pytest.raises(TypeError, match="`bundle_name` must be a string"):
+        dag_maker(bundle_name=invalid_name)
+    with pytest.raises(ValueError, match="`bundle_name` must be non-empty"):
+        dag_maker(bundle_name="")
+    with pytest.raises(TypeError, match="`bundle_version` must be a string"):
+        dag_maker(bundle_version=invalid_version)
+
+
+class _TouchRecordingSession:
+    """Count the rollback and close calls cleanup ownership handling makes."""
+
+    def __init__(self) -> None:
+        """Initialize the rollback and close counters."""
+
+        self.rollbacks = 0
+        self.closes = 0
+
+    def rollback(self) -> None:
+        """Record one rollback."""
+
+        self.rollbacks += 1
+
+    def close(self) -> None:
+        """Record one close."""
+
+        self.closes += 1
+
+
+def test_cleanup_dag_swaps_a_borrowed_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace a borrowed session with a fresh owned one before teardown cleanup."""
+
+    borrowed: Any = _TouchRecordingSession()
+    fresh: Any = _TouchRecordingSession()
+    cleaned: list[dag_compat.DagPersistenceRecord] = []
+
+    def open_fresh(dag_id: str) -> Any:
+        """Return the fresh replacement session."""
+
+        del dag_id
+        return fresh
+
+    monkeypatch.setattr(dag_compat, "open_dag_session", open_fresh)
+    monkeypatch.setattr(dag_compat, "_cleanup_dag", cleaned.append)
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="borrowed_teardown_swap",
+        bundle_name="borrowed_teardown_bundle",
+        session=borrowed,
+        session_owned=False,
+    )
+
+    dag_compat.cleanup_dag(record)
+
+    assert cleaned == [record]
+    assert record.session is fresh
+    assert record.session_owned is True
+    assert fresh.closes == 1
+    assert borrowed.rollbacks == 0
+    assert borrowed.closes == 0
+
+
+def test_cleanup_dag_open_failure_leaves_borrowed_session_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never roll back or close a borrowed session presumed dead at teardown."""
+
+    borrowed: Any = _TouchRecordingSession()
+
+    def fail_open(dag_id: str) -> Any:
+        """Refuse the fresh cleanup session."""
+
+        raise DagPersistenceError(f"no session for '{dag_id}'")
+
+    monkeypatch.setattr(dag_compat, "open_dag_session", fail_open)
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="borrowed_teardown_dead",
+        bundle_name="borrowed_teardown_bundle",
+        session=borrowed,
+        session_owned=False,
+    )
+
+    with pytest.raises(DagCleanupError, match="Could not clean Airflow Dag metadata"):
+        dag_compat.cleanup_dag(record)
+
+    assert borrowed.rollbacks == 0
+    assert borrowed.closes == 0
+
+
 def test_low_level_cleanup_preserves_referenced_shared_bundle() -> None:
     """Delete each owned Dag while retaining a bundle until its final reference is gone."""
 
@@ -504,6 +699,86 @@ def test_function_scope_cleanup_and_shared_bundle_preservation(
                     )
                 ) == 0
                 session.delete(session.get(DagBundleModel, BUNDLE_NAME))
+        """
+    )
+
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    result = pytester.runpytest_subprocess("-p", "pytest_airflow_in_a_box.plugin", "-q")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_shared_caller_bundle_name_cleans_up_after_last_reference(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Delete a caller-supplied shared bundle row only after its last Dag is gone."""
+
+    pytester.makepyfile(
+        """
+        import pytest
+        from airflow.models.dag import DagModel
+        from airflow.models.dagbundle import DagBundleModel
+        from airflow.providers.standard.operators.empty import EmptyOperator
+        from airflow.utils.session import create_session
+
+        pytestmark = pytest.mark.db_test
+        BUNDLE_NAME = "issue-238-shared-bundle"
+
+
+        def test_create(dag_maker):
+            with dag_maker(dag_id="shared_first", bundle_name=BUNDLE_NAME):
+                EmptyOperator(task_id="empty")
+            with dag_maker(dag_id="shared_second", bundle_name=BUNDLE_NAME):
+                EmptyOperator(task_id="empty")
+            with create_session() as session:
+                assert session.get(DagBundleModel, BUNDLE_NAME) is not None
+
+
+        def test_cleaned():
+            with create_session() as session:
+                assert session.get(DagBundleModel, BUNDLE_NAME) is None
+                assert session.get(DagModel, "shared_first") is None
+                assert session.get(DagModel, "shared_second") is None
+        """
+    )
+
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    result = pytester.runpytest_subprocess("-p", "pytest_airflow_in_a_box.plugin", "-q")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_borrowed_session_cleanup_survives_session_finalization(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clean owned rows through a fresh session after the borrowed one is dead.
+
+    The test body closes the caller's session before ``dag_maker``'s finalizer runs --
+    the same state pytest's reverse-order fixture finalization produces whenever the
+    ``session`` fixture finalizes first.
+    """
+
+    pytester.makepyfile(
+        """
+        import pytest
+        from airflow.models.dag import DagModel
+        from airflow.providers.standard.operators.empty import EmptyOperator
+        from airflow.utils.session import create_session
+
+        pytestmark = pytest.mark.db_test
+
+
+        def test_create(dag_maker, session):
+            with dag_maker(dag_id="borrowed_teardown", session=session):
+                EmptyOperator(task_id="empty")
+            session.close()
+
+
+        def test_cleaned():
+            with create_session() as session:
+                assert session.get(DagModel, "borrowed_teardown") is None
         """
     )
 

@@ -11,7 +11,7 @@ the 2.x alternative.
 | Fixture | Scope | DB | Airflow | Returns |
 | ------- | ----- | -- | ------- | ------- |
 | `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Task execution](../guide/task-execution.md#testing-a-dag-defined-elsewhere)) |
-| `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution ([Task execution](../guide/task-execution.md)) |
+| `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution; accepts upstream `tests_common`'s `session`/`bundle_name`/`bundle_version` harness keywords ([Task execution](../guide/task-execution.md#upstream-harness-keywords)) |
 | `create_task_instance` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a `TaskInstance` with its Dag and DagRun rows, composed over `dag_maker`. Returns the plain ORM instance -- no `ti.run()` wrapper ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
 | `create_dummy_dag` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a persisted single-`EmptyOperator` Dag plus, by default, a scheduled DagRun ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
 | `run_dag` | function | yes | 2.x + 3.x | A runner for externally-authored Dags, e.g. ones pulled from `dag_bag`. `executor=` drives the run through a real executor instead of in-process, 3.x only ([Task execution](../guide/task-execution.md#executor-driven-runs)) |

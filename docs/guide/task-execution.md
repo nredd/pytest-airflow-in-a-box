@@ -216,6 +216,46 @@ demand; upstream-XCom mapping works after its producer has run in the same DagRu
 `run_triggerer=True` runs the persisted trigger event and resumes a deferred task inline,
 bounded by `trigger_timeout` seconds.
 
+## Upstream harness keywords
+
+`dag_maker(...)` forwards unknown keyword arguments to the authoring `DAG` constructor, with
+three exceptions mirroring upstream `tests_common`'s `dag_maker` harness contract:
+`session`, `bundle_name`, and `bundle_version` route to the persistence layer instead of the
+constructor. A suite migrating off Airflow's internal test harness keeps those call sites
+unchanged:
+
+```python
+from airflow.models.dag import DagModel
+
+
+def test_upstream_style(dag_maker, session):
+    with dag_maker("upstream_style", session=session):
+
+        @task
+        def answer():
+            return 42
+
+        answer()
+
+    assert dag_maker.session is session
+    assert session.get(DagModel, "upstream_style") is not None
+```
+
+- `session=` supplies the metadata session used for every write the context makes
+  (persistence, `create_dagrun`, `create_ti`), and `dag_maker.session` returns it. The
+  fixture never closes a supplied session; teardown cleanup opens its own. Persistence
+  *commits* on it, though -- anything already staged commits too, so combining it with the
+  rollback-isolated `session` fixture narrows that fixture's everything-rolls-back
+  guarantee to state staged after the last `dag_maker` commit (see
+  [Database](database.md#sessions)).
+- `bundle_name=` overrides the derived per-Dag bundle row name. The derived name is unique
+  per Dag on purpose -- it is the mitigation for cross-worker bundle-row contention under
+  `pytest-xdist` -- so supplying your own opts out of that isolation. A shared row is still
+  cleaned up once the last Dag referencing it is gone.
+- `bundle_version=` is recorded on the persisted 3.x metadata rows (`dag`, `dag_version`).
+  Both bundle keywords are accepted and ignored on the certified 2.x family, which predates
+  bundles.
+
 ## Upstream one-call factories
 
 `create_task_instance` and `create_dummy_dag` mirror upstream Airflow's
