@@ -17,6 +17,7 @@ from pytest_airflow_in_a_box.fixtures import context as context_module
 from pytest_airflow_in_a_box.fixtures import logging as logging_module
 from pytest_airflow_in_a_box.fixtures import render as render_module
 from pytest_airflow_in_a_box.fixtures import taskrun as taskrun_module
+from pytest_airflow_in_a_box.fixtures import upstream as upstream_module
 
 
 def test_gate_message_names_surface_detail_and_issue(
@@ -88,6 +89,7 @@ def _drive_fixture(raw: Any, arguments: tuple[Any, ...]) -> None:
         (logging_module, "cap_structlog"),
         (api_module, "api_server_url"),
         (components_module, "airflow_components"),
+        (upstream_module, "testing_dag_bundle"),
     ],
 )
 def test_fixtures_fail_loud_when_gated(
@@ -118,6 +120,7 @@ def test_fixtures_fail_loud_when_gated(
         "render_task",
         "run_task",
         "task_context",
+        "testing_dag_bundle",
     }
     arguments = (SimpleNamespace(),) if fixture_name in needs_request else ()
 

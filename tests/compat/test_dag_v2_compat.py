@@ -470,7 +470,7 @@ def test_create_dag_run_uses_the_execution_date_interface(
         authoring_stub,
         record,
         run_id="run-1",
-        logical_date=None,
+        logical_date=dag_module.UNSET,
         run_after=None,
         start_date=None,
         dag_run_kwargs={},

@@ -24,8 +24,10 @@ from pytest_airflow_in_a_box._compat import ensure_database
 from pytest_airflow_in_a_box._compat.capabilities import require_v3
 from pytest_airflow_in_a_box._compat.components import timetable_lookup_resolves
 from pytest_airflow_in_a_box._compat.dag import (
+    UNSET,
     DagCleanupError,
     DagPersistenceRecord,
+    UnsetType,
     build_dag,
     cleanup_dag,
     create_dag_run,
@@ -486,7 +488,7 @@ class _DagFactory:
         self,
         *,
         run_id: str | None = None,
-        logical_date: datetime | None = None,
+        logical_date: datetime | UnsetType | None = UNSET,
         run_after: datetime | None = None,
         start_date: datetime | None = None,
         **dag_run_kwargs: Any,
@@ -495,7 +497,11 @@ class _DagFactory:
 
         Parameters:
             run_id: str | None containing an explicit identifier or ``None`` for a derived one.
-            logical_date: datetime.datetime | None overriding the current UTC logical date.
+            logical_date: datetime.datetime | UnsetType | None overriding the current
+                UTC logical date. An explicit ``None`` requests a run with no logical
+                date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
+                and no ``data_interval`` is inferred for it; rejected with
+                ``ValueError`` on the 2.x family, which cannot express one.
             run_after: datetime.datetime | None overriding the current UTC run-after
                 date; rejected with `ValueError` on the Airflow 2.x family, which has
                 no run-after concept.
@@ -719,7 +725,7 @@ class _DagRunner:
         dag: DAG,
         *,
         run_id: str | None = None,
-        logical_date: datetime | None = None,
+        logical_date: datetime | UnsetType | None = UNSET,
         run_after: datetime | None = None,
         start_date: datetime | None = None,
         dag_run_kwargs: dict[str, Any] | None = None,
@@ -733,7 +739,10 @@ class _DagRunner:
             dag: airflow.sdk.DAG containing the completed, externally-authored task graph.
             run_id: str | None containing an explicit identifier, or ``None`` for a
                 derived one.
-            logical_date: datetime.datetime | None overriding the current UTC logical date.
+            logical_date: datetime.datetime | UnsetType | None overriding the current
+                UTC logical date. An explicit ``None`` requests a run with no logical
+                date at all -- Airflow 3.x only; rejected with ``ValueError`` on the
+                2.x family.
             run_after: datetime.datetime | None overriding the current UTC run-after date;
                 rejected on the 2.x family, which has no run-after concept.
             start_date: datetime.datetime | None overriding the current UTC start date.

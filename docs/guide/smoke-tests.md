@@ -36,9 +36,12 @@ airflow_smoke_disable =
 ```
 
 Under `pytest-xdist`, bundled items remain independently schedulable across workers. The first item
-to need the corpus parses it once and publishes a serialized artifact below the isolated run root;
-the other workers reuse that artifact instead of reparsing every Dag. The `smoke` marker itself has
-no scheduling effect, so user-authored smoke tests remain fully parallel too.
+to need the corpus takes an exclusive lock on the isolated run root, parses the Dag folder once, and
+publishes a serialized artifact there; every other worker *blocks on that lock* and then decodes the
+artifact rather than reparsing. A whole run therefore pays at most one corpus parse no matter how
+many workers or bundled items it has -- the cost of a cold worker is a short wait, not a second
+parse. The `smoke` marker itself has no scheduling effect, so user-authored smoke tests remain fully
+parallel too.
 
 A test using the `dag_bag` fixture in the same worker process shares that parse too: if
 `dag_bag` already parsed in this process, the corpus builder reuses that live `DagBag` instead
@@ -56,8 +59,25 @@ folder in parallel on two workers. Only one consumer joins the group, not every 
 suite with many `dag_bag` tests does not have all of their execution serialized onto a single
 worker just to save one parse. An item that already carries its own explicit `xdist_group` is never
 chosen or overwritten. `-k` deselection is not predicted the way `-m` is, so a `dag_bag`
-consumer dropped only by `-k` may still be chosen. A smoke-only run with no `dag_bag` consumer
-is unaffected and keeps distributing the catalog across workers as described above.
+consumer dropped only by `-k` may still be chosen.
+
+Consumers are detected through pytest's full fixture *closure*, not just a test's own signature: a
+test taking a project fixture that itself declares `dag_bag` (`def subdir_bag(dag_bag): ...`)
+anchors the catalog exactly like a direct consumer. A fixture that reaches the bag through
+`request.getfixturevalue("dag_bag")`, or that builds its own `DagBag` instead of deriving from this
+one, is invisible to that detection and cannot anchor anything.
+
+Note that `--dist loadgroup` is *not* the default anywhere: `--dist` defaults to `no`, and a plain
+`-n auto` promotes it to `load`, under which `xdist_group` is inert and co-location never happens.
+Whenever the plugin wants to co-locate the catalog and cannot, it says so with a
+`SmokeColocationWarning` naming the reason and the extra full Dag parse it costs -- whether that is
+a run distributing without `loadgroup`, or a `loadgroup` run in which every `dag_bag` consumer is
+ineligible because each already carries its own `xdist_group` or each is about to be deselected by
+`-m`. Silence it with `-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`, or promote
+it to a hard failure with `-W error::pytest_airflow_in_a_box.smoke.SmokeColocationWarning` on a
+suite that treats parallel-efficiency regressions as bugs. A smoke-only run with no `dag_bag`
+consumer at all warns nothing and loses nothing: the catalog owns the only Dag parse in the run
+either way, and keeps distributing across workers as described above.
 
 ### Fanning the parse out across subprocess workers
 
