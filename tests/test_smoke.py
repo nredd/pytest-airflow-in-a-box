@@ -965,7 +965,7 @@ def test_serialized_dag_cache_builds_once_per_session(monkeypatch: pytest.Monkey
 
     serialized: list[str] = []
     dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -995,7 +995,7 @@ def test_serialized_dag_cache_records_per_dag_failures(
         return {"dag_id": "fine"}
 
     dag_bag: Any = SimpleNamespace(dags={"broken": "explode", "fine": "fine"})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=serialize_dag)
     )
@@ -1016,7 +1016,7 @@ def test_serialized_dag_cache_logs_per_dag_progress(
     """Log a per-Dag progress line as each serialization completes."""
 
     dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -1040,7 +1040,7 @@ def test_serialized_dag_cache_applies_sampling(
     dag_bag: Any = SimpleNamespace(
         dags={dag_id: _dag(dag_id) for dag_id in ("alpha", "bravo", "charlie")}
     )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
@@ -1064,7 +1064,7 @@ def test_serialized_dag_cache_skips_selection_when_serialization_disabled(
     """Select and serialize nothing once every consumer of the cache is disabled."""
 
     dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     config = _config(disable=["test_dag_serialization_roundtrip", "test_schedule_sanity"])
 
     entries = smoke._serialized_dag_cache(_session(), config)
@@ -1160,10 +1160,39 @@ def test_log_serialization_table_marks_ok_and_failed_rows(
     assert "Dag serialization report" in caplog.text
 
 
-def test_integrity_repr_failure_delegates_foreign_exceptions() -> None:
-    """Hand non-smoke exceptions back to pytest's standard representation."""
+def _context(*, session: Any = None, config: Any = None, **overrides: Any) -> smoke.SmokeContext:
+    """Construct a `SmokeContext` with any cached properties pre-seeded for a test.
 
-    item = _bare_item(smoke.DagBagIntegrityItem)
+    Overriding a keyword (e.g. `corpus=`, `dag_folder=`, `serialized_cache=`, `disabled=`)
+    assigns it directly onto the context's cached-property slot, bypassing the function that
+    would otherwise compute it -- the seam a check's `run` needs for a test double.
+
+    Parameters:
+        session: Any standing in for the pytest Session; defaults to a bare `_session()`.
+        config: Any standing in for the pytest Config; defaults to a bare `_config()`.
+        overrides: Any assigned directly onto the context's matching attribute.
+
+    Returns:
+        pytest_airflow_in_a_box.smoke.SmokeContext with every override pre-seeded.
+    """
+
+    context = smoke.SmokeContext(
+        session=session if session is not None else _session(),
+        config=config if config is not None else _config(),
+    )
+    for name, value in overrides.items():
+        setattr(context, name, value)
+    return context
+
+
+def test_catalog_item_repr_failure_delegates_foreign_exceptions() -> None:
+    """Hand non-smoke exceptions back to pytest's standard representation.
+
+    `repr_failure` lives once on the generic `_CatalogItem`, shared by every check --
+    unlike the pre-catalog design, where only 2 of 14 `Item` subclasses overrode it.
+    """
+
+    item = _bare_item(smoke._CatalogItem)
     delegated: list[str] = []
     excinfo: Any = SimpleNamespace(value=RuntimeError("something else"))
 
@@ -1179,10 +1208,10 @@ def test_integrity_repr_failure_delegates_foreign_exceptions() -> None:
     assert delegated == ["called"]
 
 
-def test_integrity_repr_failure_returns_smoke_message() -> None:
+def test_catalog_item_repr_failure_returns_smoke_message() -> None:
     """Render a smoke failure body without a pytest-internal traceback."""
 
-    item = _bare_item(smoke.DagBagIntegrityItem)
+    item = _bare_item(smoke._CatalogItem)
     excinfo: Any = SimpleNamespace(value=smoke.SmokeCheckFailure("the body"))
 
     assert item.repr_failure(excinfo, style="long") == "the body"
@@ -1193,21 +1222,22 @@ def test_serialization_roundtrip_collects_per_dag_failures(
 ) -> None:
     """Report every Dag that cannot survive the serialization round trip."""
 
-    dag_bag: Any = SimpleNamespace(dags={"broken": _dag("broken"), "other": _dag("other")})
-
-    def explode(_dag: object) -> dict[str, Any]:
-        raise ValueError("cannot serialize a lambda")
-
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
-        smoke,
-        "_get_dag_serializer",
-        lambda: SimpleNamespace(serialize_dag=explode, deserialize_dag=lambda _encoded: None),
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(deserialize_dag=lambda _e: None)
     )
-    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
+    context = _context(
+        serialized_cache={
+            "broken": smoke.SerializedDagEntry(
+                encoded=None, error="cannot serialize a lambda", seconds=0.1
+            ),
+            "other": smoke.SerializedDagEntry(
+                encoded=None, error="cannot serialize a lambda", seconds=0.1
+            ),
+        }
+    )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="cannot serialize a lambda") as caught:
-        item.runtest()
+        smoke._run_dag_serialization_roundtrip(context, True)
 
     assert "Dag `broken`" in str(caught.value)
     assert "Dag `other`" in str(caught.value)
@@ -1218,19 +1248,18 @@ def test_serialization_roundtrip_passes_when_every_dag_survives(
 ) -> None:
     """Raise nothing when every Dag round-trips."""
 
-    dag_bag: Any = SimpleNamespace(dags={"fine": _dag("fine")})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
-        lambda: SimpleNamespace(
-            serialize_dag=lambda _dag: {"dag_id": "fine"},
-            deserialize_dag=lambda _encoded: object(),
-        ),
+        lambda: SimpleNamespace(deserialize_dag=lambda _encoded: object()),
     )
-    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
+    context = _context(
+        serialized_cache={
+            "fine": smoke.SerializedDagEntry(encoded={"dag_id": "fine"}, error=None, seconds=0.1)
+        }
+    )
 
-    item.runtest()
+    smoke._run_dag_serialization_roundtrip(context, True)
 
 
 def test_serialization_roundtrip_reports_deserialize_failures(
@@ -1238,23 +1267,22 @@ def test_serialization_roundtrip_reports_deserialize_failures(
 ) -> None:
     """Report a Dag whose serialized payload cannot be deserialized."""
 
-    dag_bag: Any = SimpleNamespace(dags={"broken": _dag("broken")})
-
     def explode(_encoded: object) -> object:
         raise ValueError("cannot rebuild the Dag")
 
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
-        smoke,
-        "_get_dag_serializer",
-        lambda: SimpleNamespace(
-            serialize_dag=lambda _dag: {"dag_id": "broken"}, deserialize_dag=explode
-        ),
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(deserialize_dag=explode)
     )
-    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
+    context = _context(
+        serialized_cache={
+            "broken": smoke.SerializedDagEntry(
+                encoded={"dag_id": "broken"}, error=None, seconds=0.1
+            )
+        }
+    )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="cannot rebuild the Dag") as caught:
-        item.runtest()
+        smoke._run_dag_serialization_roundtrip(context, True)
 
     assert "Dag `broken` failed to round-trip" in str(caught.value)
 
@@ -1264,57 +1292,27 @@ def test_serialization_roundtrip_appends_timing_table_on_failure(
 ) -> None:
     """Append the slowest-first timing table below the failure bullets."""
 
-    def serialize_dag(dag: Any) -> dict[str, Any]:
-        if dag == "explode":
-            raise ValueError("cannot serialize a lambda")
-        return {"dag_id": "fine"}
-
-    dag_bag: Any = SimpleNamespace(dags={"broken": "explode", "fine": "fine"})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
-        lambda: SimpleNamespace(
-            serialize_dag=serialize_dag, deserialize_dag=lambda _encoded: object()
-        ),
+        lambda: SimpleNamespace(deserialize_dag=lambda _encoded: object()),
     )
-    item = _bare_item(smoke.DagSerializationRoundtripItem, session=_session(), config=_config())
+    context = _context(
+        serialized_cache={
+            "broken": smoke.SerializedDagEntry(
+                encoded=None, error="cannot serialize a lambda", seconds=0.1
+            ),
+            "fine": smoke.SerializedDagEntry(encoded={"dag_id": "fine"}, error=None, seconds=0.05),
+        }
+    )
 
     with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        item.runtest()
+        smoke._run_dag_serialization_roundtrip(context, True)
 
     body = str(caught.value)
     assert "Dag `broken` failed to round-trip" in body
     assert "FAILED" in body
     assert "fine" in body
-
-
-def test_serialization_roundtrip_repr_failure_returns_smoke_message() -> None:
-    """Render a smoke failure body without a pytest-internal traceback."""
-
-    item = _bare_item(smoke.DagSerializationRoundtripItem)
-    excinfo: Any = SimpleNamespace(value=smoke.SmokeCheckFailure("the body"))
-
-    assert item.repr_failure(excinfo, style="long") == "the body"
-
-
-def test_serialization_roundtrip_repr_failure_delegates_foreign_exceptions() -> None:
-    """Hand non-smoke exceptions back to pytest's standard representation."""
-
-    item = _bare_item(smoke.DagSerializationRoundtripItem)
-    delegated: list[str] = []
-    excinfo: Any = SimpleNamespace(value=RuntimeError("something else"))
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(
-            pytest.Item,
-            "repr_failure",
-            lambda _self, _excinfo: delegated.append("called") or "delegated",
-        )
-
-        assert item.repr_failure(excinfo) == "delegated"
-
-    assert delegated == ["called"]
 
 
 def _scheduled_dag(*, can_be_scheduled: bool, raises: Exception | None = None) -> Any:
@@ -1325,7 +1323,7 @@ def _scheduled_dag(*, can_be_scheduled: bool, raises: Exception | None = None) -
         raises: Exception | None raised when computing the next run.
 
     Returns:
-        Any shaped like the Dag surface `ScheduleSanityItem` reads.
+        Any shaped like the Dag surface `_run_schedule_sanity` reads.
     """
 
     def next_dagrun_info(**_kwargs: object) -> object:
@@ -1347,21 +1345,21 @@ def _scheduled_dag(*, can_be_scheduled: bool, raises: Exception | None = None) -
 def test_schedule_sanity_skips_unscheduled_dags(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leave Dags without a real schedule alone."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={"manual": _scheduled_dag(can_be_scheduled=False, raises=ValueError("never called"))}
-    )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
-        lambda: SimpleNamespace(
-            serialize_dag=lambda dag: dag,
-            deserialize_dag=lambda _dag: pytest.fail("must not deserialize"),
-        ),
+        lambda: SimpleNamespace(deserialize_dag=lambda _dag: pytest.fail("must not deserialize")),
     )
-    item = _bare_item(smoke.ScheduleSanityItem, session=_session(), config=_config())
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={
+                "manual": _scheduled_dag(can_be_scheduled=False, raises=ValueError("never called"))
+            }
+        ),
+        serialized_cache={},
+    )
 
-    item.runtest()
+    smoke._run_schedule_sanity(context, True)
 
 
 def test_schedule_sanity_reports_broken_timetables(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1369,20 +1367,19 @@ def test_schedule_sanity_reports_broken_timetables(monkeypatch: pytest.MonkeyPat
 
     broken = _scheduled_dag(can_be_scheduled=True, raises=ValueError("bad cron"))
     healthy = _scheduled_dag(can_be_scheduled=True)
-    dag_bag: Any = SimpleNamespace(dags={"broken": broken, "healthy": healthy})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
-        smoke,
-        "_get_dag_serializer",
-        lambda: SimpleNamespace(
-            serialize_dag=lambda dag: dag,
-            deserialize_dag=lambda dag: dag,
-        ),
+        smoke, "_get_dag_serializer", lambda: SimpleNamespace(deserialize_dag=lambda dag: dag)
     )
-    item = _bare_item(smoke.ScheduleSanityItem, session=_session(), config=_config())
+    context = _context(
+        corpus=SimpleNamespace(dags={"broken": broken, "healthy": healthy}),
+        serialized_cache={
+            "broken": smoke.SerializedDagEntry(encoded=broken, error=None, seconds=0.1),
+            "healthy": smoke.SerializedDagEntry(encoded=healthy, error=None, seconds=0.1),
+        },
+    )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="bad cron") as caught:
-        item.runtest()
+        smoke._run_schedule_sanity(context, True)
 
     assert "Dag `broken`" in str(caught.value)
     assert "Dag `healthy`" not in str(caught.value)
@@ -1393,25 +1390,25 @@ def test_schedule_sanity_skips_serialization_failures_and_unsampled_dags(
 ) -> None:
     """Skip Dags whose serialization failed or that fell outside the sample."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={
-            "broken": _scheduled_dag(can_be_scheduled=True),
-            "unsampled": _scheduled_dag(can_be_scheduled=True),
-        }
-    )
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
         lambda: SimpleNamespace(deserialize_dag=lambda _dag: pytest.fail("must not deserialize")),
     )
-    session = _session()
-    session.stash[smoke.SERIALIZED_DAG_CACHE_KEY] = {
-        "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1),
-    }
-    item = _bare_item(smoke.ScheduleSanityItem, session=session, config=_config())
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={
+                "broken": _scheduled_dag(can_be_scheduled=True),
+                "unsampled": _scheduled_dag(can_be_scheduled=True),
+            }
+        ),
+        serialized_cache={
+            "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1),
+        },
+        disabled=frozenset(),
+    )
 
-    item.runtest()
+    smoke._run_schedule_sanity(context, True)
 
 
 def test_schedule_sanity_reports_serialization_failures_when_roundtrip_is_disabled(
@@ -1424,22 +1421,21 @@ def test_schedule_sanity_reports_serialization_failures_when_roundtrip_is_disabl
     silently just because that item is gone.
     """
 
-    dag_bag: Any = SimpleNamespace(dags={"broken": _scheduled_dag(can_be_scheduled=True)})
-    monkeypatch.setattr(smoke, "_smoke_dag_bag", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         smoke,
         "_get_dag_serializer",
         lambda: SimpleNamespace(deserialize_dag=lambda _dag: pytest.fail("must not deserialize")),
     )
-    session = _session()
-    session.stash[smoke.SERIALIZED_DAG_CACHE_KEY] = {
-        "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1),
-    }
-    config = _config(disable=["test_dag_serialization_roundtrip"])
-    item = _bare_item(smoke.ScheduleSanityItem, session=session, config=config)
+    context = _context(
+        corpus=SimpleNamespace(dags={"broken": _scheduled_dag(can_be_scheduled=True)}),
+        serialized_cache={
+            "broken": smoke.SerializedDagEntry(encoded=None, error="boom", seconds=0.1),
+        },
+        disabled=frozenset({"test_dag_serialization_roundtrip"}),
+    )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="Dag `broken` failed to serialize: boom"):
-        item.runtest()
+        smoke._run_schedule_sanity(context, True)
 
 
 def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1447,24 +1443,24 @@ def test_pool_references_report_unknown_pools(monkeypatch: pytest.MonkeyPatch) -
 
     from airflow.models.pool import Pool
 
-    dag_bag: Any = SimpleNamespace(
-        dags={
-            "etl": _dag(
-                "etl",
-                tasks=(_task("known", pool="default_pool"), _task("missing", pool="nope")),
-            )
-        }
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={
+                "etl": _dag(
+                    "etl",
+                    tasks=(_task("known", pool="default_pool"), _task("missing", pool="nope")),
+                )
+            }
+        )
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
     monkeypatch.setattr(
         Pool,
         "get_pools",
         lambda **_kwargs: [SimpleNamespace(pool="default_pool", slots=128)],
     )
-    item = _bare_item(smoke.PoolReferencesExistItem, session=None, config=None, pools=())
 
     with pytest.raises(smoke.SmokeCheckFailure, match="references unknown pool `nope`") as caught:
-        item.runtest()
+        smoke._run_pool_references_exist(context, ())
 
     assert "task `missing`" in str(caught.value)
     assert "task `known`" not in str(caught.value)
@@ -1515,20 +1511,15 @@ def test_pool_references_seeds_configured_pools_before_checking(
 
     from airflow.models.pool import Pool
 
-    dag_bag: Any = SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("t", pool="batch"),))})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    context = _context(
+        corpus=SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("t", pool="batch"),))})
+    )
     monkeypatch.setattr(
         Pool, "get_pools", lambda **_kwargs: [SimpleNamespace(pool="default_pool", slots=128)]
     )
     added = _fake_pool_session(monkeypatch)
-    item = _bare_item(
-        smoke.PoolReferencesExistItem,
-        session=None,
-        config=None,
-        pools=(smoke.PoolSeed(name="batch", slots=4),),
-    )
 
-    item.runtest()
+    smoke._run_pool_references_exist(context, (smoke.PoolSeed(name="batch", slots=4),))
 
     assert len(added) == 1
     assert added[0].pool == "batch"
@@ -1546,20 +1537,15 @@ def test_pool_references_seed_matching_existing_slots_is_a_no_op(
 
     from airflow.models.pool import Pool
 
-    dag_bag: Any = SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("t", pool="batch"),))})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    context = _context(
+        corpus=SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("t", pool="batch"),))})
+    )
     monkeypatch.setattr(
         Pool, "get_pools", lambda **_kwargs: [SimpleNamespace(pool="batch", slots=4)]
     )
     added = _fake_pool_session(monkeypatch)
-    item = _bare_item(
-        smoke.PoolReferencesExistItem,
-        session=None,
-        config=None,
-        pools=(smoke.PoolSeed(name="batch", slots=4),),
-    )
 
-    item.runtest()
+    smoke._run_pool_references_exist(context, (smoke.PoolSeed(name="batch", slots=4),))
 
     assert added == []
 
@@ -1571,99 +1557,81 @@ def test_pool_references_rejects_seed_colliding_with_existing_pool(
 
     from airflow.models.pool import Pool
 
-    dag_bag: Any = SimpleNamespace(dags={})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
+    context = _context(corpus=SimpleNamespace(dags={}))
     monkeypatch.setattr(
         Pool, "get_pools", lambda **_kwargs: [SimpleNamespace(pool="default_pool", slots=128)]
     )
-    item = _bare_item(
-        smoke.PoolReferencesExistItem,
-        session=None,
-        config=None,
-        pools=(smoke.PoolSeed(name="default_pool", slots=4),),
-    )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="cannot seed `default_pool`"):
-        item.runtest()
+        smoke._run_pool_references_exist(context, (smoke.PoolSeed(name="default_pool", slots=4),))
 
 
-def test_dag_id_pattern_item_passes_matching_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dag_id_pattern_item_passes_matching_ids() -> None:
     """Raise nothing when every dag_id matches the configured pattern."""
 
-    dag_bag: Any = SimpleNamespace(dags={"team_a": _dag("team_a")})
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(
-        smoke.DagIdPatternItem, session=None, config=None, pattern=re.compile("^team_")
-    )
+    context = _context(corpus=SimpleNamespace(dags={"team_a": _dag("team_a")}))
 
-    item.runtest()
+    smoke._run_dag_id_pattern(context, re.compile("^team_"))
 
 
-def test_required_dag_tags_item_passes_when_tags_present(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_required_dag_tags_item_passes_when_tags_present() -> None:
     """Raise nothing when every Dag carries the required tags."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={"tagged": _dag("tagged", tags=frozenset({"team-a", "extra"}))}
-    )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(
-        smoke.RequiredDagTagsItem, session=None, config=None, tags=frozenset({"team-a"})
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={"tagged": _dag("tagged", tags=frozenset({"team-a", "extra"}))}
+        )
     )
 
-    item.runtest()
+    smoke._run_required_dag_tags(context, frozenset({"team-a"}))
 
 
-def test_forbid_default_owner_item_reports_every_stock_owner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_forbid_default_owner_item_reports_every_stock_owner() -> None:
     """Report each task owned by Airflow's stock default owner."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={
-            "etl": _dag(
-                "etl",
-                tasks=(_task("stock", owner="airflow"), _task("owned", owner="team-a")),
-            )
-        }
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={
+                "etl": _dag(
+                    "etl",
+                    tasks=(_task("stock", owner="airflow"), _task("owned", owner="team-a")),
+                )
+            }
+        )
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.ForbidDefaultOwnerItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure, match="owned by the stock") as caught:
-        item.runtest()
+        smoke._run_forbid_default_owner(context, True)
 
     assert "task `stock`" in str(caught.value)
     assert "task `owned`" not in str(caught.value)
 
 
-def test_forbid_default_owner_item_passes_when_every_task_is_owned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_forbid_default_owner_item_passes_when_every_task_is_owned() -> None:
     """Raise nothing when no task carries the stock owner."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={"etl": _dag("etl", tasks=(_task("owned", owner="team"),))}
+    context = _context(
+        corpus=SimpleNamespace(dags={"etl": _dag("etl", tasks=(_task("owned", owner="team"),))})
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.ForbidDefaultOwnerItem, session=None, config=None)
 
-    item.runtest()
+    smoke._run_forbid_default_owner(context, True)
 
 
 def _scan_corpus(
-    monkeypatch: pytest.MonkeyPatch,
     folder: Path,
     files: dict[str, str | None],
     **corpus_fields: Any,
-) -> None:
-    """Write Dag sources and point the corpus and Dag-folder lookups at them.
+) -> smoke.SmokeContext:
+    """Write Dag sources and build a context pointing at the resulting corpus and folder.
 
     Parameters:
-        monkeypatch: pytest.MonkeyPatch used to stub the corpus and folder readers.
         folder: pathlib.Path receiving one file per ``files`` entry.
         files: dict[str, str | None] mapping file names to source text; a ``None`` source
             records the file in the parse statistics without writing it.
         corpus_fields: Any extra attributes set on the corpus double.
+
+    Returns:
+        pytest_airflow_in_a_box.smoke.SmokeContext with `corpus` and `dag_folder` pre-seeded.
     """
 
     stats = []
@@ -1672,8 +1640,7 @@ def _scan_corpus(
             (folder / name).write_text(source, encoding="utf-8")
         stats.append(_stat(f"/{name}", 0.1))
     corpus = SimpleNamespace(**{"dagbag_stats": stats, "runtime_lookups": ()} | corpus_fields)
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: corpus)
-    monkeypatch.setattr(smoke, "_dag_folder", lambda _config: folder)
+    return _context(corpus=corpus, dag_folder=folder)
 
 
 def test_corpus_source_files_resolves_relative_and_absolute_stat_paths(
@@ -1709,20 +1676,16 @@ def test_corpus_source_files_resolves_relative_and_absolute_stat_paths(
     assert resolved["/missing.py"] == folder / "missing.py"
 
 
-def test_variable_access_item_reports_ast_findings_with_locations(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_variable_access_item_reports_ast_findings_with_locations(tmp_path: Path) -> None:
     """Report a top-level `Variable.get` with its file, line, and source snippet."""
 
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"offender.py": 'from airflow.sdk import Variable\n\nVALUE = Variable.get("k")\n'},
     )
-    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure, match="at import time") as caught:
-        item.runtest()
+        smoke._run_top_level_variable_access(context, True)
 
     message = str(caught.value)
     assert "'/offender.py' line 3" in message
@@ -1730,27 +1693,22 @@ def test_variable_access_item_reports_ast_findings_with_locations(
 
 
 def test_variable_access_item_skips_unparsable_files_and_passes_clean_corpora(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """Skip a syntax-error file leniently and pass a corpus with no lookups."""
 
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"clean.py": "X = 1\n", "mangled.py": "def broken(:\n"},
     )
-    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
 
-    item.runtest()
+    smoke._run_top_level_variable_access(context, True)
 
 
-def test_variable_access_item_merges_runtime_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_variable_access_item_merges_runtime_findings(tmp_path: Path) -> None:
     """Report a runtime lookup hidden behind a helper, plus an unattributed one."""
 
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"clean.py": "X = 1\n"},
         runtime_lookups=(
@@ -1758,10 +1716,9 @@ def test_variable_access_item_merges_runtime_findings(
             SecretsLookup(kind="connection", key="db", file=None, line=None),
         ),
     )
-    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        item.runtest()
+        smoke._run_top_level_variable_access(context, True)
 
     message = str(caught.value)
     assert "fetched variable 'hidden'" in message
@@ -1770,95 +1727,80 @@ def test_variable_access_item_merges_runtime_findings(
 
 
 def test_variable_access_item_dedupes_runtime_findings_against_ast_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """Report one failure when the AST and runtime passes find the same call."""
 
     source = 'from airflow.sdk import Variable\n\nVALUE = Variable.get("k")\n'
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"offender.py": source},
         runtime_lookups=(
             SecretsLookup(kind="variable", key="k", file=str(tmp_path / "offender.py"), line=3),
         ),
     )
-    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        item.runtest()
+        smoke._run_top_level_variable_access(context, True)
 
     assert "fetched variable" not in str(caught.value)
 
 
 def test_variable_access_item_degrades_to_ast_only_without_instrumentation(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Log the degradation note and pass on AST-clean sources when lookups are `None`."""
 
-    _scan_corpus(monkeypatch, tmp_path, {"clean.py": "X = 1\n"}, runtime_lookups=None)
-    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
+    context = _scan_corpus(tmp_path, {"clean.py": "X = 1\n"}, runtime_lookups=None)
 
     with caplog.at_level(logging.INFO, logger=smoke.LOGGER.name):
-        item.runtest()
+        smoke._run_top_level_variable_access(context, True)
 
     assert "Runtime secrets interception unavailable" in caplog.text
 
 
-def test_io_item_reports_import_time_io_calls(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_io_item_reports_import_time_io_calls(tmp_path: Path) -> None:
     """Report a top-level call into a configured I/O module."""
 
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"offender.py": "import requests\n\nDATA = requests.get('https://x')\n"},
     )
-    item = _bare_item(smoke.TopLevelIOItem, session=None, config=None, io_modules=("requests",))
 
     with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        item.runtest()
+        smoke._run_top_level_io(context, ("requests",))
 
     assert "'/offender.py' line 3" in str(caught.value)
     assert "requests.get('https://x')" in str(caught.value)
 
 
-def test_io_item_skips_unresolved_and_unlisted_calls(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_io_item_skips_unresolved_and_unlisted_calls(tmp_path: Path) -> None:
     """Pass files whose calls resolve to unlisted modules, and skip unreadable files."""
 
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"clean.py": "import json\n\nDATA = json.loads('{}')\n", "missing.py": None},
     )
-    item = _bare_item(smoke.TopLevelIOItem, session=None, config=None, io_modules=("requests",))
 
-    item.runtest()
+    smoke._run_top_level_io(context, ("requests",))
 
 
 def test_parse_budget_item_passes_trivially_below_the_minimum_corpus(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Skip the relative budget when fewer than three files parsed."""
 
     corpus: Any = SimpleNamespace(dagbag_stats=[_stat("a.py", 30.0), _stat("b.py", 0.1)])
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: corpus)
-    item = _bare_item(smoke.DagParseBudgetItem, session=None, config=None, ratio=10.0)
+    context = _context(corpus=corpus)
 
     with caplog.at_level(logging.INFO, logger=smoke.LOGGER.name):
-        item.runtest()
+        smoke._run_dag_parse_budget(context, 10.0)
 
     assert "Skipping the parse budget" in caplog.text
 
 
-def test_parse_budget_item_fails_the_outlier_against_the_median(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_parse_budget_item_fails_the_outlier_against_the_median() -> None:
     """Fail only the file exceeding `ratio x median`, floored at one second."""
 
     corpus: Any = SimpleNamespace(
@@ -1869,11 +1811,10 @@ def test_parse_budget_item_fails_the_outlier_against_the_median(
             _stat("outlier.py", 6.0),
         ]
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: corpus)
-    item = _bare_item(smoke.DagParseBudgetItem, session=None, config=None, ratio=10.0)
+    context = _context(corpus=corpus)
 
     with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        item.runtest()
+        smoke._run_dag_parse_budget(context, 10.0)
 
     message = str(caught.value)
     assert "'outlier.py' took 6.000s" in message
@@ -1881,18 +1822,15 @@ def test_parse_budget_item_fails_the_outlier_against_the_median(
     assert "fast_a.py" not in message
 
 
-def test_parse_budget_item_floor_absorbs_near_zero_medians(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_parse_budget_item_floor_absorbs_near_zero_medians() -> None:
     """Pass a fast corpus whose ratio-scaled threshold falls under the absolute floor."""
 
     corpus: Any = SimpleNamespace(
         dagbag_stats=[_stat("a.py", 0.01), _stat("b.py", 0.01), _stat("c.py", 0.5)]
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: corpus)
-    item = _bare_item(smoke.DagParseBudgetItem, session=None, config=None, ratio=10.0)
+    context = _context(corpus=corpus)
 
-    item.runtest()
+    smoke._run_dag_parse_budget(context, 10.0)
 
 
 def _corpus_dag(dag_id: str, *, catchup: bool, can_be_scheduled: bool) -> smoke.SmokeDag:
@@ -1916,39 +1854,37 @@ def _corpus_dag(dag_id: str, *, catchup: bool, can_be_scheduled: bool) -> smoke.
     )
 
 
-def test_forbid_catchup_item_reports_each_scheduled_catchup_dag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_forbid_catchup_item_reports_each_scheduled_catchup_dag() -> None:
     """Report a scheduled catchup Dag; pass unflagged and unschedulable Dags."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={
-            "eager": _corpus_dag("eager", catchup=True, can_be_scheduled=True),
-            "calm": _corpus_dag("calm", catchup=False, can_be_scheduled=True),
-            "manual": _corpus_dag("manual", catchup=True, can_be_scheduled=False),
-        }
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={
+                "eager": _corpus_dag("eager", catchup=True, can_be_scheduled=True),
+                "calm": _corpus_dag("calm", catchup=False, can_be_scheduled=True),
+                "manual": _corpus_dag("manual", catchup=True, can_be_scheduled=False),
+            }
+        )
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.ForbidCatchupItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure, match="enables `catchup`") as caught:
-        item.runtest()
+        smoke._run_forbid_catchup(context, True)
 
     assert "Dag `eager` ('/dags/eager.py')" in str(caught.value)
     assert "`calm`" not in str(caught.value)
     assert "`manual`" not in str(caught.value)
 
 
-def test_forbid_catchup_item_passes_without_catchup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forbid_catchup_item_passes_without_catchup() -> None:
     """Raise nothing when no Dag enables catchup."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={"calm": _corpus_dag("calm", catchup=False, can_be_scheduled=True)}
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={"calm": _corpus_dag("calm", catchup=False, can_be_scheduled=True)}
+        )
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.ForbidCatchupItem, session=None, config=None)
 
-    item.runtest()
+    smoke._run_forbid_catchup(context, True)
 
 
 def _mapped_task(
@@ -1976,29 +1912,27 @@ def _mapped_task(
     )
 
 
-def test_unbounded_expand_item_fails_only_uncapped_runtime_expansions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_unbounded_expand_item_fails_only_uncapped_runtime_expansions() -> None:
     """Fail the uncapped runtime expansion and pass literal, capped, and unmapped tasks."""
 
-    dag_bag: Any = SimpleNamespace(
-        dags={
-            "etl": _dag(
-                "etl",
-                tasks=(
-                    _mapped_task("uncapped", runtime=True, cap=None),
-                    _mapped_task("capped", runtime=True, cap=4),
-                    _mapped_task("literal", runtime=False, cap=None),
-                    _mapped_task("plain", runtime=False, cap=None, mapped=False),
-                ),
-            )
-        }
+    context = _context(
+        corpus=SimpleNamespace(
+            dags={
+                "etl": _dag(
+                    "etl",
+                    tasks=(
+                        _mapped_task("uncapped", runtime=True, cap=None),
+                        _mapped_task("capped", runtime=True, cap=4),
+                        _mapped_task("literal", runtime=False, cap=None),
+                        _mapped_task("plain", runtime=False, cap=None, mapped=False),
+                    ),
+                )
+            }
+        )
     )
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    item = _bare_item(smoke.UnboundedExpandItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure, match="expands over runtime data") as caught:
-        item.runtest()
+        smoke._run_unbounded_expand(context, True)
 
     message = str(caught.value)
     assert "task `uncapped`" in message
@@ -2008,7 +1942,7 @@ def test_unbounded_expand_item_fails_only_uncapped_runtime_expansions(
 
 
 def test_variable_access_item_dedupes_by_call_span_across_frame_line_drift(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """Dedupe a runtime finding whose frame line lands inside a multi-line AST call.
 
@@ -2018,146 +1952,129 @@ def test_variable_access_item_dedupes_by_call_span_across_frame_line_drift(
     """
 
     source = 'from airflow.sdk import Variable\n\nVALUE = Variable.get(\n    "k",\n)\n'
-    _scan_corpus(
-        monkeypatch,
+    context = _scan_corpus(
         tmp_path,
         {"offender.py": source},
         runtime_lookups=(
             SecretsLookup(kind="variable", key="k", file=str(tmp_path / "offender.py"), line=4),
         ),
     )
-    item = _bare_item(smoke.TopLevelVariableAccessItem, session=None, config=None)
 
     with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        item.runtest()
+        smoke._run_top_level_variable_access(context, True)
 
     assert "fetched variable" not in str(caught.value)
 
 
-def _snapshot_item(
-    monkeypatch: pytest.MonkeyPatch,
+def _snapshot_context(
     *,
     dags: dict[str, Any],
     snapshot_dir: Path,
     update: bool,
     serialize_dag: Any = lambda _dag: {"dag_id": "irrelevant"},
-) -> Any:
-    """Build a bare `SerializedDagSnapshotItem` wired to a fake Dag bag and serializer.
+) -> tuple[smoke.SmokeContext, Any]:
+    """Build a context and payload wired to a fake serialized cache for snapshot tests.
+
+    `_run_dag_serialization_snapshot` reads `context.serialized_cache` directly and never
+    calls the Airflow Dag serializer itself, so `serialize_dag` runs here, in the test, to
+    build that cache -- no monkeypatching of `smoke` internals needed.
 
     Parameters:
-        monkeypatch: pytest.MonkeyPatch used to stub the shared Dag bag and serializer.
         dags: dict[str, Any] mapping dag_id to a Dag double passed to `serialize_dag`.
-        snapshot_dir: pathlib.Path used as the item's committed snapshot directory.
-        update: bool indicating whether the item runs in update mode.
+        snapshot_dir: pathlib.Path used as the committed snapshot directory.
+        update: bool indicating whether the check runs in update mode.
         serialize_dag: Any callable serializing a Dag double into a plain dict.
 
     Returns:
-        Any containing the constructed item with only the attributes under test.
+        tuple[SmokeContext, Any] ready to pass to `_run_dag_serialization_snapshot`.
     """
 
-    dag_bag: Any = SimpleNamespace(dags=dags)
-    monkeypatch.setattr(smoke, "_smoke_corpus", lambda _session, _config: dag_bag)
-    monkeypatch.setattr(
-        smoke,
-        "_get_dag_serializer",
-        lambda: SimpleNamespace(serialize_dag=serialize_dag),
-    )
-    return _bare_item(
-        smoke.SerializedDagSnapshotItem,
-        session=_session(),
-        config=_config(),
-        snapshot_dir=snapshot_dir,
-        update=update,
-    )
+    entries: dict[str, smoke.SerializedDagEntry] = {}
+    for dag_id, dag in dags.items():
+        try:
+            encoded = serialize_dag(dag)
+        except Exception as error:
+            entries[dag_id] = smoke.SerializedDagEntry(encoded=None, error=str(error), seconds=0.1)
+        else:
+            entries[dag_id] = smoke.SerializedDagEntry(encoded=encoded, error=None, seconds=0.1)
+    context = _context(serialized_cache=entries)
+    payload = smoke._SnapshotPayload(snapshot_dir=snapshot_dir, update=update)
+    return context, payload
 
 
-def test_snapshot_item_update_mode_writes_new_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_snapshot_item_update_mode_writes_new_file(tmp_path: Path) -> None:
     """Write a new snapshot file when none exists yet."""
 
     snapshot_dir = tmp_path / "snapshots"
-    item = _snapshot_item(
-        monkeypatch,
+    context, payload = _snapshot_context(
         dags={"sample": _dag("sample")},
         snapshot_dir=snapshot_dir,
         update=True,
         serialize_dag=lambda _dag: {"dag_id": "sample"},
     )
 
-    item.runtest()
+    smoke._run_dag_serialization_snapshot(context, payload)
 
     written = (snapshot_dir / "sample.json").read_text(encoding="utf-8")
     assert written == '{\n  "dag_id": "sample"\n}\n'
 
 
-def test_snapshot_item_update_mode_overwrites_existing_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_snapshot_item_update_mode_overwrites_existing_file(tmp_path: Path) -> None:
     """Overwrite a differing committed snapshot in update mode."""
 
     snapshot_dir = tmp_path / "snapshots"
     snapshot_dir.mkdir()
     (snapshot_dir / "sample.json").write_text("stale", encoding="utf-8")
-    item = _snapshot_item(
-        monkeypatch,
+    context, payload = _snapshot_context(
         dags={"sample": _dag("sample")},
         snapshot_dir=snapshot_dir,
         update=True,
         serialize_dag=lambda _dag: {"dag_id": "sample"},
     )
 
-    item.runtest()
+    smoke._run_dag_serialization_snapshot(context, payload)
 
     written = (snapshot_dir / "sample.json").read_text(encoding="utf-8")
     assert written == '{\n  "dag_id": "sample"\n}\n'
 
 
-def test_snapshot_item_diff_mode_fails_when_snapshot_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_snapshot_item_diff_mode_fails_when_snapshot_missing(tmp_path: Path) -> None:
     """Fail naming the missing path and the update flag when no snapshot exists."""
 
     snapshot_dir = tmp_path / "snapshots"
-    item = _snapshot_item(
-        monkeypatch, dags={"sample": _dag("sample")}, snapshot_dir=snapshot_dir, update=False
+    context, payload = _snapshot_context(
+        dags={"sample": _dag("sample")}, snapshot_dir=snapshot_dir, update=False
     )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="has no committed snapshot") as caught:
-        item.runtest()
+        smoke._run_dag_serialization_snapshot(context, payload)
 
     assert "--airflow-smoke-update" in str(caught.value)
 
 
-def test_snapshot_item_diff_mode_passes_when_snapshot_matches(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_snapshot_item_diff_mode_passes_when_snapshot_matches(tmp_path: Path) -> None:
     """Raise nothing when the committed snapshot matches the current serialization."""
 
     snapshot_dir = tmp_path / "snapshots"
     snapshot_dir.mkdir()
     (snapshot_dir / "sample.json").write_text('{\n  "dag_id": "sample"\n}\n', encoding="utf-8")
-    item = _snapshot_item(
-        monkeypatch,
+    context, payload = _snapshot_context(
         dags={"sample": _dag("sample")},
         snapshot_dir=snapshot_dir,
         update=False,
         serialize_dag=lambda _dag: {"dag_id": "sample"},
     )
 
-    item.runtest()
+    smoke._run_dag_serialization_snapshot(context, payload)
 
 
-def test_snapshot_item_diff_mode_fails_with_diff_on_drift(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_snapshot_item_diff_mode_fails_with_diff_on_drift(tmp_path: Path) -> None:
     """Fail with a unified diff body naming the dag_id when content drifted."""
 
     snapshot_dir = tmp_path / "snapshots"
     snapshot_dir.mkdir()
     (snapshot_dir / "sample.json").write_text('{\n  "dag_id": "sample"\n}\n', encoding="utf-8")
-    item = _snapshot_item(
-        monkeypatch,
+    context, payload = _snapshot_context(
         dags={"sample": _dag("sample")},
         snapshot_dir=snapshot_dir,
         update=False,
@@ -2165,13 +2082,13 @@ def test_snapshot_item_diff_mode_fails_with_diff_on_drift(
     )
 
     with pytest.raises(smoke.SmokeCheckFailure, match=r"Dag `sample` drifted") as caught:
-        item.runtest()
+        smoke._run_dag_serialization_snapshot(context, payload)
 
     assert "-{" in str(caught.value) or "+  " in str(caught.value)
 
 
 def test_snapshot_item_aggregates_serialize_failures_without_blocking_other_dags(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     """Report a per-Dag serialize failure while still processing every other Dag."""
 
@@ -2182,8 +2099,7 @@ def test_snapshot_item_aggregates_serialize_failures_without_blocking_other_dags
             raise ValueError("cannot serialize a lambda")
         return {"dag_id": "fine"}
 
-    item = _snapshot_item(
-        monkeypatch,
+    context, payload = _snapshot_context(
         dags={"broken": "explode", "fine": "fine"},
         snapshot_dir=snapshot_dir,
         update=True,
@@ -2191,7 +2107,7 @@ def test_snapshot_item_aggregates_serialize_failures_without_blocking_other_dags
     )
 
     with pytest.raises(smoke.SmokeCheckFailure, match="cannot serialize a lambda") as caught:
-        item.runtest()
+        smoke._run_dag_serialization_snapshot(context, payload)
 
     assert "Dag `broken`" in str(caught.value)
     assert (snapshot_dir / "fine.json").is_file()
@@ -3227,7 +3143,7 @@ def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
 
     A flat matcher over the union of every known smoke marker name would wrongly resolve
     `-m "smoke and not db_test"`: `db_test` names a marker on *some* smoke items
-    (`DagBagIntegrityItem`, `PoolReferencesExistItem`), so the union sees it as "present"
+    (`test_dag_bag_integrity`, `test_pool_references_exist`), so the union sees it as "present"
     and negating it evaluates to `False` -- even though the other bundled items genuinely
     lack `db_test` and the expression does select them.
     """

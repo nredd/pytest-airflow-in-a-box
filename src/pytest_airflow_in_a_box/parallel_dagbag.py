@@ -55,7 +55,8 @@ class RunRoot(Protocol):
     def logs_folder(self) -> Path: ...
 
 
-# The exact marker `smoke.NoDuplicateDagIdsItem` filters `import_errors` messages for.
+# The exact marker `smoke`'s `test_no_duplicate_dag_ids` check filters `import_errors`
+# messages for.
 # Owned here, not in `smoke.py`, because this module is the one that has to synthesize a
 # collision Airflow's own `DagBag.bag_dag` never sees (each shard's Dag bag is a separate
 # instance, so a same-`dag_id` collision spanning two shards is invisible to either one).
@@ -432,11 +433,11 @@ def merge_shard_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     Reproduces Airflow's own `DagBag.bag_dag` collision behavior across shards: the
     first-seen `dag_id` wins, and every later shard's colliding entry is dropped with a
-    synthesized `DUPLICATE_ID_MARKER` import-errors entry, so
-    `smoke.NoDuplicateDagIdsItem` -- which only ever filters `import_errors` for that
+    synthesized `DUPLICATE_ID_MARKER` import-errors entry, so `smoke`'s
+    `test_no_duplicate_dag_ids` check -- which only ever filters `import_errors` for that
     marker string -- keeps working unmodified. `dagbag_stats` concatenates (files are
-    disjoint across shards by construction), preserving `smoke.DagParseBudgetItem`'s
-    whole-corpus median. `runtime_lookups` dedupes across shards the same way each child
+    disjoint across shards by construction), preserving `smoke`'s `test_dag_parse_budget`
+    check's whole-corpus median. `runtime_lookups` dedupes across shards the same way each child
     already dedupes within its own shard.
 
     Parameters:
@@ -484,7 +485,7 @@ def merge_shard_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, Any]:
             # load-balancing loss -- see `shard_file_paths`) or tracking each file's
             # global discovery index through to merge time purely to pick a winner
             # that is otherwise inert -- the check that consumes this message
-            # (`smoke.NoDuplicateDagIdsItem`) only greps for `DUPLICATE_ID_MARKER`, so
+            # (`smoke`'s `test_no_duplicate_dag_ids`) only greps for `DUPLICATE_ID_MARKER`, so
             # both files are equally "the fix" from the user's side regardless of
             # which one is named loser. Both paths promise only that a collision is
             # detected and named, never a specific winner.
