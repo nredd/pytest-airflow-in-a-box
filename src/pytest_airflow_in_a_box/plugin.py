@@ -21,12 +21,14 @@ from pytest_airflow_in_a_box import _airflow_home, baseline, record, smoke
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
+    WORKER_ENV_DRIFT_INI,
     XDIST_WORKER_ENVIRONMENT_VARIABLE,
     XdistNode,
     configure_node,
     get_bootstrap_state,
     load_initial_state,
     validate_configure,
+    warn_if_worker_env_repaired,
 )
 from pytest_airflow_in_a_box.certification import warn_if_airflow_uncertified
 from pytest_airflow_in_a_box.collection import (
@@ -161,6 +163,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Allow an explicit Airflow storage base on a network filesystem.",
     )
     parser.addini("airflow_home", "Base directory for isolated Airflow run storage.", default="")
+    parser.addini(
+        WORKER_ENV_DRIFT_INI,
+        "Response when an xdist worker or isolated child inherits an Airflow environment "
+        "another plugin mutated: `error` or `repair`.",
+        default="error",
+    )
     group.addoption(
         "--airflow-db-backend",
         action="store",
@@ -408,6 +416,7 @@ def pytest_configure(config: pytest.Config) -> None:
     apply_default_filterwarnings(config)
     record.configure(config)
     warn_if_migration_strict_is_a_noop(config)
+    warn_if_worker_env_repaired(config)
     warn_if_airflow_uncertified(config)
 
 

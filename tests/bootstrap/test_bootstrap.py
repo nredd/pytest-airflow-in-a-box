@@ -391,3 +391,65 @@ def test_two_xdist_workers_share_controller_state(pytester: pytest.Pytester) -> 
     assert len({record["secret"] for record in records}) == 1
     assert len({record["owner_pid"] for record in records}) == 1
     assert not Path(records[0]["root"]).exists()
+
+
+_FOREIGN_MUTATOR_CONFTEST = """
+import os
+
+# A conftest-imported plugin that rewrites `AIRFLOW__*` at module scope, the shape
+# `tests_common/pytest_plugin.py` has upstream. This runs after the plugin exported
+# its bootstrap state, on the controller and again in every worker process.
+os.environ["AIRFLOW__CORE__PLUGINS_FOLDER"] = os.path.join(os.getcwd(), "foreign-plugins")
+"""
+
+
+def test_foreign_env_mutation_aborts_a_worker_with_a_diagnosis(
+    pytester: pytest.Pytester,
+) -> None:
+    """Explain the likely cause when a worker inherits a mutated Airflow environment.
+
+    The reproduction from the issue: the controller survives because the mutation lands
+    after its own bootstrap, but every worker inherits the result and trips the drift
+    check before it collects anything.
+
+    Parameters:
+        pytester: pytest.Pytester driving a real nested session.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/241
+    """
+
+    pytester.makeconftest(_FOREIGN_MUTATOR_CONFTEST)
+    pytester.makepyfile("def test_needs_a_worker():\n    assert True\n")
+
+    result = pytester.runpytest_subprocess("-q", "-p", "xdist", "-n", "2")
+
+    assert result.ret != 0
+    output = "\n".join(result.outlines + result.errlines)
+    assert "disagrees with state: `AIRFLOW__CORE__PLUGINS_FOLDER`" in output
+    assert "another pytest plugin or conftest likely mutated `AIRFLOW__*`" in output
+    assert "airflow_worker_env_drift = repair" in output
+
+
+def test_repair_policy_lets_a_worker_coexist_with_a_foreign_mutator(
+    pytester: pytest.Pytester,
+) -> None:
+    """Keep the run alive under `repair`, and say so where the user will see it.
+
+    Parameters:
+        pytester: pytest.Pytester driving a real nested session.
+
+    References:
+        https://github.com/nredd/pytest-airflow-in-a-box/issues/241
+    """
+
+    pytester.makefile(".ini", pytest="[pytest]\nairflow_worker_env_drift = repair\n")
+    pytester.makeconftest(_FOREIGN_MUTATOR_CONFTEST)
+    pytester.makepyfile("def test_needs_a_worker():\n    assert True\n")
+
+    result = pytester.runpytest_subprocess("-q", "-p", "xdist", "-n", "2")
+
+    result.assert_outcomes(passed=1, warnings=2)
+    output = "\n".join(result.outlines + result.errlines)
+    assert "Re-installed 1 inherited Airflow variable(s)" in output
+    assert "`AIRFLOW__CORE__PLUGINS_FOLDER`" in output
