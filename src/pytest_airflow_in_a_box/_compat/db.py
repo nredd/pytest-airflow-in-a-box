@@ -19,7 +19,12 @@ vacuously satisfied, and its own optional-spec set for symbols that arrived in
 Out of scope: ``deadline_alert`` definitions (user configuration, like asset
 definitions) and Airflow-internal bookkeeping tables; clearing ``dags``
 without ``assets`` leaves asset definitions and their Dag reference rows in
-place.
+place. ``backfill`` is the one group whose rows are referenced BY another group
+rather than referencing it: ``dag_run.backfill_id`` has no ``ondelete`` action, so
+clearing ``backfill`` implies clearing ``runs`` first, the reverse of every other
+``_IMPLIED`` entry; the ``BackfillDagRun`` join table is instead folded directly
+into ``runs``' own specs, since it references ``dag_run`` the same way
+``AssetPartitionDagRun`` and the asset association table already do.
 
 References:
     https://airflow.apache.org/docs/apache-airflow/stable/database-erd-ref.html
@@ -56,20 +61,18 @@ _TABLE_REGISTRY: Registry = (
     ),
     ("deadlines", (("airflow.models.deadline", "Deadline"),)),
     (
-        "backfill",
-        (
-            ("airflow.models.backfill", "BackfillDagRun"),
-            ("airflow.models.backfill", "Backfill"),
-        ),
-    ),
-    (
         "runs",
         (
+            ("airflow.models.backfill", "BackfillDagRun"),
             ("airflow.models.asset", "association_table"),
             ("airflow.models.asset", "AssetPartitionDagRun"),
             ("airflow.models.dagrun", "DagRun"),
         ),
     ),
+    # Placed after `runs`: `dag_run.backfill_id` references `backfill.id` with no
+    # `ondelete` action, so every DagRun that might reference a Backfill must be gone
+    # before its row can be deleted.
+    ("backfill", (("airflow.models.backfill", "Backfill"),)),
     (
         "serialized_dags",
         (
@@ -124,9 +127,13 @@ _IMPLIED: dict[str, tuple[str, ...]] = {
     "bundles": ("dags",),
     "dags": ("serialized_dags", "runs"),
     "serialized_dags": ("runs",),
-    "runs": ("deadlines", "task_instances", "backfill"),
+    "runs": ("deadlines", "task_instances"),
     "task_instances": ("xcom",),
     "triggers": ("task_instances",),
+    # `backfill` is the odd one out: unlike every other entry, its rows are
+    # REFERENCED BY `runs` (`dag_run.backfill_id`), not the reverse, so clearing it
+    # implies clearing `runs` first rather than the other way around.
+    "backfill": ("runs",),
 }
 
 # Present only on some certified releases; skipped where unresolvable and
@@ -140,8 +147,8 @@ _OPTIONAL_SPECS: frozenset[ModelSpec] = frozenset(
 )
 
 # The 2.x registry mirrors the 3.x group sequence exactly so shared suites and the
-# `TableGroup` enum stay family-independent: `deadlines` and `bundles` are vacuously
-# satisfied (the tables arrived in 3.x), `assets` maps to the renamed `dataset*`
+# `TableGroup` enum stay family-independent: `deadlines`, `backfill`, and `bundles` are
+# vacuously satisfied (the tables arrived in 3.x), `assets` maps to the renamed `dataset*`
 # tables, and the XCom delete target is the `BaseXCom` ORM model because 2.x `XCom`
 # is a backend-resolved alias. Spike-verified on 2.9.3/2.10.5/2.11.2 (2026-08-11) and
 # on 2.7.3/2.8.4 (2026-08-14, #139), where every required spec resolves unchanged and
@@ -160,7 +167,6 @@ _V2_TABLE_REGISTRY: Registry = (
         ),
     ),
     ("deadlines", ()),
-    ("backfill", ()),
     (
         "runs",
         (
@@ -168,6 +174,7 @@ _V2_TABLE_REGISTRY: Registry = (
             ("airflow.models.dagrun", "DagRun"),
         ),
     ),
+    ("backfill", ()),
     (
         "serialized_dags",
         (

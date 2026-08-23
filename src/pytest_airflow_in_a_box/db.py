@@ -43,12 +43,15 @@ def clear_db(*, tables: Collection[TableGroup] | None = None) -> None:
     """Clear the requested table groups plus every transitively implied group.
 
     Requesting a group also clears the groups whose rows reference it (for
-    example ``RUNS`` clears deadlines, task instances, backfill rows, and XCom
-    rows, and ``TRIGGERS`` clears the task instances that reference triggers), because
-    the tuned test database does not enforce foreign keys. Clearing
-    ``CONNECTIONS`` recreates Airflow's default connections. Clearing ``DAGS``
-    without ``ASSETS`` deliberately leaves asset definitions and their Dag
-    reference rows in place.
+    example ``RUNS`` clears deadlines and task instances, and ``TRIGGERS`` clears
+    the task instances that reference triggers), because the tuned test database
+    does not enforce foreign keys. ``BACKFILL`` is the reverse case: its rows are
+    referenced BY ``RUNS`` (a DagRun can carry a `backfill_id`), so clearing
+    ``BACKFILL`` clears ``RUNS`` first. Clearing ``CONNECTIONS`` recreates
+    Airflow's default connections. Clearing ``DAGS`` without ``ASSETS``
+    deliberately leaves asset definitions and their Dag reference rows in place,
+    and clearing ``RUNS`` without ``BACKFILL`` deliberately leaves completed
+    backfill definitions in place.
 
     Parameters:
         tables: Collection[TableGroup] | None selecting groups to clear, or

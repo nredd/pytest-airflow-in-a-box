@@ -886,8 +886,8 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
     session = record.session
     session.rollback()
     if not _is_v2():
-        # Backfill rows arrived in 3.x and FK-reference `dag_run.id`; deleting a
-        # referenced DagRun without clearing them first raises a FK violation.
+        # Backfill rows arrived in 3.x. `BackfillDagRun` FK-references `dag_run.id`, so
+        # deleting a referenced DagRun without clearing it first raises a FK violation.
         from airflow.models.backfill import BackfillDagRun
 
         session.execute(
@@ -898,6 +898,16 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
         if dag_run is not None:
             session.delete(dag_run)
     session.flush()
+
+    if not _is_v2():
+        # `dag_run.backfill_id` FK-references `backfill.id` with no `ondelete` action,
+        # so the Backfill parent can only go after every DagRun that might reference it
+        # is gone -- the delete loop and flush above. Deleted too (not just its
+        # `BackfillDagRun` children) so a fixture-owned Dag leaves no backfill metadata
+        # behind, matching `clear_db`'s `backfill` group.
+        from airflow.models.backfill import Backfill
+
+        session.execute(delete(Backfill).where(Backfill.dag_id == record.dag_id))
 
     if _is_v2():
         # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id`. The

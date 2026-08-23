@@ -354,15 +354,18 @@ def test_low_level_cleanup_preserves_referenced_shared_bundle() -> None:
 
 
 def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
-    """Delete backfill rows that FK-reference an owned DagRun before deleting the run.
+    """Delete both the `BackfillDagRun` referencing an owned DagRun and its `Backfill` parent.
 
     Regression test for issue #240: a leaked `BackfillDagRun` row referencing a
     fixture-owned DagRun used to make cleanup raise `sqlite3.IntegrityError: FOREIGN
     KEY constraint failed` instead of `DagCleanupError` wrapping a real failure.
+    `DagRun.backfill_id` is set too -- the FK with no `ondelete` action that requires
+    the DagRun gone before its `Backfill` parent can be deleted.
     """
 
     from airflow.models.backfill import Backfill, BackfillDagRun
     from airflow.sdk.timezone import utcnow
+    from sqlalchemy import update
 
     session = dag_compat.open_dag_session("backfill_cleanup")
     record = dag_compat.DagPersistenceRecord(
@@ -395,12 +398,16 @@ def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
         setup_session.add(
             BackfillDagRun(backfill_id=backfill.id, dag_run_id=dag_run.id, sort_ordinal=1)
         )
+        setup_session.execute(
+            update(DagRun).where(DagRun.id == dag_run.id).values(backfill_id=backfill.id)
+        )
 
     dag_compat.cleanup_dag(record)
 
     with create_session() as verify_session:
         assert verify_session.get(DagRun, dag_run.id) is None
         assert verify_session.scalar(select(func.count()).select_from(BackfillDagRun)) == 0
+        assert verify_session.scalar(select(func.count()).select_from(Backfill)) == 0
 
 
 def test_cleanup_accepts_missing_owned_rows() -> None:
