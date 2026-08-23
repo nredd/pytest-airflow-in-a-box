@@ -752,7 +752,7 @@ def test_render_doctor_report_combines_every_section(
     stash[doctor.INI_OVERRIDES_KEY] = {("core", "dagbag_import_timeout"): "12.5"}
     fake_config: Any = SimpleNamespace(
         getoption=lambda _name, default=None: default,
-        getini=lambda _name: False,
+        getini=lambda name: "error" if name == doctor.WORKER_ENV_DRIFT_INI else False,
         stash=stash,
     )
     report = doctor.render_doctor_report(config=fake_config)
@@ -764,6 +764,8 @@ def test_render_doctor_report_combines_every_section(
     assert "- `core.dagbag_import_timeout` = `12.5`" in report
     assert "## Executor" in report
     assert "## Migration-strict" in report
+    assert "## Worker environment drift" in report
+    assert "- `airflow_worker_env_drift`: `error`" in report
     assert "## Dag coverage" in report
     assert "## Versions and capabilities" in report
     assert "## API server" in report
@@ -794,6 +796,8 @@ def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> No
             "*core.executor*: `*`",
             "*## Migration-strict*",
             "*--airflow-migration-strict*: disabled*",
+            "*## Worker environment drift*",
+            "*airflow_worker_env_drift*: `error`*",
             "*## Dag coverage*",
             "*- Dag folder: *scratch fallback*",
             "*- Collection folder: not configured*",
@@ -828,3 +832,14 @@ def test_format_capability_value_marks_unprobed_fields() -> None:
     """Render None capability fields as unprobed rather than a bare `None`."""
 
     assert doctor._format_capability_value(None) == "unprobed on this family"
+
+
+def test_worker_env_drift_section_spells_out_the_repair_caveat() -> None:
+    """Say what `repair` costs, so the report is not read as a clean bill of health."""
+
+    fake_config: Any = SimpleNamespace(getini=lambda _name: "repair")
+
+    assert doctor._worker_env_drift_section(fake_config) == [
+        "- `airflow_worker_env_drift`: `repair` -- a worker re-installs this run's "
+        "variables and continues; isolation past bootstrap is not guaranteed"
+    ]
