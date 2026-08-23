@@ -56,6 +56,8 @@ from pytest_airflow_in_a_box.fixtures import (
     api_client,
     api_server_url,
     cap_structlog,
+    create_dummy_dag,
+    create_task_instance,
     dag_bag,
     dag_maker,
     render_task,
@@ -63,6 +65,7 @@ from pytest_airflow_in_a_box.fixtures import (
     run_task,
     session,
     task_context,
+    testing_dag_bundle,
 )
 from pytest_airflow_in_a_box.fixtures.dagbag import (
     DAG_BAG_FIXTURE_NAME,
@@ -108,6 +111,8 @@ __all__ = (
     "api_client",
     "api_server_url",
     "cap_structlog",
+    "create_dummy_dag",
+    "create_task_instance",
     "dag_bag",
     "dag_maker",
     "get_bootstrap_state",
@@ -116,6 +121,7 @@ __all__ = (
     "run_task",
     "session",
     "task_context",
+    "testing_dag_bundle",
 )
 
 

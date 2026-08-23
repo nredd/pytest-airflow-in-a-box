@@ -136,6 +136,8 @@ The full reference, with scopes, database behavior, and Airflow-2.x availability
 | ------- | --------- |
 | `dag_bag` | All Dags parsed from the configured Dag directory, once per worker process |
 | `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it |
+| `create_task_instance` | One call: a `TaskInstance` with its Dag and DagRun rows, upstream-parity |
+| `create_dummy_dag` | One call: a single-`EmptyOperator` Dag plus a scheduled DagRun, upstream-parity |
 | `run_dag` | Run an externally-authored Dag, e.g. one pulled from `dag_bag` |
 | `run_task` | DB-free in-process runner for a single operator or standalone `@task` |
 | `render_task` | DB-free rendering of an operator's `template_fields`, no `execute()` |
@@ -152,6 +154,7 @@ The full reference, with scopes, database behavior, and Airflow-2.x availability
 | `api_client` | Authenticated client bound to the isolated API server |
 | `api_base_url` | The live server URL, published to Airflow config for `api_test` tests |
 | `cap_structlog` | Capture structlog events emitted during the test |
+| `testing_dag_bundle` | Register the shared `testing` Dag bundle row upstream tests write against |
 
 ## Markers
 
