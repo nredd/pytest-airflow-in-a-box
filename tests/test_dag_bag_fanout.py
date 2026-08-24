@@ -12,6 +12,7 @@ References:
 
 from __future__ import annotations
 
+import json
 import platform
 import sys
 from pathlib import Path
@@ -216,6 +217,18 @@ _DAG_CORPUS_DUMP_TEST = """
                 "task_ids": sorted(task.task_id for task in dag.tasks),
                 "can_be_scheduled": dag.can_be_scheduled,
                 "catchup": dag.catchup,
+                # Full byte-identical `serialized` dicts are not asserted: nothing
+                # promises the Dag serializer's output is itself immune to per-process
+                # detail leaking in (it embeds absolute paths, and Airflow's own
+                # serializer format has changed shape across supported releases). The
+                # presence of a serialization plus the task ids it actually encoded is
+                # the meaningful, portable substructure fan-out and serial both owe.
+                "serialized_present": dag.serialized is not None,
+                "serialized_task_ids": (
+                    sorted(task["__var"]["task_id"] for task in dag.serialized["tasks"])
+                    if dag.serialized is not None
+                    else None
+                ),
             }}
             for dag_id, dag in dag_corpus.dags.items()
         }}
@@ -227,14 +240,16 @@ _DAG_CORPUS_DUMP_TEST = """
 def test_fanout_and_serial_dag_corpus_metadata_match(pytester: pytest.Pytester) -> None:
     """Build identical `dag_corpus` metadata whether or not the parse was fanned out.
 
-    The corpus's portable, non-serialized fields (`dags`/`tags`/`fileloc`/task ids/
-    `can_be_scheduled`/`catchup`) must not depend on whether the parse was sharded
-    across subprocesses or done in one process -- the "equivalent serial and fan-out
-    runs" acceptance criterion from issue #277, made concrete. `serialized`/
-    `serialization_error`/`serialization_seconds` are deliberately excluded from the
-    comparison: neither run here has a consumer needing a serialized Dag, so both
-    already leave every Dag unserialized, which would make comparing those fields
-    vacuous either way.
+    The corpus's portable fields (`dags`/`tags`/`fileloc`/task ids/`can_be_scheduled`/
+    `catchup`, plus whether serialization happened and which task ids it covered) must
+    not depend on whether the parse was sharded across subprocesses or done in one
+    process -- the "equivalent serial and fan-out runs expose the same metadata"
+    acceptance criterion from issue #277, made concrete. Both runs here request
+    `dag_corpus` and nothing else, so `_corpus_serialization_needed` treats that as
+    "serialize every Dag" in both -- unlike an earlier version of this test, whose
+    docstring wrongly assumed neither run serializes anything, making a
+    serialization comparison here vacuous. It is not: every Dag is serialized both
+    ways, so `serialized_present`/`serialized_task_ids` are exercised for real.
     """
 
     fanout_dump = pytester.path / "fanout.json"
@@ -253,7 +268,80 @@ def test_fanout_and_serial_dag_corpus_metadata_match(pytester: pytest.Pytester) 
     serial_result = pytester.runpytest_subprocess("-q", f"--dag-folder={CORPUS}")
 
     serial_result.assert_outcomes(passed=1)
-    assert fanout_dump.read_text(encoding="utf-8") == serial_dump.read_text(encoding="utf-8")
+    fanout_payload = json.loads(fanout_dump.read_text(encoding="utf-8"))
+    serial_payload = json.loads(serial_dump.read_text(encoding="utf-8"))
+    assert fanout_payload == serial_payload
+    assert fanout_payload
+    assert all(dag["serialized_present"] for dag in fanout_payload.values())
+
+
+_DAG_CORPUS_IMPORT_ERRORS_DUMP_TEST = """
+    import json
+    from pathlib import Path
+
+    DUMP_PATH = Path({dump_path!r})
+
+
+    def test_dump_dag_corpus_import_errors(dag_corpus):
+        payload = {{
+            "dag_ids": sorted(dag_corpus.dags),
+            "import_errors": dict(dag_corpus.import_errors),
+        }}
+        DUMP_PATH.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+"""
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_fanout_and_serial_dag_corpus_import_errors_agree_on_a_duplicate_dag_id(
+    pytester: pytest.Pytester,
+) -> None:
+    """Report the same duplicate-`dag_id` collision through `dag_corpus`, either way.
+
+    Companion to `test_fanout_detects_duplicate_dag_id_spanning_two_shards`, which pins
+    this "same ... duplicate-DAG-id behavior" acceptance criterion (issue #277) for the
+    bundled smoke catalog's `test_no_duplicate_dag_ids` check; this pins the same
+    guarantee for the public `dag_corpus` fixture directly, reusing the same
+    `_DUPLICATE_DAG` two-shard layout. The losing fileloc is NOT compared for exact
+    equality: `parallel_dagbag.merge_shard_payloads` documents that which file lands as
+    winner vs. loser can differ from a serial parse's own choice (shard-merge order
+    tracks shard assignment, not original discovery order) -- confirmed empirically,
+    this really does flip between the two runs below. Both runs must still agree on
+    which Dag survives, that exactly one collision was detected, and that both
+    colliding files are named in it.
+    """
+
+    pytester.makeini(_FANOUT_INI)
+    dag_folder = pytester.path / "dags"
+    (dag_folder / "team_a").mkdir(parents=True)
+    (dag_folder / "team_b").mkdir(parents=True)
+    one_py = dag_folder / "team_a" / "one.py"
+    two_py = dag_folder / "team_b" / "two.py"
+    one_py.write_text(dedent(_DUPLICATE_DAG), encoding="utf-8")
+    two_py.write_text(dedent(_DUPLICATE_DAG), encoding="utf-8")
+
+    fanout_dump = pytester.path / "fanout.json"
+    pytester.makepyfile(_DAG_CORPUS_IMPORT_ERRORS_DUMP_TEST.format(dump_path=str(fanout_dump)))
+
+    fanout_result = pytester.runpytest_subprocess(
+        "-q", f"--dag-folder={dag_folder}", "--airflow-dag-bag-fanout"
+    )
+
+    fanout_result.assert_outcomes(passed=1)
+
+    serial_dump = pytester.path / "serial.json"
+    pytester.makepyfile(_DAG_CORPUS_IMPORT_ERRORS_DUMP_TEST.format(dump_path=str(serial_dump)))
+
+    serial_result = pytester.runpytest_subprocess("-q", f"--dag-folder={dag_folder}")
+
+    serial_result.assert_outcomes(passed=1)
+    for dump in (fanout_dump, serial_dump):
+        payload = json.loads(dump.read_text(encoding="utf-8"))
+        assert payload["dag_ids"] == ["dup_across_shards"]
+        ((fileloc, message),) = payload["import_errors"].items()
+        assert "AirflowDagDuplicatedIdException" in message
+        assert fileloc in {str(one_py), str(two_py)}
+        assert str(one_py) in message
+        assert str(two_py) in message
 
 
 _USES_SIBLING_PACKAGE_DAG = """
