@@ -201,6 +201,34 @@ def _serialization_sample_size(config: pytest.Config) -> int:
     return size
 
 
+def _effective_sample_size(config: pytest.Config) -> int:
+    """Read the serialization sample size the corpus builder must actually honor.
+
+    A bare `_serialization_sample_size` read is correct for validating the user's raw ini
+    configuration (see `smoke._validate_smoke_options`), but wrong for deciding how much of
+    the corpus to serialize once a `dag_corpus` consumer exists: `_corpus_serialization_needed`
+    already treats that case as "serialize every Dag", so honoring a nonzero configured sample
+    size here would silently leave some Dags unserialized despite that guarantee. Reduces to
+    `0` ("every Dag", the existing sentinel) whenever `DAG_CORPUS_WANTS_SERIALIZATION_KEY` is
+    stashed, and passes the configured value through unchanged otherwise -- including the
+    smoke-only case, where sampling remains an intentional optimization.
+
+    Parameters:
+        config: pytest.Config containing the `airflow_serialization_sample_size` ini value and
+            the `DAG_CORPUS_WANTS_SERIALIZATION_KEY` request marker.
+
+    Returns:
+        int containing the sample size to actually use; ``0`` means every Dag.
+
+    Raises:
+        pytest.UsageError: The ini value is not a non-negative integer.
+    """
+
+    if config.stash.get(DAG_CORPUS_WANTS_SERIALIZATION_KEY, False):
+        return 0
+    return _serialization_sample_size(config)
+
+
 def _serialization_sample_seed(config: pytest.Config) -> str:
     """Read the seed selecting which Dags land in the serialization sample.
 
@@ -304,7 +332,11 @@ def _select_serialization_sample(config: pytest.Config, dag_ids: Iterable[str]) 
     """Select the Dag IDs to serialize, honoring `_corpus_serialization_needed`.
 
     Skips sampling (and any Airflow DAG serializer call downstream) entirely once
-    `_corpus_serialization_needed` reports nothing still needs a serialized Dag.
+    `_corpus_serialization_needed` reports nothing still needs a serialized Dag. Reads
+    `_effective_sample_size`, not the raw configured value, so a `dag_corpus` request
+    always selects every Dag even when `airflow_serialization_sample_size` is nonzero --
+    matching `_corpus_serialization_needed`'s own "serialize everything" guarantee for
+    that case instead of silently honoring a sample meant for the smoke catalog alone.
 
     Parameters:
         config: pytest.Config containing plugin options and ini values.
@@ -317,7 +349,7 @@ def _select_serialization_sample(config: pytest.Config, dag_ids: Iterable[str]) 
     if not _corpus_serialization_needed(config):
         return []
     dag_ids = list(dag_ids)
-    sample_size = _serialization_sample_size(config)
+    sample_size = _effective_sample_size(config)
     seed = _serialization_sample_seed(config)
     selected = _sampled_dag_ids(dag_ids, sample_size=sample_size, seed=seed)
     if len(selected) < len(dag_ids):
@@ -392,15 +424,20 @@ def _build_dag_corpus(session: pytest.Session, config: pytest.Config) -> DagCorp
         # `fanout_enabled` is checked first and is filesystem-free, so the default
         # (disabled) case never pays for a Dag file walk it will not use. A seed-keyed
         # serialization sample needs the whole corpus's `dag_id` set, which no single
-        # fan-out shard can see, so a nonzero sample size blocks fan-out entirely (a
-        # shard cannot decide on its own whether one of its Dags falls inside the
-        # sample) -- this is unrelated to whether serialization is needed at all, which
-        # `serialize=_corpus_serialization_needed(config)` below decides independently:
-        # even at the default sample size (0, "serialize everything"), a smoke-only run
-        # with `airflow_smoke_disable` covering every serialization-consuming item means
-        # nothing needs a serialized Dag, and fan-out still parallelizes the (usually
-        # dominant) import cost without ever resolving or calling the Dag serializer.
-        if fanout_enabled(config) and _serialization_sample_size(config) == 0:
+        # fan-out shard can see, so an actually-nonzero effective sample size blocks
+        # fan-out entirely (a shard cannot decide on its own whether one of its Dags
+        # falls inside the sample) -- `_effective_sample_size` collapses to `0` whenever
+        # a `dag_corpus` consumer exists, since that case always serializes every Dag
+        # (see `_corpus_serialization_needed`), so it no longer blocks fan-out just
+        # because the smoke catalog's own `airflow_serialization_sample_size` happens to
+        # be configured nonzero. This is unrelated to whether serialization is needed at
+        # all, which `serialize=_corpus_serialization_needed(config)` below decides
+        # independently: even at sample size `0` ("serialize everything"), a smoke-only
+        # run with `airflow_smoke_disable` covering every serialization-consuming item
+        # means nothing needs a serialized Dag, and fan-out still parallelizes the
+        # (usually dominant) import cost without ever resolving or calling the Dag
+        # serializer.
+        if fanout_enabled(config) and _effective_sample_size(config) == 0:
             file_paths = list_dag_file_paths(dag_folder)
             if should_fan_out(len(file_paths), config):
                 try:

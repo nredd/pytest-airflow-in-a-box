@@ -244,6 +244,31 @@ def test_serialization_sample_size_rejects_malformed_values(value: object) -> No
         dagcorpus._serialization_sample_size(_config(sample_size=value))
 
 
+def test_effective_sample_size_passes_through_when_dag_corpus_not_requested() -> None:
+    """Return the raw configured sample size absent a `dag_corpus` request.
+
+    Matches `_serialization_sample_size` exactly in this case -- the smoke-only sampling
+    optimization is unaffected by `_effective_sample_size`'s existence.
+    """
+
+    assert dagcorpus._effective_sample_size(_config()) == 0
+    assert dagcorpus._effective_sample_size(_config(sample_size="5")) == 5
+
+
+def test_effective_sample_size_collapses_to_zero_when_dag_corpus_requested() -> None:
+    """Ignore a nonzero configured sample size once `dag_corpus` is requested.
+
+    `_corpus_serialization_needed` already treats a `dag_corpus` request as "serialize
+    every Dag"; `_effective_sample_size` must agree, or `_select_serialization_sample`
+    would silently honor a smoke-catalog sample size instead.
+    """
+
+    config = _config(sample_size="2")
+    dagcorpus.mark_dag_corpus_requested(config)
+
+    assert dagcorpus._effective_sample_size(config) == 0
+
+
 def test_serialization_sample_seed_reads_configured_value() -> None:
     """Return the configured seed string, defaulting to '0'."""
 
@@ -466,6 +491,46 @@ def test_dag_corpus_build_extracts_portable_data(monkeypatch: pytest.MonkeyPatch
     assert os.environ["AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT"] == "12.5"
 
 
+def test_dag_corpus_serializes_every_dag_despite_a_configured_sample_size_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serialize every Dag once `dag_corpus` is requested, regardless of the sample size.
+
+    Literal repro for the `_effective_sample_size` fix: 8 Dags, `airflow_serialization_
+    sample_size` configured to 2, smoke disabled. Before the fix, `_select_serialization_
+    sample` read the raw configured sample size unconditionally once past the all-or-
+    nothing `_corpus_serialization_needed` gate, so only 2 of the 8 Dags ended up
+    serialized -- silently contradicting the documented guarantee that requesting
+    `dag_corpus` at all serializes every Dag.
+    """
+
+    dags = {
+        f"dag_{i}": SimpleNamespace(
+            tags=set(), tasks=[], timetable=SimpleNamespace(can_be_scheduled=True)
+        )
+        for i in range(8)
+    }
+    dag_bag = SimpleNamespace(dags=dags, import_errors={}, dagbag_stats=[])
+
+    monkeypatch.setattr(dagcorpus, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(dagcorpus, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
+    monkeypatch.setattr(dagcorpus, "record_secrets_lookups", _fake_recorder([]))
+    monkeypatch.setattr(
+        dagcorpus,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=lambda _dag: {"dag_id": "x"}),
+    )
+
+    config = _config(parse_timeout="1", sample_size="2")
+    dagcorpus.mark_dag_corpus_requested(config)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    corpus = dagcorpus._build_dag_corpus(session, config)
+
+    assert len(corpus.dags) == 8
+    assert all(dag.serialized is not None for dag in corpus.dags.values())
+
+
 def test_dag_corpus_falls_back_to_serial_parse_when_fanout_fails(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -528,6 +593,97 @@ def test_dag_corpus_skips_fanout_below_the_minimum_file_count(
     )
 
     assert set(corpus.dags) == {"good"}
+
+
+def test_dag_corpus_fanout_not_blocked_by_sample_size_when_dag_corpus_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not let a nonzero configured sample size block fan-out once `dag_corpus` is requested.
+
+    Repro for the `_effective_sample_size` fix on the fan-out-gating side: before it, the
+    gate in `_build_dag_corpus` read the raw `airflow_serialization_sample_size`
+    unconditionally, so a `dag_corpus` consumer plus a nonzero configured sample size
+    blocked fan-out entirely -- even though the reasoning behind the gate (a single shard
+    cannot know whether one of its Dags falls inside a corpus-wide sample) does not apply
+    once `dag_corpus`'s "serialize everything" guarantee means nothing is actually being
+    sampled.
+    """
+
+    called = False
+
+    def fake_fan_out(**_kwargs: object) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return {"import_errors": {}, "dagbag_stats": [], "runtime_lookups": [], "dags": {}}
+
+    def _fail_if_called(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("must not fall back to a serial parse")
+
+    monkeypatch.setattr(dagcorpus, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(
+        dagcorpus, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
+    )
+    monkeypatch.setattr(dagcorpus, "list_dag_file_paths", lambda _folder: ["dags/good.py"])
+    monkeypatch.setattr(dagcorpus, "fan_out_dag_bag", fake_fan_out)
+    monkeypatch.setattr(dagcorpus, "build_dag_bag", _fail_if_called)
+
+    config = _config(parse_timeout="1", fanout=True, fanout_min_files="0", sample_size="2")
+    dagcorpus.mark_dag_corpus_requested(config)
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    corpus = dagcorpus._build_dag_corpus(session, config)
+
+    assert called is True
+    assert corpus.dags == {}
+
+
+def test_dag_corpus_fanout_still_blocked_by_sample_size_absent_a_dag_corpus_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserve the original smoke-only sampling/fan-out-blocking behavior.
+
+    Pins that the `_effective_sample_size` fix only changes behavior once a `dag_corpus`
+    consumer exists: absent a request marker, `_effective_sample_size` passes the
+    configured `airflow_serialization_sample_size` straight through, so a nonzero value
+    still blocks fan-out entirely and the smoke catalog's own sampling optimization keeps
+    applying, exactly as before fix #2.
+    """
+
+    def _fail_if_called(**_kwargs: object) -> Any:
+        raise AssertionError("fan-out must stay blocked by a nonzero sample size")
+
+    dags = {
+        f"dag_{i}": SimpleNamespace(
+            tags=set(), tasks=[], timetable=SimpleNamespace(can_be_scheduled=True)
+        )
+        for i in range(4)
+    }
+    dag_bag = SimpleNamespace(dags=dags, import_errors={}, dagbag_stats=[])
+
+    monkeypatch.setattr(dagcorpus, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(
+        dagcorpus, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
+    )
+    monkeypatch.setattr(dagcorpus, "list_dag_file_paths", lambda _folder: ["dags/good.py"])
+    monkeypatch.setattr(dagcorpus, "fan_out_dag_bag", _fail_if_called)
+    monkeypatch.setattr(dagcorpus, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
+    monkeypatch.setattr(dagcorpus, "record_secrets_lookups", _fake_recorder([]))
+    monkeypatch.setattr(
+        dagcorpus,
+        "_get_dag_serializer",
+        lambda: SimpleNamespace(serialize_dag=lambda _dag: {"dag_id": "x"}),
+    )
+    monkeypatch.setattr(smoke, "_smoke_enabled", lambda _config: True)
+    monkeypatch.setattr(smoke, "_smoke_in_scope", lambda _config: True)
+    monkeypatch.setattr(smoke, "_smoke_serialization_needed", lambda _config: True)
+
+    config = _config(parse_timeout="1", fanout=True, fanout_min_files="0", sample_size="2")
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+
+    corpus = dagcorpus._build_dag_corpus(session, config)
+
+    serialized = [dag_id for dag_id, dag in corpus.dags.items() if dag.serialized is not None]
+    assert len(serialized) == 2
 
 
 def test_dag_corpus_build_records_runtime_secrets_lookups(
