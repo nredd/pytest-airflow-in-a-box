@@ -3,6 +3,13 @@
 `pytest-airflow-in-a-box` is an independent project informed by public Apache Airflow source,
 documentation, issue discussions, and mailing-list discussions.
 
+`skills/mattpocock/` is a git submodule pointing at
+[`mattpocock/skills`](https://github.com/mattpocock/skills), pinned to commit
+`5b15a47f2d7150f545fbcacbfe381787fc0230dc` (`v1.2.3-36-g5b15a47`), MIT licensed
+(`skills/mattpocock/LICENSE`, copyright Matt Pocock). Bump the pin with `git -C
+skills/mattpocock fetch && git -C skills/mattpocock checkout <commit> && git add
+skills/mattpocock`.
+
 `src/pytest_airflow_in_a_box/_compat/taskrun.py::run_task_instance` is adapted from Apache Airflow
 `devel-common/src/tests_common/test_utils/taskinstance.py` at commit
 `2d374f71bc81202204ac0208df07b07c280668fa`, introduced by merge

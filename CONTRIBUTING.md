@@ -5,6 +5,7 @@
 Use Python 3.10 or newer and install the locked development environment:
 
 ```console
+git submodule update --init
 uv sync
 uv run prek install
 ```

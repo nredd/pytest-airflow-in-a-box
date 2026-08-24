@@ -27,6 +27,9 @@ jobs:
           # against `origin/main`; the default shallow, single-ref checkout never
           # fetches that branch, so towncrier can't resolve it and aborts.
           fetch-depth: 0
+          # `.claude/skills/` and `.agents/skills/` symlink into skills/mattpocock/, a
+          # submodule; without this the broken-symlink hooks below fail on an empty dir.
+          submodules: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
