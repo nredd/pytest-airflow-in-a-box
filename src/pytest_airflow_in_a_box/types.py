@@ -239,7 +239,15 @@ class DagMaker(Protocol):
 
         Parameters:
             dag_id: str | None containing an explicit bounded identifier, or ``None`` for a
-                deterministic test- and worker-specific identifier.
+                deterministic test- and worker-specific identifier. On a serial run,
+                re-using an explicit identifier this process itself persisted earlier
+                -- within one test or by a previous test whose cleanup leaked --
+                replaces the leftover metadata, matching upstream ``tests_common``
+                semantics. Everything else raises ``ValueError`` on context entry: an
+                identifier whose metadata this process never wrote, and any collision
+                at all on a ``pytest-xdist`` worker, where a leftover is
+                indistinguishable from another worker's live registration
+                (``pytest.mark.xdist_group`` remains the cross-worker mitigation).
             serialized: bool | None accepted for upstream ``tests_common`` contract
                 compatibility. Every Dag is serialized as part of persistence, so the
                 flag (and the ``need_serialized_dag`` marker it overrides) no longer
@@ -541,7 +549,10 @@ class RunDag(Protocol):
     before persisting, or the two workers may silently share one bundle row and have
     whichever tears down first delete metadata the other's still-running test depends on.
     Keep such tests on the same worker (e.g. via ``pytest.mark.xdist_group``) or accept that
-    they run serially. Metadata is cleaned up when the function-scoped fixture is finalized.
+    they run serially. On a serial run, adopting a ``dag_id`` this process itself
+    persisted earlier replaces the leftover metadata instead of raising; metadata this
+    process never wrote, and any collision on a ``pytest-xdist`` worker, is refused.
+    Metadata is cleaned up when the function-scoped fixture is finalized.
     """
 
     def __call__(
@@ -603,7 +614,9 @@ class RunDag(Protocol):
             pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
 
         Raises:
-            ValueError: ``dag.dag_id`` already has persisted metadata, ``run_after`` or
+            ValueError: ``dag.dag_id`` already has persisted metadata this process
+                never wrote (metadata this process itself persisted earlier is
+                replaced instead), ``run_after`` or
                 an explicit ``logical_date=None`` was passed on the Airflow 2.x family,
                 ``run_triggerer`` was combined with ``executor``, or ``dag_run_kwargs``
                 sets a key this method already supplies from its own parameters (e.g.

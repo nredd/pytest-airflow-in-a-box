@@ -14,6 +14,7 @@ def _empty_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate every test from process-level registry state."""
 
     monkeypatch.setattr(registry, "_AUTHORING_DAGS", {})
+    monkeypatch.setattr(registry, "_PERSISTED_DAG_IDS", set())
 
 
 def test_register_and_lookup_round_trip() -> None:
@@ -54,3 +55,31 @@ def test_unregister_removes_entry_and_is_idempotent() -> None:
     registry.unregister_authoring_dag("removed")
 
     assert registry.lookup_authoring_dag("removed") is None
+
+
+def test_persisted_dag_id_history_round_trip() -> None:
+    """Record a persisted identifier and report it as history."""
+
+    assert not registry.was_dag_id_persisted("history")
+
+    registry.record_persisted_dag_id("history")
+
+    assert registry.was_dag_id_persisted("history")
+
+
+def test_persisted_dag_id_history_survives_unregistration() -> None:
+    """Keep history entries after the live authoring registration is removed.
+
+    `cleanup_dag`'s `finally` always unregisters the authoring Dag, even when row
+    deletion fails -- ownership history must outlive that to tell a leaked
+    fixture-owned row from foreign metadata.
+    """
+
+    dag: Any = object()
+
+    registry.register_authoring_dag("leaked", dag)
+    registry.record_persisted_dag_id("leaked")
+    registry.unregister_authoring_dag("leaked")
+
+    assert registry.lookup_authoring_dag("leaked") is None
+    assert registry.was_dag_id_persisted("leaked")

@@ -311,7 +311,7 @@ def test_sync_dag_model_raises_after_exhausted_retries() -> None:
 def test_sync_dag_model_does_not_retry_a_foreign_integrity_error() -> None:
     """Keep a non-`dag_code` violation loud instead of absorbing it as the race.
 
-    A cross-worker `dag_id` collision that slips past `ensure_dag_absent`'s
+    A cross-worker `dag_id` collision that slips past `ensure_dag_registrable`'s
     non-locking check must fail the test, not silently take the update path over
     another worker's committed rows.
     """
@@ -751,6 +751,52 @@ def test_cleanup_dag_tolerates_an_absent_dag_model() -> None:
 
     assert session.deleted == []
     assert any("serialized_dag" in statement for statement in session.executed)
+    assert session.committed is True
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_purge_dag_metadata_deletes_the_v2_row_set() -> None:
+    """Purge a leaked v2 Dag's runs, serialized rows, and model, keeping `dag_code`.
+
+    The 2.x family has no backfill or `DagVersion` rows, and the `dag_code` row --
+    keyed on `fileloc`, shared across xdist workers testing one source file -- must
+    stay to avoid re-arming issue #157's insert race, matching `_cleanup_dag`.
+    """
+
+    class FakeSession:
+        """Record ORM and core delete traffic for the v2 purge probe."""
+
+        def __init__(self) -> None:
+            self.deleted: list[Any] = []
+            self.executed: list[str] = []
+            self.committed = False
+
+        def scalars(self, statement: Any) -> list[Any]:
+            del statement
+            return [SimpleNamespace(id=5, kind="DagRun:5")]
+
+        def delete(self, row: Any) -> None:
+            self.deleted.append(row)
+
+        def flush(self) -> None:
+            return None
+
+        def execute(self, statement: Any) -> None:
+            self.executed.append(str(statement))
+
+        def commit(self) -> None:
+            self.committed = True
+
+    session: Any = FakeSession()
+    dag_model = SimpleNamespace(kind="DagModel:fake_dag")
+
+    dag_module._purge_dag_metadata("fake_dag", session, dag_model)
+
+    assert session.deleted[0].kind == "DagRun:5"
+    assert session.deleted[-1] is dag_model
+    assert any("serialized_dag" in statement for statement in session.executed)
+    assert not any("dag_code" in statement for statement in session.executed)
+    assert not any("backfill" in statement for statement in session.executed)
     assert session.committed is True
 
 

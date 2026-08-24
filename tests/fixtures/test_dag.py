@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from pytest_airflow_in_a_box._compat import dag as dag_compat
+from pytest_airflow_in_a_box._compat import registry
 from pytest_airflow_in_a_box._compat.dag import DagCleanupError, DagPersistenceError
 from pytest_airflow_in_a_box.components import ComponentContractError
 from pytest_airflow_in_a_box.fixtures import dag as dag_fixture
@@ -104,6 +105,40 @@ def _row_counts(dag_id: str) -> tuple[int, int, int, int]:
                 )
             ),
         )
+
+
+FOREIGN_BUNDLE = "issue-262-foreign-bundle"
+
+
+def _seed_foreign_dag_model(dag_id: str) -> None:
+    """Insert one bare ``DagModel`` row this process never persisted.
+
+    Parameters:
+        dag_id: str identifying the foreign row; ``DagModel.bundle_name`` is NOT NULL
+            and FK-constrained, so a shared foreign bundle row backs it.
+    """
+
+    with create_session() as session:
+        if session.get(DagBundleModel, FOREIGN_BUNDLE) is None:
+            session.add(DagBundleModel(name=FOREIGN_BUNDLE))
+            session.flush()
+        session.add(DagModel(dag_id=dag_id, bundle_name=FOREIGN_BUNDLE))
+
+
+def _delete_foreign_dag_model(dag_id: str) -> None:
+    """Remove one seeded foreign ``DagModel`` row, asserting it survived the test.
+
+    Parameters:
+        dag_id: str identifying the foreign row.
+
+    Raises:
+        AssertionError: The refused registration deleted the foreign row anyway.
+    """
+
+    with create_session() as session:
+        model = session.get(DagModel, dag_id)
+        assert model is not None
+        session.delete(model)
 
 
 def test_default_id_context_and_required_metadata(
@@ -217,16 +252,52 @@ def test_context_cannot_be_entered_twice(dag_maker: DagMaker) -> None:
     assert _row_counts("single_entry") == (1, 1, 1, 1)
 
 
-def test_existing_dag_id_is_not_overwritten(dag_maker: DagMaker) -> None:
-    """Close a rejected context session while preserving existing owned metadata."""
+def test_recreating_owned_dag_id_replaces_metadata(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replace an identifier this process itself persisted, upstream-style.
 
-    with dag_maker(dag_id="duplicate_id"):
+    Upstream suites re-create short ids (`dag`, `test1`) within one test -- create,
+    mutate, re-create -- and `tests_common` re-syncs silently. The second context must
+    purge the first registration's rows and persist its own (issue #262). Replacement
+    is serial-only, so the worker marker is cleared to keep this test deterministic
+    under an xdist run of this suite.
+    """
+
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    with dag_maker(dag_id="issue_262_recreated"):
         EmptyOperator(task_id="original")
+    # A run (and its task instance) from the first registration exercises the purge's
+    # run-cascade path when the second registration replaces it.
+    dag_maker.create_dagrun()
 
-    with pytest.raises(ValueError, match="already exists"), dag_maker(dag_id="duplicate_id"):
+    with dag_maker(dag_id="issue_262_recreated"):
         EmptyOperator(task_id="replacement")
 
-    assert _row_counts("duplicate_id") == (1, 1, 1, 1)
+    assert _row_counts("issue_262_recreated") == (1, 1, 1, 1)
+    with create_session() as check:
+        run_count = check.scalar(
+            select(func.count()).select_from(DagRun).where(DagRun.dag_id == "issue_262_recreated")
+        )
+    assert run_count == 0
+    serialized = dag_maker.serialized_dag
+    assert serialized is not None
+    assert serialized.task_ids == ["replacement"]
+
+
+def test_foreign_dag_id_is_not_overwritten(dag_maker: DagMaker) -> None:
+    """Refuse an identifier whose metadata this process never persisted."""
+
+    _seed_foreign_dag_model("issue_262_foreign_maker")
+
+    with (
+        pytest.raises(ValueError, match="already exists"),
+        dag_maker(dag_id="issue_262_foreign_maker"),
+    ):
+        EmptyOperator(task_id="rejected")
+
+    _delete_foreign_dag_model("issue_262_foreign_maker")
 
 
 @pytest.mark.need_serialized_dag
@@ -313,6 +384,10 @@ def test_persistence_failure_is_wrapped_and_cleans_committed_rows(
 
     assert caught.value.__cause__ is failure
     assert _row_counts("failed_persistence") == (0, 0, 0, 0)
+    # Ownership history is recorded at the commit, not at full success: had the
+    # follow-up `_cleanup_dag` also failed here, the committed row would be this
+    # process's leftover and a later re-registration must replace it, not raise.
+    assert registry.was_dag_id_persisted("failed_persistence")
 
 
 def test_repeated_factory_calls_are_independent(dag_maker: DagMaker) -> None:
@@ -497,23 +572,40 @@ def test_borrowed_session_survives_context_body_error(
     assert _row_counts("borrowed_failed") == (0, 0, 0, 0)
 
 
-def test_borrowed_session_not_closed_when_dag_id_exists(
+def test_borrowed_session_replaces_owned_dag_id(
+    dag_maker: DagMaker,
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replace an owned identifier on a caller-supplied session without closing it."""
+
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    with dag_maker(dag_id="issue_262_borrowed_replaced"):
+        EmptyOperator(task_id="original")
+
+    with dag_maker(dag_id="issue_262_borrowed_replaced", session=session):
+        EmptyOperator(task_id="replacement")
+
+    assert session.get(DagModel, "issue_262_borrowed_replaced") is not None
+    assert _row_counts("issue_262_borrowed_replaced") == (1, 1, 1, 1)
+
+
+def test_borrowed_session_not_closed_when_foreign_dag_id_exists(
     dag_maker: DagMaker,
     session: Session,
 ) -> None:
-    """Refuse an owned identifier without closing the caller-supplied session."""
+    """Refuse a foreign identifier without closing the caller-supplied session."""
 
-    with dag_maker(dag_id="borrowed_duplicate"):
-        EmptyOperator(task_id="original")
+    _seed_foreign_dag_model("issue_262_borrowed_foreign")
 
     with (
         pytest.raises(ValueError, match="already exists"),
-        dag_maker(dag_id="borrowed_duplicate", session=session),
+        dag_maker(dag_id="issue_262_borrowed_foreign", session=session),
     ):
-        EmptyOperator(task_id="replacement")
+        EmptyOperator(task_id="rejected")
 
-    assert session.get(DagModel, "borrowed_duplicate") is not None
-    assert _row_counts("borrowed_duplicate") == (1, 1, 1, 1)
+    assert session.get(DagModel, "issue_262_borrowed_foreign") is not None
+    _delete_foreign_dag_model("issue_262_borrowed_foreign")
 
 
 def test_bundle_name_override_routes_to_all_metadata(dag_maker: DagMaker) -> None:
@@ -1153,6 +1245,104 @@ def test_borrowed_session_cleanup_survives_an_uncommitted_flush(
     result.assert_outcomes(passed=2)
 
 
+def test_leaked_dag_id_from_a_previous_test_is_replaced(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replace a previous test's leaked row instead of failing the next test.
+
+    The upstream `test_asset.py` shape behind issue #262: the test body re-syncs the
+    Dag under another bundle (`tests_common`'s `sync_dags_to_db` rewrites
+    `DagModel.bundle_name` to `testing`), so `_cleanup_dag`'s bundle-guarded delete
+    silently skips the `DagModel` row and the next test reusing the short `dag_id`
+    used to die in `ensure_dag_registrable`. The per-process ownership history must
+    survive the drift and let the second test replace the leftover. The subprocess
+    inherits this process's environment, so the worker marker is cleared first --
+    the inner run is serial and must take the serial replace path even when this
+    suite itself runs under xdist.
+    """
+
+    pytester.makepyfile(
+        """
+        import pytest
+        from airflow.models.dag import DagModel
+        from airflow.models.dagbundle import DagBundleModel
+        from airflow.providers.standard.operators.empty import EmptyOperator
+        from airflow.utils.session import create_session
+        from sqlalchemy import update
+
+        pytestmark = pytest.mark.db_test
+        DAG_ID = "test1"
+
+
+        def test_drifting_sync_leaks_the_dag_model_row(dag_maker):
+            with dag_maker(dag_id=DAG_ID):
+                EmptyOperator(task_id="t1")
+            with create_session() as session:
+                # Upstream's `testing_dag_bundle` fixture supplies the bundle row the
+                # drifted `DagModel.bundle_name` FK-references; flushed ahead of the
+                # core UPDATE, which does not autoflush the pending insert first.
+                session.add(DagBundleModel(name="testing"))
+                session.flush()
+                session.execute(
+                    update(DagModel)
+                    .where(DagModel.dag_id == DAG_ID)
+                    .values(bundle_name="testing")
+                )
+
+
+        def test_reuse_replaces_the_leftover(dag_maker):
+            with create_session() as session:
+                leftover = session.get(DagModel, DAG_ID)
+                assert leftover is not None
+                assert leftover.bundle_name == "testing"
+            with dag_maker(dag_id=DAG_ID):
+                EmptyOperator(task_id="t1")
+            with create_session() as session:
+                # The purge never deletes bundle rows -- they are shared identities.
+                assert session.get(DagBundleModel, "testing") is not None
+
+
+        def test_replacement_was_cleaned():
+            with create_session() as session:
+                assert session.get(DagModel, DAG_ID) is None
+        """
+    )
+
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    result = pytester.runpytest_subprocess("-p", "pytest_airflow_in_a_box.plugin", "-q")
+
+    result.assert_outcomes(passed=3)
+
+
+def test_owned_dag_id_collision_still_raises_on_an_xdist_worker(
+    dag_maker: DagMaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never replace on a worker, where a leftover may be another worker's live row.
+
+    Ownership history is per-process and metadata rows carry no writer identity, so
+    on a shared metadata database an id from this process's own history may belong to
+    another worker's in-flight test -- the guard must stay loud there (issue #262
+    review finding).
+    """
+
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    with dag_maker(dag_id="issue_262_worker_guard"):
+        EmptyOperator(task_id="original")
+
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw7")
+    with (
+        pytest.raises(ValueError, match="never replaced") as caught,
+        dag_maker(dag_id="issue_262_worker_guard"),
+    ):
+        EmptyOperator(task_id="rejected")
+
+    assert "xdist_group" in str(caught.value)
+    assert _row_counts("issue_262_worker_guard") == (1, 1, 1, 1)
+
+
 def test_run_dag_persists_executes_and_cleans_an_external_dag(run_dag: RunDag) -> None:
     """Adopt an externally-authored Dag and return its executed `DagRunResult`."""
 
@@ -1170,20 +1360,41 @@ def test_run_dag_persists_executes_and_cleans_an_external_dag(run_dag: RunDag) -
     assert _row_counts("run_dag_basic") == (1, 1, 1, 1)
 
 
-def test_run_dag_rejects_a_colliding_dag_id(dag_maker: DagMaker, run_dag: RunDag) -> None:
-    """Refuse to adopt a Dag whose id already has persisted metadata."""
+def test_run_dag_replaces_an_owned_dag_id(
+    dag_maker: DagMaker,
+    run_dag: RunDag,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adopt a Dag whose id this process itself persisted, replacing the leftover."""
 
-    with dag_maker(dag_id="run_dag_duplicate"):
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    with dag_maker(dag_id="issue_262_run_dag_replaced"):
         EmptyOperator(task_id="owned_by_dag_maker")
 
-    colliding = dag_compat.build_dag("run_dag_duplicate", __file__, {})
+    colliding = dag_compat.build_dag("issue_262_run_dag_replaced", __file__, {})
     with colliding:
         EmptyOperator(task_id="owned_by_run_dag")
+
+    result = run_dag(colliding)
+
+    assert result.success
+    assert result.order == ["owned_by_run_dag"]
+    assert _row_counts("issue_262_run_dag_replaced") == (1, 1, 1, 1)
+
+
+def test_run_dag_rejects_a_foreign_dag_id(run_dag: RunDag) -> None:
+    """Refuse to adopt a Dag whose id has metadata this process never persisted."""
+
+    _seed_foreign_dag_model("issue_262_run_dag_foreign")
+
+    colliding = dag_compat.build_dag("issue_262_run_dag_foreign", __file__, {})
+    with colliding:
+        EmptyOperator(task_id="rejected")
 
     with pytest.raises(ValueError, match="already exists"):
         run_dag(colliding)
 
-    assert _row_counts("run_dag_duplicate") == (1, 1, 1, 1)
+    _delete_foreign_dag_model("issue_262_run_dag_foreign")
 
 
 def test_run_dag_closes_the_session_when_persist_dag_fails(

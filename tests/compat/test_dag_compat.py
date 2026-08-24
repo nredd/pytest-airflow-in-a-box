@@ -120,9 +120,133 @@ def test_existing_dag_check_wraps_query_failure() -> None:
     session: Any = FailingSession()
 
     with pytest.raises(DagPersistenceError, match="check existing Airflow metadata") as caught:
-        dag_compat.ensure_dag_absent("query_failure", session)
+        dag_compat.ensure_dag_registrable("query_failure", session)
 
     assert caught.value.__cause__ is failure
+
+
+class _RowSession:
+    """Return one canned ``DagModel`` lookup result and record rollbacks."""
+
+    def __init__(self, row: Any) -> None:
+        """Store the canned lookup result.
+
+        Parameters:
+            row: Any returned for every ``get`` call, ``None`` for an absent row.
+        """
+
+        self.row = row
+        self.rollbacks = 0
+
+    def get(self, model: object, dag_id: str) -> Any:
+        """Return the canned row for any lookup.
+
+        Parameters:
+            model: object containing the queried ORM class.
+            dag_id: str identifying the requested Dag.
+
+        Returns:
+            Any containing the canned row.
+        """
+
+        del model, dag_id
+        return self.row
+
+    def rollback(self) -> None:
+        """Record one rollback."""
+
+        self.rollbacks += 1
+
+
+def test_registrable_check_passes_an_absent_row() -> None:
+    """Return silently when no ``DagModel`` row uses the identifier."""
+
+    session: Any = _RowSession(None)
+
+    dag_compat.ensure_dag_registrable("registrable_absent", session)
+
+    assert session.rollbacks == 0
+
+
+def test_registrable_check_rejects_a_foreign_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refuse an existing row this process never persisted, naming the mitigation."""
+
+    session: Any = _RowSession(object())
+    monkeypatch.setattr(registry, "_PERSISTED_DAG_IDS", set())
+
+    with pytest.raises(ValueError, match="already exists") as caught:
+        dag_compat.ensure_dag_registrable("registrable_foreign", session)
+
+    assert "xdist_group" in str(caught.value)
+
+
+def test_registrable_check_purges_an_owned_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace an existing row this process itself persisted."""
+
+    row = object()
+    session: Any = _RowSession(row)
+    purged: list[tuple[str, Any, Any]] = []
+    monkeypatch.setattr(
+        dag_compat,
+        "_purge_dag_metadata",
+        lambda dag_id, purge_session, dag_model: purged.append((dag_id, purge_session, dag_model)),
+    )
+    monkeypatch.setattr(registry, "_PERSISTED_DAG_IDS", {"registrable_owned"})
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+
+    dag_compat.ensure_dag_registrable("registrable_owned", session)
+
+    assert purged == [("registrable_owned", session, row)]
+    assert session.rollbacks == 0
+
+
+def test_registrable_check_rejects_an_owned_row_on_a_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refuse even an owned identifier on an xdist worker, naming the mitigation.
+
+    History is per-process and rows carry no writer identity, so on a worker an id
+    from this process's own history may be another worker's live registration.
+    """
+
+    session: Any = _RowSession(object())
+    monkeypatch.setattr(registry, "_PERSISTED_DAG_IDS", {"registrable_worker"})
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
+
+    with pytest.raises(ValueError, match="never replaced") as caught:
+        dag_compat.ensure_dag_registrable("registrable_worker", session)
+
+    assert "xdist_group" in str(caught.value)
+    assert session.rollbacks == 0
+
+
+def test_registrable_check_wraps_a_purge_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Roll back and name the replacement when the purge fails."""
+
+    failure = OSError("purge failed")
+
+    def failing_purge(dag_id: str, purge_session: Any, dag_model: Any) -> None:
+        """Raise one representative purge failure.
+
+        Parameters:
+            dag_id: str identifying the Dag under replacement.
+            purge_session: Any containing the metadata session.
+            dag_model: Any containing the existing row.
+        """
+
+        del dag_id, purge_session, dag_model
+        raise failure
+
+    session: Any = _RowSession(object())
+    monkeypatch.setattr(dag_compat, "_purge_dag_metadata", failing_purge)
+    monkeypatch.setattr(registry, "_PERSISTED_DAG_IDS", {"registrable_purge_failure"})
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+
+    with pytest.raises(DagPersistenceError, match="replace leftover Airflow metadata") as caught:
+        dag_compat.ensure_dag_registrable("registrable_purge_failure", session)
+
+    assert caught.value.__cause__ is failure
+    assert session.rollbacks == 1
 
 
 def test_get_dag_model_wraps_query_failure() -> None:

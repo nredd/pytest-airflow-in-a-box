@@ -32,7 +32,7 @@ from pytest_airflow_in_a_box._compat.dag import (
     cleanup_dag,
     create_dag_run,
     custom_schedule_timetables,
-    ensure_dag_absent,
+    ensure_dag_registrable,
     expand_mapped_task_instances,
     get_dag_model,
     open_dag_session,
@@ -216,6 +216,8 @@ class _DagContext(AbstractContextManager["DAG"]):
 
         Raises:
             RuntimeError: The context manager has already been entered.
+            ValueError: The identifier's existing metadata was never persisted by
+                this process -- another worker's live registration or foreign rows.
         """
 
         if self._record is not None:
@@ -225,7 +227,7 @@ class _DagContext(AbstractContextManager["DAG"]):
         if session is None:
             session = open_dag_session(self._dag_id)
         try:
-            ensure_dag_absent(self._dag_id, session)
+            ensure_dag_registrable(self._dag_id, session)
         except Exception:
             if session_owned:
                 session.close()
@@ -845,7 +847,9 @@ class _DagRunner:
             pytest_airflow_in_a_box.results.DagRunResult containing the settled outcome.
 
         Raises:
-            ValueError: ``dag.dag_id`` already has persisted Dag metadata,
+            ValueError: ``dag.dag_id`` already has persisted Dag metadata this process
+                never wrote (metadata this process itself persisted earlier is
+                replaced instead),
                 ``run_triggerer`` was combined with ``executor``, ``run_after`` or an
                 explicit ``logical_date=None`` was passed on the Airflow 2.x family, or
                 ``dag_run_kwargs`` sets a key this method already supplies from its own
@@ -876,7 +880,7 @@ class _DagRunner:
         dag_id = dag.dag_id
         session = open_dag_session(dag_id)
         try:
-            ensure_dag_absent(dag_id, session)
+            ensure_dag_registrable(dag_id, session)
         except Exception:
             session.close()
             raise
