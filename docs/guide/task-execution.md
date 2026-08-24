@@ -381,7 +381,9 @@ machinery rather than upstream's:
   injection entirely; upstream silently replaces it with `DEFAULT_DATE`
 - A non-manual run whose timetable schedules nothing (`schedule=None`) degrades its
   default `logical_date` to the Dag's `start_date` and then the current UTC date;
-  upstream crashes on the `None` run info there
+  upstream crashes on the `None` run info there. Likewise a non-manual run on a
+  trigger-style or custom timetable degrades whitelist-refused automated
+  `data_interval` inference to the manual shape every timetable implements
 - On a serial run, reusing one `dag_id` across factory calls -- in the same test, or
   after a previous test in the same process leaked its cleanup -- replaces the earlier
   metadata, matching upstream's silent re-sync. `ValueError` remains for a `dag_id`

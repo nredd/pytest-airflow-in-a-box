@@ -658,6 +658,7 @@ class _DagFactory:
             dag_run_kwargs=dag_run_kwargs,
             default_logical_date=self._start_date,
             default_start_date=self._start_date,
+            upstream_defaults=True,
         )
 
     def create_ti(

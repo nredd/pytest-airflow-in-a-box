@@ -41,14 +41,23 @@ We decided to adopt upstream's defaults wholesale in `dag_maker`:
   `timetable.generate_run_id(...)` when one was -- keyed on the KEYWORD's presence, so
   an explicit `run_type=MANUAL` also gets a generated id, exactly as upstream.
 - `data_interval` inference follows the run type: manual runs keep
-  `infer_manual_data_interval`, non-manual runs use `infer_automated_data_interval`
-  (module-level in `airflow.models.dag` on 3.1+, the instance method on 2.x). The run's
-  default `start_date` and `run_after` also take upstream's shapes (the Dag's
-  `start_date`, and the resolved interval's end).
+  `infer_manual_data_interval`; non-manual runs use the interval carried by the
+  timetable's own run info when the date came from `next_dagrun_info`, and
+  `infer_automated_data_interval` otherwise (module-level in `airflow.models.dag` on
+  3.1+, the instance method on 2.x). That function whitelists cron/delta/null/once
+  shapes and hard-raises `Not a valid timetable` for trigger-style and custom
+  timetables -- a second deliberate deviation degrades it to the manual inference
+  every timetable implements, instead of importing upstream's crash into this
+  plugin's first-class custom-timetable support. The run's default `start_date` and
+  `run_after` also take upstream's shapes (the Dag's `start_date`, and the resolved
+  interval's end).
 
 `run_dag` keeps its derived `manual__pytest-airflow-in-a-box-...` ids and `utcnow()`
-dating: it has no upstream analogue and adopts externally-authored Dags whose
-`start_date` this plugin does not control.
+dating for EVERY run type: it has no upstream analogue and adopts externally-authored
+Dags whose `start_date` this plugin does not control -- silently backdating such a run
+by years would change `depends_on_past`, sensor windows, and `{{ ds }}` semantics. The
+timetable derivation is therefore gated behind `create_dag_run`'s
+`upstream_defaults` flag, which only `dag_maker` sets.
 
 Consequences: this supersedes ADR 0002's "run-id conventions stay divergent" clause --
 the rest of 0002 (the authoring yield, the opt-in scheduler handles) stands. A second

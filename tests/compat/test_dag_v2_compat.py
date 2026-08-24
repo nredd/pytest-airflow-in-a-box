@@ -630,10 +630,9 @@ def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
 ) -> None:
     """Route a 2.x non-manual run through the 2.x scheduling seams.
 
-    All three family-specific spellings at once: `next_dagrun_info` takes 2.x's
-    `last_automated_dagrun`, the interval comes from the INSTANCE method
-    `infer_automated_data_interval`, and `generate_run_id` takes 2.x's
-    `logical_date` keyword.
+    The family-specific spellings at once: `next_dagrun_info` takes 2.x's
+    `last_automated_dagrun`, the interval comes from the run info it returned, and
+    `generate_run_id` takes 2.x's `logical_date` keyword.
     """
 
     from airflow.utils.types import DagRunType
@@ -645,10 +644,13 @@ def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
     dag_run_stub = SimpleNamespace(id=82, task_instances=())
 
     def fake_next_dagrun_info(**kwargs: Any) -> Any:
-        """Record the release-specific keyword and yield the automated date."""
+        """Record the release-specific keyword and yield the automated run info."""
 
         created["next_kwargs"] = kwargs
-        return SimpleNamespace(logical_date=automated_date)
+        return SimpleNamespace(
+            logical_date=automated_date,
+            data_interval=("automated", automated_date),
+        )
 
     def fake_generate_run_id(**kwargs: Any) -> str:
         """Record the 2.x `generate_run_id` keyword spelling."""
@@ -659,12 +661,11 @@ def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
     scheduler_dag: Any = SimpleNamespace(
         timetable=SimpleNamespace(
             infer_manual_data_interval=lambda _run_after: pytest.fail(
-                "a non-manual run must use automated inference"
+                "a non-manual run must use the timetable's own run-info interval"
             ),
             generate_run_id=fake_generate_run_id,
         ),
         next_dagrun_info=fake_next_dagrun_info,
-        infer_automated_data_interval=lambda logical_date: ("automated", logical_date),
         create_dagrun=lambda **kwargs: created.__setitem__("kwargs", kwargs) or dag_run_stub,
     )
     authoring_stub: Any = SimpleNamespace()
@@ -680,6 +681,7 @@ def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
         dag_run_kwargs={"run_type": "scheduled"},
         default_logical_date=None,
         default_start_date=None,
+        upstream_defaults=True,
     )
 
     assert created["next_kwargs"] == {"last_automated_dagrun": None}
@@ -726,6 +728,7 @@ def test_create_dag_run_v2_non_manual_falls_back_to_now_without_a_schedule(
         dag_run_kwargs={"run_type": "scheduled"},
         default_logical_date=None,
         default_start_date=None,
+        upstream_defaults=True,
     )
 
     kwargs = created["kwargs"]
@@ -1125,3 +1128,34 @@ def test_open_dag_session_registers_v2_orm_models(
 
     assert session == "session-token"
     assert registered == [True]
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_infer_automated_data_interval_uses_the_v2_instance_method() -> None:
+    """Route automated inference through 2.x's `DAG.infer_automated_data_interval`."""
+
+    scheduler_dag: Any = SimpleNamespace(
+        infer_automated_data_interval=lambda logical_date: ("automated", logical_date)
+    )
+
+    assert dag_module._infer_automated_data_interval(scheduler_dag, "L") == ("automated", "L")
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_infer_automated_data_interval_degrades_to_manual_inference() -> None:
+    """Fall back to the manual shape when the whitelist refuses the timetable."""
+
+    def refuse(logical_date: Any) -> None:
+        """Raise 2.x's whitelist rejection for a non-interval timetable."""
+
+        del logical_date
+        raise ValueError("Not a valid timetable")
+
+    scheduler_dag: Any = SimpleNamespace(
+        infer_automated_data_interval=refuse,
+        timetable=SimpleNamespace(
+            infer_manual_data_interval=lambda *, run_after: ("manual", run_after)
+        ),
+    )
+
+    assert dag_module._infer_automated_data_interval(scheduler_dag, "L") == ("manual", "L")

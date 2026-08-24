@@ -1259,7 +1259,7 @@ def test_coerce_run_type_accepts_members_and_strings() -> None:
         (AirflowFamily.V3, (3, 3, 0), "last_automated_run_info"),
     ],
 )
-def test_next_automated_logical_date_uses_the_release_keyword(
+def test_next_automated_run_info_uses_the_release_keyword(
     monkeypatch: pytest.MonkeyPatch,
     family: AirflowFamily,
     release: tuple[int, int, int],
@@ -1286,18 +1286,21 @@ def test_next_automated_logical_date_uses_the_release_keyword(
     recorded: dict[str, Any] = {}
 
     def next_dagrun_info(**kwargs: Any) -> Any:
-        """Record the exact keyword spelling and yield one automated date."""
+        """Record the exact keyword spelling and yield one automated run info."""
 
         recorded.update(kwargs)
         return SimpleNamespace(logical_date="the-automated-date")
 
     scheduler_dag = SimpleNamespace(next_dagrun_info=next_dagrun_info)
 
-    assert dag_compat._next_automated_logical_date(scheduler_dag) == "the-automated-date"
+    info = dag_compat._next_automated_run_info(scheduler_dag)
+
+    assert info is not None
+    assert info.logical_date == "the-automated-date"
     assert recorded == {expected_keyword: None}
 
 
-def test_next_automated_logical_date_is_none_for_an_unscheduled_timetable(
+def test_next_automated_run_info_is_none_for_an_unscheduled_timetable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Report no automated date when the timetable schedules nothing.
@@ -1313,4 +1316,4 @@ def test_next_automated_logical_date_is_none_for_an_unscheduled_timetable(
     )
     scheduler_dag = SimpleNamespace(next_dagrun_info=lambda **_kwargs: None)
 
-    assert dag_compat._next_automated_logical_date(scheduler_dag) is None
+    assert dag_compat._next_automated_run_info(scheduler_dag) is None

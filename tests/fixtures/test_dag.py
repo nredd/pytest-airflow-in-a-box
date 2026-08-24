@@ -753,6 +753,23 @@ def test_no_logical_date_run_generates_its_id_from_now(dag_maker: DagMaker) -> N
     assert str(dag_run.run_id).startswith("manual__")
 
 
+def test_explicit_run_after_wins_over_the_interval_default(dag_maker: DagMaker) -> None:
+    """Preserve a caller-supplied `run_after` over the interval-end default.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    explicit = datetime(2016, 4, 5, tzinfo=timezone.utc)
+    with dag_maker(dag_id="explicit_run_after"):
+        EmptyOperator(task_id="empty")
+
+    dag_run = dag_maker.create_dagrun(run_after=explicit)
+
+    assert dag_run.run_after == explicit
+    assert dag_run.logical_date == DEFAULT_START_DATE
+
+
 def test_invalid_run_type_is_rejected_before_metadata_writes(
     dag_maker: DagMaker,
 ) -> None:
@@ -1819,6 +1836,103 @@ def test_run_dag_passes_through_run_id_logical_date_and_dag_run_kwargs(
     assert result.run_id == "pinned-run-dag"
     assert result.dag_run.logical_date == pinned_date
     assert result.dag_run.conf == {"probe": 1}
+
+
+def test_run_dag_keeps_current_utc_dating_for_non_manual_runs(run_dag: RunDag) -> None:
+    """Date an adopted Dag's non-manual run now, not from its timetable.
+
+    docs/adr/0003: `run_dag` never applies the upstream timetable derivation --
+    backdating an externally-authored Dag's run by years would silently change
+    `depends_on_past`, sensor windows, and `{{ ds }}` semantics.
+
+    Parameters:
+        run_dag: RunDag executing the adopted Dag.
+    """
+
+    from datetime import timedelta
+
+    from airflow.sdk.timezone import utcnow
+
+    dag = dag_compat.build_dag(
+        "run_dag_now_dating",
+        __file__,
+        {
+            "schedule": timedelta(days=1),
+            "start_date": datetime(2020, 1, 1, tzinfo=timezone.utc),
+            "catchup": True,
+        },
+    )
+    with dag:
+        EmptyOperator(task_id="only")
+    before = utcnow()
+
+    result = run_dag(dag, dag_run_kwargs={"run_type": "scheduled"})
+
+    assert result.dag_run.logical_date >= before
+    assert str(result.run_id).startswith("manual__pytest-airflow-in-a-box")
+
+
+def test_scheduled_run_uses_a_trigger_timetables_own_run_info(
+    dag_maker: DagMaker,
+) -> None:
+    """Create a non-manual run for a timetable outside Airflow's inference whitelist.
+
+    `infer_automated_data_interval` hard-raises `Not a valid timetable` for
+    trigger-style (and custom) timetables; the run info `next_dagrun_info` returned
+    already carries the timetable's own interval, so the run must build from that
+    instead of crashing.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from airflow.timetables.trigger import CronTriggerTimetable
+
+    with dag_maker(
+        dag_id="trigger_timetable_scheduled",
+        schedule=CronTriggerTimetable("0 0 * * *", timezone="UTC"),
+        start_date=DEFAULT_START_DATE,
+        catchup=True,
+    ):
+        EmptyOperator(task_id="empty")
+
+    dag_run = dag_maker.create_dagrun(run_type="scheduled")
+
+    assert dag_run.logical_date == DEFAULT_START_DATE
+    assert str(dag_run.run_id).startswith("scheduled__")
+    assert [ti.task_id for ti in dag_run.task_instances] == ["empty"]
+
+
+def test_explicit_date_on_a_trigger_timetable_degrades_to_manual_inference(
+    dag_maker: DagMaker,
+) -> None:
+    """Fall back to manual inference when whitelist-based inference refuses.
+
+    An explicit `logical_date` skips `next_dagrun_info`, so the automated-inference
+    seam runs -- and for a trigger timetable it raises `Not a valid timetable`; the
+    deliberate deviation (docs/adr/0003) degrades to the manual shape every
+    timetable implements.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from airflow.timetables.trigger import CronTriggerTimetable
+
+    explicit = datetime(2016, 2, 3, tzinfo=timezone.utc)
+    with dag_maker(
+        dag_id="trigger_timetable_explicit",
+        schedule=CronTriggerTimetable("0 0 * * *", timezone="UTC"),
+        start_date=DEFAULT_START_DATE,
+        catchup=True,
+    ):
+        EmptyOperator(task_id="empty")
+
+    dag_run = dag_maker.create_dagrun(run_type="scheduled", logical_date=explicit)
+
+    assert dag_run.logical_date == explicit
+    assert dag_run.data_interval_start == explicit
+    assert dag_run.data_interval_end == explicit
 
 
 def test_run_dag_cleanup_continues_after_one_failure(
