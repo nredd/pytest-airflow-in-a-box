@@ -34,6 +34,7 @@ from pytest_airflow_in_a_box.components import ComponentContractError
 from pytest_airflow_in_a_box.fixtures import dag as dag_fixture
 from pytest_airflow_in_a_box.fixtures.dag import (
     DAG_ID_MAX_LENGTH,
+    DEFAULT_START_DATE,
     _bundle_name,
     _DagFactory,
     _DagRunner,
@@ -219,6 +220,7 @@ def test_rejects_invalid_argument_types(dag_maker: DagMaker) -> None:
 def test_properties_require_factory_progress(dag_maker: DagMaker) -> None:
     """Report property misuse before a Dag or metadata session exists."""
 
+    assert dag_maker.start_date is None
     with pytest.raises(RuntimeError, match="has not created a Dag"):
         _ = dag_maker.dag
     with pytest.raises(RuntimeError, match="has not entered a Dag context"):
@@ -447,7 +449,7 @@ def test_borrowed_session_routes_persistence_and_is_exposed(
     assert session.get(DagModel, "borrowed_session") is not None
     assert _row_counts("borrowed_session") == (1, 1, 1, 1)
     dag_run = dag_maker.create_dagrun()
-    assert dag_run.run_id.startswith("manual__pytest-airflow-in-a-box")
+    assert dag_run.run_id == "test"
 
 
 def test_created_run_task_refresh_survives_garbage_collection(dag_maker: DagMaker) -> None:
@@ -533,6 +535,238 @@ def test_task_refresh_survives_session_expiry_after_a_run(dag_maker: DagMaker) -
     # its refreshed authoring task alive.
     assert reloaded["second"].task is not None
     assert reloaded["first"].task is not None
+
+
+def test_default_start_date_ladder(dag_maker: DagMaker) -> None:
+    """Resolve the default `start_date` per upstream's ladder and expose the handle.
+
+    docs/adr/0003: explicit kwarg > `default_args` > module `DEFAULT_DATE` (absent in
+    this module) > the 2016 epoch; an explicit `start_date=None` opts out entirely.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dags.
+    """
+
+    explicit = datetime(2019, 5, 6, tzinfo=timezone.utc)
+
+    with dag_maker(dag_id="ladder_bare") as bare_dag:
+        EmptyOperator(task_id="empty")
+    assert dag_maker.start_date == DEFAULT_START_DATE
+    assert bare_dag.start_date == DEFAULT_START_DATE
+    assert bare_dag.get_task("empty").start_date == DEFAULT_START_DATE
+
+    with dag_maker(dag_id="ladder_explicit", start_date=explicit) as explicit_dag:
+        EmptyOperator(task_id="empty")
+    assert dag_maker.start_date == explicit
+    assert explicit_dag.start_date == explicit
+
+    with dag_maker(
+        dag_id="ladder_default_args",
+        default_args={"start_date": explicit},
+    ) as default_args_dag:
+        EmptyOperator(task_id="empty")
+    assert dag_maker.start_date == explicit
+    # Sourced from `default_args`, not injected as a constructor kwarg: the task
+    # inherits it while the Dag-level attribute stays unset.
+    assert default_args_dag.get_task("empty").start_date == explicit
+
+
+def test_explicit_none_start_date_opts_out_and_runs_date_now(dag_maker: DagMaker) -> None:
+    """Skip injection on `start_date=None` and fall back to the current UTC date.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from airflow.sdk.timezone import utcnow
+
+    before = utcnow()
+    with dag_maker(dag_id="ladder_opt_out", start_date=None) as dag:
+        EmptyOperator(task_id="empty")
+
+    assert dag_maker.start_date is None
+    assert dag.start_date is None
+    dag_run = dag_maker.create_dagrun()
+    assert dag_run.run_id == "test"
+    assert dag_run.logical_date is not None
+    assert dag_run.logical_date >= before
+
+
+def test_module_default_date_feeds_the_ladder(pytester: pytest.Pytester) -> None:
+    """Adopt a datetime module `DEFAULT_DATE` and ignore a non-datetime one.
+
+    Parameters:
+        pytester: pytest.Pytester driving the installed plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        test_module_date="""
+        import datetime
+
+        from airflow.providers.standard.operators.empty import EmptyOperator
+
+        DEFAULT_DATE = datetime.datetime(2017, 3, 4, tzinfo=datetime.timezone.utc)
+
+        def test_module_default_adopted(dag_maker):
+            with dag_maker(dag_id="module_default"):
+                EmptyOperator(task_id="empty")
+
+            assert dag_maker.start_date == DEFAULT_DATE
+            assert dag_maker.create_dagrun().logical_date == DEFAULT_DATE
+        """,
+        test_module_date_invalid="""
+        import datetime
+
+        from airflow.providers.standard.operators.empty import EmptyOperator
+
+        DEFAULT_DATE = "not-a-datetime"
+        EPOCH = datetime.datetime(2016, 1, 1, tzinfo=datetime.timezone.utc)
+
+        def test_non_datetime_default_ignored(dag_maker):
+            with dag_maker(dag_id="module_default_invalid"):
+                EmptyOperator(task_id="empty")
+
+            assert dag_maker.start_date == EPOCH
+        """,
+    )
+
+    result = pytester.runpytest_subprocess("-q", "-p", "no:randomly")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_scheduled_run_defaults_derive_from_the_timetable(dag_maker: DagMaker) -> None:
+    """Derive an explicit non-manual run's date, interval, and id from the timetable.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from datetime import timedelta
+
+    with dag_maker(
+        dag_id="scheduled_defaults",
+        schedule=timedelta(days=1),
+        start_date=DEFAULT_START_DATE,
+        catchup=True,
+    ):
+        EmptyOperator(task_id="empty")
+
+    # A plain string proves the `run_type` coercion, upstream's accepted spelling.
+    dag_run = dag_maker.create_dagrun(run_type="scheduled")
+
+    assert dag_run.run_id == "scheduled__2016-01-01T00:00:00+00:00"
+    assert dag_run.logical_date == DEFAULT_START_DATE
+    assert dag_run.data_interval_end == dag_run.run_after
+    assert dag_run.data_interval_start == DEFAULT_START_DATE
+
+
+def test_scheduled_run_on_a_scheduleless_dag_falls_back_to_start_date(
+    dag_maker: DagMaker,
+) -> None:
+    """Degrade a scheduleless non-manual run's date to `start_date`, inside the window.
+
+    The #259 empty-`task_instances` regression shape: with the old `utcnow()` default
+    a 2016-vintage `start_date`/`end_date` window excluded every task and
+    `verify_integrity` created ZERO instances.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from datetime import timedelta
+
+    with dag_maker(
+        dag_id="scheduleless_window",
+        start_date=DEFAULT_START_DATE,
+        end_date=DEFAULT_START_DATE + timedelta(days=10),
+        catchup=True,
+    ):
+        EmptyOperator(task_id="first")
+        EmptyOperator(task_id="second", retries=2)
+
+    dag_run = dag_maker.create_dagrun(run_type="scheduled")
+
+    assert dag_run.logical_date == DEFAULT_START_DATE
+    assert sorted(ti.task_id for ti in dag_run.task_instances) == ["first", "second"]
+
+
+def test_scheduled_run_without_any_start_date_falls_back_to_now(
+    dag_maker: DagMaker,
+) -> None:
+    """Degrade a scheduleless non-manual run to the current UTC date on opt-out.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from airflow.sdk.timezone import utcnow
+
+    before = utcnow()
+    with dag_maker(dag_id="scheduleless_opt_out", start_date=None):
+        EmptyOperator(task_id="empty")
+
+    dag_run = dag_maker.create_dagrun(run_type="scheduled")
+
+    assert dag_run.logical_date is not None
+    assert dag_run.logical_date >= before
+    assert str(dag_run.run_id).startswith("scheduled__")
+
+
+def test_explicit_manual_run_type_generates_a_timetable_run_id(
+    dag_maker: DagMaker,
+) -> None:
+    """Generate the timetable id for an explicit `run_type`, even a manual one.
+
+    Upstream's ladder keys on the KEYWORD's presence, not its value: only a call
+    with neither `run_id` nor `run_type` gets the fixed `test` id.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    from airflow.utils.types import DagRunType
+
+    with dag_maker(dag_id="explicit_manual_run_type"):
+        EmptyOperator(task_id="empty")
+
+    dag_run = dag_maker.create_dagrun(run_type=DagRunType.MANUAL)
+
+    assert dag_run.run_id != "test"
+    assert str(dag_run.run_id).startswith("manual__")
+    assert dag_run.logical_date == DEFAULT_START_DATE
+
+
+def test_no_logical_date_run_generates_its_id_from_now(dag_maker: DagMaker) -> None:
+    """Generate an explicit-run-type id from the current date for a dateless run.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    with dag_maker(dag_id="dateless_generated_id"):
+        EmptyOperator(task_id="empty")
+
+    dag_run = dag_maker.create_dagrun(logical_date=None, run_type="manual")
+
+    assert dag_run.logical_date is None
+    assert str(dag_run.run_id).startswith("manual__")
+
+
+def test_invalid_run_type_is_rejected_before_metadata_writes(
+    dag_maker: DagMaker,
+) -> None:
+    """Reject a `run_type` naming no `DagRunType` member with a caller error.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    with dag_maker(dag_id="invalid_run_type"):
+        EmptyOperator(task_id="empty")
+
+    with pytest.raises(ValueError, match="nonsense"):
+        dag_maker.create_dagrun(run_type="nonsense")
 
 
 def test_dag_model_returns_the_live_metadata_row(dag_maker: DagMaker) -> None:

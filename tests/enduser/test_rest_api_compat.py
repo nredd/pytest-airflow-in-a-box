@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -22,8 +23,16 @@ def test_dag_tasks_and_paginated_runs_are_visible(
         first = EmptyOperator(task_id="first")
         second = EmptyOperator(task_id="second")
         first >> second
+    start_date = dag_maker.start_date
+    assert start_date is not None
     dag_maker.create_dagrun(run_id="compat_api_run_1")
-    dag_maker.create_dagrun(run_id="compat_api_run_2")
+    # Distinct logical date on purpose: runs share `(dag_id, logical_date)`
+    # uniqueness, and the deterministic default (docs/adr/0003) is the Dag's
+    # `start_date` for every manual run.
+    dag_maker.create_dagrun(
+        run_id="compat_api_run_2",
+        logical_date=start_date + timedelta(days=1),
+    )
 
     dag = api_client.get("/api/v2/dags/compat_api_catalog")
     tasks = api_client.get("/api/v2/dags/compat_api_catalog/tasks")
@@ -46,8 +55,14 @@ def test_dagrun_and_task_instance_states_can_be_mutated(
 
     with dag_maker(dag_id="compat_api_states"):
         EmptyOperator(task_id="task")
+    start_date = dag_maker.start_date
+    assert start_date is not None
     dag_maker.create_dagrun(run_id="compat_api_state_run")
-    dag_maker.create_dagrun(run_id="compat_api_ti_run")
+    # Distinct logical date on purpose -- see `test_dag_tasks_and_paginated_runs_are_visible`.
+    dag_maker.create_dagrun(
+        run_id="compat_api_ti_run",
+        logical_date=start_date + timedelta(days=1),
+    )
 
     run = api_client.patch(
         "/api/v2/dags/compat_api_states/dagRuns/compat_api_state_run",

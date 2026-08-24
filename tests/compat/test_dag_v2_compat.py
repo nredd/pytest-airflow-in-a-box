@@ -540,6 +540,200 @@ def test_create_dag_run_uses_the_execution_date_interface(
     assert dag_run.id == 77
 
 
+def _run_creation_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    fixed_now: Any,
+) -> tuple[dict[str, Any], Any]:
+    """Install the timezone fake and build recording run-creation doubles.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the 2.x timezone module.
+        fixed_now: Any returned by the fake ``utcnow``.
+
+    Returns:
+        tuple[dict[str, Any], Any] containing the recorded call sink and the
+        persistence record around a recording fake session.
+    """
+
+    monkeypatch.setitem(
+        sys.modules,
+        "airflow.utils.timezone",
+        SimpleNamespace(
+            utcnow=lambda: fixed_now,
+            coerce_datetime=lambda value: value,
+            convert_to_utc=lambda value: value,
+        ),
+    )
+    created: dict[str, Any] = {}
+    session = SimpleNamespace(
+        commit=lambda: created.__setitem__("committed", True),
+        rollback=lambda: pytest.fail("rollback must not run on success"),
+    )
+    return created, _record(session=session)
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_create_dag_run_v2_defaults_run_id_and_logical_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default a bare 2.x run to upstream's `test` id and the Dag's start date.
+
+    docs/adr/0003: with neither `run_id` nor `run_type` passed, the run id is the
+    fixed `test` and `execution_date` is `default_logical_date` -- `dag_maker`'s
+    resolved Dag `start_date` -- rather than the current UTC date.
+    """
+
+    fixed_now = object()
+    created, record = _run_creation_fakes(monkeypatch, fixed_now)
+    default_date = datetime(2016, 1, 1, tzinfo=timezone.utc)
+
+    dag_run_stub = SimpleNamespace(id=81, task_instances=())
+
+    def fake_create_dagrun(**kwargs: Any) -> Any:
+        """Record the exact kwargs the 2.x scheduler Dag receives."""
+
+        created["kwargs"] = kwargs
+        return dag_run_stub
+
+    scheduler_dag: Any = SimpleNamespace(
+        timetable=SimpleNamespace(
+            infer_manual_data_interval=lambda run_after: ("interval", run_after)
+        ),
+        create_dagrun=fake_create_dagrun,
+    )
+    authoring_stub: Any = SimpleNamespace()
+
+    dag_run = dag_module.create_dag_run(
+        scheduler_dag,
+        authoring_stub,
+        record,
+        run_id=None,
+        logical_date=dag_module.UNSET,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+        default_logical_date=default_date,
+        default_start_date=default_date,
+    )
+
+    kwargs = created["kwargs"]
+    assert kwargs["run_id"] == dag_module.DEFAULT_RUN_ID
+    assert kwargs["execution_date"] is default_date
+    assert kwargs["start_date"] is default_date
+    assert kwargs["data_interval"] == ("interval", default_date)
+    assert dag_run.id == 81
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route a 2.x non-manual run through the 2.x scheduling seams.
+
+    All three family-specific spellings at once: `next_dagrun_info` takes 2.x's
+    `last_automated_dagrun`, the interval comes from the INSTANCE method
+    `infer_automated_data_interval`, and `generate_run_id` takes 2.x's
+    `logical_date` keyword.
+    """
+
+    from airflow.utils.types import DagRunType
+
+    fixed_now = object()
+    created, record = _run_creation_fakes(monkeypatch, fixed_now)
+    automated_date = datetime(2016, 2, 3, tzinfo=timezone.utc)
+
+    dag_run_stub = SimpleNamespace(id=82, task_instances=())
+
+    def fake_next_dagrun_info(**kwargs: Any) -> Any:
+        """Record the release-specific keyword and yield the automated date."""
+
+        created["next_kwargs"] = kwargs
+        return SimpleNamespace(logical_date=automated_date)
+
+    def fake_generate_run_id(**kwargs: Any) -> str:
+        """Record the 2.x `generate_run_id` keyword spelling."""
+
+        created["generate_kwargs"] = kwargs
+        return "scheduled__generated"
+
+    scheduler_dag: Any = SimpleNamespace(
+        timetable=SimpleNamespace(
+            infer_manual_data_interval=lambda _run_after: pytest.fail(
+                "a non-manual run must use automated inference"
+            ),
+            generate_run_id=fake_generate_run_id,
+        ),
+        next_dagrun_info=fake_next_dagrun_info,
+        infer_automated_data_interval=lambda logical_date: ("automated", logical_date),
+        create_dagrun=lambda **kwargs: created.__setitem__("kwargs", kwargs) or dag_run_stub,
+    )
+    authoring_stub: Any = SimpleNamespace()
+
+    dag_module.create_dag_run(
+        scheduler_dag,
+        authoring_stub,
+        record,
+        run_id=None,
+        logical_date=dag_module.UNSET,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={"run_type": "scheduled"},
+        default_logical_date=None,
+        default_start_date=None,
+    )
+
+    assert created["next_kwargs"] == {"last_automated_dagrun": None}
+    kwargs = created["kwargs"]
+    assert kwargs["execution_date"] is automated_date
+    assert kwargs["data_interval"] == ("automated", automated_date)
+    assert kwargs["run_id"] == "scheduled__generated"
+    assert kwargs["run_type"] is DagRunType.SCHEDULED
+    assert created["generate_kwargs"] == {
+        "run_type": DagRunType.SCHEDULED,
+        "logical_date": automated_date,
+        "data_interval": ("automated", automated_date),
+    }
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_create_dag_run_v2_non_manual_falls_back_to_now_without_a_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degrade to the current UTC date when the timetable schedules nothing."""
+
+    fixed_now = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    created, record = _run_creation_fakes(monkeypatch, fixed_now)
+
+    dag_run_stub = SimpleNamespace(id=83, task_instances=())
+    scheduler_dag: Any = SimpleNamespace(
+        timetable=SimpleNamespace(
+            generate_run_id=lambda **_kwargs: "scheduled__fallback",
+        ),
+        next_dagrun_info=lambda **_kwargs: None,
+        infer_automated_data_interval=lambda logical_date: ("automated", logical_date),
+        create_dagrun=lambda **kwargs: created.__setitem__("kwargs", kwargs) or dag_run_stub,
+    )
+    authoring_stub: Any = SimpleNamespace()
+
+    dag_module.create_dag_run(
+        scheduler_dag,
+        authoring_stub,
+        record,
+        run_id=None,
+        logical_date=dag_module.UNSET,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={"run_type": "scheduled"},
+        default_logical_date=None,
+        default_start_date=None,
+    )
+
+    kwargs = created["kwargs"]
+    assert kwargs["execution_date"] is fixed_now
+    assert kwargs["data_interval"] == ("automated", fixed_now)
+    assert kwargs["run_id"] == "scheduled__fallback"
+
+
 @pytest.mark.usefixtures("v2_capabilities")
 def test_create_dag_run_rejects_run_after_on_v2() -> None:
     """Refuse the 3.x-only `run_after` kwarg instead of silently ignoring it."""

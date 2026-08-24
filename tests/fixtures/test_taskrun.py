@@ -20,6 +20,7 @@ from airflow.utils.state import TaskInstanceState
 from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
+from pytest_airflow_in_a_box._compat.dag import DagRunCreationError
 from pytest_airflow_in_a_box.fixtures.dag import RUN_ID_MAX_LENGTH
 from pytest_airflow_in_a_box.taskinstance import ordered_task_instances, run_task_instance
 from pytest_airflow_in_a_box.types import DagMaker
@@ -246,23 +247,34 @@ def test_ordered_task_instances_uses_topological_order(dag_maker: DagMaker) -> N
     ] == ["z_upstream", "a_downstream"]
 
 
-def test_default_run_ids_are_independent_and_bounded(dag_maker: DagMaker) -> None:
-    """Create distinct deterministic bounded defaults with UTC dates and current linkage."""
+def test_default_run_id_is_upstreams_test_and_recreation_collides(
+    dag_maker: DagMaker,
+) -> None:
+    """Default the bare run to upstream's fixed `test` id with deterministic dates.
+
+    docs/adr/0003: a second bare `create_dagrun()` on one Dag collides on
+    `(dag_id, "test")` and fails loudly, exactly as upstream does -- the
+    invocation-counter ids that made it silently unique are gone.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
 
     with dag_maker(dag_id="default_run_ids"):
         EmptyOperator(task_id="empty")
 
     first: Any = dag_maker.create_dagrun()
-    second: Any = dag_maker.create_dagrun()
 
-    assert first.run_id != second.run_id
+    assert first.run_id == "test"
     assert len(first.run_id) <= RUN_ID_MAX_LENGTH
-    assert len(second.run_id) <= RUN_ID_MAX_LENGTH
+    assert first.logical_date == dag_maker.start_date
     assert first.logical_date.tzinfo is not None
     assert first.run_after.tzinfo is not None
     assert first.start_date is not None
     assert first.start_date.tzinfo is not None
     assert first.created_dag_version_id is not None
+    with pytest.raises(DagRunCreationError, match="'test'"):
+        dag_maker.create_dagrun()
 
 
 def test_create_ti_selection_and_errors(dag_maker: DagMaker) -> None:

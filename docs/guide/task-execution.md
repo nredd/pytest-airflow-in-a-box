@@ -164,6 +164,28 @@ retry-configured task that fails settles as `up_for_retry`, the DagRun stays `ru
 a warning names the stranded instances; drop `retries` from Dags under test (or assert
 `up_for_retry` deliberately).
 
+### Deterministic run defaults
+
+`dag_maker` follows upstream `tests_common`'s deterministic defaults
+([ADR 0003](../adr/0003-dag-maker-run-default-parity.md)):
+
+- Every Dag gets a default `start_date` -- explicit kwarg, then
+  `default_args["start_date"]`, then the test module's `DEFAULT_DATE` attribute, then the
+  `2016-01-01` UTC epoch -- exposed as `dag_maker.start_date`. Pass an explicit
+  `start_date=None` to opt out
+- A bare `create_dagrun()` gets `run_id="test"` and `logical_date=dag_maker.start_date`,
+  so `session.query(DagRun).filter_by(run_id="test")` finds it. A second bare call on one
+  Dag collides on `(dag_id, "test")` and fails loudly, exactly as upstream -- and because
+  runs are also unique per `(dag_id, logical_date)`, multi-run tests need distinct
+  `logical_date`s alongside explicit `run_id`s
+- Passing `run_type=` (even a manual one) switches the default `run_id` to the
+  timetable-generated `manual__...` / `scheduled__...` form; non-manual run types derive
+  the default `logical_date` from `next_dagrun_info` and infer an automated (rather than
+  manual) `data_interval`
+
+`run_dag` keeps its derived `manual__pytest-airflow-in-a-box-...` ids and current-UTC
+dating: it adopts externally-authored Dags whose `start_date` the plugin does not control.
+
 ## Bulk outcome matchers
 
 `pytest_airflow_in_a_box.matchers` asserts a whole DagRun in one expression. The mapping
@@ -355,12 +377,11 @@ machinery rather than upstream's:
 - `testing_dag_bundle` never deletes the shared row at teardown: a conditional delete
   would race another `pytest-xdist` worker's in-flight `DagModel.bundle_name` reference,
   and the per-run metadata database is disposable anyway
-- Derived run identifiers keep this plugin's collision-safe
-  `manual__pytest-airflow-in-a-box-...` spelling, not upstream's `test` /
-  `scheduled__<timestamp>` forms -- pass `run_id=` where a test asserts on it
-- `create_dummy_dag`'s default scheduled run carries the current UTC logical date, not
-  upstream's `next_dagrun_info`-derived schedule-aligned one -- pass `logical_date=` where
-  alignment matters
+- An explicit `start_date=None` to `dag_maker(...)` opts out of the default-`start_date`
+  injection entirely; upstream silently replaces it with `DEFAULT_DATE`
+- A non-manual run whose timetable schedules nothing (`schedule=None`) degrades its
+  default `logical_date` to the Dag's `start_date` and then the current UTC date;
+  upstream crashes on the `None` run info there
 - On a serial run, reusing one `dag_id` across factory calls -- in the same test, or
   after a previous test in the same process leaked its cleanup -- replaces the earlier
   metadata, matching upstream's silent re-sync. `ValueError` remains for a `dag_id`

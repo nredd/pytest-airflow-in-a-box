@@ -30,6 +30,11 @@ same-`dag_id` contention; upstream's fixed `test` id would reintroduce exactly t
 cross-worker row collisions the naming scheme exists to prevent. The drift scans put this
 class at a flat ~50 upstream-test failures at every certified version -- a price we accept.
 
+> SUPERSEDED IN PART by [ADR 0003](0003-dag-maker-run-default-parity.md): the paragraph
+> above is reversed -- `dag_maker` now follows upstream's run-id and date defaults, and
+> the hashed id survives only in `run_dag`. 0003 records why the xdist-mitigation claim
+> was hollow. Everything else in this ADR stands.
+
 Consequences: `serialized=` / `need_serialized_dag` no longer change behavior (a suite
 can no longer assert "not serialized" via `serialized_dag is None` after exit); the
 sdk-object failure classes in upstream suites (timetables missing

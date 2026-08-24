@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -824,7 +825,14 @@ def test_legacy_refresh_and_explicit_data_interval(monkeypatch: pytest.MonkeyPat
         logical_date=dag_compat.UNSET,
         run_after=None,
         start_date=None,
-        dag_run_kwargs={"data_interval": (object(), object())},
+        dag_run_kwargs={
+            # Real datetimes, not opaque objects: the run-after default is now the
+            # explicit interval's end and goes through `coerce_datetime`.
+            "data_interval": (
+                datetime(2016, 1, 1, tzinfo=timezone.utc),
+                datetime(2016, 1, 2, tzinfo=timezone.utc),
+            ),
+        },
     )
     selected = dag_compat.select_task_instance(
         authoring_dag,
@@ -1240,3 +1248,69 @@ def test_coerce_run_type_accepts_members_and_strings() -> None:
 
     assert dag_compat.coerce_run_type("scheduled") is DagRunType.SCHEDULED
     assert dag_compat.coerce_run_type(DagRunType.MANUAL) is DagRunType.MANUAL
+
+
+@pytest.mark.parametrize(
+    ("family", "release", "expected_keyword"),
+    [
+        (AirflowFamily.V2, (2, 11, 2), "last_automated_dagrun"),
+        (AirflowFamily.V3, (3, 1, 0), "last_automated_dagrun"),
+        (AirflowFamily.V3, (3, 2, 0), "last_automated_run_info"),
+        (AirflowFamily.V3, (3, 3, 0), "last_automated_run_info"),
+    ],
+)
+def test_next_automated_logical_date_uses_the_release_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+    family: AirflowFamily,
+    release: tuple[int, int, int],
+    expected_keyword: str,
+) -> None:
+    """Spell `next_dagrun_info`'s parameter per family and release boundary.
+
+    Airflow 3.2 renamed 2.x/3.1's `last_automated_dagrun` to
+    `last_automated_run_info`; the wrong spelling is an immediate `TypeError`
+    three frames down, so the keyword choice is pinned per certified boundary.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the capability resolver.
+        family: AirflowFamily naming the faked distribution family.
+        release: tuple[int, int, int] containing the faked release.
+        expected_keyword: str naming the keyword the fake must receive.
+    """
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=family, release=release),
+    )
+    recorded: dict[str, Any] = {}
+
+    def next_dagrun_info(**kwargs: Any) -> Any:
+        """Record the exact keyword spelling and yield one automated date."""
+
+        recorded.update(kwargs)
+        return SimpleNamespace(logical_date="the-automated-date")
+
+    scheduler_dag = SimpleNamespace(next_dagrun_info=next_dagrun_info)
+
+    assert dag_compat._next_automated_logical_date(scheduler_dag) == "the-automated-date"
+    assert recorded == {expected_keyword: None}
+
+
+def test_next_automated_logical_date_is_none_for_an_unscheduled_timetable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Report no automated date when the timetable schedules nothing.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the capability resolver.
+    """
+
+    monkeypatch.setattr(
+        dag_compat,
+        "resolve_capabilities",
+        lambda: SimpleNamespace(family=AirflowFamily.V3, release=(3, 3, 0)),
+    )
+    scheduler_dag = SimpleNamespace(next_dagrun_info=lambda **_kwargs: None)
+
+    assert dag_compat._next_automated_logical_date(scheduler_dag) is None

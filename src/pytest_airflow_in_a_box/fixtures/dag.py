@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 from contextlib import AbstractContextManager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -57,7 +58,6 @@ from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
-    from datetime import datetime
     from types import TracebackType
 
     from airflow.models.dagrun import DagRun
@@ -72,6 +72,10 @@ RUN_ID_MAX_LENGTH = 250
 DAG_ID_PATTERN = re.compile(r"^[\w.-]+$")
 DAG_ID_SANITIZER = re.compile(r"[^\w.-]+")
 BUNDLE_PREFIX = "pytest-airflow-in-a-box"
+# Upstream `tests_common`'s epoch: the bottom of the default-`start_date` ladder
+# (explicit kwarg > `default_args` > the consumer module's `DEFAULT_DATE` > this),
+# so bare `dag_maker()` Dags and their runs date deterministically (docs/adr/0003).
+DEFAULT_START_DATE = datetime(2016, 1, 1, tzinfo=timezone.utc)
 
 
 def _validate_dag_id(dag_id: str) -> str:
@@ -133,7 +137,11 @@ def _bundle_name(dag_id: str) -> str:
 
 
 def _default_run_id(dag_id: str, invocation: int) -> str:
-    """Derive a bounded deterministic run identifier for one factory call.
+    """Derive a bounded deterministic run identifier for one ``run_dag`` call.
+
+    ``dag_maker`` no longer uses this: its omitted-``run_id`` defaults follow
+    upstream ``tests_common`` (docs/adr/0003). ``run_dag`` keeps the derived
+    spelling -- it has no upstream analogue and adopts externally-authored Dags.
 
     Parameters:
         dag_id: str identifying the fixture-owned Dag.
@@ -284,6 +292,7 @@ class _DagFactory:
         worker: str,
         *,
         register_timetable: Callable[[Any], None] | None = None,
+        module_default_date: datetime | None = None,
     ) -> None:
         """Store deterministic identity inputs.
 
@@ -294,14 +303,19 @@ class _DagFactory:
             register_timetable: Callable[[Any], None] | None registering one custom
                 timetable instance before its Dag is built, or None to skip
                 registration entirely (direct construction in unit tests).
+            module_default_date: datetime.datetime | None containing the consumer test
+                module's ``DEFAULT_DATE`` attribute, slotted into the default
+                ``start_date`` ladder above the epoch fallback (upstream
+                ``tests_common``'s shape), or ``None`` when the module defines none.
         """
 
         self._register_timetable = register_timetable
         self._nodeid = nodeid
         self._fileloc = fileloc
         self._worker = worker
+        self._module_default_date = module_default_date
         self._invocations = 0
-        self._run_invocations = 0
+        self._start_date: datetime | None = None
         self._dag: DAG | None = None
         self._session: Session | None = None
         self._serialized_dag: SerializedDag | None = None
@@ -338,6 +352,19 @@ class _DagFactory:
         if self._session is None:
             raise RuntimeError("`dag_maker` has not entered a Dag context")
         return self._session
+
+    @property
+    def start_date(self) -> datetime | None:
+        """Return the latest Dag's resolved default ``start_date``.
+
+        Returns:
+            datetime.datetime | None resolved by the default-``start_date`` ladder for
+            the latest ``dag_maker(...)`` call (upstream ``tests_common`` exposes the
+            same handle), or ``None`` before the first call or after an explicit
+            ``start_date=None`` opt-out.
+        """
+
+        return self._start_date
 
     @property
     def serialized_dag(self) -> SerializedDag | None:
@@ -431,6 +458,13 @@ class _DagFactory:
         upstream ``tests_common``'s ``dag_maker`` harness contract: they route to the
         persistence layer and are never forwarded to the ``DAG`` constructor.
 
+        When ``dag_kwargs`` carries no ``start_date`` key, one is injected by upstream
+        ``tests_common``'s ladder -- ``default_args["start_date"]``, then the consumer
+        test module's ``DEFAULT_DATE`` attribute, then the ``2016-01-01`` UTC epoch --
+        and exposed as ``start_date`` (docs/adr/0003). An explicit ``start_date=None``
+        opts out of injection entirely, a deliberate deviation from upstream, which
+        silently replaces it.
+
         Parameters:
             dag_id: str | None containing an explicit identifier or ``None`` for a derived one.
             serialized: bool | None accepted for upstream ``tests_common`` contract
@@ -482,6 +516,23 @@ class _DagFactory:
             if dag_id is None
             else _validate_dag_id(dag_id)
         )
+        # Upstream `tests_common`'s default-`start_date` ladder (docs/adr/0003):
+        # explicit kwarg > `default_args` > module `DEFAULT_DATE` > the 2016 epoch.
+        # One deliberate deviation: an EXPLICIT `start_date=None` opts out of
+        # injection entirely -- only an absent key climbs the ladder.
+        if "start_date" in dag_kwargs:
+            resolved_start_date = dag_kwargs["start_date"]
+        else:
+            default_args = dag_kwargs.get("default_args") or {}
+            resolved_start_date = default_args.get("start_date")
+            if resolved_start_date is None:
+                resolved_start_date = (
+                    self._module_default_date
+                    if self._module_default_date is not None
+                    else DEFAULT_START_DATE
+                )
+                dag_kwargs["start_date"] = resolved_start_date
+        self._start_date = resolved_start_date
         # Before `build_dag`, not at context exit: Airflow 3.1's `encode_timetable`
         # already refuses an unregistered custom timetable when `persist_dag` runs.
         # The collector runs even with no hook wired, so its custom-timetable-CLASS
@@ -556,17 +607,32 @@ class _DagFactory:
     ) -> DagRun:
         """Create one fixture-owned DagRun through the persisted scheduler Dag.
 
+        Omitted ``run_id`` and ``logical_date`` follow upstream ``tests_common``'s
+        deterministic defaults (docs/adr/0003): ``run_id`` is ``test`` when no
+        ``run_type`` was passed and the timetable-generated id when one was
+        (including an explicit manual one), and ``logical_date`` is the Dag's
+        resolved ``start_date`` for manual runs or the timetable's first automated
+        date for explicit non-manual run types -- degrading to ``start_date`` and
+        then the current UTC date when the timetable schedules nothing. A second
+        bare call on one Dag therefore collides on ``(dag_id, "test")`` and fails
+        loudly, exactly as upstream does; pass explicit ``run_id``s for multi-run
+        tests.
+
         Parameters:
-            run_id: str | None containing an explicit identifier or ``None`` for a derived one.
-            logical_date: datetime.datetime | UnsetType | None overriding the current
-                UTC logical date. An explicit ``None`` requests a run with no logical
+            run_id: str | None containing an explicit identifier or ``None`` for
+                upstream's default ladder.
+            logical_date: datetime.datetime | UnsetType | None overriding the default
+                logical date. An explicit ``None`` requests a run with no logical
                 date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
                 and no ``data_interval`` is inferred for it; rejected with
                 ``ValueError`` on the 2.x family, which cannot express one.
-            run_after: datetime.datetime | None overriding the current UTC run-after
-                date; rejected with `ValueError` on the Airflow 2.x family, which has
+            run_after: datetime.datetime | None overriding the run-after date
+                (defaulted to the resolved data interval's end, then the current UTC
+                date); rejected with `ValueError` on the Airflow 2.x family, which has
                 no run-after concept.
-            start_date: datetime.datetime | None overriding the current UTC start date.
+            start_date: datetime.datetime | None overriding the run's start date
+                (defaulted to the Dag's resolved ``start_date``, then the current
+                UTC date).
             dag_run_kwargs: Any forwarded to Airflow's scheduler Dag creation method.
 
         Returns:
@@ -574,25 +640,24 @@ class _DagFactory:
 
         Raises:
             ValueError: `run_after` or an explicit `logical_date=None` was passed on
-                the Airflow 2.x family, or `dag_run_kwargs` sets a key this method
+                the Airflow 2.x family, `dag_run_kwargs` sets a key this method
                 already supplies from its own parameters (e.g. `session`,
-                `execution_date`) -- see the message for the exact remedy.
+                `execution_date`) -- see the message for the exact remedy -- or
+                `dag_run_kwargs["run_type"]` names no ``DagRunType`` member.
         """
 
         record, scheduler_dag = self._require_persisted()
-        self._run_invocations += 1
-        resolved_run_id = (
-            _default_run_id(record.dag_id, self._run_invocations) if run_id is None else run_id
-        )
         return create_dag_run(
             scheduler_dag,
             self.dag,
             record,
-            run_id=resolved_run_id,
+            run_id=run_id,
             logical_date=logical_date,
             run_after=run_after,
             start_date=start_date,
             dag_run_kwargs=dag_run_kwargs,
+            default_logical_date=self._start_date,
+            default_start_date=self._start_date,
         )
 
     def create_ti(
@@ -980,11 +1045,19 @@ def dag_maker(request: pytest.FixtureRequest) -> Iterator[DagMaker]:
         request.getfixturevalue("airflow_components")
         register_schedule_timetable(timetable)
 
+    # Upstream `tests_common` slots the consumer module's `DEFAULT_DATE` into the
+    # default-`start_date` ladder; anything but a datetime (a coincidental same-named
+    # constant, or a node with no module) is ignored rather than handed to Airflow's
+    # `DAG` constructor to blow up far from its source.
+    module_default_date = getattr(getattr(request, "module", None), "DEFAULT_DATE", None)
+    if not isinstance(module_default_date, datetime):
+        module_default_date = None
     factory = _DagFactory(
         request.node.nodeid,
         fileloc,
         worker,
         register_timetable=register_timetable,
+        module_default_date=module_default_date,
     )
     try:
         yield factory
@@ -1011,4 +1084,4 @@ def run_dag(request: pytest.FixtureRequest) -> Iterator[RunDag]:
         runner.close()
 
 
-__all__ = ("dag_maker", "run_dag")
+__all__ = ("DEFAULT_START_DATE", "dag_maker", "run_dag")

@@ -183,6 +183,75 @@ def test_created_run_task_instances_keep_their_refreshed_tasks(
     result.assert_outcomes(passed=1)
 
 
+def test_deterministic_run_defaults_follow_upstream(pytester: pytest.Pytester) -> None:
+    """Drive upstream's deterministic defaults on any family (docs/adr/0003).
+
+    The three #227 round-3 shapes at once: a default `start_date` on the Dag and its
+    tasks (module `DEFAULT_DATE` pickup), a bare run findable by
+    `filter_by(run_id="test")` with `logical_date == DEFAULT_DATE`, and the
+    cleartasks window shape -- a 2017-vintage `start_date`/`end_date` window whose
+    scheduled run still creates every task instance.
+
+    Parameters:
+        pytester: pytest.Pytester driving the installed plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        """
+        import datetime
+
+        DEFAULT_DATE = datetime.datetime(2017, 3, 4, tzinfo=datetime.timezone.utc)
+
+        def _empty_operator():
+            try:
+                from airflow.providers.standard.operators.empty import EmptyOperator
+            except ModuleNotFoundError:
+                from airflow.operators.empty import EmptyOperator
+            return EmptyOperator
+
+        def test_bare_run_lookup(dag_maker):
+            from airflow.models.dagrun import DagRun
+
+            EmptyOperator = _empty_operator()
+            with dag_maker(dag_id="enduser_bare_defaults") as dag:
+                EmptyOperator(task_id="probe")
+
+            assert dag_maker.start_date == DEFAULT_DATE
+            assert dag.get_task("probe").start_date == DEFAULT_DATE
+
+            dag_run = dag_maker.create_dagrun()
+            found = (
+                dag_maker.session.query(DagRun)
+                .filter_by(dag_id="enduser_bare_defaults", run_id="test")
+                .one_or_none()
+            )
+            assert found is not None
+            assert dag_run.logical_date == DEFAULT_DATE
+
+        def test_window_shape_scheduled_run(dag_maker):
+            EmptyOperator = _empty_operator()
+            with dag_maker(
+                dag_id="enduser_window_defaults",
+                end_date=DEFAULT_DATE + datetime.timedelta(days=10),
+                catchup=True,
+            ):
+                EmptyOperator(task_id="first")
+                EmptyOperator(task_id="second", retries=2)
+
+            dag_run = dag_maker.create_dagrun(run_type="scheduled")
+
+            assert dag_run.logical_date == DEFAULT_DATE
+            ti0, ti1 = sorted(dag_run.task_instances, key=lambda ti: ti.task_id)
+            assert (ti0.task_id, ti1.task_id) == ("first", "second")
+            assert ti0.task is not None
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=2)
+
+
 @pytest.mark.requires_airflow3
 def test_testing_dag_bundle_and_no_logical_date_runs(pytester: pytest.Pytester) -> None:
     """Register the shared bundle and create a run without a logical date on 3.x."""
