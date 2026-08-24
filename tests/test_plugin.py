@@ -703,7 +703,10 @@ def test_dag_corpus_colocation_takes_precedence_over_dag_bag_colocation(
     `dag_corpus` co-location pass first, and when it groups anything, hands the
     `dag_bag` pass an empty `smoke_items` list -- so a run with both kinds of consumer
     never has the smoke catalog claimed by both groups, and the `dag_bag` pass's own
-    anchor search never even runs against `test_bag_consumer` here.
+    anchor search never even runs against `test_bag_consumer` here. The `dag_corpus`
+    pass still colocates one `dag_bag` anchor into its *own* group though
+    (`_find_dag_bag_anchor`), so the corpus builder on that worker can still reuse a
+    live `LIVE_DAG_BAG_KEY` parse instead of costing a second full Dag-folder parse.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
@@ -740,7 +743,7 @@ def test_dag_corpus_colocation_takes_precedence_over_dag_bag_colocation(
     corpus_group = next(
         group for name, group in groups.items() if name.endswith("::test_corpus_consumer")
     )
-    assert bag_group is None
+    assert bag_group == DAG_CORPUS_XDIST_GROUP
     assert corpus_group == DAG_CORPUS_XDIST_GROUP
 
 
@@ -790,6 +793,64 @@ def test_missing_dag_corpus_anchor_warns_when_every_consumer_is_pre_grouped(
     pre_grouped_group = next(
         group for name, group in groups.items() if name.endswith("::test_pre_grouped")
     )
+    assert pre_grouped_group == "user-group"
+
+
+def test_missing_dag_corpus_anchor_is_silent_when_dag_bag_pass_will_claim_the_catalog(
+    pytester: pytest.Pytester,
+) -> None:
+    """Skip the dag_corpus-anchor warning when the dag_bag pass will still claim the catalog.
+
+    Coverage pin for `_colocate_dag_corpus_consumers`'s missing-anchor branch: when every
+    `dag_corpus` consumer is disqualified (here, pre-grouped) but an eligible `dag_bag`
+    consumer also exists, `_find_dag_bag_anchor` lets the corpus pass predict that the
+    fallback `_colocate_smoke_catalog_with_dag_bag` pass will successfully claim the
+    smoke catalog on its own -- so it returns silently instead of warning about a parse
+    that, in fact, never happens twice.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_bag_consumer(dag_bag):
+            pass
+
+        @pytest.mark.xdist_group(name="user-group")
+        def test_pre_grouped_corpus_consumer(dag_corpus):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=12)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" not in output
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group == DAG_BAG_XDIST_GROUP for group in smoke_groups.values())
+    bag_group = next(
+        group for name, group in groups.items() if name.endswith("::test_bag_consumer")
+    )
+    pre_grouped_group = next(
+        group
+        for name, group in groups.items()
+        if name.endswith("::test_pre_grouped_corpus_consumer")
+    )
+    assert bag_group == DAG_BAG_XDIST_GROUP
     assert pre_grouped_group == "user-group"
 
 

@@ -785,7 +785,13 @@ def _colocate_dag_corpus_consumers(
     checks -- not `dag_bag`'s potentially large set of real-execution tests -- so
     colocating all of them costs nothing extra, while leaving any of them behind would
     mean it independently pays the `dagcorpus._shared_dag_corpus` flock-wait and
-    JSON-decode cost the whole grouping mechanism exists to avoid.
+    JSON-decode cost the whole grouping mechanism exists to avoid. When grouping
+    succeeds, also colocates one eligible `dag_bag` anchor (`_find_dag_bag_anchor`,
+    shared with `_colocate_smoke_catalog_with_dag_bag`) so the corpus builder on that
+    worker can still reuse a live `LIVE_DAG_BAG_KEY` parse: the caller withholds the
+    smoke catalog from the `dag_bag` pass whenever this one already grouped it, so
+    without an anchor of its own here, a run with `dag_bag`, `dag_corpus`, and the smoke
+    catalog all present would pay for two full Dag-folder parses instead of one.
 
     Also calls `dagcorpus.mark_dag_corpus_requested` whenever *any* item in this run
     requires `dag_corpus`, so `dagcorpus._corpus_serialization_needed` knows to build a
@@ -829,12 +835,55 @@ def _colocate_dag_corpus_consumers(
         # every such item lands in `consumers` xor `disqualifications` above -- so
         # `disqualifications` is never empty here, unlike `dag_bag`'s anchor search,
         # which has no analogous pre-check and can reach this point with a genuinely
-        # empty `disqualifications` (no `dag_bag` consumer in the run at all).
-        _warn_missing_dag_corpus_anchor(disqualifications)
+        # empty `disqualifications` (no `dag_bag` consumer in the run at all). Only warn
+        # when the catalog will not also end up grouped through the fallback `dag_bag`
+        # pass: with no smoke catalog at all there is nothing to warn about, and an
+        # eligible `dag_bag` anchor means that pass claims the catalog anyway.
+        if smoke_items and _find_dag_bag_anchor(items, config)[0] is None:
+            _warn_missing_dag_corpus_anchor(disqualifications)
         return False
-    for item in (*smoke_items, *consumers):
+    dag_bag_anchor, _ = _find_dag_bag_anchor(items, config)
+    members = (
+        (*smoke_items, *consumers)
+        if dag_bag_anchor is None
+        else (*smoke_items, *consumers, dag_bag_anchor)
+    )
+    for item in members:
         item.add_marker(pytest.mark.xdist_group(name=DAG_CORPUS_XDIST_GROUP))
     return True
+
+
+def _find_dag_bag_anchor(
+    items: list[pytest.Item], config: pytest.Config
+) -> tuple[pytest.Item | None, list[str]]:
+    """Find one eligible `dag_bag` consumer to anchor a co-location group onto.
+
+    Shared by both co-location passes: `_colocate_smoke_catalog_with_dag_bag` anchors the
+    smoke catalog on the result directly, and `_colocate_dag_corpus_consumers` uses it so
+    a `dag_corpus` group gets the same `LIVE_DAG_BAG_KEY`-reuse benefit when a `dag_bag`
+    consumer is available, and so it can predict whether the `dag_bag` pass will
+    successfully claim the catalog on its own before deciding whether to warn.
+
+    Parameters:
+        items: list[pytest.Item] surviving collection, inspected for `dag_bag` use.
+        config: pytest.Config used to predict `-m` deselection.
+
+    Returns:
+        tuple of (the first eligible `dag_bag` consumer, or None if none qualifies; every
+        disqualification reason collected along the way, in discovery order).
+    """
+
+    anchor: pytest.Item | None = None
+    disqualifications: list[str] = []
+    for item in items:
+        if not _requires_dag_bag(item):
+            continue
+        reason = _anchor_disqualification(item, config)
+        if reason is None:
+            anchor = item
+            break
+        disqualifications.append(reason)
+    return anchor, disqualifications
 
 
 def _colocate_smoke_catalog_with_dag_bag(
@@ -887,16 +936,7 @@ def _colocate_smoke_catalog_with_dag_bag(
         ):
             _warn_loadgroup_would_colocate()
         return
-    anchor: pytest.Item | None = None
-    disqualifications: list[str] = []
-    for item in items:
-        if not _requires_dag_bag(item):
-            continue
-        reason = _anchor_disqualification(item, config)
-        if reason is None:
-            anchor = item
-            break
-        disqualifications.append(reason)
+    anchor, disqualifications = _find_dag_bag_anchor(items, config)
     if anchor is None:
         if disqualifications:
             _warn_missing_dag_bag_anchor(disqualifications)
