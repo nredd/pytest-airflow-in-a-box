@@ -505,6 +505,36 @@ def test_created_run_relationship_exposes_refreshed_task_instances(
         assert ti.queue == ti.task.queue
 
 
+def test_task_refresh_survives_session_expiry_after_a_run(dag_maker: DagMaker) -> None:
+    """Keep sibling instances' refreshed tasks across task execution and expiry.
+
+    Regression test for the deeper #259 hazard: `run_ti` (and `run`) call
+    `session.expire_all()`, which drops the `DagRun.task_instances` relationship
+    collection from the run -- the strong reference that survived plain garbage
+    collection. The record-held pin must keep every refreshed instance (not just the
+    one the runner returned) reachable, so the post-run relationship reload yields
+    identity-mapped objects whose `ti.task` is still set.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    with dag_maker(dag_id="refresh_survives_expiry"):
+        EmptyOperator(task_id="first")
+        EmptyOperator(task_id="second")
+
+    dag_run = dag_maker.create_dagrun()
+    dag_maker.run_ti("first", dag_run)
+    gc.collect()
+
+    reloaded = {str(ti.task_id): ti for ti in dag_run.task_instances}
+    assert sorted(reloaded) == ["first", "second"]
+    # `second` never ran and nothing else references it -- only the record pin keeps
+    # its refreshed authoring task alive.
+    assert reloaded["second"].task is not None
+    assert reloaded["first"].task is not None
+
+
 def test_dag_model_returns_the_live_metadata_row(dag_maker: DagMaker) -> None:
     """Expose the persisted `DagModel` row on the factory's metadata session."""
 
