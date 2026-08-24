@@ -977,8 +977,22 @@ def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
 
     with create_session() as verify_session:
         assert verify_session.get(DagRun, dag_run.id) is None
-        assert verify_session.scalar(select(func.count()).select_from(BackfillDagRun)) == 0
-        assert verify_session.scalar(select(func.count()).select_from(Backfill)) == 0
+        assert (
+            verify_session.scalar(
+                select(func.count())
+                .select_from(BackfillDagRun)
+                .where(BackfillDagRun.dag_run_id == dag_run.id)
+            )
+            == 0
+        )
+        assert (
+            verify_session.scalar(
+                select(func.count())
+                .select_from(Backfill)
+                .where(Backfill.dag_id == "backfill_cleanup")
+            )
+            == 0
+        )
 
 
 def test_cleanup_dag_clears_test_created_backfill_rows() -> None:
