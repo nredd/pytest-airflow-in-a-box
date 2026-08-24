@@ -258,7 +258,8 @@ def _run_sdk_task_instance(
     from airflow.models.taskinstance import TaskInstance
     from airflow.sdk.definitions.dag import _run_task
     from airflow.utils.state import TaskInstanceState
-    from sqlalchemy.orm import object_session
+    from sqlalchemy import select
+    from sqlalchemy.orm import lazyload, object_session
 
     active_session = session or object_session(ti)
     if active_session is None:
@@ -294,15 +295,24 @@ def _run_sdk_task_instance(
             _refresh_task_instance(ti, active_session)
         return ti
 
-    # Session handling is a mess in tests; use a fresh ti to run the task.
+    # Session handling is a mess in tests; use a fresh ti to run the task. Queried
+    # directly rather than through `TaskInstance.get_task_instance`: Airflow 3.2.0
+    # dropped `dag_id` from that classmethod's filter (restored in 3.2.1), so any two
+    # Dags sharing a run id -- every bare `create_dagrun()` uses upstream's fixed
+    # `test` id (docs/adr/0003) -- collided with `MultipleResultsFound` there. The
+    # full-identity query below is correct on every certified release; `lazyload`
+    # mirrors the classmethod's avoid-locking-the-run option.
     identity: Any = ti
-    new_ti = TaskInstance.get_task_instance(
-        dag_id=identity.dag_id,
-        run_id=identity.run_id,
-        task_id=identity.task_id,
-        map_index=identity.map_index,
-        session=active_session,
-    )
+    new_ti = active_session.execute(
+        select(TaskInstance)
+        .options(lazyload(TaskInstance.dag_run))
+        .filter_by(
+            dag_id=identity.dag_id,
+            run_id=identity.run_id,
+            task_id=identity.task_id,
+            map_index=identity.map_index,
+        )
+    ).scalar_one_or_none()
     # Some tests don't save the ti at all, in which case new_ti is None.
     taskrun_result: Any = None
     try:

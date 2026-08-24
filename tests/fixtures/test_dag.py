@@ -749,6 +749,35 @@ def test_no_logical_date_run_generates_its_id_from_now(dag_maker: DagMaker) -> N
     assert str(dag_run.run_id).startswith("manual__")
 
 
+def test_run_ti_is_dag_scoped_when_runs_share_the_default_id(dag_maker: DagMaker) -> None:
+    """Execute against the right Dag when two runs share the fixed `test` id.
+
+    With upstream's fixed default (docs/adr/0003), every bare run in one metadata
+    database is `run_id="test"`, so any task-instance lookup that drops `dag_id`
+    from its filter collides -- Airflow 3.2.0's `TaskInstance.get_task_instance`
+    did exactly that (`MultipleResultsFound`; restored in 3.2.1), which is why the
+    runner queries the full identity itself.
+
+    Parameters:
+        dag_maker: DagMaker building both fixture-owned Dags.
+    """
+
+    from airflow.utils.state import TaskInstanceState
+
+    with dag_maker(dag_id="shared_test_id_a"):
+        EmptyOperator(task_id="probe")
+    dag_maker.create_dagrun()
+
+    with dag_maker(dag_id="shared_test_id_b"):
+        EmptyOperator(task_id="probe")
+    run_b = dag_maker.create_dagrun()
+
+    ti = dag_maker.run_ti("probe", run_b)
+
+    assert ti.dag_id == "shared_test_id_b"
+    assert ti.state == TaskInstanceState.SUCCESS
+
+
 def test_explicit_run_after_wins_over_the_interval_default(dag_maker: DagMaker) -> None:
     """Preserve a caller-supplied `run_after` over the interval-end default.
 
