@@ -12,6 +12,7 @@ from pytest_airflow_in_a_box.fixtures.configure import airflow_configure
 from pytest_airflow_in_a_box.fixtures.context import task_context
 from pytest_airflow_in_a_box.fixtures.dag import dag_maker, run_dag
 from pytest_airflow_in_a_box.fixtures.dagbag import dag_bag
+from pytest_airflow_in_a_box.fixtures.dagcorpus import dag_corpus
 from pytest_airflow_in_a_box.fixtures.logging import cap_structlog
 from pytest_airflow_in_a_box.fixtures.paths import (
     airflow_dags_folder,
@@ -43,6 +44,8 @@ DATABASE_FIXTURE_NAMES = frozenset(
         "dag_maker",
         "dag_bag",
         "run_dag",
+        # `dag_corpus` deliberately absent: unlike `dag_bag`, its builder never calls
+        # `ensure_database` unconditionally -- see `fixtures/dagcorpus.py::dag_corpus`.
         "session",
         "testing_dag_bundle",
     }
@@ -63,6 +66,7 @@ __all__ = (
     "create_dummy_dag",
     "create_task_instance",
     "dag_bag",
+    "dag_corpus",
     "dag_maker",
     "render_task",
     "run_dag",

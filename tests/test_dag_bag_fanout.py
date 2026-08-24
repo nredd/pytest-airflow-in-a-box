@@ -120,7 +120,7 @@ def test_fanout_detects_duplicate_dag_id_spanning_two_shards(pytester: pytest.Py
 def test_fanout_pool_spawns_exactly_once_under_xdist(pytester: pytest.Pytester) -> None:
     """Spawn exactly `fanout-workers` shard subprocesses total under `-n 2 --dist loadgroup`.
 
-    `_shared_smoke_corpus`'s existing cross-worker `fcntl.flock` election already
+    `dagcorpus._shared_dag_corpus`'s existing cross-worker `fcntl.flock` election already
     guarantees only one xdist worker ever builds the corpus at all; fan-out lives
     entirely inside that elected build, so it must never spawn
     `fanout-workers * xdist-worker-count` processes -- only `fanout-workers`, once.
@@ -155,6 +155,105 @@ def test_fanout_pool_spawns_exactly_once_under_xdist(pytester: pytest.Pytester) 
     # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
     logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
     assert len(logs) == 2
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_fanout_pool_spawns_exactly_once_with_dag_corpus_and_smoke_mixed(
+    pytester: pytest.Pytester,
+) -> None:
+    """Spawn exactly `fanout-workers` shard subprocesses when `dag_corpus` and smoke mix.
+
+    Companion to `test_fanout_pool_spawns_exactly_once_under_xdist`, which pins the
+    single-shard-pool guarantee for a `--airflow-smoke`-only run. Issue #277 adds a
+    second, independent `dag_corpus` consumer that
+    `plugin._colocate_dag_corpus_consumers` now also joins to the shared
+    `DAG_CORPUS_XDIST_GROUP`; `dagcorpus._shared_dag_corpus`'s cross-worker flock
+    election is what keeps this at exactly one shard pool regardless of how many
+    consumers request the corpus.
+    """
+
+    pytester.makeini(_FANOUT_INI)
+    home = pytester.path / "airflow-home"
+    home.mkdir()
+    pytester.makepyfile(
+        """
+        def test_corpus_consumer(dag_corpus):
+            assert dag_corpus.dags
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "-n",
+        "2",
+        "--dist=loadgroup",
+        "--airflow-smoke",
+        f"--dag-folder={CORPUS}",
+        "--airflow-dag-bag-fanout",
+        f"--airflow-home={home}",
+        "--airflow-home-retention=all",
+    )
+
+    result.assert_outcomes(passed=11)
+    # `--airflow-home` names a base directory; the run root is a generated subdirectory
+    # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
+    logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
+    assert len(logs) == 2
+
+
+_DAG_CORPUS_DUMP_TEST = """
+    import json
+    from pathlib import Path
+
+    DUMP_PATH = Path({dump_path!r})
+
+
+    def test_dump_dag_corpus(dag_corpus):
+        payload = {{
+            dag_id: {{
+                "tags": sorted(dag.tags),
+                "fileloc": dag.fileloc,
+                "task_ids": sorted(task.task_id for task in dag.tasks),
+                "can_be_scheduled": dag.can_be_scheduled,
+                "catchup": dag.catchup,
+            }}
+            for dag_id, dag in dag_corpus.dags.items()
+        }}
+        DUMP_PATH.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+"""
+
+
+@pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
+def test_fanout_and_serial_dag_corpus_metadata_match(pytester: pytest.Pytester) -> None:
+    """Build identical `dag_corpus` metadata whether or not the parse was fanned out.
+
+    The corpus's portable, non-serialized fields (`dags`/`tags`/`fileloc`/task ids/
+    `can_be_scheduled`/`catchup`) must not depend on whether the parse was sharded
+    across subprocesses or done in one process -- the "equivalent serial and fan-out
+    runs" acceptance criterion from issue #277, made concrete. `serialized`/
+    `serialization_error`/`serialization_seconds` are deliberately excluded from the
+    comparison: neither run here has a consumer needing a serialized Dag, so both
+    already leave every Dag unserialized, which would make comparing those fields
+    vacuous either way.
+    """
+
+    fanout_dump = pytester.path / "fanout.json"
+    pytester.makeini(_FANOUT_INI)
+    pytester.makepyfile(_DAG_CORPUS_DUMP_TEST.format(dump_path=str(fanout_dump)))
+
+    fanout_result = pytester.runpytest_subprocess(
+        "-q", f"--dag-folder={CORPUS}", "--airflow-dag-bag-fanout"
+    )
+
+    fanout_result.assert_outcomes(passed=1)
+
+    serial_dump = pytester.path / "serial.json"
+    pytester.makepyfile(_DAG_CORPUS_DUMP_TEST.format(dump_path=str(serial_dump)))
+
+    serial_result = pytester.runpytest_subprocess("-q", f"--dag-folder={CORPUS}")
+
+    serial_result.assert_outcomes(passed=1)
+    assert fanout_dump.read_text(encoding="utf-8") == serial_dump.read_text(encoding="utf-8")
 
 
 _USES_SIBLING_PACKAGE_DAG = """
