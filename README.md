@@ -366,6 +366,7 @@ diff, markers, and diagnostics are all covered on the
 ## Development
 
 ```console
+git submodule update --init
 uv sync
 uv run prek install
 make all
