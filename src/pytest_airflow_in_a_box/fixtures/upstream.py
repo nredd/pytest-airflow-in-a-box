@@ -15,6 +15,7 @@ References:
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -170,6 +171,7 @@ def create_task_instance(dag_maker: DagMaker) -> CreateTaskInstance:
 
     def factory(
         logical_date: datetime | UnsetType | None = UNSET,
+        execution_date: datetime | UnsetType | None = UNSET,
         run_after: datetime | None = None,
         dagrun_state: str | None = None,
         state: str | None = None,
@@ -208,8 +210,31 @@ def create_task_instance(dag_maker: DagMaker) -> CreateTaskInstance:
 
         Returns:
             airflow.models.taskinstance.TaskInstance refreshed from its authoring task.
+
+        Raises:
+            ValueError: Both ``logical_date`` and ``execution_date`` were passed.
         """
 
+        # An explicit `execution_date=None` means "not supplied", never the 3.x
+        # no-logical-date sentinel: `execution_date` is the Airflow 2 spelling, and no
+        # Airflow 2 run can lack an execution date -- upstream defaulted `None` to the
+        # current date. `logical_date=None` stays the only way to request a
+        # logical-date-less run.
+        if not isinstance(execution_date, UnsetType) and execution_date is not None:
+            if not isinstance(logical_date, UnsetType):
+                raise ValueError(
+                    "`execution_date` is the Airflow 2 spelling of `logical_date`; "
+                    "passing both would pick one silently. Drop `execution_date`."
+                )
+            # Upstream `tests_common` preserves the Airflow 2 spelling with the same
+            # warning category; the mapping keeps 2.x-era suites running unchanged.
+            warnings.warn(
+                "'execution_date' parameter is preserved only for backward "
+                "compatibility with Airflow 2 test suites. Use logical_date instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            logical_date = execution_date
         _, operator = _author_single_operator_dag(
             dag_maker,
             dag_id,

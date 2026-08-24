@@ -364,6 +364,29 @@ class _DagFactory:
         record, _ = self._require_persisted()
         return get_dag_model(record)
 
+    @property
+    def timetable(self) -> Any:
+        """Return the latest persisted scheduler Dag's timetable.
+
+        The migration target for upstream's
+        ``dag.timetable.infer_manual_data_interval(...)`` pattern: Airflow 3.2+
+        split authoring timetables into the task SDK and dropped the scheduling
+        methods from them, so the yielded authoring Dag's timetable cannot infer
+        intervals there. The scheduler Dag's timetable can, on every certified
+        release -- it is the exact object ``create_dagrun`` itself infers
+        ``data_interval`` through.
+
+        Returns:
+            pytest_airflow_in_a_box.types.SchedulerTimetable attached to the
+            persisted scheduler Dag.
+
+        Raises:
+            RuntimeError: No successful Dag context has been persisted.
+        """
+
+        _, scheduler_dag = self._require_persisted()
+        return scheduler_dag.timetable
+
     def sync_dagbag_to_db(self) -> SerializedDag:
         """Re-persist the current authoring Dag's scheduler metadata.
 
@@ -625,6 +648,7 @@ class _DagFactory:
         mark_success: bool = False,
         run_triggerer: bool = False,
         trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+        session: Session | None = None,
     ) -> TaskInstance:
         """Create and run one task instance through the compatibility shim.
 
@@ -639,11 +663,31 @@ class _DagFactory:
             mark_success: bool marking success without executing the task body.
             run_triggerer: bool running one persisted trigger event and resuming deferral.
             trigger_timeout: float seconds allowed for the persisted trigger's first event.
+            session: sqlalchemy.orm.Session | None used for the task-execution step,
+                mirroring upstream ``tests_common``'s ``run_ti(session=...)`` routing,
+                or ``None`` for the factory's own metadata session. A
+                ``scoped_session`` proxy (the shape of ``airflow.settings.Session``)
+                is accepted too. DagRun creation and task-instance selection stay on
+                ``dag_maker.session`` exactly as upstream's do.
 
         Returns:
             airflow.models.taskinstance.TaskInstance containing refreshed persisted state.
+
+        Raises:
+            TypeError: ``session`` is not a SQLAlchemy session, a ``scoped_session``
+                proxy, or ``None``.
         """
 
+        if session is not None:
+            # Deferred with the Airflow imports: SQLAlchemy arrives with Airflow, not
+            # with this plugin. Unlike `__call__`'s guard, `scoped_session` proxies
+            # pass here: this session is only forwarded to metadata calls, never
+            # lifecycle-owned, and `airflow.settings.Session` itself is one.
+            from sqlalchemy.orm import Session as OrmSession
+            from sqlalchemy.orm import scoped_session
+
+            if not isinstance(session, (OrmSession, scoped_session)):
+                raise TypeError(f"`session` must be a SQLAlchemy session or `None`: '{session}'")
         ti = self.create_ti(
             task_id,
             dag_run,
@@ -659,7 +703,7 @@ class _DagFactory:
             mark_success=mark_success,
             run_triggerer=run_triggerer,
             trigger_timeout=trigger_timeout,
-            session=self.session,
+            session=session if session is not None else self.session,
         )
 
     def run(

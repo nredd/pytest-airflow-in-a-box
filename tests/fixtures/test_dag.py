@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
@@ -192,6 +192,8 @@ def test_properties_require_factory_progress(dag_maker: DagMaker) -> None:
         dag_maker.create_dagrun()
     with pytest.raises(RuntimeError, match="has not persisted a Dag"):
         _ = dag_maker.dag_model
+    with pytest.raises(RuntimeError, match="has not persisted a Dag"):
+        _ = dag_maker.timetable
     with pytest.raises(RuntimeError, match="has not persisted a Dag"):
         dag_maker.sync_dagbag_to_db()
 
@@ -382,6 +384,31 @@ def test_dag_model_returns_the_live_metadata_row(dag_maker: DagMaker) -> None:
     assert dag_model.dag_id == "dag_model_handle"
     assert dag_model.is_paused is False
     assert dag_model is dag_maker.session.get(DagModel, "dag_model_handle")
+
+
+def test_timetable_returns_the_scheduler_timetable(dag_maker: DagMaker) -> None:
+    """Expose the persisted scheduler timetable with its interval-inference method.
+
+    The migration target for upstream's `dag.timetable.infer_manual_data_interval`
+    pattern, which Airflow 3.2+ removed from the yielded authoring Dag's timetable
+    (issue #261).
+    """
+
+    with dag_maker(
+        dag_id="timetable_handle",
+        schedule=timedelta(days=1),
+        start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    ):
+        EmptyOperator(task_id="empty")
+
+    run_after = datetime(2024, 3, 4, tzinfo=timezone.utc)
+    interval = dag_maker.timetable.infer_manual_data_interval(run_after=run_after)
+
+    assert interval.end == run_after
+    assert interval.start == run_after - timedelta(days=1)
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert dag_maker.timetable is serialized_dag.timetable
 
 
 def test_sync_dagbag_to_db_republishes_a_mutated_dag(dag_maker: DagMaker) -> None:
