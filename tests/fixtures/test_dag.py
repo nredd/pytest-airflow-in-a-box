@@ -543,17 +543,25 @@ class _TouchRecordingSession:
         self.closes += 1
 
 
-def test_cleanup_dag_swaps_a_borrowed_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replace a borrowed session with a fresh owned one before teardown cleanup."""
+def test_cleanup_dag_rolls_back_and_swaps_a_borrowed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roll back a borrowed session, then replace it with a fresh owned one.
+
+    The rollback must land BEFORE the fresh session opens (issue #263): an uncommitted
+    flush on the borrowed session's SQLite connection holds the database's single write
+    lock, so a fresh session opened first would block on its own cleanup deletes.
+    """
 
     borrowed: Any = _TouchRecordingSession()
     fresh: Any = _TouchRecordingSession()
     cleaned: list[dag_compat.DagPersistenceRecord] = []
 
     def open_fresh(dag_id: str) -> Any:
-        """Return the fresh replacement session."""
+        """Return the fresh replacement session after the borrowed rollback."""
 
         del dag_id
+        assert borrowed.rollbacks == 1
         return fresh
 
     monkeypatch.setattr(dag_compat, "open_dag_session", open_fresh)
@@ -571,14 +579,58 @@ def test_cleanup_dag_swaps_a_borrowed_session(monkeypatch: pytest.MonkeyPatch) -
     assert record.session is fresh
     assert record.session_owned is True
     assert fresh.closes == 1
-    assert borrowed.rollbacks == 0
+    assert borrowed.rollbacks == 1
     assert borrowed.closes == 0
 
 
-def test_cleanup_dag_open_failure_leaves_borrowed_session_untouched(
+def test_cleanup_dag_tolerates_a_dead_borrowed_handle(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Log and skip a borrowed handle whose rollback raises, then clean up anyway."""
+
+    class _DeadSession(_TouchRecordingSession):
+        """Refuse the pre-cleanup rollback like a finalized broken handle."""
+
+        def rollback(self) -> None:
+            """Raise a representative dead-handle failure."""
+
+            super().rollback()
+            raise RuntimeError("handle is dead")
+
+    borrowed: Any = _DeadSession()
+    fresh: Any = _TouchRecordingSession()
+    cleaned: list[dag_compat.DagPersistenceRecord] = []
+
+    def open_fresh(dag_id: str) -> Any:
+        """Return the fresh replacement session."""
+
+        del dag_id
+        return fresh
+
+    monkeypatch.setattr(dag_compat, "open_dag_session", open_fresh)
+    monkeypatch.setattr(dag_compat, "_cleanup_dag", cleaned.append)
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="borrowed_teardown_dead_handle",
+        bundle_name="borrowed_teardown_bundle",
+        session=borrowed,
+        session_owned=False,
+    )
+
+    with caplog.at_level(logging.INFO, logger="pytest_airflow_in_a_box._compat.dag"):
+        dag_compat.cleanup_dag(record)
+
+    assert cleaned == [record]
+    assert record.session is fresh
+    assert fresh.closes == 1
+    assert borrowed.closes == 0
+    assert "Could not roll back the borrowed session" in caplog.text
+
+
+def test_cleanup_dag_open_failure_never_closes_a_borrowed_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Never roll back or close a borrowed session presumed dead at teardown."""
+    """Roll back but never close a borrowed session when no fresh session opens."""
 
     borrowed: Any = _TouchRecordingSession()
 
@@ -598,7 +650,7 @@ def test_cleanup_dag_open_failure_leaves_borrowed_session_untouched(
     with pytest.raises(DagCleanupError, match="Could not clean Airflow Dag metadata"):
         dag_compat.cleanup_dag(record)
 
-    assert borrowed.rollbacks == 0
+    assert borrowed.rollbacks == 1
     assert borrowed.closes == 0
 
 
@@ -945,6 +997,56 @@ def test_borrowed_session_cleanup_survives_session_finalization(
         def test_cleaned():
             with create_session() as session:
                 assert session.get(DagModel, "borrowed_teardown") is None
+        """
+    )
+
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    result = pytester.runpytest_subprocess("-p", "pytest_airflow_in_a_box.plugin", "-q")
+
+    result.assert_outcomes(passed=2)
+
+
+def test_borrowed_session_cleanup_survives_an_uncommitted_flush(
+    pytester: pytest.Pytester,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clean owned rows when the borrowed session still holds an uncommitted flush.
+
+    Regression test for issue #263: the test body flushes on the borrowed session
+    without committing, so its SQLite connection idles in a write transaction when
+    ``dag_maker``'s finalizer runs -- ``session`` is requested FIRST, so pytest
+    finalizes it LAST. Cleanup's fresh session used to block on that never-released
+    write lock for the full ``busy_timeout`` and then raise ``DagCleanupError``
+    (``database is locked``); rolling the borrowed session back first releases the
+    lock and discards the flushed row.
+    """
+
+    pytester.makepyfile(
+        """
+        import pytest
+        from airflow.models.dag import DagModel
+        from airflow.models.variable import Variable
+        from airflow.providers.standard.operators.empty import EmptyOperator
+        from airflow.utils.session import create_session
+        from sqlalchemy import select
+
+        pytestmark = pytest.mark.db_test
+
+
+        def test_create(session, dag_maker):
+            with dag_maker(dag_id="borrowed_uncommitted_flush", session=session):
+                EmptyOperator(task_id="empty")
+            session.add(Variable(key="issue_263_leak", val="uncommitted"))
+            session.flush()
+
+
+        def test_cleaned():
+            with create_session() as session:
+                assert session.get(DagModel, "borrowed_uncommitted_flush") is None
+                leaked = session.scalar(
+                    select(Variable).where(Variable.key == "issue_263_leak")
+                )
+                assert leaked is None
         """
     )
 
