@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pytest_airflow_in_a_box._compat.dag import UNSET, UnsetType
 from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT
 from pytest_airflow_in_a_box.config import ConfigOverrides, EnvOverrides
+from pytest_airflow_in_a_box.dagcorpus import CorpusDag, CorpusDagFileStat, CorpusTask, DagCorpus
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -1033,8 +1034,12 @@ __all__ = (
     "AirflowConnections",
     "AirflowVariables",
     "ComponentRegistry",
+    "CorpusDag",
+    "CorpusDagFileStat",
+    "CorpusTask",
     "CreateDummyDag",
     "CreateTaskInstance",
+    "DagCorpus",
     "DagMaker",
     "DagModelRow",
     "RenderTask",

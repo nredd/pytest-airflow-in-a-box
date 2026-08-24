@@ -54,7 +54,6 @@ from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
 from pytest_airflow_in_a_box.fixtures.components import register_schedule_timetable
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
 from pytest_airflow_in_a_box.markers import read_bool_marker
-from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -66,6 +65,14 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from pytest_airflow_in_a_box.results import DagRunResult
+
+    # Deferred: eagerly importing `types.py` here would cycle back through this module --
+    # `types.py` imports `dagcorpus.py` for its `DagCorpus`/... re-exports, and merely
+    # importing the `fixtures.dagbag` submodule (needed above) first runs
+    # `fixtures/__init__.py`, which imports this module, which would import `types.py`
+    # again while it is still mid-initialization. Safe under `from __future__ import
+    # annotations`: every use below is a type annotation, never evaluated at runtime.
+    from pytest_airflow_in_a_box.types import DagMaker, RunDag, SerializedDag
 
 DAG_ID_MAX_LENGTH = 250
 RUN_ID_MAX_LENGTH = 250
