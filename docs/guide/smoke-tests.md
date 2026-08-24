@@ -139,17 +139,29 @@ def test_every_dag_has_an_owner_tag(dag_corpus):
 `dag_corpus.dags` maps `dag_id` to a `DagCorpus`-scoped Dag record (`tags`, `tasks`,
 `fileloc`, `can_be_scheduled`, `catchup`, and, when serialized, `serialized`); requesting
 `dag_corpus` at all makes the builder always serialize every Dag, regardless of
-`airflow_smoke_disable` -- there is no cheap way to know in advance which fields a test
-body's assertions will read. `dag_corpus.import_errors` maps file path to traceback. Both
-are read-only mapping views (assigning into them raises `TypeError`): `dag_corpus` is
-built once per worker process and shared by every consuming test in it, so nothing can
-mutate one test's corpus out from under another's.
+`airflow_smoke_disable` or a configured `airflow_serialization_sample_size` -- there is no
+cheap way to know in advance which fields a test body's assertions will read.
+`dag_corpus.import_errors` maps file path to traceback. Both are read-only mapping views
+(assigning into them raises `TypeError`): `dag_corpus` is built once per worker process
+and shared by every consuming test in it, so nothing can mutate one test's corpus out
+from under another's. That guarantee stops at the top level, though: each Dag record's
+`serialized` field is a plain `dict`, not a protected view, and is shared by reference
+across every consumer in the same worker process (including the bundled catalog's own
+checks) -- treat it as read-only by convention, the same way `dag_bag`'s returned
+`DagBag` is documented as read-only by convention rather than enforced.
+
 Under `--dist loadgroup`, every surviving `dag_corpus` consumer in the run -- not just
 one, unlike the `dag_bag` co-location above -- joins the bundled catalog's shared
 `xdist_group`, since `dag_corpus` consumers are expected to be few, cheap, read-only
 checks with nothing to lose by sharing a worker. When both `dag_bag` and `dag_corpus`
 consumers exist in the same run, the catalog joins the `dag_corpus` group, not the
-`dag_bag` one.
+`dag_bag` one. That collection-time scan only sees a test that takes `dag_corpus` as a
+normal fixture parameter -- one reached only through
+`request.getfixturevalue("dag_corpus")` is invisible to it (pytest's static fixture
+closure never includes a dynamic `getfixturevalue` lookup), so if that test is the only
+thing in the run that would otherwise force serialization or fan-out eligibility, it
+silently does not get either. Prefer a normal fixture parameter over `getfixturevalue`
+when that matters.
 
 Prefer `dag_corpus` for a check phrased entirely over static Dag metadata -- tags,
 task shape, scheduling policy, serialized structure -- and reach for `dag_bag` only once

@@ -104,7 +104,17 @@ class CorpusDagFileStat:
 
 @dataclass(frozen=True)
 class CorpusDag:
-    """Serialized Dag plus metadata needed without the authoring process."""
+    """Serialized Dag plus metadata needed without the authoring process.
+
+    Every field but `serialized` is either a primitive or an immutable container of
+    frozen dataclasses (`tags` is a `frozenset`, `tasks` a tuple of frozen `CorpusTask`s),
+    so nothing about them can be mutated out from under another consumer. `serialized`
+    is the one exception: a plain, unprotected `dict` (from `json.loads(json.dumps(...))`
+    of the Airflow Dag serializer's output) handed by reference and shared by every
+    consumer of the same cached `DagCorpus` in this worker process, including the bundled
+    smoke catalog's own checks. Treat it as read-only by convention -- the same way
+    `dag_bag`'s own docstring tells callers to treat the live `DagBag` it returns.
+    """
 
     dag_id: str
     tags: frozenset[str]
@@ -129,6 +139,8 @@ class DagCorpus:
     parse was observed and no lookup happened. ``dags`` and ``import_errors`` are
     read-only ``MappingProxyType`` views, not plain ``dict``s -- a consumer cannot mutate
     a shared, cached corpus out from under other consumers in the same worker process.
+    That guarantee does not reach inside each ``CorpusDag`` value, though: see
+    `CorpusDag`'s own docstring for the one field (``serialized``) it does not cover.
     """
 
     dags: Mapping[str, CorpusDag]
