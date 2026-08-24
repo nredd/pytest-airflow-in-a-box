@@ -38,6 +38,15 @@ to state staged after the last `dag_maker` commit. Rows `dag_maker` itself creat
 removed at fixture teardown either way. See
 [Upstream harness keywords](task-execution.md#upstream-harness-keywords).
 
+At teardown, `dag_maker` *rolls back* a borrowed session before cleaning up its rows on a
+fresh one: an uncommitted flush left on the borrowed session would otherwise hold SQLite's
+single write lock across cleanup and fail it deterministically with `database is locked`
+(issue [#263](https://github.com/nredd/pytest-airflow-in-a-box/issues/263)). Anything
+flushed-but-uncommitted on the borrowed session at teardown is therefore discarded -- the
+same fate the `session` fixture's own rollback would deal it a moment later. Uncommitted flushes on *other* sessions are the consumer's responsibility:
+SQLite allows one writer per database, so commit or roll back sibling sessions before
+`dag_maker` persists or cleans up, or use the Postgres backend.
+
 ## Cleanup
 
 `clear_db` is a registry-driven whole-database reset for serial setup and teardown contexts:

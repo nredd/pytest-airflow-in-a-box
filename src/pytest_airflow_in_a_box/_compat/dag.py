@@ -114,8 +114,9 @@ class DagPersistenceRecord:
         session: sqlalchemy.orm.Session used to persist and inspect metadata.
         session_owned: bool indicating whether the fixture opened ``session`` and may
             roll back and close it. ``False`` marks a caller-supplied session the
-            fixture must never close; ``cleanup_dag`` replaces it with a fresh owned
-            one, because caller fixtures can finalize first.
+            fixture must never close; ``cleanup_dag`` rolls it back (releasing any
+            uncommitted write transaction, issue #263) and replaces it with a fresh
+            owned one, because caller fixtures can finalize first.
         bundle_version: str | None recorded on persisted 3.x metadata rows, or
             ``None`` for unversioned. Ignored by the 2.x family, which predates
             bundles.
@@ -1232,11 +1233,19 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 def cleanup_dag(record: DagPersistenceRecord) -> None:
     """Remove one fixture-owned Dag, deregister its authoring Dag, and close its session.
 
-    A borrowed session (``session_owned=False``) is never touched here: the caller's
-    fixture may already have finalized it by the time this teardown runs, so cleanup
-    replaces it with a fresh owned session first. Every fixture write path commits, so
-    the fresh session sees all owned rows. If even opening that session fails, the dead
-    borrowed handle still receives no rollback or close.
+    A borrowed session (``session_owned=False``) is rolled back -- best-effort, never
+    closed -- and then replaced with a fresh owned session: the caller's fixture may
+    already have finalized it by the time this teardown runs, so cleanup cannot rely on
+    the borrowed handle for its own deletes. The rollback is what makes the fresh
+    session workable on SQLite (issue #263): a test that flushed on the borrowed
+    session without committing leaves its connection idle in a write transaction, and
+    because this finalizer runs BEFORE the borrowed session's own teardown, the fresh
+    session's first ``DELETE`` would otherwise block on that never-released write lock
+    for the full ``busy_timeout`` and then fail ``database is locked``. Rolling back a
+    finalized handle is harmless, and a handle so broken that even rollback raises is
+    logged and skipped -- exactly the dead-handle case the fresh session exists for.
+    Every fixture write path commits, so the fresh session sees all owned rows. If even
+    opening that session fails, the borrowed handle still receives no close.
 
     Parameters:
         record: DagPersistenceRecord identifying fixture-owned rows.
@@ -1247,6 +1256,15 @@ def cleanup_dag(record: DagPersistenceRecord) -> None:
 
     try:
         if not record.session_owned:
+            try:
+                record.session.rollback()
+            except Exception as rollback_error:
+                # INFO, not DEBUG: Airflow's dictConfig caps handlers at INFO, and this
+                # diagnostic matters exactly when cleanup later hits a locked database.
+                LOGGER.info(
+                    f"Could not roll back the borrowed session for Dag "
+                    f"'{record.dag_id}' before cleanup: {rollback_error}"
+                )
             record.session = open_dag_session(record.dag_id)
             record.session_owned = True
         _cleanup_dag(record)
