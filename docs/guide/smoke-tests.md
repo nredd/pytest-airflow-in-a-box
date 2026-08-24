@@ -140,7 +140,10 @@ def test_every_dag_has_an_owner_tag(dag_corpus):
 `fileloc`, `can_be_scheduled`, `catchup`, and, when serialized, `serialized`); requesting
 `dag_corpus` at all makes the builder always serialize every Dag, regardless of
 `airflow_smoke_disable` -- there is no cheap way to know in advance which fields a test
-body's assertions will read. `dag_corpus.import_errors` maps file path to traceback.
+body's assertions will read. `dag_corpus.import_errors` maps file path to traceback. Both
+are read-only mapping views (assigning into them raises `TypeError`): `dag_corpus` is
+built once per worker process and shared by every consuming test in it, so nothing can
+mutate one test's corpus out from under another's.
 Under `--dist loadgroup`, every surviving `dag_corpus` consumer in the run -- not just
 one, unlike the `dag_bag` co-location above -- joins the bundled catalog's shared
 `xdist_group`, since `dag_corpus` consumers are expected to be few, cheap, read-only

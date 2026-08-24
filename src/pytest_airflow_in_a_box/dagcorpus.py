@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -54,7 +55,7 @@ from pytest_airflow_in_a_box.parallel_dagbag import (
 from pytest_airflow_in_a_box.parse_secrets import parse_time_comms
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
 LOGGER = logging.getLogger(__name__)
 
@@ -125,11 +126,13 @@ class DagCorpus:
     (see `get_dag_corpus`). ``runtime_lookups`` is deliberately tri-state: ``None`` means
     the producer reused a ``DagBag`` that `dag_bag` had already parsed without
     interception, so runtime secrets findings are unavailable; an empty tuple means the
-    parse was observed and no lookup happened.
+    parse was observed and no lookup happened. ``dags`` and ``import_errors`` are
+    read-only ``MappingProxyType`` views, not plain ``dict``s -- a consumer cannot mutate
+    a shared, cached corpus out from under other consumers in the same worker process.
     """
 
-    dags: dict[str, CorpusDag]
-    import_errors: dict[str, str]
+    dags: Mapping[str, CorpusDag]
+    import_errors: Mapping[str, str]
     dagbag_stats: tuple[CorpusDagFileStat, ...]
     runtime_lookups: tuple[SecretsLookup, ...] | None
     producer_pid: int
@@ -477,8 +480,8 @@ def _build_dag_corpus(session: pytest.Session, config: pytest.Config) -> DagCorp
         for stat in dag_bag.dagbag_stats
     )
     return DagCorpus(
-        dags=dags,
-        import_errors=dict(dag_bag.import_errors),
+        dags=MappingProxyType(dags),
+        import_errors=MappingProxyType(dict(dag_bag.import_errors)),
         dagbag_stats=stats,
         runtime_lookups=runtime_lookups,
         producer_pid=os.getpid(),
@@ -500,7 +503,7 @@ def _dag_corpus_payload(corpus: DagCorpus) -> dict[str, Any]:
         "version": DAG_CORPUS_VERSION,
         "producer_pid": corpus.producer_pid,
         "producer_worker": corpus.producer_worker,
-        "import_errors": corpus.import_errors,
+        "import_errors": dict(corpus.import_errors),
         "dagbag_stats": [
             {
                 "file": stat.file,
@@ -565,21 +568,23 @@ def _dag_corpus_from_payload(payload: dict[str, Any]) -> DagCorpus:
         raise ValueError(f"Unsupported Dag corpus version: '{version}'")
     runtime_lookups = payload["runtime_lookups"]
     return DagCorpus(
-        dags={
-            dag_id: CorpusDag(
-                dag_id=dag_id,
-                tags=frozenset(value["tags"]),
-                tasks=tuple(CorpusTask(**task) for task in value["tasks"]),
-                can_be_scheduled=value["can_be_scheduled"],
-                catchup=value["catchup"],
-                fileloc=value["fileloc"],
-                serialized=value["serialized"],
-                serialization_error=value["serialization_error"],
-                serialization_seconds=value["serialization_seconds"],
-            )
-            for dag_id, value in payload["dags"].items()
-        },
-        import_errors=payload["import_errors"],
+        dags=MappingProxyType(
+            {
+                dag_id: CorpusDag(
+                    dag_id=dag_id,
+                    tags=frozenset(value["tags"]),
+                    tasks=tuple(CorpusTask(**task) for task in value["tasks"]),
+                    can_be_scheduled=value["can_be_scheduled"],
+                    catchup=value["catchup"],
+                    fileloc=value["fileloc"],
+                    serialized=value["serialized"],
+                    serialization_error=value["serialization_error"],
+                    serialization_seconds=value["serialization_seconds"],
+                )
+                for dag_id, value in payload["dags"].items()
+            }
+        ),
+        import_errors=MappingProxyType(dict(payload["import_errors"])),
         dagbag_stats=tuple(
             CorpusDagFileStat(
                 file=stat["file"],

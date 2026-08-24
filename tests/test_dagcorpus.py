@@ -8,7 +8,7 @@ import logging
 import os
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -163,29 +163,31 @@ def _sample_corpus() -> dagcorpus.DagCorpus:
     """
 
     return dagcorpus.DagCorpus(
-        dags={
-            "sample": dagcorpus.CorpusDag(
-                dag_id="sample",
-                tags=frozenset({"team-a"}),
-                tasks=(
-                    dagcorpus.CorpusTask(
-                        task_id="task",
-                        owner="team-a",
-                        pool="default_pool",
-                        is_mapped=True,
-                        mapped_over_runtime_data=True,
-                        max_active_tis_per_dag=4,
+        dags=MappingProxyType(
+            {
+                "sample": dagcorpus.CorpusDag(
+                    dag_id="sample",
+                    tags=frozenset({"team-a"}),
+                    tasks=(
+                        dagcorpus.CorpusTask(
+                            task_id="task",
+                            owner="team-a",
+                            pool="default_pool",
+                            is_mapped=True,
+                            mapped_over_runtime_data=True,
+                            max_active_tis_per_dag=4,
+                        ),
                     ),
-                ),
-                can_be_scheduled=False,
-                catchup=True,
-                fileloc="/dags/sample.py",
-                serialized={"dag_id": "sample"},
-                serialization_error=None,
-                serialization_seconds=0.1,
-            )
-        },
-        import_errors={"broken.py": "traceback"},
+                    can_be_scheduled=False,
+                    catchup=True,
+                    fileloc="/dags/sample.py",
+                    serialized={"dag_id": "sample"},
+                    serialization_error=None,
+                    serialization_seconds=0.1,
+                )
+            }
+        ),
+        import_errors=MappingProxyType({"broken.py": "traceback"}),
         dagbag_stats=(
             dagcorpus.CorpusDagFileStat(
                 file="sample.py", duration=timedelta(seconds=0.25), dag_num=1, task_num=1
@@ -359,6 +361,43 @@ def test_corpus_serialization_needed_defaults_to_true_when_smoke_out_of_scope(
     monkeypatch.setattr(smoke, "_smoke_in_scope", lambda _config: False)
 
     assert dagcorpus._corpus_serialization_needed(config) is True
+
+
+def test_dag_corpus_dags_and_import_errors_are_read_only() -> None:
+    """Reject mutation of `dags`/`import_errors`, matching the issue's immutable-model ask.
+
+    `DagCorpus` is `frozen=True`, but that alone only blocks reassigning an attribute --
+    a plain `dict` field would still let a consumer mutate the shared, cached corpus out
+    from under every other consumer sharing it in the same worker process. `dags`/
+    `import_errors` are `MappingProxyType` views specifically to close that gap.
+    """
+
+    corpus = _sample_corpus()
+    # `Mapping` (the field's static type) has no `__setitem__` at all -- typed `Any` here
+    # deliberately, to drive the *runtime* `MappingProxyType` rejection under test rather
+    # than a static one `ty` would otherwise catch first.
+    dags: Any = corpus.dags
+    import_errors: Any = corpus.import_errors
+
+    with pytest.raises(TypeError):
+        dags["new"] = corpus.dags["sample"]
+    with pytest.raises(TypeError):
+        import_errors["new.py"] = "traceback"
+
+
+def test_dag_corpus_from_payload_produces_read_only_mappings() -> None:
+    """Reject mutation of a `dags`/`import_errors` decoded from a shared artifact."""
+
+    payload = dagcorpus._dag_corpus_payload(_sample_corpus())
+
+    corpus = dagcorpus._dag_corpus_from_payload(payload)
+    dags: Any = corpus.dags
+    import_errors: Any = corpus.import_errors
+
+    with pytest.raises(TypeError):
+        dags["new"] = corpus.dags["sample"]
+    with pytest.raises(TypeError):
+        import_errors["new.py"] = "traceback"
 
 
 def test_dag_corpus_artifact_round_trips() -> None:

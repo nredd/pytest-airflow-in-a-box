@@ -83,6 +83,12 @@ stable external contract. Unlike `dag_bag`'s fixture, `dag_corpus` never calls
 `ensure_database` unconditionally: the builder already initializes the database
 conditionally, only when parse-time secrets resolution is active, and forcing it eagerly here
 would make a `dag_corpus`-only run pay the one-time migration cost even when nothing needs it.
+`DagCorpus.dags`/`.import_errors` are `MappingProxyType` views, not plain `dict`s -- issue
+#277 explicitly asked for "a documented immutable public model," and `frozen=True` alone only
+blocks reassigning an attribute, not mutating a mutable object it points to; a consumer
+mutating a shared, cross-worker-cached corpus would corrupt it for every other consumer in the
+same worker process. `CorpusDag.tags`/`.tasks` already used `frozenset`/`tuple` for the same
+reason; `dags`/`import_errors` were the two fields that hadn't caught up.
 
 Separately profiled and rejected in the same pass: swapping stdlib `json` for `orjson` in the
 fan-out payload codecs (`parallel_dagbag.py`'s `encode_shard`/`merge_shard_payloads`,

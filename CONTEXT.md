@@ -32,7 +32,10 @@ directly, with a property pre-seeded, is the test seam for a check -- no monkeyp
 The portable, fan-out-eligible representation of one parsed Dag folder (`dagcorpus.py`):
 `dags` (a `dag_id`-keyed map of `CorpusDag` records -- tags, tasks, `fileloc`,
 `can_be_scheduled`, `catchup`, and, when serialized, `serialized`), `import_errors`,
-`dagbag_stats`, and `runtime_lookups`. Built once per worker process and shared with local
+`dagbag_stats`, and `runtime_lookups`. `dags`/`import_errors` are read-only
+`MappingProxyType` views, not plain `dict`s -- `frozen=True` alone only blocks reassigning
+an attribute, not mutating a mutable object it points to, and this is a value shared by
+every consumer in one worker process. Built once per worker process and shared with local
 `pytest-xdist` workers through a flock-guarded JSON artifact (`get_dag_corpus`); the same
 instance backs both the public `dag_corpus` fixture and the bundled smoke catalog's
 `SmokeContext.corpus`, so whichever one triggers the build, every consumer in that worker
