@@ -1122,63 +1122,92 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
         ti.refresh_from_task(task, dag_run=dag_run)
 
 
+def _delete_dag_run_rows(session: Session, run_ids: set[int]) -> None:
+    """ORM-delete DagRun rows by primary key, flushing once at the end.
+
+    ORM deletion (not a core ``DELETE``) is deliberate: it cascades each run's
+    task-instance rows through the ``DagRun.task_instances`` relationship, exactly
+    like Airflow's own teardown paths. Absent rows are skipped so cleanup stays
+    idempotent after a failed operation.
+
+    Parameters:
+        session: sqlalchemy.orm.Session used for the deletes; not committed here.
+        run_ids: set[int] containing DagRun primary keys to delete.
+    """
+
+    from airflow.models.dagrun import DagRun
+
+    for run_id in sorted(run_ids):
+        dag_run = session.get(DagRun, run_id)
+        if dag_run is not None:
+            session.delete(dag_run)
+    session.flush()
+
+
+def _delete_dag_runs(session: Session, dag_id: str, owned_run_ids: set[int]) -> None:
+    """ORM-delete every 3.x DagRun carrying one Dag identity, plus its backfill rows.
+
+    Fixture ownership is not enough of a predicate here: Airflow creates DagRuns for a
+    Dag that never pass through ``create_dag_run`` -- ``dag.test()`` makes its own
+    manual run, and the Backfill machinery makes runs for a test-created ``Backfill``
+    (issue #258) -- so the sweep is scoped by ``dag_id``, unioned with the
+    fixture-owned ids for explicitness. Every run is ORM-deleted so task-instance
+    rows cascade identically to the fixture-owned path; leaving any behind blocks the
+    ``dag_version`` delete, whose one restrictive foreign key is
+    ``task_instance.dag_version_id`` (``ondelete="RESTRICT"``, issue #266).
+
+    Deletion order is FK-driven: ``BackfillDagRun`` join rows reference both
+    ``dag_run.id`` and ``backfill.id``, so they go first; ``dag_run.backfill_id``
+    references ``backfill.id`` with no ``ondelete`` action, so the ``Backfill``
+    parents go only after every run is flushed away. The parents are deleted too (not
+    just their join rows) so a fixture-owned Dag leaves no backfill metadata behind,
+    matching ``clear_db``'s ``backfill`` group.
+
+    Parameters:
+        session: sqlalchemy.orm.Session used for the deletes; not committed here.
+        dag_id: str identifying the Dag whose runs are swept.
+        owned_run_ids: set[int] containing fixture-owned DagRun primary keys to
+            delete even when their rows no longer carry ``dag_id``.
+    """
+
+    from airflow.models.backfill import Backfill, BackfillDagRun
+    from airflow.models.dagrun import DagRun
+    from sqlalchemy import delete, select
+
+    run_ids = set(session.scalars(select(DagRun.id).where(DagRun.dag_id == dag_id)))
+    run_ids |= owned_run_ids
+    backfill_ids = list(session.scalars(select(Backfill.id).where(Backfill.dag_id == dag_id)))
+    session.execute(
+        delete(BackfillDagRun).where(
+            BackfillDagRun.dag_run_id.in_(run_ids) | BackfillDagRun.backfill_id.in_(backfill_ids)
+        )
+    )
+    _delete_dag_run_rows(session, run_ids)
+    if backfill_ids:
+        session.execute(delete(Backfill).where(Backfill.id.in_(backfill_ids)))
+
+
 def _cleanup_dag(record: DagPersistenceRecord) -> None:
     """Delete only metadata carrying this record's Dag and bundle identities.
+
+    On the 3.x family that includes DagRuns Airflow itself created for the record's
+    Dag outside the fixture (``dag.test()``, the Backfill machinery) -- see
+    ``_delete_dag_runs``.
 
     Parameters:
         record: DagPersistenceRecord identifying fixture-owned rows.
     """
 
     from airflow.models.dag import DagModel
-    from airflow.models.dagrun import DagRun
     from airflow.models.serialized_dag import SerializedDagModel
     from sqlalchemy import delete, func, select
 
     session = record.session
     session.rollback()
-    backfill_ids: list[int] = []
-    if not _is_v2():
-        # Backfill rows arrived in 3.x. `BackfillDagRun` FK-references both `dag_run.id`
-        # and `backfill.id`, so the join rows must go before either parent. Fixture
-        # ownership is not enough of a predicate here: a test driving Airflow's Backfill
-        # machinery directly creates backfills for this Dag -- and DagRuns for them --
-        # that never pass through `create_dag_run`, so the cleanup is scoped by
-        # `record.dag_run_ids` OR membership in this Dag's backfills (issue #258).
-        from airflow.models.backfill import Backfill, BackfillDagRun
-
-        backfill_ids = list(
-            session.scalars(select(Backfill.id).where(Backfill.dag_id == record.dag_id))
-        )
-        session.execute(
-            delete(BackfillDagRun).where(
-                BackfillDagRun.dag_run_id.in_(record.dag_run_ids)
-                | BackfillDagRun.backfill_id.in_(backfill_ids)
-            )
-        )
-    for dag_run_id in record.dag_run_ids:
-        dag_run = session.get(DagRun, dag_run_id)
-        if dag_run is not None:
-            session.delete(dag_run)
-    session.flush()
-
-    if backfill_ids:
-        # `dag_run.backfill_id` FK-references `backfill.id` with no `ondelete` action,
-        # so the Backfill parents can only go after every DagRun that might reference
-        # them is gone: the fixture-owned runs (the delete loop and flush above) plus
-        # the runs Airflow's Backfill machinery created for this Dag's backfills, which
-        # are not in `record.dag_run_ids`. Those are ORM-deleted exactly like the owned
-        # loop so task-instance rows cascade identically -- and removing them also
-        # unblocks the DagVersion delete below. The Backfill parents are deleted too
-        # (not just their `BackfillDagRun` children) so a fixture-owned Dag leaves no
-        # backfill metadata behind, matching `clear_db`'s `backfill` group.
-        from airflow.models.backfill import Backfill
-
-        for dag_run in session.scalars(select(DagRun).where(DagRun.backfill_id.in_(backfill_ids))):
-            session.delete(dag_run)
-        session.flush()
-        session.execute(delete(Backfill).where(Backfill.id.in_(backfill_ids)))
-
     if _is_v2():
+        # 2.x predates DagVersion and Backfill rows, so nothing outside the
+        # fixture-owned runs can block the deletes below.
+        _delete_dag_run_rows(session, record.dag_run_ids)
         # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id`. The
         # `dag_code` row -- keyed on `fileloc` and shared by every Dag in one source
         # file -- is deliberately left in place: deleting it would re-arm issue #157's
@@ -1196,6 +1225,8 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
     from airflow.models.dag_version import DagVersion
     from airflow.models.dagbundle import DagBundleModel
     from airflow.models.dagcode import DagCode
+
+    _delete_dag_runs(session, record.dag_id, record.dag_run_ids)
 
     version_ids = list(
         session.scalars(

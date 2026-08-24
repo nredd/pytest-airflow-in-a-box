@@ -860,6 +860,71 @@ def test_cleanup_dag_clears_test_created_backfill_rows() -> None:
     assert _row_counts("backfill_foreign_cleanup") == (0, 0, 0, 0)
 
 
+def test_cleanup_dag_clears_unowned_dag_run_task_instances() -> None:
+    """Delete DagRuns Airflow created for the Dag outside the fixture before its versions.
+
+    Regression test for issue #266: ``dag.test()`` creates a manual DagRun through
+    the scheduler Dag directly, so neither the run nor its task instances ever enter
+    ``record.dag_run_ids``. ``task_instance.dag_version_id`` FK-references
+    ``dag_version.id`` with ``ondelete="RESTRICT"`` -- the only restrictive foreign
+    key into ``dag_version`` -- so cleanup scoped to fixture-owned runs used to fail
+    the ``dag_version`` delete with ``sqlite3.IntegrityError: FOREIGN KEY constraint
+    failed`` and strand every row behind it.
+    """
+
+    from airflow.models.taskinstance import TaskInstance
+
+    session = dag_compat.open_dag_session("unowned_run_cleanup")
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="unowned_run_cleanup",
+        bundle_name=_bundle_name("unowned_run_cleanup"),
+        session=session,
+    )
+    dag = dag_compat.build_dag("unowned_run_cleanup", __file__, {})
+    EmptyOperator(task_id="only_task", dag=dag)
+    scheduler_dag = dag_compat.persist_dag(dag, record)
+    dag_run = dag_compat.create_dag_run(
+        scheduler_dag,
+        dag,
+        record,
+        run_id="unowned_run_cleanup_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+    )
+    # Disown the run: `dag.test()` calls the scheduler Dag's `create_dagrun` itself,
+    # so cleanup cannot find its run -- or the task instances referencing the Dag's
+    # `DagVersion` rows -- through `dag_run_ids`.
+    record.dag_run_ids.discard(dag_run.id)
+    record.task_instance_keys.clear()
+
+    with create_session() as verify_session:
+        version_references = verify_session.scalar(
+            select(func.count())
+            .select_from(TaskInstance)
+            .where(
+                TaskInstance.run_id == "unowned_run_cleanup_run",
+                TaskInstance.dag_version_id.is_not(None),
+            )
+        )
+    assert version_references == 1
+
+    dag_compat.cleanup_dag(record)
+
+    with create_session() as verify_session:
+        assert verify_session.get(DagRun, dag_run.id) is None
+        assert (
+            verify_session.scalar(
+                select(func.count())
+                .select_from(TaskInstance)
+                .where(TaskInstance.dag_id == "unowned_run_cleanup")
+            )
+            == 0
+        )
+    assert _row_counts("unowned_run_cleanup") == (0, 0, 0, 0)
+
+
 def test_cleanup_accepts_missing_owned_rows() -> None:
     """Make cleanup idempotent when a failed operation did not create metadata rows."""
 
