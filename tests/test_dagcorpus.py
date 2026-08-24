@@ -199,6 +199,42 @@ def _sample_corpus() -> dagcorpus.DagCorpus:
     )
 
 
+def _corpus_with_filelocs(filelocs: dict[str, str]) -> dagcorpus.DagCorpus:
+    """Build a corpus containing one minimal Dag per entry, keyed by `dag_id`.
+
+    Parameters:
+        filelocs: dict[str, str] mapping `dag_id` to its `fileloc`.
+
+    Returns:
+        pytest_airflow_in_a_box.dagcorpus.DagCorpus containing one Dag per entry, with
+        every other field set to a minimal placeholder value.
+    """
+
+    return dagcorpus.DagCorpus(
+        dags=MappingProxyType(
+            {
+                dag_id: dagcorpus.CorpusDag(
+                    dag_id=dag_id,
+                    tags=frozenset(),
+                    tasks=(),
+                    can_be_scheduled=True,
+                    catchup=False,
+                    fileloc=fileloc,
+                    serialized=None,
+                    serialization_error=None,
+                    serialization_seconds=0.0,
+                )
+                for dag_id, fileloc in filelocs.items()
+            }
+        ),
+        import_errors=MappingProxyType({}),
+        dagbag_stats=(),
+        runtime_lookups=(),
+        producer_pid=1,
+        producer_worker="master",
+    )
+
+
 def test_parse_timeout_reads_default() -> None:
     """Parse the default timeout string into a float."""
 
@@ -861,3 +897,185 @@ def test_dag_corpus_is_built_once_and_cached_per_process(
     assert builds == [config]
     assert loaded == corpus
     assert loaded is not corpus
+
+
+def test_dags_under_filters_by_subdirectory(tmp_path: Path) -> None:
+    """Keep only Dags whose file lives under the requested subdirectory.
+
+    Uses real on-disk paths (unlike most `dags_under` tests below, which exercise the
+    nonexistent-path branch of `Path.resolve()` deliberately): a real directory pins the
+    common case where `resolve()` walks actual filesystem entries, not just syntax.
+    """
+
+    dag_folder = tmp_path / "dags"
+    (dag_folder / "a").mkdir(parents=True)
+    (dag_folder / "b").mkdir(parents=True)
+    (dag_folder / "a" / "one.py").touch()
+    (dag_folder / "b" / "two.py").touch()
+    corpus = _corpus_with_filelocs(
+        {
+            "in_a": str(dag_folder / "a" / "one.py"),
+            "in_b": str(dag_folder / "b" / "two.py"),
+        }
+    )
+
+    result = dagcorpus.dags_under(corpus, dag_folder, "a")
+
+    assert dict(result) == {"in_a": corpus.dags["in_a"]}
+
+
+def test_dags_under_does_not_match_a_sibling_with_a_shared_prefix(tmp_path: Path) -> None:
+    """Reject `dags/ab` when filtering for `dags/a`.
+
+    Guards the reason this filter resolves and compares path *parts* via
+    `Path.is_relative_to` instead of a `str.startswith` prefix check, which a naive
+    reimplementation could regress to.
+    """
+
+    dag_folder = tmp_path / "dags"
+    corpus = _corpus_with_filelocs(
+        {
+            "in_a": str(dag_folder / "a" / "one.py"),
+            "in_ab": str(dag_folder / "ab" / "two.py"),
+        }
+    )
+
+    result = dagcorpus.dags_under(corpus, dag_folder, "a")
+
+    assert dict(result) == {"in_a": corpus.dags["in_a"]}
+
+
+def test_dags_under_resolves_through_a_symlinked_subdirectory(tmp_path: Path) -> None:
+    """Follow a symlinked directory component the same way `Path.resolve()` does.
+
+    `resolve()` is what makes the containment check filesystem-aware rather than
+    syntactic; this only exercises that when the symlink is real, unlike the
+    nonexistent-path cases elsewhere in this file.
+    """
+
+    dag_folder = tmp_path / "dags"
+    real_dir = tmp_path / "real_a"
+    real_dir.mkdir()
+    (real_dir / "one.py").touch()
+    dag_folder.mkdir()
+    (dag_folder / "a").symlink_to(real_dir)
+    corpus = _corpus_with_filelocs({"in_a": str(dag_folder / "a" / "one.py")})
+
+    result = dagcorpus.dags_under(corpus, dag_folder, "a")
+
+    assert dict(result) == {"in_a": corpus.dags["in_a"]}
+
+
+def test_dags_under_includes_nested_subdirectories(tmp_path: Path) -> None:
+    """Keep Dags nested arbitrarily deep under the requested subdirectory."""
+
+    dag_folder = tmp_path / "dags"
+    corpus = _corpus_with_filelocs(
+        {
+            "shallow": str(dag_folder / "a" / "one.py"),
+            "deep": str(dag_folder / "a" / "nested" / "further" / "two.py"),
+            "sibling": str(dag_folder / "b" / "three.py"),
+        }
+    )
+
+    result = dagcorpus.dags_under(corpus, dag_folder, "a")
+
+    assert set(result) == {"shallow", "deep"}
+
+
+def test_dags_under_returns_empty_mapping_when_nothing_matches(tmp_path: Path) -> None:
+    """Match nothing when an existing, on-disk subdirectory holds no Dags.
+
+    Distinct from `test_dags_under_subdir_absent_from_disk_still_matches_nothing` below:
+    `other` is real here, so this pins the "exists but empty" case rather than the
+    "does not exist at all" one.
+    """
+
+    dag_folder = tmp_path / "dags"
+    (dag_folder / "other").mkdir(parents=True)
+    corpus = _corpus_with_filelocs({"in_a": str(dag_folder / "a" / "one.py")})
+
+    assert dict(dagcorpus.dags_under(corpus, dag_folder, "other")) == {}
+
+
+def test_dags_under_subdir_absent_from_disk_still_matches_nothing(tmp_path: Path) -> None:
+    """Stay a pure in-memory filter: a `subdir` that was never created still resolves."""
+
+    dag_folder = tmp_path / "dags"
+    assert not dag_folder.exists()
+    corpus = _corpus_with_filelocs({"in_a": str(dag_folder / "a" / "one.py")})
+
+    result = dagcorpus.dags_under(corpus, dag_folder, "nope")
+
+    assert dict(result) == {}
+    assert not dag_folder.exists()
+
+
+def test_dags_under_relative_and_absolute_subdir_match(tmp_path: Path) -> None:
+    """Give identical results for a relative and an equivalent absolute `subdir`."""
+
+    dag_folder = tmp_path / "dags"
+    corpus = _corpus_with_filelocs({"in_a": str(dag_folder / "a" / "one.py")})
+
+    relative_result = dagcorpus.dags_under(corpus, dag_folder, "a")
+    absolute_result = dagcorpus.dags_under(corpus, dag_folder, dag_folder / "a")
+
+    expected = {"in_a": corpus.dags["in_a"]}
+    assert dict(relative_result) == dict(absolute_result) == expected
+
+
+def test_dags_under_normalizes_trailing_slash_dot_and_dotdot(tmp_path: Path) -> None:
+    """Normalize a trailing slash, `.`, and `..` in `subdir` to the same result."""
+
+    dag_folder = tmp_path / "dags"
+    corpus = _corpus_with_filelocs({"in_a": str(dag_folder / "a" / "one.py")})
+    expected = {"in_a": corpus.dags["in_a"]}
+
+    assert dict(dagcorpus.dags_under(corpus, dag_folder, "a/")) == expected
+    assert dict(dagcorpus.dags_under(corpus, dag_folder, "./a")) == expected
+    assert dict(dagcorpus.dags_under(corpus, dag_folder, "b/../a")) == expected
+
+
+@pytest.mark.parametrize("subdir", [".", ""])
+def test_dags_under_dot_or_empty_subdir_returns_everything(subdir: str, tmp_path: Path) -> None:
+    """Return every Dag when `subdir` names the Dag folder itself."""
+
+    dag_folder = tmp_path / "dags"
+    corpus = _corpus_with_filelocs(
+        {
+            "in_a": str(dag_folder / "a" / "one.py"),
+            "in_b": str(dag_folder / "b" / "two.py"),
+        }
+    )
+
+    assert dict(dagcorpus.dags_under(corpus, dag_folder, subdir)) == corpus.dags
+
+
+def test_dags_under_ignores_fileloc_outside_dag_folder(tmp_path: Path) -> None:
+    """Do not crash on a `fileloc` that lives outside `dag_folder` entirely."""
+
+    dag_folder = tmp_path / "dags"
+    outside = tmp_path / "elsewhere" / "rogue.py"
+    corpus = _corpus_with_filelocs({"rogue": str(outside)})
+
+    assert dict(dagcorpus.dags_under(corpus, dag_folder, ".")) == {}
+
+
+def test_dags_under_return_value_is_read_only(tmp_path: Path) -> None:
+    """Reject mutation of the returned mapping so a shared corpus stays intact."""
+
+    dag_folder = tmp_path / "dags"
+    corpus = _corpus_with_filelocs({"in_a": str(dag_folder / "a" / "one.py")})
+    result = dagcorpus.dags_under(corpus, dag_folder, "a")
+    mutable: Any = result
+
+    with pytest.raises(TypeError):
+        mutable["new"] = corpus.dags["in_a"]
+
+
+def test_dags_under_empty_corpus_returns_empty_mapping(tmp_path: Path) -> None:
+    """Return an empty mapping, without raising, for a corpus with no Dags."""
+
+    corpus = _corpus_with_filelocs({})
+
+    assert dict(dagcorpus.dags_under(corpus, tmp_path / "dags", ".")) == {}
