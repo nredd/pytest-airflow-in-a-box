@@ -476,6 +476,9 @@ def test_create_dag_run_uses_the_execution_date_interface(
         """Reject repeated integrity verification and expose owned identities."""
 
         id = 77
+        # The relationship attribute `create_dag_run` snapshots for the refresh loop,
+        # mirroring the real 2.x `DagRun.task_instances` relationship.
+        task_instances: tuple[Any, ...] = ()
 
         def verify_integrity(self, session: Any = None) -> None:
             del session
@@ -483,10 +486,6 @@ def test_create_dag_run_uses_the_execution_date_interface(
                 "2.x `DAG.create_dagrun` already verified integrity; the plugin must "
                 "not run a second pass"
             )
-
-        def get_task_instances(self, session: Any = None) -> list[Any]:
-            del session
-            return []
 
     class FakeSchedulerDag:
         """Record the 2.x `create_dagrun` call shape, verifying like real 2.x."""

@@ -126,6 +126,13 @@ class DagPersistenceRecord:
         bundle_created: bool indicating whether this fixture inserted the bundle row.
         dag_run_ids: set[int] containing exact fixture-owned DagRun primary keys.
         task_instance_keys: set[tuple[str, str, str, int]] containing owned task identities.
+        task_instances: list[Any] pinning every refreshed ORM task instance for the
+            record's lifetime. The session's identity map holds instances weakly, and
+            expiry (`session.expire_all()` runs on every task execution) drops the
+            `DagRun.task_instances` relationship collection that would otherwise keep
+            them alive -- without this pin a later lookup rehydrates fresh rows whose
+            `ti.task` is ``None`` (issue #259). Never read back or cleaned: it exists
+            purely to keep the refreshed objects reachable until fixture teardown.
     """
 
     dag_id: str
@@ -136,6 +143,7 @@ class DagPersistenceRecord:
     bundle_created: bool = False
     dag_run_ids: set[int] = field(default_factory=set)
     task_instance_keys: set[tuple[str, str, str, int]] = field(default_factory=set)
+    task_instances: list[Any] = field(default_factory=list)
 
 
 def _is_v2() -> bool:
@@ -1091,7 +1099,17 @@ def create_dag_run(
             operation = "verifying task-instance integrity"
             dag_run.verify_integrity(session=record.session, dag_version_id=dag_version.id)
         capabilities = resolve_capabilities()
-        task_instances: list[Any] = dag_run.get_task_instances(session=record.session)
+        operation = "loading created task instances"
+        # The `task_instances` relationship, NOT `get_task_instances`' transient query
+        # result: the session's identity map holds task instances weakly, so refreshing
+        # a list nothing else references is undone by garbage collection the moment this
+        # function returns -- the caller's next lookup rehydrates fresh rows with
+        # `ti.task = None` (issue #259). The relationship collection populates the
+        # returned DagRun the way upstream `tests_common` does, and the record pin
+        # below keeps the refreshed objects alive even after session expiry drops the
+        # collection from the run (`session.expire_all()` runs on every task
+        # execution).
+        task_instances: list[Any] = list(dag_run.task_instances)
         operation = "refreshing task instances from authoring tasks"
         for ti in task_instances:
             task = authoring_dag.get_task(str(ti.task_id))
@@ -1099,6 +1117,7 @@ def create_dag_run(
                 _refresh_from_task(ti, task, dag_run)
             else:
                 _refresh_from_task(ti, task)
+        record.task_instances.extend(task_instances)
         operation = "committing DagRun and task-instance metadata"
         record.session.commit()
         record.dag_run_ids.add(dag_run.id)
@@ -1176,6 +1195,10 @@ def select_task_instance(
         operation = "committing refreshed task-instance metadata"
         record.session.commit()
         selected: Any = ti
+        # The same lifetime pin `create_dag_run` applies: a selected instance the
+        # caller drops (e.g. a mapped expansion) must survive session expiry with its
+        # refreshed `ti.task` intact.
+        record.task_instances.append(ti)
         record.task_instance_keys.add(
             (
                 str(selected.dag_id),
