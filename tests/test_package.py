@@ -252,6 +252,7 @@ def test_public_surface_is_explicit() -> None:
         "RenderTask",
         "RunDag",
         "RunTask",
+        "SchedulerTimetable",
         "SerializedDag",
         "TaskContext",
         "TaskContextHandle",

@@ -137,6 +137,64 @@ def test_create_task_instance_omitted_logical_date_defaults_to_now(
     assert ti.dag_run.data_interval_end is not None
 
 
+def test_create_task_instance_accepts_the_execution_date_spelling(
+    create_task_instance: CreateTaskInstance,
+) -> None:
+    """Map upstream's Airflow 2 ``execution_date`` spelling onto the logical date.
+
+    Upstream 2.x-era suites call ``create_task_instance(execution_date=...)``;
+    upstream ``tests_common`` preserves the spelling with a ``DeprecationWarning``
+    and this fixture matches it (issue #261).
+
+    Parameters:
+        create_task_instance: CreateTaskInstance under test.
+    """
+
+    execution_date = datetime(2018, 1, 1, tzinfo=timezone.utc)
+
+    with pytest.warns(DeprecationWarning, match="'execution_date' parameter is preserved"):
+        ti = create_task_instance(dag_id="cti_execution_date", execution_date=execution_date)
+
+    assert ti.dag_run.logical_date == execution_date
+
+
+def test_create_task_instance_treats_none_execution_date_as_unset(
+    create_task_instance: CreateTaskInstance,
+) -> None:
+    """Keep an explicit ``execution_date=None`` on the omission default.
+
+    No Airflow 2 run can lack an execution date, so ``None`` in the 2.x spelling
+    means "not supplied" -- never the 3.x no-logical-date sentinel, which would
+    also raise ``ValueError`` on the 2.x family (issue #261).
+
+    Parameters:
+        create_task_instance: CreateTaskInstance under test.
+    """
+
+    ti = create_task_instance(dag_id="cti_none_execution_date", execution_date=None)
+
+    assert ti.dag_run.logical_date is not None
+
+
+def test_create_task_instance_rejects_both_date_spellings(
+    create_task_instance: CreateTaskInstance,
+) -> None:
+    """Refuse to pick between ``logical_date`` and ``execution_date`` silently.
+
+    Parameters:
+        create_task_instance: CreateTaskInstance under test.
+    """
+
+    date = datetime(2018, 1, 1, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="Drop `execution_date`"):
+        create_task_instance(
+            dag_id="cti_both_dates",
+            logical_date=date,
+            execution_date=date,
+        )
+
+
 def test_create_task_instance_adopts_a_supplied_task(
     create_task_instance: CreateTaskInstance,
 ) -> None:
