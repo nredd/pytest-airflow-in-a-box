@@ -625,7 +625,7 @@ def test_dagrun_creation_allows_triggered_by_through_dag_run_kwargs(
         run_id="compat_run",
         created_dag_version_id="current",
         verify_integrity=lambda **_kwargs: None,
-        get_task_instances=lambda **_kwargs: [ti],
+        task_instances=[ti],
     )
     created_kwargs: dict[str, Any] = {}
 
@@ -776,7 +776,7 @@ def test_legacy_refresh_and_explicit_data_interval(monkeypatch: pytest.MonkeyPat
         run_id="compat_run",
         created_dag_version_id="current",
         verify_integrity=lambda **_kwargs: None,
-        get_task_instances=lambda **_kwargs: [ti],
+        task_instances=[ti],
         get_task_instance=lambda **_kwargs: ti,
     )
     scheduler_dag = SimpleNamespace(

@@ -137,6 +137,52 @@ def test_timetable_handle_run_ti_session_and_execution_date_alias(
     result.assert_outcomes(passed=3)
 
 
+def test_created_run_task_instances_keep_their_refreshed_tasks(
+    pytester: pytest.Pytester,
+) -> None:
+    """Sort `dag_run.task_instances` and use each task, upstream's cleartasks shape.
+
+    Regression test for issue #259 on both families: the refreshed instances must stay
+    reachable through the returned DagRun after garbage collection, so consumer code
+    holding only the run never sees `ti.task = None`.
+
+    Parameters:
+        pytester: pytest.Pytester driving the installed plugin in a subprocess.
+    """
+
+    pytester.makepyfile(
+        """
+        import gc
+
+        def test_relationship_instances(dag_maker):
+            try:
+                from airflow.providers.standard.operators.empty import EmptyOperator
+            except ModuleNotFoundError:
+                from airflow.operators.empty import EmptyOperator
+
+            with dag_maker(dag_id="enduser_run_parity"):
+                EmptyOperator(task_id="first")
+                EmptyOperator(task_id="second", retries=2)
+
+            dag_run = dag_maker.create_dagrun()
+            gc.collect()
+
+            ti0, ti1 = sorted(dag_run.task_instances, key=lambda ti: ti.task_id)
+            assert (ti0.task_id, ti1.task_id) == ("first", "second")
+            for ti in (ti0, ti1):
+                assert ti.task is not None
+                assert ti.queue == ti.task.queue
+                assert ti.dag_id == "enduser_run_parity"
+            fetched = dag_run.get_task_instances(session=dag_maker.session)
+            assert all(ti.task is not None for ti in fetched)
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q")
+
+    result.assert_outcomes(passed=1)
+
+
 @pytest.mark.requires_airflow3
 def test_testing_dag_bundle_and_no_logical_date_runs(pytester: pytest.Pytester) -> None:
     """Register the shared bundle and create a run without a logical date on 3.x."""

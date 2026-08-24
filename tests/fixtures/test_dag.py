@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -447,6 +448,61 @@ def test_borrowed_session_routes_persistence_and_is_exposed(
     assert _row_counts("borrowed_session") == (1, 1, 1, 1)
     dag_run = dag_maker.create_dagrun()
     assert dag_run.run_id.startswith("manual__pytest-airflow-in-a-box")
+
+
+def test_created_run_task_refresh_survives_garbage_collection(dag_maker: DagMaker) -> None:
+    """Keep refreshed task instances reachable through the returned DagRun.
+
+    Regression test for issue #259: `create_dag_run` used to refresh the transient
+    `get_task_instances` query result, which the session's weak identity map dropped at
+    the next garbage collection -- any later lookup rehydrated fresh rows with
+    `ti.task = None` and upstream-shaped consumers crashed on `ti.task.queue`.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    with dag_maker(dag_id="refresh_survives_gc"):
+        EmptyOperator(task_id="first")
+        EmptyOperator(task_id="second")
+
+    dag_run = dag_maker.create_dagrun()
+    gc.collect()
+
+    fetched = dag_run.get_task_instances(session=dag_maker.session)
+    assert sorted(ti.task_id for ti in fetched) == ["first", "second"]
+    assert all(ti.task is not None for ti in fetched)
+
+
+def test_created_run_relationship_exposes_refreshed_task_instances(
+    dag_maker: DagMaker,
+) -> None:
+    """Expose usable instances through `dag_run.task_instances`, upstream's shape.
+
+    The upstream `tests_common` consumer pattern (`test_cleartasks.py`): sort the
+    relationship collection, then use each instance's refreshed authoring task.
+
+    Parameters:
+        dag_maker: DagMaker building the fixture-owned Dag.
+    """
+
+    with dag_maker(dag_id="relationship_task_instances") as dag:
+        EmptyOperator(task_id="first")
+        EmptyOperator(task_id="second", retries=2)
+
+    dag_run = dag_maker.create_dagrun()
+    gc.collect()
+
+    # Genexp on purpose: ty resolves the relationship attribute as
+    # `InstrumentedAttribute[Any]`, which fails `list(...)`'s `Iterable` protocol
+    # check while plain iteration is accepted (same shape as `sync_dagbag_to_db`'s
+    # round-trip assertion above).
+    ti0, ti1 = sorted((ti for ti in dag_run.task_instances), key=lambda ti: str(ti.task_id))
+    assert (ti0.task_id, ti1.task_id) == ("first", "second")
+    for ti in (ti0, ti1):
+        assert ti.task is not None
+        assert ti.task is dag.get_task(ti.task_id)
+        assert ti.queue == ti.task.queue
 
 
 def test_dag_model_returns_the_live_metadata_row(dag_maker: DagMaker) -> None:

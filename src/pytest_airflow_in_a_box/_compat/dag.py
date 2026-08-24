@@ -1091,7 +1091,15 @@ def create_dag_run(
             operation = "verifying task-instance integrity"
             dag_run.verify_integrity(session=record.session, dag_version_id=dag_version.id)
         capabilities = resolve_capabilities()
-        task_instances: list[Any] = dag_run.get_task_instances(session=record.session)
+        operation = "loading created task instances"
+        # The `task_instances` relationship, NOT `get_task_instances`' transient query
+        # result: the session's identity map holds task instances weakly, so refreshing
+        # a list nothing else references is undone by garbage collection the moment this
+        # function returns -- the caller's next lookup rehydrates fresh rows with
+        # `ti.task = None` (issue #259). The relationship collection is strongly
+        # referenced by the returned DagRun, so the refreshed objects live exactly as
+        # long as the run the test holds, matching upstream `tests_common`.
+        task_instances: list[Any] = list(dag_run.task_instances)
         operation = "refreshing task instances from authoring tasks"
         for ti in task_instances:
             task = authoring_dag.get_task(str(ti.task_id))
