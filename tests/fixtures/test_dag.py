@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
@@ -192,6 +192,8 @@ def test_properties_require_factory_progress(dag_maker: DagMaker) -> None:
         dag_maker.create_dagrun()
     with pytest.raises(RuntimeError, match="has not persisted a Dag"):
         _ = dag_maker.dag_model
+    with pytest.raises(RuntimeError, match="has not persisted a Dag"):
+        _ = dag_maker.timetable
     with pytest.raises(RuntimeError, match="has not persisted a Dag"):
         dag_maker.sync_dagbag_to_db()
 
@@ -382,6 +384,31 @@ def test_dag_model_returns_the_live_metadata_row(dag_maker: DagMaker) -> None:
     assert dag_model.dag_id == "dag_model_handle"
     assert dag_model.is_paused is False
     assert dag_model is dag_maker.session.get(DagModel, "dag_model_handle")
+
+
+def test_timetable_returns_the_scheduler_timetable(dag_maker: DagMaker) -> None:
+    """Expose the persisted scheduler timetable with its interval-inference method.
+
+    The migration target for upstream's `dag.timetable.infer_manual_data_interval`
+    pattern, which Airflow 3.2+ removed from the yielded authoring Dag's timetable
+    (issue #261).
+    """
+
+    with dag_maker(
+        dag_id="timetable_handle",
+        schedule=timedelta(days=1),
+        start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    ):
+        EmptyOperator(task_id="empty")
+
+    run_after = datetime(2024, 3, 4, tzinfo=timezone.utc)
+    interval = dag_maker.timetable.infer_manual_data_interval(run_after=run_after)
+
+    assert interval.end == run_after
+    assert interval.start == run_after - timedelta(days=1)
+    serialized_dag = dag_maker.serialized_dag
+    assert serialized_dag is not None
+    assert dag_maker.timetable is serialized_dag.timetable
 
 
 def test_sync_dagbag_to_db_republishes_a_mutated_dag(dag_maker: DagMaker) -> None:
@@ -687,6 +714,54 @@ def test_low_level_cleanup_preserves_referenced_shared_bundle() -> None:
         assert session.get(DagBundleModel, bundle_name) is None
 
 
+def _attach_backfill(dag_id: str, dag_run_id: Any) -> int:
+    """Attach a test-created `Backfill` (and its join row) to one existing DagRun.
+
+    The shared scaffold of both backfill-cleanup regression tests: a `Backfill` for
+    `dag_id`, a `BackfillDagRun` join row pointing at `dag_run_id`, and the DagRun's
+    own `backfill_id` set -- the FK with no `ondelete` action that blocks the
+    `Backfill` delete until the run is gone. `BackfillDagRun.logical_date` is set
+    explicitly because Airflow 3.1.x declares the column NOT NULL.
+
+    Parameters:
+        dag_id: str identifying the Dag the `Backfill` targets.
+        dag_run_id: Any containing the DagRun primary key to reference and mark as
+            backfilled -- typed dynamically because Airflow's ORM attribute access
+            is untyped.
+
+    Returns:
+        int containing the created `Backfill` primary key.
+    """
+
+    from airflow.models.backfill import Backfill, BackfillDagRun
+    from airflow.sdk.timezone import utcnow
+    from sqlalchemy import update
+
+    with create_session() as setup_session:
+        # The dynamic annotation keeps `backfill.id` statically valid: Airflow's ORM
+        # models expose `InstrumentedAttribute` to the checker, not `int`.
+        backfill: Any = Backfill(
+            dag_id=dag_id,
+            from_date=utcnow(),
+            to_date=utcnow(),
+            max_active_runs=1,
+        )
+        setup_session.add(backfill)
+        setup_session.flush()
+        setup_session.add(
+            BackfillDagRun(
+                backfill_id=backfill.id,
+                dag_run_id=dag_run_id,
+                sort_ordinal=1,
+                logical_date=utcnow(),
+            )
+        )
+        setup_session.execute(
+            update(DagRun).where(DagRun.id == dag_run_id).values(backfill_id=backfill.id)
+        )
+        return backfill.id
+
+
 def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
     """Delete both the `BackfillDagRun` referencing an owned DagRun and its `Backfill` parent.
 
@@ -698,8 +773,6 @@ def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
     """
 
     from airflow.models.backfill import Backfill, BackfillDagRun
-    from airflow.sdk.timezone import utcnow
-    from sqlalchemy import update
 
     session = dag_compat.open_dag_session("backfill_cleanup")
     record = dag_compat.DagPersistenceRecord(
@@ -720,26 +793,7 @@ def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
         dag_run_kwargs={},
     )
 
-    with create_session() as setup_session:
-        backfill = Backfill(
-            dag_id="backfill_cleanup",
-            from_date=utcnow(),
-            to_date=utcnow(),
-            max_active_runs=1,
-        )
-        setup_session.add(backfill)
-        setup_session.flush()
-        setup_session.add(
-            BackfillDagRun(
-                backfill_id=backfill.id,
-                dag_run_id=dag_run.id,
-                sort_ordinal=1,
-                logical_date=utcnow(),
-            )
-        )
-        setup_session.execute(
-            update(DagRun).where(DagRun.id == dag_run.id).values(backfill_id=backfill.id)
-        )
+    _attach_backfill("backfill_cleanup", dag_run.id)
 
     dag_compat.cleanup_dag(record)
 
@@ -762,8 +816,6 @@ def test_cleanup_dag_clears_test_created_backfill_rows() -> None:
     """
 
     from airflow.models.backfill import Backfill, BackfillDagRun
-    from airflow.sdk.timezone import utcnow
-    from sqlalchemy import update
 
     session = dag_compat.open_dag_session("backfill_foreign_cleanup")
     record = dag_compat.DagPersistenceRecord(
@@ -788,27 +840,7 @@ def test_cleanup_dag_clears_test_created_backfill_rows() -> None:
     record.dag_run_ids.discard(dag_run.id)
     record.task_instance_keys.clear()
 
-    with create_session() as setup_session:
-        backfill = Backfill(
-            dag_id="backfill_foreign_cleanup",
-            from_date=utcnow(),
-            to_date=utcnow(),
-            max_active_runs=1,
-        )
-        setup_session.add(backfill)
-        setup_session.flush()
-        setup_session.add(
-            BackfillDagRun(
-                backfill_id=backfill.id,
-                dag_run_id=dag_run.id,
-                sort_ordinal=1,
-                logical_date=utcnow(),
-            )
-        )
-        setup_session.execute(
-            update(DagRun).where(DagRun.id == dag_run.id).values(backfill_id=backfill.id)
-        )
-        backfill_id = backfill.id
+    backfill_id = _attach_backfill("backfill_foreign_cleanup", dag_run.id)
 
     dag_compat.cleanup_dag(record)
 

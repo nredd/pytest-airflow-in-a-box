@@ -214,7 +214,10 @@ covers that whole-DagRun case directly. The `DagMaker` protocol additionally exp
 `create_dagrun`, `create_ti`, and `run_ti`. Passing `map_index` expands a mapped task on
 demand; upstream-XCom mapping works after its producer has run in the same DagRun. Passing
 `run_triggerer=True` runs the persisted trigger event and resumes a deferred task inline,
-bounded by `trigger_timeout` seconds.
+bounded by `trigger_timeout` seconds. `run_ti(session=...)` mirrors upstream
+`tests_common`'s routing: the supplied session is used for the task-execution step only,
+while DagRun creation and task-instance selection stay on `dag_maker.session` exactly as
+upstream's do.
 
 ## Upstream harness keywords
 
@@ -289,6 +292,36 @@ def test_scheduler_state(dag_maker):
   caller had staged, exactly like persistence at context exit). On 3.x a resync may
   record a new DagVersion; DagRuns created before the resync keep their original version.
   Works on the certified 2.x family too, through that family's writers
+- `timetable` returns the persisted scheduler Dag's timetable (typed as the structural
+  `SchedulerTimetable` protocol) -- the exact object `create_dagrun` infers
+  `data_interval` through. On Airflow 3.2+ the *authoring* Dag's timetable lost the
+  scheduling methods, so `dag.timetable.infer_manual_data_interval(...)` raises
+  `AttributeError` on the yielded Dag; this handle carries the method on every
+  certified release
+
+### Migrating scheduler-side Dag calls
+
+Upstream's `dag_maker` yields a proxy over the serialized Dag, so upstream tests call
+scheduler-side methods directly on the yield. This plugin's context always yields the
+authoring Dag (ADR 0002), so those call sites move to a factory handle -- each is a
+one-line rewrite:
+
+| Upstream pattern on the yield | Migration target |
+| --- | --- |
+| `dag.timetable.infer_manual_data_interval(...)` | `dag_maker.timetable.infer_manual_data_interval(...)` |
+| `dag.create_dagrun(...)` | `dag_maker.create_dagrun(...)` |
+| `dag.clear(...)` | `dag_maker.serialized_dag.clear(..., session=dag_maker.session)` |
+| `dag.partial_subset(...)` | `dag_maker.serialized_dag.partial_subset(...)` |
+| `dag.set_task_instance_state(...)` | `dag_maker.serialized_dag.set_task_instance_state(..., session=dag_maker.session)` |
+
+`serialized_dag` is the installed release's real scheduler Dag object, so everything on
+that class is reachable -- the rows above are the patterns upstream suites actually hit.
+Signatures beyond `infer_manual_data_interval` follow the installed Airflow release
+(e.g. `partial_subset(exclude_original=...)` exists only where upstream added it);
+private attributes such as `_time_restriction` are deliberately not part of any plugin
+contract. `create_dagrun_after` has no equivalent -- deliberately deferred in
+[#261](https://github.com/nredd/pytest-airflow-in-a-box/issues/261) until consumer
+demand justifies its per-version run-info machinery (see ADR 0002's amendment).
 
 ## Upstream one-call factories
 
@@ -330,6 +363,12 @@ machinery rather than upstream's:
   silently. Use distinct identifiers
 - `run_after` on the Airflow 2.x family raises `ValueError` instead of upstream's silent
   drop, matching `dag_maker.create_dagrun`
+- `create_task_instance(execution_date=...)` -- the Airflow 2 spelling 2.x-era upstream
+  suites use -- is accepted on both families and mapped onto `logical_date` with a
+  `DeprecationWarning`, exactly as upstream `tests_common` preserves it; passing both
+  spellings raises `ValueError`. `dag_maker.create_dagrun` deliberately does *not* grow
+  the alias: `dag_run_kwargs={"execution_date": ...}` keeps its loud rejection, whose
+  message names the `logical_date` remedy
 - `dag_maker`-routed keywords upstream supports (`session=`, `bundle_name=`,
   `bundle_version=`) follow whatever `dag_maker(...)` itself accepts
 

@@ -98,6 +98,10 @@ class SerializedDag(Protocol):
     def task_ids(self) -> list[str]:
         """Return the task identifiers present in the persisted Dag."""
 
+    @property
+    def timetable(self) -> SchedulerTimetable:
+        """Return the scheduler-side timetable driving this Dag's runs."""
+
     def get_task(self, task_id: str) -> Any:
         """Return the task with the requested identifier."""
 
@@ -119,6 +123,32 @@ class DagModelRow(Protocol):
     next_dagrun_data_interval_end: datetime | None
 
 
+class SchedulerTimetable(Protocol):
+    """Public structural view of a persisted scheduler-side timetable.
+
+    The concrete object is the timetable attached to ``dag_maker``'s persisted
+    scheduler Dag. On the Airflow 3.2+ releases that split authoring timetables
+    into the task SDK, the *authoring* Dag's timetable no longer carries the
+    scheduling methods -- this handle always does, on every certified release.
+    Only the method upstream test suites reach for is part of the contract; the
+    concrete object additionally exposes the installed release's full timetable
+    surface.
+    """
+
+    def infer_manual_data_interval(self, *, run_after: Any) -> Any:
+        """Infer the data interval a manual run triggered at ``run_after`` covers.
+
+        Parameters:
+            run_after: Any containing the manual trigger time as a timezone-aware
+                datetime, keyword-only exactly as on Airflow's ``Timetable``. Typed
+                ``Any`` because Airflow's own signatures narrow it to pendulum's
+                ``DateTime``, which plain ``datetime`` inputs satisfy at runtime.
+
+        Returns:
+            Any containing Airflow's ``DataInterval`` for the manual run.
+        """
+
+
 class DagMaker(Protocol):
     """Build and persist isolated Airflow Dags for one pytest test.
 
@@ -127,10 +157,10 @@ class DagMaker(Protocol):
     ``airflow.models.dag.DAG`` on the certified 2.x family -- so operators and decorated
     tasks can be defined naturally. Metadata is persisted only after a successful context
     exit, and every Dag is serialized as part of persistence: ``serialized_dag``,
-    ``dag_model``, and ``sync_dagbag_to_db`` expose the scheduler-side state after exit
-    without changing what the context yields (see ``docs/adr/0002``); no mutable proxy
-    or task execution behavior is implied. Metadata remains available until the
-    function-scoped fixture is finalized.
+    ``dag_model``, ``timetable``, and ``sync_dagbag_to_db`` expose the scheduler-side
+    state after exit without changing what the context yields (see ``docs/adr/0002``);
+    no mutable proxy or task execution behavior is implied. Metadata remains available
+    until the function-scoped fixture is finalized.
     """
 
     @property
@@ -156,6 +186,19 @@ class DagMaker(Protocol):
     @property
     def dag_model(self) -> DagModelRow:
         """Return the live ``DagModel`` metadata row for the latest persisted Dag.
+
+        Raises:
+            RuntimeError: No successful Dag context has been persisted.
+        """
+
+    @property
+    def timetable(self) -> SchedulerTimetable:
+        """Return the latest persisted scheduler Dag's timetable.
+
+        The migration target for upstream's
+        ``dag.timetable.infer_manual_data_interval(...)`` pattern: on Airflow
+        3.2+ the yielded authoring Dag's timetable lost the scheduling methods,
+        while this handle carries them on every certified release.
 
         Raises:
             RuntimeError: No successful Dag context has been persisted.
@@ -278,8 +321,17 @@ class DagMaker(Protocol):
         mark_success: bool = False,
         run_triggerer: bool = False,
         trigger_timeout: float = DEFAULT_TRIGGER_TIMEOUT,
+        session: Session | None = None,
     ) -> TaskInstance:
-        """Create and execute one task instance through the compatibility shim."""
+        """Create and execute one task instance through the compatibility shim.
+
+        ``session`` mirrors upstream ``tests_common``'s ``run_ti(session=...)``
+        contract: it routes to the task-execution step only (``None`` keeps the
+        factory's own metadata session), while DagRun creation and task-instance
+        selection stay on ``dag_maker.session`` exactly as upstream's do. A
+        ``scoped_session`` proxy (the shape of ``airflow.settings.Session``) is
+        accepted at runtime too.
+        """
 
     def run(
         self,
@@ -378,6 +430,7 @@ class CreateTaskInstance(Protocol):
     def __call__(
         self,
         logical_date: datetime | UnsetType | None = UNSET,
+        execution_date: datetime | UnsetType | None = UNSET,
         run_after: datetime | None = None,
         dagrun_state: str | None = None,
         state: str | None = None,
@@ -417,6 +470,13 @@ class CreateTaskInstance(Protocol):
                 current UTC logical date. An explicit ``None`` requests a run with no
                 logical date at all -- Airflow 3.x only; the 2.x family raises
                 ``ValueError``.
+            execution_date: datetime.datetime | UnsetType | None accepted as the
+                Airflow 2 spelling of ``logical_date``, exactly as upstream
+                ``tests_common`` preserves it: the value becomes the DagRun's
+                logical date and a ``DeprecationWarning`` is emitted. Passing both
+                spellings raises ``ValueError``. An explicit ``None`` means "not
+                supplied" -- no Airflow 2 run can lack an execution date, so only
+                ``logical_date=None`` requests a logical-date-less run.
             run_after: datetime.datetime | None overriding the DagRun's current UTC
                 run-after date. Airflow 3.x only.
             dagrun_state: str | None assigned to the DagRun's state, forwarded even
@@ -464,7 +524,8 @@ class CreateTaskInstance(Protocol):
 
         Raises:
             ValueError: ``run_after`` or an explicit ``logical_date=None`` was passed
-                on the Airflow 2.x family.
+                on the Airflow 2.x family, or both ``logical_date`` and
+                ``execution_date`` were passed.
         """
 
 
@@ -935,6 +996,7 @@ __all__ = (
     "RenderTask",
     "RunDag",
     "RunTask",
+    "SchedulerTimetable",
     "SerializedDag",
     "TaskContext",
     "TaskContextHandle",

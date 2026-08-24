@@ -38,3 +38,18 @@ class remain out of scope by design; and upstream-parity work on `dag_maker` is 
 to harness kwargs and factory handles -- never the yielded object, never run-id
 semantics. On 3.x each `sync_dagbag_to_db()` may record a new DagVersion; DagRuns created
 before a resync keep the version they were created with.
+
+Amended 2026-08-24 (#261, round-3 drift scan): the handle set grew by `timetable`,
+returning the persisted scheduler Dag's timetable -- the largest remaining fixable class
+(26-27 failures per version at 3.2+, where the authoring timetable lost
+`infer_manual_data_interval`). This stays inside the decision, not against it: the yield
+is unchanged, and `dag.timetable.<method>` call sites migrate to
+`dag_maker.timetable.<method>`. The remaining scheduler-side calls on the yielded object
+(`DAG.clear`, `DAG.partial_subset`, `DAG.set_task_instance_state`, direct
+`DAG.create_dagrun`) are reaffirmed wontfix as Dag attributes: `dag_maker.serialized_dag`
+IS the installed release's scheduler Dag object, so each is a one-line rewrite onto it
+(documented in the task-execution guide's migration table), and mirroring their
+per-minor signatures as plugin API would reintroduce exactly the churn this ADR exists
+to avoid. `_time_restriction` is private upstream API and is never mirrored.
+`create_dagrun_after` (a factory-level upstream method, one failure per version) is
+deferred until consumer demand justifies its per-version run-info machinery.

@@ -17,7 +17,7 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import task
 from airflow.utils.session import create_session
 from airflow.utils.state import TaskInstanceState
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from pytest_airflow_in_a_box.fixtures.dag import RUN_ID_MAX_LENGTH
@@ -74,6 +74,99 @@ def test_run_task_instance_resolves_task_across_sessions(
 
     assert result.state == TaskInstanceState.SUCCESS
     assert result.xcom_pull(task_ids="answer", session=session) == 42
+
+
+def test_run_ti_routes_an_explicit_session_to_execution(
+    dag_maker: DagMaker,
+    session: Session,
+) -> None:
+    """Route upstream's `run_ti(session=...)` keyword to the task-execution step.
+
+    Upstream `tests_common` suites pass the `session` fixture straight into
+    `run_ti` (issue #261); DagRun creation and selection stay on the factory's
+    own session, exactly as upstream's do.
+    """
+
+    with dag_maker(dag_id="run_ti_explicit_session"):
+
+        @task
+        def answer() -> int:
+            """Return a deterministic XCom value."""
+
+            return 42
+
+        answer()
+
+    # An `after_commit` listener on the SUPPLIED session is the routing proof: the
+    # success/XCom assertions alone would also hold if `run_ti` silently fell back
+    # to `dag_maker.session`.
+    commits: list[bool] = []
+
+    def record_commit(_: Session) -> None:
+        """Record one commit on the supplied session.
+
+        Parameters:
+            _: sqlalchemy.orm.Session that committed.
+        """
+
+        commits.append(True)
+
+    event.listen(session, "after_commit", record_commit)
+    try:
+        ti = dag_maker.run_ti("answer", session=session)
+    finally:
+        event.remove(session, "after_commit", record_commit)
+
+    assert ti.state == TaskInstanceState.SUCCESS
+    assert commits
+    assert ti.xcom_pull(task_ids="answer", session=session) == 42
+
+
+def test_run_ti_accepts_a_scoped_session_proxy(dag_maker: DagMaker) -> None:
+    """Accept `airflow.settings.Session`, a `scoped_session` proxy, as `session=`.
+
+    Upstream suites pass exactly this shape; only the task-execution step uses it
+    (issue #261).
+
+    Parameters:
+        dag_maker: pytest_airflow_in_a_box.types.DagMaker building the Dag under test.
+    """
+
+    from airflow import settings
+
+    with dag_maker(dag_id="run_ti_scoped_session"):
+
+        @task
+        def answer() -> int:
+            """Return a deterministic XCom value."""
+
+            return 42
+
+        answer()
+
+    proxy: Any = settings.Session
+    ti = dag_maker.run_ti("answer", session=proxy)
+
+    assert ti.state == TaskInstanceState.SUCCESS
+
+
+def test_run_ti_rejects_a_non_session(dag_maker: DagMaker) -> None:
+    """Reject a `session` value outside the typed public call contract."""
+
+    with dag_maker(dag_id="run_ti_bad_session"):
+
+        @task
+        def answer() -> int:
+            """Return a deterministic XCom value."""
+
+            return 42
+
+        answer()
+
+    invalid_session: Any = "not-a-session"
+
+    with pytest.raises(TypeError, match="`session` must be a SQLAlchemy session"):
+        dag_maker.run_ti("answer", session=invalid_session)
 
 
 def test_failure_propagates_and_refreshes_original_ti(dag_maker: DagMaker) -> None:
