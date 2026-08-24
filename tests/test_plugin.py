@@ -18,6 +18,7 @@ from pytest_airflow_in_a_box import plugin, smoke
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError
 from pytest_airflow_in_a_box.bootstrap import XDIST_WORKER_ENVIRONMENT_VARIABLE
 from pytest_airflow_in_a_box.fixtures.dagbag import DAG_BAG_XDIST_GROUP
+from pytest_airflow_in_a_box.fixtures.dagcorpus import DAG_CORPUS_XDIST_GROUP
 
 
 def test_database_incompatibility_renders_as_usage_error(
@@ -630,3 +631,263 @@ def test_xdist_worker_without_loadgroup_detects_a_distributing_worker(
     monkeypatch.setattr(pytestconfig.option, "loadgroup", loadgroup, raising=False)
 
     assert plugin._xdist_worker_without_loadgroup(pytestconfig) is expected
+
+
+def test_smoke_catalog_and_every_dag_corpus_consumer_share_one_xdist_group(
+    pytester: pytest.Pytester,
+) -> None:
+    """Group the smoke catalog with EVERY `dag_corpus` consumer, unlike `dag_bag`'s anchor.
+
+    Issue #277: `_colocate_dag_corpus_consumers` deliberately groups every surviving
+    `dag_corpus` consumer, not just one -- `dag_corpus` consumers are expected to be
+    few, cheap, read-only metadata checks, so colocating all of them costs nothing extra
+    (contrast `test_smoke_catalog_and_dag_bag_consumers_share_one_xdist_group`, which
+    pins the single-anchor behavior for `dag_bag`). An item that already carries its own
+    explicit `xdist_group` is still never chosen or overwritten.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        def test_consumer(dag_corpus):
+            pass
+
+        def test_second_consumer(dag_corpus):
+            pass
+
+        @pytest.mark.xdist_group(name="user-group")
+        def test_pre_grouped(dag_corpus):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=13)
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group == DAG_CORPUS_XDIST_GROUP for group in smoke_groups.values())
+    consumer_group = next(
+        group for name, group in groups.items() if name.endswith("::test_consumer")
+    )
+    second_consumer_group = next(
+        group for name, group in groups.items() if name.endswith("::test_second_consumer")
+    )
+    pre_grouped_group = next(
+        group for name, group in groups.items() if name.endswith("::test_pre_grouped")
+    )
+    assert consumer_group == DAG_CORPUS_XDIST_GROUP
+    assert second_consumer_group == DAG_CORPUS_XDIST_GROUP
+    assert pre_grouped_group == "user-group"
+
+
+def test_dag_corpus_colocation_takes_precedence_over_dag_bag_colocation(
+    pytester: pytest.Pytester,
+) -> None:
+    """Join the smoke catalog to `DAG_CORPUS_XDIST_GROUP`, never `DAG_BAG_XDIST_GROUP`.
+
+    Pins the precedence rule from issue #277: `pytest_collection_modifyitems` runs the
+    `dag_corpus` co-location pass first, and when it groups anything, hands the
+    `dag_bag` pass an empty `smoke_items` list -- so a run with both kinds of consumer
+    never has the smoke catalog claimed by both groups, and the `dag_bag` pass's own
+    anchor search never even runs against `test_bag_consumer` here.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        def test_bag_consumer(dag_bag):
+            pass
+
+        def test_corpus_consumer(dag_corpus):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=12)
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group == DAG_CORPUS_XDIST_GROUP for group in smoke_groups.values())
+    bag_group = next(
+        group for name, group in groups.items() if name.endswith("::test_bag_consumer")
+    )
+    corpus_group = next(
+        group for name, group in groups.items() if name.endswith("::test_corpus_consumer")
+    )
+    assert bag_group is None
+    assert corpus_group == DAG_CORPUS_XDIST_GROUP
+
+
+def test_missing_dag_corpus_anchor_warns_when_every_consumer_is_pre_grouped(
+    pytester: pytest.Pytester,
+) -> None:
+    """Warn when every `dag_corpus` consumer already carries its own `xdist_group`.
+
+    Companion to `test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped`
+    for the `dag_corpus` pass: with no eligible consumer to group the catalog onto, the
+    corpus builder parses the Dag folder itself, and that now costs a diagnostic instead
+    of a silent extra parse.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xdist_group(name="user-group")
+        def test_pre_grouped(dag_corpus):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=11)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" in output
+    assert "carries an explicit `xdist_group` marker" in output
+    assert "adding one full Dag parse to this run" in output
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(group is None for group in smoke_groups.values())
+    pre_grouped_group = next(
+        group for name, group in groups.items() if name.endswith("::test_pre_grouped")
+    )
+    assert pre_grouped_group == "user-group"
+
+
+def test_dag_corpus_colocation_is_a_noop_without_loadgroup_dist(
+    pytester: pytest.Pytester,
+) -> None:
+    """Leave every item ungrouped when `--dist=loadgroup` is not in effect.
+
+    Coverage pin for `_colocate_dag_corpus_consumers`'s early return: a `dag_corpus`
+    consumer exists, but a plain serial run never even scans for one.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+    pytester.makepyfile(
+        """
+        def test_consumer(dag_corpus):
+            pass
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q", "--airflow-smoke", "--dag-folder", str(dag_folder)
+    )
+
+    result.assert_outcomes(passed=11)
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    assert all(group is None for group in groups.values())
+
+
+def test_dag_corpus_request_forces_serialization_without_loadgroup_dist(
+    pytester: pytest.Pytester,
+) -> None:
+    """Serialize every Dag for a `dag_corpus` consumer even without `--dist loadgroup`.
+
+    Regression test: `_colocate_dag_corpus_consumers`'s actual xdist *grouping* is
+    gated on `--dist loadgroup`, but `dagcorpus.mark_dag_corpus_requested` must not be
+    -- `--dist loadgroup` is opt-in and the overwhelming majority of runs never pass it.
+    Gating the mark on successful grouping would leave a bare `dag_corpus`-only run
+    against a project with `--airflow-smoke` enabled and every serialization-backed
+    smoke item disabled exposed to exactly the ini-knob-controls-a-public-fixture gap
+    issue #277 set out to close: the corpus would silently come back with every
+    `.serialized` field `None`.
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeini(
+        "[pytest]\n"
+        "airflow_smoke = true\n"
+        "airflow_smoke_disable =\n"
+        "    test_dag_serialization_roundtrip\n"
+        "    test_schedule_sanity\n"
+    )
+    pytester.makepyfile(
+        """
+        def test_consumer(dag_corpus):
+            dag = dag_corpus.dags["colocate_dag"]
+            assert dag.serialized is not None
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", f"--dag-folder={dag_folder}")
+
+    assert result.ret == pytest.ExitCode.OK
+    output = result.stdout.str() + result.stderr.str()
+    assert "INTERNALERROR" not in output
+
+
+def test_missing_dag_corpus_anchor_warning_names_every_distinct_reason_once() -> None:
+    """Join distinct disqualification reasons and drop repeats, preserving order.
+
+    Mirrors `test_missing_anchor_warning_names_every_distinct_reason_once` for
+    `_warn_missing_dag_corpus_anchor`, which reuses the exact same disqualification
+    reason constants since both passes share `_anchor_disqualification`.
+    """
+
+    with pytest.warns(smoke.SmokeColocationWarning) as caught:
+        plugin._warn_missing_dag_corpus_anchor(
+            (
+                plugin._PRE_GROUPED_ANCHOR_REASON,
+                plugin._DESELECTED_ANCHOR_REASON,
+                plugin._PRE_GROUPED_ANCHOR_REASON,
+            )
+        )
+
+    message = str(caught[0].message)
+    assert message.count(plugin._PRE_GROUPED_ANCHOR_REASON) == 1
+    assert message.count(plugin._DESELECTED_ANCHOR_REASON) == 1
+    assert f"{plugin._PRE_GROUPED_ANCHOR_REASON} or {plugin._DESELECTED_ANCHOR_REASON}" in message

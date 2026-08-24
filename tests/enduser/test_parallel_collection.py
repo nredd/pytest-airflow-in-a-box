@@ -449,3 +449,48 @@ def test_missing_anchor_warning_is_recorded_once_across_workers(
     output = result.stdout.str() + result.stderr.str()
     assert "carries an explicit `xdist_group` marker" in output
     assert output.count("SmokeColocationWarning:") == 1
+
+
+def test_missing_dag_corpus_anchor_warning_is_recorded_once_across_workers(
+    pytester: pytest.Pytester,
+) -> None:
+    """Record the missing-`dag_corpus`-anchor advisory once, not once per xdist worker.
+
+    Companion to `test_missing_anchor_warning_is_recorded_once_across_workers` for
+    `_warn_missing_dag_corpus_anchor`: every worker collects in its own process and
+    reaches the same run-wide conclusion, so an unguarded `warnings.warn` in a
+    collection hook would produce N identical entries describing one condition.
+    `plugin._warns_for_this_process` elects `gw0`, which always exists in a
+    distributing run.
+    """
+
+    counter = pytester.path / "parses.txt"
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(
+        dedent(_COLOCATION_DAG.format(counter=str(counter))), encoding="utf-8"
+    )
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xdist_group(name="user-group")
+        def test_pre_grouped(dag_corpus):
+            assert set(dag_corpus.dags) == {"colocate_dag"}
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "-n",
+        "2",
+        "--dist=loadgroup",
+        "--airflow-smoke",
+        "--dag-folder",
+        str(dag_folder),
+    )
+
+    result.assert_outcomes(passed=11)
+    output = result.stdout.str() + result.stderr.str()
+    assert "carries an explicit `xdist_group` marker" in output
+    assert output.count("SmokeColocationWarning:") == 1
