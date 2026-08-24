@@ -35,7 +35,9 @@ writes leak nothing between tests. Passing it to `dag_maker(session=...)` routes
 context's metadata writes through it -- but persistence *commits* the session, so anything
 staged on it at that point commits with it, and the everything-rolls-back guarantee narrows
 to state staged after the last `dag_maker` commit. Rows `dag_maker` itself created are
-removed at fixture teardown either way. See
+removed at fixture teardown either way -- and on the 3.x family so is every other DagRun
+carrying the Dag's `dag_id` (`dag.test()`'s manual run, the Backfill machinery's runs),
+whose task instances would otherwise block the `dag_version` delete. See
 [Upstream harness keywords](task-execution.md#upstream-harness-keywords).
 
 At teardown, `dag_maker` *rolls back* a borrowed session before cleaning up its rows on a
