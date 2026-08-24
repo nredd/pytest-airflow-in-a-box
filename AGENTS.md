@@ -122,6 +122,21 @@ failure. `act pull_request` can run the Linux workflow locally.
 
 ## Agent skills
 
+### Standing skills
+
+- Implementation work: use `tdd` for test-first feature/bugfix work, `codebase-design`
+  when shaping or reworking a module's interface, `diagnosing-bugs` for hard bugs or perf
+  regressions before attempting a fix. `coding-like-redd` already auto-loads globally for
+  any Python/Rust work here
+- Review: use `/code-review` (Standards + Spec axes) before opening a PR, or when asked to
+  review a branch/PR/WIP diff
+- Shipping a GitHub issue end-to-end: use `/ship-issue` -- worktree, implement, gate,
+  review, PR, auto-merge
+- Delegation rule: when spawning a subagent for implementation, review, or issue work, name
+  the applicable skill explicitly in its prompt (e.g. "apply the `tdd` skill"). A
+  freshly-spawned subagent has not read this file, so auto-triggering by description alone
+  is not reliable
+
 ### Issue tracker
 
 Issues live in GitHub Issues (`nredd/pytest-airflow-in-a-box`), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
