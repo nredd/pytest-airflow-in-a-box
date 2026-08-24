@@ -124,6 +124,10 @@ failure. `act pull_request` can run the Linux workflow locally.
 
 ### Standing skills
 
+`skills/` vendors every skill this repo expects, verbatim and model-agnostic (see
+`skills/README.md`). `.claude/skills/` and `.agents/skills/` symlink into it by name, so
+they're discoverable in-repo without relying on a global, machine-specific install.
+
 - Implementation work: use `tdd` for test-first feature/bugfix work, `codebase-design`
   when shaping or reworking a module's interface, `diagnosing-bugs` for hard bugs or perf
   regressions before attempting a fix. `coding-like-redd` already auto-loads globally for
@@ -131,7 +135,7 @@ failure. `act pull_request` can run the Linux workflow locally.
 - Review: use `/code-review` (Standards + Spec axes) before opening a PR, or when asked to
   review a branch/PR/WIP diff
 - Shipping a GitHub issue end-to-end: use `/ship-issue` -- worktree, implement, gate,
-  review, PR, auto-merge
+  review, PR, auto-merge. Landing a batch of already-open PRs: use `/get-it-merged`
 - Delegation rule: when spawning a subagent for implementation, review, or issue work, name
   the applicable skill explicitly in its prompt (e.g. "apply the `tdd` skill"). A
   freshly-spawned subagent has not read this file, so auto-triggering by description alone
