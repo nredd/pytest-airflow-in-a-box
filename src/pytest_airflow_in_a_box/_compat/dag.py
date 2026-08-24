@@ -1042,15 +1042,12 @@ def _generate_run_id(
         str containing the generated run identifier.
     """
 
-    if _is_v2():
-        return str(
-            scheduler_dag.timetable.generate_run_id(
-                run_type=run_type, logical_date=run_after, data_interval=data_interval
-            )
-        )
+    date_keyword = "logical_date" if _is_v2() else "run_after"
     return str(
         scheduler_dag.timetable.generate_run_id(
-            run_type=run_type, run_after=run_after, data_interval=data_interval
+            run_type=run_type,
+            data_interval=data_interval,
+            **{date_keyword: run_after},
         )
     )
 

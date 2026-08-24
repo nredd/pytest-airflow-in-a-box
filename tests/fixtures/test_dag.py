@@ -642,8 +642,6 @@ def test_scheduled_run_defaults_derive_from_the_timetable(dag_maker: DagMaker) -
         dag_maker: DagMaker building the fixture-owned Dag.
     """
 
-    from datetime import timedelta
-
     with dag_maker(
         dag_id="scheduled_defaults",
         schedule=timedelta(days=1),
@@ -673,8 +671,6 @@ def test_scheduled_run_on_a_scheduleless_dag_falls_back_to_start_date(
     Parameters:
         dag_maker: DagMaker building the fixture-owned Dag.
     """
-
-    from datetime import timedelta
 
     with dag_maker(
         dag_id="scheduleless_window",
@@ -1848,8 +1844,6 @@ def test_run_dag_keeps_current_utc_dating_for_non_manual_runs(run_dag: RunDag) -
     Parameters:
         run_dag: RunDag executing the adopted Dag.
     """
-
-    from datetime import timedelta
 
     from airflow.sdk.timezone import utcnow
 

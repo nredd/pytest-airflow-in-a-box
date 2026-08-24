@@ -581,6 +581,9 @@ def test_create_dag_run_v2_defaults_run_id_and_logical_date(
     docs/adr/0003: with neither `run_id` nor `run_type` passed, the run id is the
     fixed `test` and `execution_date` is `default_logical_date` -- `dag_maker`'s
     resolved Dag `start_date` -- rather than the current UTC date.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the 2.x timezone module.
     """
 
     fixed_now = object()
@@ -633,6 +636,9 @@ def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
     The family-specific spellings at once: `next_dagrun_info` takes 2.x's
     `last_automated_dagrun`, the interval comes from the run info it returned, and
     `generate_run_id` takes 2.x's `logical_date` keyword.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the 2.x timezone module.
     """
 
     from airflow.utils.types import DagRunType
@@ -701,7 +707,11 @@ def test_create_dag_run_v2_derives_non_manual_defaults_from_the_timetable(
 def test_create_dag_run_v2_non_manual_falls_back_to_now_without_a_schedule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Degrade to the current UTC date when the timetable schedules nothing."""
+    """Degrade to the current UTC date when the timetable schedules nothing.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the 2.x timezone module.
+    """
 
     fixed_now = datetime(2026, 8, 24, tzinfo=timezone.utc)
     created, record = _run_creation_fakes(monkeypatch, fixed_now)
