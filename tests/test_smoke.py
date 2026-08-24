@@ -965,10 +965,20 @@ def test_serialized_dag_cache_applies_sampling(
 def test_serialized_dag_cache_skips_selection_when_serialization_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Select and serialize nothing once every consumer of the cache is disabled."""
+    """Select and serialize nothing once every consumer of the cache is disabled.
+
+    `_corpus_serialization_needed` only defers to `_smoke_serialization_needed` when the
+    catalog is enabled and in scope -- a real `SmokeContext.serialized_cache` is only ever
+    built from an item that exists because both were already true, so `_smoke_enabled`/
+    `_smoke_in_scope` are stubbed here rather than routed through the full ini/positional
+    surface `_smoke_in_scope` reads, which this test's minimal `_config` double does not
+    model.
+    """
 
     dag_bag: Any = SimpleNamespace(dags={"one": _dag("one"), "two": _dag("two")})
     monkeypatch.setattr(smoke, "get_dag_corpus", lambda _session, _config: dag_bag)
+    monkeypatch.setattr(smoke, "_smoke_enabled", lambda _config: True)
+    monkeypatch.setattr(smoke, "_smoke_in_scope", lambda _config: True)
     config = _config(disable=["test_dag_serialization_roundtrip", "test_schedule_sanity"])
 
     entries = smoke._serialized_dag_cache(_session(), config)

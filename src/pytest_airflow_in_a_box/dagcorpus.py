@@ -6,6 +6,13 @@ Dag folder, built once per worker process and shared with local xdist workers th
 flock-guarded JSON artifact (`get_dag_corpus`). Dag parsing optionally fans out across
 subprocess workers (`parallel_dagbag.fan_out_dag_bag`) for large corpora.
 
+Whether the builder calls the Airflow Dag serializer at all is decided by
+`_corpus_serialization_needed`: a run with at least one `dag_corpus` consumer always
+serializes every Dag, since there is no cheap way to know a test body's field usage before
+it runs. Absent a `dag_corpus` consumer, the bundled smoke catalog's own
+`airflow_smoke_disable`/`airflow_dag_snapshot_dir`-driven need decides instead, when the
+catalog is enabled and in scope; a run with neither serializes everything, the safe default.
+
 References:
     https://docs.pytest.org/en/stable/reference/reference.html#pytest.Session
     https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/dag-serialization.html
@@ -55,6 +62,11 @@ DAG_CORPUS_KEY = pytest.StashKey["DagCorpus"]()
 DAG_CORPUS_VERSION = 2
 DAG_CORPUS_ARTIFACT_NAME = ".airflow-dag-corpus.json"
 DAG_CORPUS_LOCK_NAME = ".airflow-dag-corpus.lock"
+# Stashed by `plugin.py`'s collection hook whenever at least one collected item survives
+# with a `dag_corpus` fixture dependency; read by `_corpus_serialization_needed` so a bare
+# `dag_corpus` request always gets a fully serialized corpus, independent of whatever the
+# bundled smoke catalog's own ini knobs happen to be set to.
+DAG_CORPUS_WANTS_SERIALIZATION_KEY = pytest.StashKey[bool]()
 
 
 @dataclass(frozen=True)
@@ -205,6 +217,56 @@ def _serialization_sample_seed(config: pytest.Config) -> str:
     return value
 
 
+def mark_dag_corpus_requested(config: pytest.Config) -> None:
+    """Record that at least one collected item this run consumes `dag_corpus`.
+
+    Called from `plugin.py`'s collection hook once per run, alongside the `dag_corpus`
+    xdist-grouping scan, whenever a surviving item requires `dag_corpus`.
+    `_corpus_serialization_needed` reads the stashed marker so a bare `dag_corpus` request
+    always gets a fully serialized corpus, independent of the bundled smoke catalog's own
+    ini-driven serialization need.
+
+    Parameters:
+        config: pytest.Config receiving the request marker on its stash.
+    """
+
+    config.stash[DAG_CORPUS_WANTS_SERIALIZATION_KEY] = True
+
+
+def _corpus_serialization_needed(config: pytest.Config) -> bool:
+    """Report whether the corpus builder must call the Airflow Dag serializer.
+
+    A run with at least one `dag_corpus` consumer always serializes every Dag -- there is
+    no cheap way to know in advance which fields a test body's assertions read. Absent
+    that, when the bundled smoke catalog is enabled and in scope, its own
+    `smoke._smoke_serialization_needed` decides, exactly as before this predicate existed.
+    A run with neither builds a corpus with every Dag serialized, the safe default a
+    `dag_bag`-equivalent parse would also produce.
+
+    Parameters:
+        config: pytest.Config containing plugin options, ini values, and the
+            `DAG_CORPUS_WANTS_SERIALIZATION_KEY` request marker.
+
+    Returns:
+        bool indicating whether the corpus builder must call the Dag serializer.
+    """
+
+    if config.stash.get(DAG_CORPUS_WANTS_SERIALIZATION_KEY, False):
+        return True
+    # Deferred: smoke.py imports this module at load time, so a module-level import here
+    # would cycle. Mirrors `fixtures/dagbag.py::_cached_dag_bag`'s own deferred import of
+    # smoke internals, for the same reason.
+    from pytest_airflow_in_a_box.smoke import (
+        _smoke_enabled,
+        _smoke_in_scope,
+        _smoke_serialization_needed,
+    )
+
+    if _smoke_enabled(config) and _smoke_in_scope(config):
+        return _smoke_serialization_needed(config)
+    return True
+
+
 def _sampled_dag_ids(dag_ids: Iterable[str], *, sample_size: int, seed: str) -> list[str]:
     """Select a deterministic, seed-keyed sample of Dag identifiers.
 
@@ -236,10 +298,10 @@ def _sampled_dag_ids(dag_ids: Iterable[str], *, sample_size: int, seed: str) -> 
 
 
 def _select_serialization_sample(config: pytest.Config, dag_ids: Iterable[str]) -> list[str]:
-    """Select the Dag IDs to serialize, honoring `airflow_smoke_disable`.
+    """Select the Dag IDs to serialize, honoring `_corpus_serialization_needed`.
 
     Skips sampling (and any Airflow DAG serializer call downstream) entirely once
-    `_smoke_serialization_needed` reports nothing still needs a serialized Dag.
+    `_corpus_serialization_needed` reports nothing still needs a serialized Dag.
 
     Parameters:
         config: pytest.Config containing plugin options and ini values.
@@ -249,12 +311,7 @@ def _select_serialization_sample(config: pytest.Config, dag_ids: Iterable[str]) 
         list[str] containing the selected Dag IDs; empty when serialization is not needed.
     """
 
-    # Deferred: smoke.py imports this module at load time, so a module-level import here
-    # would cycle. Mirrors `fixtures/dagbag.py::_cached_dag_bag`'s own deferred import of
-    # smoke internals, for the same reason.
-    from pytest_airflow_in_a_box.smoke import _smoke_serialization_needed
-
-    if not _smoke_serialization_needed(config):
+    if not _corpus_serialization_needed(config):
         return []
     dag_ids = list(dag_ids)
     sample_size = _serialization_sample_size(config)
@@ -305,7 +362,8 @@ def _build_dag_corpus(session: pytest.Session, config: pytest.Config) -> DagCorp
         config: pytest.Config containing plugin options and ini values.
 
     Returns:
-        DagCorpus containing portable data for every bundled smoke check.
+        DagCorpus containing portable data for every consumer: the public `dag_corpus`
+        fixture and the bundled smoke catalog alike.
     """
 
     timeout = _parse_timeout(config)
@@ -321,27 +379,22 @@ def _build_dag_corpus(session: pytest.Session, config: pytest.Config) -> DagCorp
         dag_folder = _dag_folder(config)
         comms = parse_time_comms(config)
         if comms is not None:
-            # Several smoke items are deliberately not `db_test`, so nothing has
-            # initialized the database by the time they run. A Dag with a top-level
-            # Variable or Connection lookup would otherwise charge the whole one-time
-            # migration to this item's parse timeout, which budgets for parsing and
-            # serialization alone. `--airflow-parse-secrets=off` keeps the build
+            # Several `dag_corpus`/smoke consumers are deliberately not `db_test`, so
+            # nothing has initialized the database by the time they run. A Dag with a
+            # top-level Variable or Connection lookup would otherwise charge the whole
+            # one-time migration to this item's parse timeout, which budgets for parsing
+            # and serialization alone. `--airflow-parse-secrets=off` keeps the build
             # database-free.
             ensure_database(get_bootstrap_state(config).root)
-        # Deferred: smoke.py imports this module at load time, so a module-level import
-        # here would cycle. Mirrors `fixtures/dagbag.py::_cached_dag_bag`'s own deferred
-        # import of smoke internals, for the same reason.
-        from pytest_airflow_in_a_box.smoke import _smoke_serialization_needed
-
         # `fanout_enabled` is checked first and is filesystem-free, so the default
         # (disabled) case never pays for a Dag file walk it will not use. A seed-keyed
         # serialization sample needs the whole corpus's `dag_id` set, which no single
         # fan-out shard can see, so a nonzero sample size blocks fan-out entirely (a
         # shard cannot decide on its own whether one of its Dags falls inside the
         # sample) -- this is unrelated to whether serialization is needed at all, which
-        # `serialize=_smoke_serialization_needed(config)` below decides independently:
-        # even at the default sample size (0, "serialize everything"),
-        # `airflow_smoke_disable` covering every serialization-consuming item means
+        # `serialize=_corpus_serialization_needed(config)` below decides independently:
+        # even at the default sample size (0, "serialize everything"), a smoke-only run
+        # with `airflow_smoke_disable` covering every serialization-consuming item means
         # nothing needs a serialized Dag, and fan-out still parallelizes the (usually
         # dominant) import cost without ever resolving or calling the Dag serializer.
         if fanout_enabled(config) and _serialization_sample_size(config) == 0:
@@ -354,7 +407,7 @@ def _build_dag_corpus(session: pytest.Session, config: pytest.Config) -> DagCorp
                         dag_folder=dag_folder,
                         file_paths=file_paths,
                         comms_needed=comms is not None,
-                        serialize=_smoke_serialization_needed(config),
+                        serialize=_corpus_serialization_needed(config),
                     )
                 except DagBagFanoutError as error:
                     LOGGER.warning(
@@ -624,4 +677,5 @@ __all__ = (
     "DagCorpus",
     "SecretsLookup",
     "get_dag_corpus",
+    "mark_dag_corpus_requested",
 )

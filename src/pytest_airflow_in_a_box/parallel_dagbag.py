@@ -343,7 +343,7 @@ def _encode_dag(dag: Any, *, serializer: Any | None) -> dict[str, Any]:
     at all: fan-out only ever serializes when `airflow_serialization_sample_size` is `0`
     (serialize every Dag), since a seed-keyed sample needs the whole corpus's `dag_id`
     set, which no single shard has. `serializer=None` skips serialization entirely,
-    matching the serial path's own `_smoke_serialization_needed` short-circuit -- fan-out
+    matching the serial path's own `_corpus_serialization_needed` short-circuit -- fan-out
     still parallelizes the (usually dominant) import cost even when no still-collected
     smoke item needs a serialized Dag.
 
@@ -398,7 +398,7 @@ def encode_shard(
         runtime_lookups: Sequence[Any] containing this shard's deduplicated
             `_compat.introspection.SecretsLookup`-shaped secrets lookups.
         serialize: bool indicating whether any still-collected smoke item needs a
-            serialized Dag (`smoke._smoke_serialization_needed`); `False` skips
+            serialized Dag (`dagcorpus._corpus_serialization_needed`); `False` skips
             resolving and calling the Dag serializer entirely, matching the serial
             path's own short-circuit.
 
@@ -577,7 +577,7 @@ def fan_out_dag_bag(
             `_compat.list_dag_file_paths(dag_folder)`.
         comms_needed: bool indicating whether parse-time secrets resolution is active.
         serialize: bool indicating whether any still-collected smoke item needs a
-            serialized Dag (`smoke._smoke_serialization_needed`).
+            serialized Dag (`dagcorpus._corpus_serialization_needed`).
 
     Returns:
         dict[str, Any] containing the merged payload, shaped for

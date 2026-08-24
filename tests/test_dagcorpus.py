@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pytest_airflow_in_a_box import dagcorpus
+from pytest_airflow_in_a_box import dagcorpus, smoke
 from pytest_airflow_in_a_box._compat.introspection import SecretsLookup
 from pytest_airflow_in_a_box.fixtures import dagbag
 
@@ -35,6 +35,11 @@ def _config(
     rootpath: Path = Path("/repo"),
 ) -> Any:
     """Create a minimal configuration double for corpus-builder tests.
+
+    Defaults `airflow_smoke`/`ini_smoke` to disabled, matching a `dag_corpus`-only run
+    with the bundled smoke catalog off: `_corpus_serialization_needed` then falls through
+    to its own "serialize everything" default, exactly like every corpus-build test here
+    exercised before the smoke catalog gained a say in the matter.
 
     Parameters:
         parse_timeout: object containing the ``airflow_dag_parse_timeout`` ini value.
@@ -297,6 +302,63 @@ def test_sampled_dag_ids_rejects_negative_sample_size() -> None:
 
     with pytest.raises(ValueError, match="`sample_size` must be non-negative"):
         dagcorpus._sampled_dag_ids(["alpha"], sample_size=-1, seed="0")
+
+
+def test_mark_dag_corpus_requested_stashes_the_marker() -> None:
+    """Record the request marker on the config stash."""
+
+    config = _config()
+
+    assert dagcorpus.DAG_CORPUS_WANTS_SERIALIZATION_KEY not in config.stash
+
+    dagcorpus.mark_dag_corpus_requested(config)
+
+    assert config.stash[dagcorpus.DAG_CORPUS_WANTS_SERIALIZATION_KEY] is True
+
+
+def test_corpus_serialization_needed_true_when_request_marker_set() -> None:
+    """Serialize everything once any collected item requires `dag_corpus`."""
+
+    config = _config()
+    dagcorpus.mark_dag_corpus_requested(config)
+
+    assert dagcorpus._corpus_serialization_needed(config) is True
+
+
+def test_corpus_serialization_needed_delegates_when_smoke_enabled_and_in_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defer to the bundled smoke catalog's own serialization need when in scope."""
+
+    config = _config()
+    monkeypatch.setattr(smoke, "_smoke_enabled", lambda _config: True)
+    monkeypatch.setattr(smoke, "_smoke_in_scope", lambda _config: True)
+    monkeypatch.setattr(smoke, "_smoke_serialization_needed", lambda _config: False)
+
+    assert dagcorpus._corpus_serialization_needed(config) is False
+
+
+def test_corpus_serialization_needed_defaults_to_true_when_smoke_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serialize everything when the bundled smoke catalog is disabled."""
+
+    config = _config()
+    monkeypatch.setattr(smoke, "_smoke_enabled", lambda _config: False)
+
+    assert dagcorpus._corpus_serialization_needed(config) is True
+
+
+def test_corpus_serialization_needed_defaults_to_true_when_smoke_out_of_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serialize everything when smoke is enabled but out of scope for this run."""
+
+    config = _config()
+    monkeypatch.setattr(smoke, "_smoke_enabled", lambda _config: True)
+    monkeypatch.setattr(smoke, "_smoke_in_scope", lambda _config: False)
+
+    assert dagcorpus._corpus_serialization_needed(config) is True
 
 
 def test_dag_corpus_artifact_round_trips() -> None:
