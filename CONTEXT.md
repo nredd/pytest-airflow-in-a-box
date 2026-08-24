@@ -27,3 +27,23 @@ The lazily-computed bundle (`session`, `config`, plus cached `corpus`/`dag_folde
 `serialized_cache`/`disabled` properties) a check's `run` reads from. Constructing one
 directly, with a property pre-seeded, is the test seam for a check -- no monkeypatching of
 `smoke` internals needed.
+
+**DagCorpus**:
+The portable, fan-out-eligible representation of one parsed Dag folder (`dagcorpus.py`):
+`dags` (a `dag_id`-keyed map of `CorpusDag` records -- tags, tasks, `fileloc`,
+`can_be_scheduled`, `catchup`, and, when serialized, `serialized`), `import_errors`,
+`dagbag_stats`, and `runtime_lookups`. Built once per worker process and shared with local
+`pytest-xdist` workers through a flock-guarded JSON artifact (`get_dag_corpus`); the same
+instance backs both the public `dag_corpus` fixture and the bundled smoke catalog's
+`SmokeContext.corpus`, so whichever one triggers the build, every consumer in that worker
+process shares the exact same parse. Extracted from `smoke.py` (see ADR 0003) once
+`dag_corpus` gave the corpus builder a second, independently-motivated consumer beyond the
+bundled catalog.
+
+**dag_corpus**:
+The public, session-scoped fixture wrapping `get_dag_corpus`. For repository-defined checks
+phrased entirely over static Dag metadata -- not part of the bundled smoke catalog, and
+read-only: unlike `dag_bag`, it never hands back live Airflow objects, so it cannot cross
+back into execution. Migration boundary: prefer `dag_corpus` for a metadata-only check, and
+reach for `dag_bag` only once a test needs a live Airflow object (executing a task,
+inspecting a real `DAG`/operator instance).

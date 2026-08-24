@@ -11,6 +11,7 @@ the 2.x alternative.
 | Fixture | Scope | DB | Airflow | Returns |
 | ------- | ----- | -- | ------- | ------- |
 | `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Task execution](../guide/task-execution.md#testing-a-dag-defined-elsewhere)) |
+| `dag_corpus` | session | conditional | 2.x + 3.x | The portable, fan-out-eligible `DagCorpus` parsed once per worker process from the configured Dag directory -- read-only metadata, not live Airflow objects; shared with the bundled `--airflow-smoke` catalog's own corpus-wide checks ([A public `dag_corpus` fixture for repository-defined checks](../guide/smoke-tests.md#a-public-dag_corpus-fixture-for-repository-defined-checks)) |
 | `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution; accepts upstream `tests_common`'s `session`/`bundle_name`/`bundle_version` harness keywords and exposes the scheduler-side `serialized_dag`/`dag_model`/`timetable`/`sync_dagbag_to_db()` handles ([Task execution](../guide/task-execution.md#scheduler-side-handles)) |
 | `create_task_instance` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a `TaskInstance` with its Dag and DagRun rows, composed over `dag_maker`. Returns the plain ORM instance -- no `ti.run()` wrapper ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
 | `create_dummy_dag` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a persisted single-`EmptyOperator` Dag plus, by default, a scheduled DagRun ([Task execution](../guide/task-execution.md#upstream-one-call-factories)) |
@@ -54,5 +55,5 @@ per-run root created below it.
 
 Return types are the typed contracts in `pytest_airflow_in_a_box.types` (`DagMaker`,
 `CreateTaskInstance`, `CreateDummyDag`, `RunDag`, `RunTask`, `RenderTask`, `TaskContext`,
-`AirflowVariables`, `AirflowConnections`, `AirflowConfigure`, `ComponentRegistry`), so fixture-parameter annotations autocomplete and
-type-check in consumer suites.
+`AirflowVariables`, `AirflowConnections`, `AirflowConfigure`, `ComponentRegistry`, `DagCorpus`), so
+fixture-parameter annotations autocomplete and type-check in consumer suites.
