@@ -10,6 +10,7 @@ References:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib import import_module
@@ -21,8 +22,10 @@ from pytest_airflow_in_a_box._compat.capabilities import (
 )
 from pytest_airflow_in_a_box._compat.components import _is_timetable
 from pytest_airflow_in_a_box._compat.registry import (
+    record_persisted_dag_id,
     register_authoring_dag,
     unregister_authoring_dag,
+    was_dag_id_persisted,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -374,16 +377,102 @@ def open_dag_session(dag_id: str) -> Session:
         ) from error
 
 
-def ensure_dag_absent(dag_id: str, session: Session) -> None:
-    """Refuse to overwrite metadata not owned by this factory.
+def _purge_dag_metadata(dag_id: str, session: Session, dag_model: Any) -> None:
+    """Delete every metadata row keyed on ``dag_id``, regardless of bundle.
+
+    The replace half of ``ensure_dag_registrable``: unlike ``_cleanup_dag``, which
+    deletes only rows matching one record's exact ownership (its run ids, its bundle
+    name), this purge sweeps the whole ``dag_id`` -- a leaked row's ``bundle_name``
+    may have drifted (upstream ``sync_dags_to_db`` rewrites it to another bundle),
+    and its runs may have been created by the test body rather than the fixture.
+    Bundle rows themselves are never deleted here: they are shared identities, not
+    Dag metadata.
+
+    Commits ``session``. On a borrowed session that also commits whatever the caller
+    had staged -- the same documented semantics as ``persist_dag``.
+
+    Parameters:
+        dag_id: str identifying the leaked fixture-owned Dag.
+        session: sqlalchemy.orm.Session used for the deletions.
+        dag_model: Any containing the existing ORM ``DagModel`` row on ``session``.
+    """
+
+    from airflow.models.dagrun import DagRun
+    from airflow.models.serialized_dag import SerializedDagModel
+    from sqlalchemy import delete, select
+
+    is_v2 = _is_v2()
+    # ORM deletes on purpose: DagRun's relationship cascades remove the run's task
+    # instances (and their dependents) exactly as `_cleanup_dag` relies on.
+    dag_runs = list(session.scalars(select(DagRun).where(DagRun.dag_id == dag_id)))
+    if not is_v2:
+        # Backfill rows arrived in 3.x. `BackfillDagRun` FK-references `dag_run.id`,
+        # so it goes first; the `Backfill` parent goes after the runs referencing it
+        # via `dag_run.backfill_id` are flushed away.
+        from airflow.models.backfill import Backfill, BackfillDagRun
+
+        run_ids = [dag_run.id for dag_run in dag_runs]
+        session.execute(delete(BackfillDagRun).where(BackfillDagRun.dag_run_id.in_(run_ids)))
+    for dag_run in dag_runs:
+        session.delete(dag_run)
+    session.flush()
+
+    if is_v2:
+        # 2.x serialized rows key on `dag_id` directly; the `dag_code` row -- keyed on
+        # `fileloc` and shared across Dags in one source file -- stays, matching
+        # `_cleanup_dag`'s issue-#157 reasoning.
+        session.execute(delete(SerializedDagModel).where(SerializedDagModel.dag_id == dag_id))
+    else:
+        session.execute(delete(Backfill).where(Backfill.dag_id == dag_id))
+
+        from airflow.models.dag_version import DagVersion
+        from airflow.models.dagcode import DagCode
+
+        version_ids = list(
+            session.scalars(select(DagVersion.id).where(DagVersion.dag_id == dag_id))
+        )
+        if version_ids:
+            session.execute(
+                delete(SerializedDagModel).where(
+                    SerializedDagModel.dag_version_id.in_(version_ids)
+                )
+            )
+            session.execute(delete(DagCode).where(DagCode.dag_version_id.in_(version_ids)))
+            session.execute(delete(DagVersion).where(DagVersion.id.in_(version_ids)))
+
+    session.delete(dag_model)
+    session.commit()
+
+
+def ensure_dag_registrable(dag_id: str, session: Session) -> None:
+    """Refuse metadata this plugin never wrote; replace a leaked fixture-owned row.
+
+    The rule (issue #262): a ``DagModel`` row for a ``dag_id`` this process itself
+    persisted earlier is a leftover -- upstream suites freely re-create short ids
+    (``dag``, ``test1``) across and within tests, and a leaked row (skipped or failed
+    cleanup, bundle-name drift) must not fail the next serial registration -- so it is
+    purged and registration proceeds. Two cases stay a hard error. A row this process
+    never persisted: silently overwriting foreign or another worker's metadata would
+    corrupt a concurrent test or user-seeded state. And any collision at all on a
+    pytest-xdist worker: workers share one metadata database and rows carry no writer
+    identity, so on a worker even an id from this process's own history may be another
+    worker's LIVE registration -- purging it would silently destroy an in-flight
+    test's metadata mid-run. ``pytest.mark.xdist_group`` remains the documented
+    cross-worker mitigation.
+
+    The replace path commits ``session``. On a borrowed session that also commits
+    whatever the caller had staged -- the same documented semantics as
+    ``persist_dag``.
 
     Parameters:
         dag_id: str containing the prospective Dag identifier.
-        session: sqlalchemy.orm.Session used for the ownership check.
+        session: sqlalchemy.orm.Session used for the ownership check and any purge.
 
     Raises:
-        ValueError: A Dag row already uses the identifier.
-        DagPersistenceError: Airflow cannot query the metadata row.
+        ValueError: A Dag row this process never persisted already uses the
+            identifier, or the collision happened on a pytest-xdist worker.
+        DagPersistenceError: Airflow cannot query the metadata row, or cannot purge a
+            leaked fixture-owned one.
     """
 
     try:
@@ -395,8 +484,36 @@ def ensure_dag_absent(dag_id: str, session: Session) -> None:
         raise DagPersistenceError(
             f"Could not check existing Airflow metadata for Dag '{dag_id}': {error}"
         ) from error
-    if existing is not None:
-        raise ValueError(f"Dag metadata already exists for `dag_id` '{dag_id}'")
+    if existing is None:
+        return
+    if not was_dag_id_persisted(dag_id):
+        raise ValueError(
+            f"Dag metadata already exists for `dag_id` '{dag_id}' and this process never "
+            f"persisted it: either another pytest-xdist worker's live registration -- "
+            f"keep same-`dag_id` tests on one worker via `pytest.mark.xdist_group` -- or "
+            f"metadata pytest-airflow-in-a-box never wrote. Refusing to overwrite it."
+        )
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker is not None:
+        raise ValueError(
+            f"Dag metadata already exists for `dag_id` '{dag_id}'. This process persisted "
+            f"that id earlier, but on a pytest-xdist worker ('{worker}') a leftover row is "
+            f"indistinguishable from another worker's live registration on the shared "
+            f"metadata database, so it is never replaced. Keep same-`dag_id` tests on one "
+            f"worker via `pytest.mark.xdist_group` and pass distinct identifiers, or run "
+            f"them serially."
+        )
+    LOGGER.info(
+        f"Replacing leftover fixture-owned Dag metadata for `dag_id` '{dag_id}' "
+        f"persisted earlier in this process"
+    )
+    try:
+        _purge_dag_metadata(dag_id, session, existing)
+    except Exception as error:
+        session.rollback()
+        raise DagPersistenceError(
+            f"Could not replace leftover Airflow metadata for Dag '{dag_id}': {error}"
+        ) from error
 
 
 def _get_serialized_dag_class() -> Any:
@@ -571,7 +688,7 @@ def _sync_dag_model_v2(dag: DAG, record: DagPersistenceRecord) -> None:
 
     The retry is deliberately narrow. Only errors naming `dag_code` qualify -- any
     other `IntegrityError` (e.g. a cross-worker `dag_id` collision that slipped past
-    `ensure_dag_absent`'s non-locking check) must stay loud rather than be absorbed
+    `ensure_dag_registrable`'s non-locking check) must stay loud rather than be absorbed
     as a benign race. And because `dag_maker.session` is published to the test body
     before persistence runs, a session carrying staged user state is never retried:
     the between-attempt rollback would silently discard that state and the eventual
@@ -729,6 +846,11 @@ def persist_dag(
         _write_serialized_dag(dag, record)
         operation = "committing Dag metadata"
         record.session.commit()
+        # Recorded at the commit, not at full success: ownership history tracks "this
+        # process durably wrote the row". A post-commit failure whose `_cleanup_dag`
+        # also fails leaves the row committed, and a later re-registration must see it
+        # as this process's leftover rather than foreign metadata.
+        record_persisted_dag_id(record.dag_id)
         operation = "loading persisted serialized Dag metadata"
         serialized_dag = _load_serialized_dag(record)
         register_authoring_dag(record.dag_id, dag)
@@ -783,6 +905,8 @@ def resync_dag(dag: DAG, record: DagPersistenceRecord) -> SerializedDag:
         _write_serialized_dag(dag, record)
         operation = "committing Dag metadata"
         record.session.commit()
+        # At the commit, not at full success -- see `persist_dag`.
+        record_persisted_dag_id(record.dag_id)
         operation = "loading persisted serialized Dag metadata"
         # 3.x `write_dag` reuses the latest DagVersion when nothing references it and
         # rewrites the serialized row with a bulk UPDATE, which bypasses the session's
@@ -1325,7 +1449,7 @@ __all__ = (
     "create_dag_run",
     "custom_schedule_timetables",
     "empty_operator_class",
-    "ensure_dag_absent",
+    "ensure_dag_registrable",
     "ensure_shared_bundle",
     "expand_mapped_task_instances",
     "get_dag_model",

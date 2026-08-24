@@ -159,8 +159,10 @@ def test_a_dag_outside_the_dag_folder_is_refused_before_any_metadata_is_written(
 
     A Dag authored in the test module is the case users will hit -- `dag_maker` Dags are
     the same shape -- because no worker subprocess could ever re-import one. The refusal
-    lands before `run_dag` persists anything, which the follow-up in-process `run_dag`
-    proves: it would raise `ValueError: Dag metadata already exists` otherwise.
+    lands before `run_dag` persists anything, so the follow-up in-process `run_dag`
+    adopts the same `dag_id` with nothing to replace (issue #262 made a leftover the
+    process itself persisted replaceable, so the follow-up run alone no longer proves
+    absence -- the ordering guarantee in `_DagRunner.__call__` does).
 
     Parameters:
         pytester: pytest.Pytester running the consumer suite in a subprocess.

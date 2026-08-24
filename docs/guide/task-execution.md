@@ -34,8 +34,11 @@ still-running test depends on -- surfacing later as a `DagPersistenceError`,
 `DagRunCreationError`, or a task-resolution failure with no obvious link back to the race. Keep
 such tests on one worker (e.g. `pytest.mark.xdist_group`) or accept that they run serially; a
 single worker process never hits this, since one test's metadata is fully cleaned up before the
-next test's setup runs. This window already exists for `dag_maker(dag_id="fixed")` with an
-explicit pinned id -- `run_dag` just makes a fixed real `dag_id` the only mode, which is why it
+next test's setup runs -- and on a serial run, even when a cleanup leaks rows, re-registering a
+`dag_id` the process itself persisted earlier replaces the leftover instead of raising (on an
+xdist worker a leftover is indistinguishable from another worker's live row, so the guard stays
+loud there). This window
+already exists for `dag_maker(dag_id="fixed")` with an explicit pinned id -- `run_dag` just makes a fixed real `dag_id` the only mode, which is why it
 is called out here.
 
 ## Executor-driven runs
@@ -358,9 +361,12 @@ machinery rather than upstream's:
 - `create_dummy_dag`'s default scheduled run carries the current UTC logical date, not
   upstream's `next_dagrun_info`-derived schedule-aligned one -- pass `logical_date=` where
   alignment matters
-- Reusing one `dag_id` across two factory calls in the same test raises `ValueError`
-  (this plugin refuses to overwrite Dag metadata it already owns); upstream re-syncs
-  silently. Use distinct identifiers
+- On a serial run, reusing one `dag_id` across factory calls -- in the same test, or
+  after a previous test in the same process leaked its cleanup -- replaces the earlier
+  metadata, matching upstream's silent re-sync. `ValueError` remains for a `dag_id`
+  whose metadata this process never persisted (foreign rows, another worker's live
+  registration) and for any collision on a `pytest-xdist` worker, where a leftover is
+  indistinguishable from another worker's in-flight row
 - `run_after` on the Airflow 2.x family raises `ValueError` instead of upstream's silent
   drop, matching `dag_maker.create_dagrun`
 - `create_task_instance(execution_date=...)` -- the Airflow 2 spelling 2.x-era upstream

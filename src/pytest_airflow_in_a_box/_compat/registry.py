@@ -18,6 +18,13 @@ if TYPE_CHECKING:
     from airflow.sdk import DAG
 
 _AUTHORING_DAGS: dict[str, DAG] = {}
+# Every `dag_id` this process has ever persisted -- a history, not a live set, so it is
+# never drained: `cleanup_dag`'s `finally` always unregisters the authoring Dag even
+# when row deletion fails, which makes `_AUTHORING_DAGS` useless for telling a leaked
+# fixture-owned row apart from metadata this plugin never wrote. Per-process on
+# purpose: another pytest-xdist worker's registration is indistinguishable from a live
+# cross-worker collision and must keep failing loudly.
+_PERSISTED_DAG_IDS: set[str] = set()
 
 
 def register_authoring_dag(dag_id: str, dag: DAG) -> None:
@@ -54,8 +61,37 @@ def unregister_authoring_dag(dag_id: str) -> None:
     _AUTHORING_DAGS.pop(dag_id, None)
 
 
+def record_persisted_dag_id(dag_id: str) -> None:
+    """Record one ``dag_id`` this process successfully persisted.
+
+    Entries are never removed: the set is ownership history, consumed by
+    ``ensure_dag_registrable`` to tell a leaked fixture-owned row from metadata the
+    plugin never wrote.
+
+    Parameters:
+        dag_id: str identifying the persisted Dag.
+    """
+
+    _PERSISTED_DAG_IDS.add(dag_id)
+
+
+def was_dag_id_persisted(dag_id: str) -> bool:
+    """Report whether this process ever persisted ``dag_id``.
+
+    Parameters:
+        dag_id: str identifying the prospective Dag.
+
+    Returns:
+        bool marking ``dag_id`` as one this process persisted at some point.
+    """
+
+    return dag_id in _PERSISTED_DAG_IDS
+
+
 __all__ = (
     "lookup_authoring_dag",
+    "record_persisted_dag_id",
     "register_authoring_dag",
     "unregister_authoring_dag",
+    "was_dag_id_persisted",
 )
