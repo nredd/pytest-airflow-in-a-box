@@ -724,12 +724,50 @@ def get_dag_corpus(session: pytest.Session, config: pytest.Config) -> DagCorpus:
     return session.stash[DAG_CORPUS_KEY]
 
 
+def dags_under(
+    corpus: DagCorpus, dag_folder: str | Path, subdir: str | Path
+) -> Mapping[str, CorpusDag]:
+    """Filter a Dag corpus down to Dags whose file lives under one subdirectory.
+
+    A pure in-memory filter over an already-built `corpus`: resolves paths (reading only
+    path metadata, e.g. via `stat`, never opening or listing directory contents) and does
+    not raise for a `subdir` that does not exist on disk -- that case simply matches
+    nothing. Mirrors `_compat/executor.py::relative_dag_path`'s resolve-then-check-
+    containment approach, so relative and absolute `subdir` inputs, and
+    trailing-slash/`.`/`..` variants, all normalize to the same result.
+
+    Parameters:
+        corpus: DagCorpus to filter, typically from `get_dag_corpus` or the `dag_corpus`
+            fixture.
+        dag_folder: str | Path containing the Dag folder `corpus` was built from.
+        subdir: str | Path containing the subdirectory to keep, relative to `dag_folder`.
+            An absolute `subdir` is used as-is, matching `pathlib`'s own `/` semantics; one
+            outside `dag_folder` simply matches nothing.
+
+    Returns:
+        Mapping[str, CorpusDag] containing only the Dags whose `fileloc` resolves under
+        `dag_folder` joined with `subdir`, keyed by `dag_id`. Empty when nothing matches,
+        including when `subdir` does not exist on disk. Read-only: mutating it raises
+        `TypeError`.
+    """
+
+    base = (Path(dag_folder) / subdir).resolve()
+    return MappingProxyType(
+        {
+            dag_id: dag
+            for dag_id, dag in corpus.dags.items()
+            if Path(dag.fileloc).resolve().is_relative_to(base)
+        }
+    )
+
+
 __all__ = (
     "CorpusDag",
     "CorpusDagFileStat",
     "CorpusTask",
     "DagCorpus",
     "SecretsLookup",
+    "dags_under",
     "get_dag_corpus",
     "mark_dag_corpus_requested",
 )

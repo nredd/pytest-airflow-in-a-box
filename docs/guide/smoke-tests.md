@@ -169,6 +169,25 @@ a test needs a live Airflow object: executing a task, inspecting a real `DAG` or
 instance, or anything that must call back into Airflow's own APIs rather than read data
 off the parse.
 
+`dag_corpus` is built once for the whole configured Dag folder, so a check that only
+cares about one subdirectory still has to filter it down itself. `dagcorpus.dags_under`
+does that filtering: a plain function taking the corpus, the configured Dag folder, and a
+subdirectory, returning a read-only `dag_id` -> `CorpusDag` mapping restricted to Dags
+whose file resolves under that subdirectory (including nested subdirectories). It only
+resolves paths -- reading path metadata, never opening or listing directory contents --
+so a subdirectory that does not exist on disk just matches nothing rather than raising,
+and relative or absolute input, trailing slashes, and `.`/`..` all normalize to the same
+result:
+
+```python
+from pytest_airflow_in_a_box.dagcorpus import dags_under
+
+
+def test_team_a_dags_are_tagged(dag_corpus, airflow_dags_folder):
+    for dag_id, dag in dags_under(dag_corpus, airflow_dags_folder, "team_a").items():
+        assert "team-a" in dag.tags, f"{dag_id} is missing its team-a tag"
+```
+
 - `test_dag_bag_integrity` -- fails on import errors and per-file parse timeouts
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
