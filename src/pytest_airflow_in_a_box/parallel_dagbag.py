@@ -1,6 +1,6 @@
 """Fan a smoke corpus's whole-Dag-folder parse out across subprocess workers.
 
-Only `smoke.py`'s corpus builder consumes this module. The `dag_bag` fixture's public
+Only `dagcorpus.py`'s corpus builder consumes this module. The `dag_bag` fixture's public
 contract is the real Airflow ``DagBag`` class -- there is no serialization format that
 hands back something still type-checking and behaving as that class across a process
 boundary, so fan-out never touches it (issue #243 discusses this at length).
@@ -315,8 +315,8 @@ def dagbag_import_timeout(config: pytest.Config) -> float:
 def _encode_task(task: Any) -> dict[str, Any]:
     """Encode one live operator's portable smoke-check metadata.
 
-    Mirrors `smoke.py`'s own task shape exactly, since a fan-out shard's payload must
-    decode through the identical `smoke._smoke_corpus_from_payload`.
+    Mirrors `dagcorpus.py`'s own task shape exactly, since a fan-out shard's payload must
+    decode through the identical `dagcorpus._dag_corpus_from_payload`.
 
     Parameters:
         task: Any containing a live Airflow operator.
@@ -353,7 +353,7 @@ def _encode_dag(dag: Any, *, serializer: Any | None) -> dict[str, Any]:
             when no still-collected smoke item needs a serialized Dag.
 
     Returns:
-        dict[str, Any] matching `smoke._smoke_corpus_payload`'s `dags` entry shape.
+        dict[str, Any] matching `dagcorpus._dag_corpus_payload`'s `dags` entry shape.
     """
 
     serialized: dict[str, Any] | None = None
@@ -446,7 +446,7 @@ def merge_shard_payloads(payloads: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     Returns:
         dict[str, Any] containing the merged `import_errors`/`dagbag_stats`/
-        `runtime_lookups`/`dags`, shaped for `smoke._smoke_corpus_from_payload` once the
+        `runtime_lookups`/`dags`, shaped for `dagcorpus._dag_corpus_from_payload` once the
         caller adds `version`/`producer_pid`/`producer_worker`.
     """
 
@@ -581,7 +581,7 @@ def fan_out_dag_bag(
 
     Returns:
         dict[str, Any] containing the merged payload, shaped for
-        `smoke._smoke_corpus_from_payload` once the caller adds
+        `dagcorpus._dag_corpus_from_payload` once the caller adds
         `version`/`producer_pid`/`producer_worker`.
 
     Raises:

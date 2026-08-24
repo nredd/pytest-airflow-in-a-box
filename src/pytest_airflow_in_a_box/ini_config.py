@@ -31,7 +31,7 @@ abort every worker with a drift error naming a variable the consumer never typed
 to override it.
 
 Bootstrap is not the only writer, though, so a second and *conditional* denial exists.
-``fixtures.dagbag._cached_dag_bag`` and ``smoke._build_smoke_corpus`` both pin
+``fixtures.dagbag._cached_dag_bag`` and ``dagcorpus._build_dag_corpus`` both pin
 ``AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT`` from the ``airflow_dag_parse_timeout`` ini option
 immediately before parsing, and that same value scales the per-file parse watchdog and the
 slowpoke budget -- so an ini override of that option would be silently discarded on a smoke run,

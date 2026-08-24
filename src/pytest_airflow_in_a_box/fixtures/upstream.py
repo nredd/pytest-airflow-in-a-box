@@ -30,13 +30,20 @@ from pytest_airflow_in_a_box._compat.dag import (
     ensure_shared_bundle,
 )
 from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
-from pytest_airflow_in_a_box.types import CreateDummyDag, CreateTaskInstance, DagMaker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import datetime
 
     from airflow.sdk import DAG
+
+    # Deferred: eagerly importing `types.py` here would cycle back through
+    # `fixtures/dag.py` -- `types.py` imports `dagcorpus.py` for its `DagCorpus`/...
+    # re-exports, and `dagcorpus.py` imports the `fixtures.dagbag` submodule, which first
+    # runs `fixtures/__init__.py`, pulling in `fixtures/dag.py` and (transitively) this
+    # module. Safe under `from __future__ import annotations`: every use below is a type
+    # annotation, never evaluated at runtime.
+    from pytest_airflow_in_a_box.types import CreateDummyDag, CreateTaskInstance, DagMaker
 
 LOGGER = logging.getLogger(__name__)
 
