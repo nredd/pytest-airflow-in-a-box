@@ -39,7 +39,7 @@ every consumer in one worker process. Built once per worker process and shared w
 `pytest-xdist` workers through a flock-guarded JSON artifact (`get_dag_corpus`); the same
 instance backs both the public `dag_corpus` fixture and the bundled smoke catalog's
 `SmokeContext.corpus`, so whichever one triggers the build, every consumer in that worker
-process shares the exact same parse. Extracted from `smoke.py` (see ADR 0003) once
+process shares the exact same parse. Extracted from `smoke.py` (see ADR 0004) once
 `dag_corpus` gave the corpus builder a second, independently-motivated consumer beyond the
 bundled catalog.
 

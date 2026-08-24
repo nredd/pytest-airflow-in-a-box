@@ -575,12 +575,15 @@ def test_missing_anchor_warning_names_every_distinct_reason_once() -> None:
     """
 
     with pytest.warns(smoke.SmokeColocationWarning) as caught:
-        plugin._warn_missing_dag_bag_anchor(
-            (
+        plugin._warn_missing_anchor(
+            fixture_name=plugin.DAG_BAG_FIXTURE_NAME,
+            group_name=DAG_BAG_XDIST_GROUP,
+            verb="anchor",
+            reasons=(
                 plugin._PRE_GROUPED_ANCHOR_REASON,
                 plugin._DESELECTED_ANCHOR_REASON,
                 plugin._PRE_GROUPED_ANCHOR_REASON,
-            )
+            ),
         )
 
     message = str(caught[0].message)
@@ -873,18 +876,22 @@ def test_dag_corpus_request_forces_serialization_without_loadgroup_dist(
 def test_missing_dag_corpus_anchor_warning_names_every_distinct_reason_once() -> None:
     """Join distinct disqualification reasons and drop repeats, preserving order.
 
-    Mirrors `test_missing_anchor_warning_names_every_distinct_reason_once` for
-    `_warn_missing_dag_corpus_anchor`, which reuses the exact same disqualification
-    reason constants since both passes share `_anchor_disqualification`.
+    Mirrors `test_missing_anchor_warning_names_every_distinct_reason_once` for the
+    `dag_corpus` pass's call into the shared `_warn_missing_anchor`, which reuses the
+    exact same disqualification reason constants since both passes share
+    `_anchor_disqualification`.
     """
 
     with pytest.warns(smoke.SmokeColocationWarning) as caught:
-        plugin._warn_missing_dag_corpus_anchor(
-            (
+        plugin._warn_missing_anchor(
+            fixture_name=plugin.DAG_CORPUS_FIXTURE_NAME,
+            group_name=DAG_CORPUS_XDIST_GROUP,
+            verb="join",
+            reasons=(
                 plugin._PRE_GROUPED_ANCHOR_REASON,
                 plugin._DESELECTED_ANCHOR_REASON,
                 plugin._PRE_GROUPED_ANCHOR_REASON,
-            )
+            ),
         )
 
     message = str(caught[0].message)

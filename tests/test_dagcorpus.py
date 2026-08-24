@@ -336,11 +336,11 @@ def test_mark_dag_corpus_requested_stashes_the_marker() -> None:
 
     config = _config()
 
-    assert dagcorpus.DAG_CORPUS_WANTS_SERIALIZATION_KEY not in config.stash
+    assert dagcorpus.DAG_CORPUS_REQUESTED_KEY not in config.stash
 
     dagcorpus.mark_dag_corpus_requested(config)
 
-    assert config.stash[dagcorpus.DAG_CORPUS_WANTS_SERIALIZATION_KEY] is True
+    assert config.stash[dagcorpus.DAG_CORPUS_REQUESTED_KEY] is True
 
 
 def test_corpus_serialization_needed_true_when_request_marker_set() -> None:
@@ -529,6 +529,41 @@ def test_dag_corpus_serializes_every_dag_despite_a_configured_sample_size_when_r
 
     assert len(corpus.dags) == 8
     assert all(dag.serialized is not None for dag in corpus.dags.values())
+
+
+def test_dag_corpus_build_produces_read_only_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the BUILD path's read-only guarantee, not just the payload-decode path.
+
+    `test_dag_corpus_dags_and_import_errors_are_read_only` asserts immutability against
+    `_sample_corpus()`, a test helper that already constructs `dags`/`import_errors` as
+    `MappingProxyType` -- it would stay green even if `_build_dag_corpus` itself regressed
+    back to returning plain, mutable `dict`s. This exercises the real builder instead, the
+    same way `test_dag_corpus_from_payload_produces_read_only_mappings` pins the decode path.
+    """
+
+    good = SimpleNamespace(tags=set(), tasks=[], timetable=SimpleNamespace(can_be_scheduled=True))
+    dag_bag = SimpleNamespace(
+        dags={"good": good}, import_errors={"bad.py": "boom"}, dagbag_stats=[]
+    )
+
+    monkeypatch.setattr(dagcorpus, "_dag_folder", lambda _config: Path("dags"))
+    monkeypatch.setattr(dagcorpus, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
+    monkeypatch.setattr(dagcorpus, "record_secrets_lookups", _fake_recorder([]))
+    monkeypatch.setattr(
+        dagcorpus, "_get_dag_serializer", lambda: SimpleNamespace(serialize_dag=lambda _dag: {})
+    )
+
+    session: Any = SimpleNamespace(stash=pytest.Stash())
+    corpus = dagcorpus._build_dag_corpus(session, _config(parse_timeout="1"))
+
+    assert isinstance(corpus.dags, MappingProxyType)
+    assert isinstance(corpus.import_errors, MappingProxyType)
+    dags: Any = corpus.dags
+    import_errors: Any = corpus.import_errors
+    with pytest.raises(TypeError):
+        dags["new"] = corpus.dags["good"]
+    with pytest.raises(TypeError):
+        import_errors["new.py"] = "traceback"
 
 
 def test_dag_corpus_falls_back_to_serial_parse_when_fanout_fails(

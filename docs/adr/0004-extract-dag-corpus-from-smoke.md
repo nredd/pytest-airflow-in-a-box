@@ -43,7 +43,7 @@ becomes a one-line delegation to `get_dag_corpus`.
 Alongside the move, we fixed the serialization-need gap directly rather than carrying it
 forward under a new name. `dagcorpus.py` now owns `_corpus_serialization_needed`: a run with
 at least one collected `dag_corpus` consumer (tracked via
-`DAG_CORPUS_WANTS_SERIALIZATION_KEY`, set by `mark_dag_corpus_requested` from `plugin.py`'s
+`DAG_CORPUS_REQUESTED_KEY`, set by `mark_dag_corpus_requested` from `plugin.py`'s
 collection hook) always serializes every Dag, since there is no cheap way to know a test
 body's field usage in advance. Absent that, the predicate checks `_smoke_enabled` and
 `_smoke_in_scope` before ever delegating to `_smoke_serialization_needed` -- so the smoke

@@ -675,17 +675,32 @@ def _warns_for_this_process() -> bool:
     return worker is None or worker == "gw0"
 
 
-def _warn_missing_dag_bag_anchor(reasons: Sequence[str]) -> None:
-    """Warn that every `dag_bag` consumer is disqualified from anchoring the catalog.
+def _warn_missing_anchor(
+    *, fixture_name: str, group_name: str, verb: str, reasons: Sequence[str]
+) -> None:
+    """Warn that every consumer of one fixture is disqualified from grouping the catalog.
+
+    Shared by `_colocate_smoke_catalog_with_dag_bag` (`fixture_name=DAG_BAG_FIXTURE_NAME`,
+    `verb="anchor"`) and `_colocate_dag_corpus_consumers`
+    (`fixture_name=DAG_CORPUS_FIXTURE_NAME`, `verb="join"`) -- both passes reach this
+    exact shape once every one of their own fixture's consumers is disqualified: same
+    `_warns_for_this_process` guard, same deduplicated `" or "`-joined reasons, same
+    `SmokeColocationWarning`, differing only in which fixture/group is named and whether
+    an eligible consumer would have anchored or joined its group.
 
     Issued from `pytest_collection_modifyitems` so pytest's own collection warnings
     context captures it into the terminal summary; `config.issue_config_time_warning`,
     used elsewhere in this plugin, is configure-time only and cannot reach this hook.
-    Deliberately never issued for a run with no `dag_bag` consumer at all: the catalog
-    then owns the only Dag parse in the run, so there is nothing to co-locate with and
-    nothing lost -- warning there would fire on every ordinary smoke-only run.
+    Deliberately never called by either pass for a run with no consumer of its fixture at
+    all: the catalog then owns the only Dag parse in the run, so there is nothing to
+    co-locate with and nothing lost -- warning there would fire on every ordinary
+    smoke-only run.
 
     Parameters:
+        fixture_name: str naming the fixture whose consumers were searched.
+        group_name: str naming the xdist group the smoke catalog could not join.
+        verb: str describing what an eligible consumer would have done ("anchor" or
+            "join"), matched to each caller's own co-location shape.
         reasons: Sequence[str] naming each disqualification, in discovery order.
 
     Returns:
@@ -698,12 +713,11 @@ def _warn_missing_dag_bag_anchor(reasons: Sequence[str]) -> None:
     warnings.warn(
         smoke.SmokeColocationWarning(
             f"Smoke catalog left ungrouped under `--dist loadgroup`: every test using "
-            f"the `{DAG_BAG_FIXTURE_NAME}` fixture in this run {joined}, so none can "
-            f"anchor the `{DAG_BAG_XDIST_GROUP}` group. The catalog's corpus builder "
-            f"will parse the Dag folder itself, adding one full Dag parse to this run. "
-            f"Leave one `{DAG_BAG_FIXTURE_NAME}` consumer ungrouped and selected to "
-            f"avoid it, or silence this with "
-            f"`-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
+            f"the `{fixture_name}` fixture in this run {joined}, so none can {verb} the "
+            f"`{group_name}` group. The catalog's corpus builder will parse the Dag "
+            f"folder itself, adding one full Dag parse to this run. Leave one "
+            f"`{fixture_name}` consumer ungrouped and selected to avoid it, or silence "
+            f"this with `-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
         ),
         stacklevel=1,
     )
@@ -733,40 +747,6 @@ def _warn_loadgroup_would_colocate() -> None:
             f"This run has at least one `{DAG_BAG_FIXTURE_NAME}` consumer to reuse a "
             f"parse from, so the catalog's corpus builder will parse the Dag folder a "
             f"second time. Pass `--dist loadgroup` to avoid it, or silence this with "
-            f"`-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
-        ),
-        stacklevel=1,
-    )
-
-
-def _warn_missing_dag_corpus_anchor(reasons: Sequence[str]) -> None:
-    """Warn that every `dag_corpus` consumer is disqualified from joining the group.
-
-    Mirrors `_warn_missing_dag_bag_anchor`'s shape and reuses the same
-    `SmokeColocationWarning` class. Unlike the `dag_bag` pass, which needs exactly one
-    eligible anchor, this pass groups *every* eligible consumer, so it has nothing to
-    group the smoke catalog onto only when every candidate is disqualified. Deliberately
-    never issued for a run with no `dag_corpus` consumer at all: a run with none has
-    nothing this pass could have grouped either way.
-
-    Parameters:
-        reasons: Sequence[str] naming each disqualification, in discovery order.
-
-    Returns:
-        None. Issues at most one `SmokeColocationWarning`.
-    """
-
-    if not _warns_for_this_process():
-        return
-    joined = " or ".join(dict.fromkeys(reasons))
-    warnings.warn(
-        smoke.SmokeColocationWarning(
-            f"Smoke catalog left ungrouped under `--dist loadgroup`: every test using "
-            f"the `{DAG_CORPUS_FIXTURE_NAME}` fixture in this run {joined}, so none can "
-            f"join the `{DAG_CORPUS_XDIST_GROUP}` group. The catalog's corpus builder "
-            f"will parse the Dag folder itself, adding one full Dag parse to this run. "
-            f"Leave one `{DAG_CORPUS_FIXTURE_NAME}` consumer ungrouped and selected to "
-            f"avoid it, or silence this with "
             f"`-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
         ),
         stacklevel=1,
@@ -830,7 +810,12 @@ def _colocate_dag_corpus_consumers(
         # `disqualifications` is never empty here, unlike `dag_bag`'s anchor search,
         # which has no analogous pre-check and can reach this point with a genuinely
         # empty `disqualifications` (no `dag_bag` consumer in the run at all).
-        _warn_missing_dag_corpus_anchor(disqualifications)
+        _warn_missing_anchor(
+            fixture_name=DAG_CORPUS_FIXTURE_NAME,
+            group_name=DAG_CORPUS_XDIST_GROUP,
+            verb="join",
+            reasons=disqualifications,
+        )
         return False
     for item in (*smoke_items, *consumers):
         item.add_marker(pytest.mark.xdist_group(name=DAG_CORPUS_XDIST_GROUP))
@@ -899,7 +884,12 @@ def _colocate_smoke_catalog_with_dag_bag(
         disqualifications.append(reason)
     if anchor is None:
         if disqualifications:
-            _warn_missing_dag_bag_anchor(disqualifications)
+            _warn_missing_anchor(
+                fixture_name=DAG_BAG_FIXTURE_NAME,
+                group_name=DAG_BAG_XDIST_GROUP,
+                verb="anchor",
+                reasons=disqualifications,
+            )
         return
     for item in (*smoke_items, anchor):
         item.add_marker(pytest.mark.xdist_group(name=DAG_BAG_XDIST_GROUP))

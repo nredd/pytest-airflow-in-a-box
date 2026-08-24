@@ -456,10 +456,11 @@ def test_missing_dag_corpus_anchor_warning_is_recorded_once_across_workers(
 ) -> None:
     """Record the missing-`dag_corpus`-anchor advisory once, not once per xdist worker.
 
-    Companion to `test_missing_anchor_warning_is_recorded_once_across_workers` for
-    `_warn_missing_dag_corpus_anchor`: every worker collects in its own process and
-    reaches the same run-wide conclusion, so an unguarded `warnings.warn` in a
-    collection hook would produce N identical entries describing one condition.
+    Companion to `test_missing_anchor_warning_is_recorded_once_across_workers` for the
+    `dag_corpus` pass's call into `_warn_missing_anchor`: every worker collects in its
+    own process and reaches the same run-wide conclusion, so an unguarded
+    `warnings.warn` in a collection hook would produce N identical entries describing
+    one condition.
     `plugin._warns_for_this_process` elects `gw0`, which always exists in a
     distributing run.
     """

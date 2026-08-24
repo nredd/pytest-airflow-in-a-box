@@ -67,7 +67,7 @@ DAG_CORPUS_LOCK_NAME = ".airflow-dag-corpus.lock"
 # with a `dag_corpus` fixture dependency; read by `_corpus_serialization_needed` so a bare
 # `dag_corpus` request always gets a fully serialized corpus, independent of whatever the
 # bundled smoke catalog's own ini knobs happen to be set to.
-DAG_CORPUS_WANTS_SERIALIZATION_KEY = pytest.StashKey[bool]()
+DAG_CORPUS_REQUESTED_KEY = pytest.StashKey[bool]()
 
 
 @dataclass(frozen=True)
@@ -209,13 +209,13 @@ def _effective_sample_size(config: pytest.Config) -> int:
     the corpus to serialize once a `dag_corpus` consumer exists: `_corpus_serialization_needed`
     already treats that case as "serialize every Dag", so honoring a nonzero configured sample
     size here would silently leave some Dags unserialized despite that guarantee. Reduces to
-    `0` ("every Dag", the existing sentinel) whenever `DAG_CORPUS_WANTS_SERIALIZATION_KEY` is
+    `0` ("every Dag", the existing sentinel) whenever `DAG_CORPUS_REQUESTED_KEY` is
     stashed, and passes the configured value through unchanged otherwise -- including the
     smoke-only case, where sampling remains an intentional optimization.
 
     Parameters:
         config: pytest.Config containing the `airflow_serialization_sample_size` ini value and
-            the `DAG_CORPUS_WANTS_SERIALIZATION_KEY` request marker.
+            the `DAG_CORPUS_REQUESTED_KEY` request marker.
 
     Returns:
         int containing the sample size to actually use; ``0`` means every Dag.
@@ -224,7 +224,7 @@ def _effective_sample_size(config: pytest.Config) -> int:
         pytest.UsageError: The ini value is not a non-negative integer.
     """
 
-    if config.stash.get(DAG_CORPUS_WANTS_SERIALIZATION_KEY, False):
+    if config.stash.get(DAG_CORPUS_REQUESTED_KEY, False):
         return 0
     return _serialization_sample_size(config)
 
@@ -261,7 +261,7 @@ def mark_dag_corpus_requested(config: pytest.Config) -> None:
         config: pytest.Config receiving the request marker on its stash.
     """
 
-    config.stash[DAG_CORPUS_WANTS_SERIALIZATION_KEY] = True
+    config.stash[DAG_CORPUS_REQUESTED_KEY] = True
 
 
 def _corpus_serialization_needed(config: pytest.Config) -> bool:
@@ -276,13 +276,13 @@ def _corpus_serialization_needed(config: pytest.Config) -> bool:
 
     Parameters:
         config: pytest.Config containing plugin options, ini values, and the
-            `DAG_CORPUS_WANTS_SERIALIZATION_KEY` request marker.
+            `DAG_CORPUS_REQUESTED_KEY` request marker.
 
     Returns:
         bool indicating whether the corpus builder must call the Dag serializer.
     """
 
-    if config.stash.get(DAG_CORPUS_WANTS_SERIALIZATION_KEY, False):
+    if config.stash.get(DAG_CORPUS_REQUESTED_KEY, False):
         return True
     # Deferred: smoke.py imports this module at load time, so a module-level import here
     # would cycle. Mirrors `fixtures/dagbag.py::_cached_dag_bag`'s own deferred import of
