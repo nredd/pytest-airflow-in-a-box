@@ -697,6 +697,85 @@ def test_cleanup_dag_clears_a_referencing_backfill_dag_run() -> None:
         assert verify_session.scalar(select(func.count()).select_from(Backfill)) == 0
 
 
+def test_cleanup_dag_clears_test_created_backfill_rows() -> None:
+    """Delete backfill rows the test created outside fixture ownership.
+
+    Regression test for issue #258: a test driving Airflow's Backfill machinery
+    directly creates a `Backfill` for the fixture's Dag, plus DagRuns (with
+    `backfill_id` set) and `BackfillDagRun` join rows that never pass through
+    `create_dag_run`, so none of them are in `record.dag_run_ids`. Cleanup scoped to
+    fixture-owned rows only used to leave them referencing the Dag's backfills and
+    fail the dag_id-scoped `Backfill` delete with `sqlite3.IntegrityError: FOREIGN
+    KEY constraint failed`.
+    """
+
+    from airflow.models.backfill import Backfill, BackfillDagRun
+    from airflow.sdk.timezone import utcnow
+    from sqlalchemy import update
+
+    session = dag_compat.open_dag_session("backfill_foreign_cleanup")
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="backfill_foreign_cleanup",
+        bundle_name=_bundle_name("backfill_foreign_cleanup"),
+        session=session,
+    )
+    dag = dag_compat.build_dag("backfill_foreign_cleanup", __file__, {})
+    scheduler_dag = dag_compat.persist_dag(dag, record)
+    dag_run = dag_compat.create_dag_run(
+        scheduler_dag,
+        dag,
+        record,
+        run_id="backfill_foreign_cleanup_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+    )
+    # Disown the run: the Backfill machinery's runs never pass through
+    # `create_dag_run`, so cleanup cannot find this one through `dag_run_ids`.
+    record.dag_run_ids.discard(dag_run.id)
+    record.task_instance_keys.clear()
+
+    with create_session() as setup_session:
+        backfill = Backfill(
+            dag_id="backfill_foreign_cleanup",
+            from_date=utcnow(),
+            to_date=utcnow(),
+            max_active_runs=1,
+        )
+        setup_session.add(backfill)
+        setup_session.flush()
+        setup_session.add(
+            BackfillDagRun(
+                backfill_id=backfill.id,
+                dag_run_id=dag_run.id,
+                sort_ordinal=1,
+                logical_date=utcnow(),
+            )
+        )
+        setup_session.execute(
+            update(DagRun).where(DagRun.id == dag_run.id).values(backfill_id=backfill.id)
+        )
+        backfill_id = backfill.id
+
+    dag_compat.cleanup_dag(record)
+
+    # Scoped to this test's own rows (not whole-table counts) so a concurrent xdist
+    # worker's backfill rows cannot leak into the assertions.
+    with create_session() as verify_session:
+        assert verify_session.get(DagRun, dag_run.id) is None
+        assert (
+            verify_session.scalar(
+                select(func.count())
+                .select_from(BackfillDagRun)
+                .where(BackfillDagRun.backfill_id == backfill_id)
+            )
+            == 0
+        )
+        assert verify_session.get(Backfill, backfill_id) is None
+    assert _row_counts("backfill_foreign_cleanup") == (0, 0, 0, 0)
+
+
 def test_cleanup_accepts_missing_owned_rows() -> None:
     """Make cleanup idempotent when a failed operation did not create metadata rows."""
 

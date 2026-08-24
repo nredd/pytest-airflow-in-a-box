@@ -1135,13 +1135,24 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
 
     session = record.session
     session.rollback()
+    backfill_ids: list[int] = []
     if not _is_v2():
-        # Backfill rows arrived in 3.x. `BackfillDagRun` FK-references `dag_run.id`, so
-        # deleting a referenced DagRun without clearing it first raises a FK violation.
-        from airflow.models.backfill import BackfillDagRun
+        # Backfill rows arrived in 3.x. `BackfillDagRun` FK-references both `dag_run.id`
+        # and `backfill.id`, so the join rows must go before either parent. Fixture
+        # ownership is not enough of a predicate here: a test driving Airflow's Backfill
+        # machinery directly creates backfills for this Dag -- and DagRuns for them --
+        # that never pass through `create_dag_run`, so the cleanup is scoped by
+        # `record.dag_run_ids` OR membership in this Dag's backfills (issue #258).
+        from airflow.models.backfill import Backfill, BackfillDagRun
 
+        backfill_ids = list(
+            session.scalars(select(Backfill.id).where(Backfill.dag_id == record.dag_id))
+        )
         session.execute(
-            delete(BackfillDagRun).where(BackfillDagRun.dag_run_id.in_(record.dag_run_ids))
+            delete(BackfillDagRun).where(
+                BackfillDagRun.dag_run_id.in_(record.dag_run_ids)
+                | BackfillDagRun.backfill_id.in_(backfill_ids)
+            )
         )
     for dag_run_id in record.dag_run_ids:
         dag_run = session.get(DagRun, dag_run_id)
@@ -1149,15 +1160,22 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
             session.delete(dag_run)
     session.flush()
 
-    if not _is_v2():
+    if backfill_ids:
         # `dag_run.backfill_id` FK-references `backfill.id` with no `ondelete` action,
-        # so the Backfill parent can only go after every DagRun that might reference it
-        # is gone -- the delete loop and flush above. Deleted too (not just its
-        # `BackfillDagRun` children) so a fixture-owned Dag leaves no backfill metadata
-        # behind, matching `clear_db`'s `backfill` group.
+        # so the Backfill parents can only go after every DagRun that might reference
+        # them is gone: the fixture-owned runs (the delete loop and flush above) plus
+        # the runs Airflow's Backfill machinery created for this Dag's backfills, which
+        # are not in `record.dag_run_ids`. Those are ORM-deleted exactly like the owned
+        # loop so task-instance rows cascade identically -- and removing them also
+        # unblocks the DagVersion delete below. The Backfill parents are deleted too
+        # (not just their `BackfillDagRun` children) so a fixture-owned Dag leaves no
+        # backfill metadata behind, matching `clear_db`'s `backfill` group.
         from airflow.models.backfill import Backfill
 
-        session.execute(delete(Backfill).where(Backfill.dag_id == record.dag_id))
+        for dag_run in session.scalars(select(DagRun).where(DagRun.backfill_id.in_(backfill_ids))):
+            session.delete(dag_run)
+        session.flush()
+        session.execute(delete(Backfill).where(Backfill.id.in_(backfill_ids)))
 
     if _is_v2():
         # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id`. The
