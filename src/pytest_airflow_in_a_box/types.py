@@ -176,6 +176,17 @@ class DagMaker(Protocol):
         """
 
     @property
+    def start_date(self) -> datetime | None:
+        """Return the latest Dag's resolved default ``start_date``.
+
+        Resolved by upstream ``tests_common``'s ladder at ``dag_maker(...)`` time --
+        explicit kwarg, then ``default_args["start_date"]``, then the consumer test
+        module's ``DEFAULT_DATE``, then the ``2016-01-01`` UTC epoch (see
+        docs/adr/0003). ``None`` before the first call, or after an explicit
+        ``start_date=None`` opt-out.
+        """
+
+    @property
     def serialized_dag(self) -> SerializedDag | None:
         """Return the latest persisted scheduler Dag.
 
@@ -237,6 +248,13 @@ class DagMaker(Protocol):
         upstream ``tests_common``'s ``dag_maker`` harness contract: they route to the
         persistence layer and are never forwarded to the ``DAG`` constructor.
 
+        When ``dag_kwargs`` carries no ``start_date`` key, one is injected by
+        upstream ``tests_common``'s ladder -- ``default_args["start_date"]``, then
+        the consumer test module's ``DEFAULT_DATE``, then the ``2016-01-01`` UTC
+        epoch -- and exposed as ``start_date`` (docs/adr/0003). An explicit
+        ``start_date=None`` opts out of injection entirely, a deliberate deviation
+        from upstream, which silently replaces it.
+
         Parameters:
             dag_id: str | None containing an explicit bounded identifier, or ``None`` for a
                 deterministic test- and worker-specific identifier. On a serial run,
@@ -283,27 +301,40 @@ class DagMaker(Protocol):
     ) -> DagRun:
         """Create and own one persisted running manual DagRun.
 
+        Omitted ``run_id`` and ``logical_date`` follow upstream ``tests_common``'s
+        deterministic defaults (docs/adr/0003): ``run_id`` is ``test`` when no
+        ``run_type`` was passed and the timetable-generated id when one was, and
+        ``logical_date`` is the Dag's resolved ``start_date`` for manual runs or the
+        timetable's first automated date for explicit non-manual run types --
+        degrading to ``start_date`` and then the current UTC date when the timetable
+        schedules nothing. A second bare call on one Dag collides on
+        ``(dag_id, "test")`` and fails loudly, exactly as upstream does.
+
         Parameters:
-            run_id: str | None containing an explicit identifier, or ``None`` for a
-                derived one.
-            logical_date: datetime.datetime | UnsetType | None overriding the current
-                UTC logical date. An explicit ``None`` requests a run with no logical
+            run_id: str | None containing an explicit identifier, or ``None`` for
+                upstream's default ladder.
+            logical_date: datetime.datetime | UnsetType | None overriding the default
+                logical date. An explicit ``None`` requests a run with no logical
                 date at all (the shape asset-triggered runs take) -- Airflow 3.x only,
                 and no ``data_interval`` is inferred for it; the 2.x family cannot
                 express one and raises ``ValueError``.
-            run_after: datetime.datetime | None overriding the current UTC run-after
-                date. Airflow 3.x only -- the 2.x family has no run-after concept, and
-                passing it there raises ``ValueError`` rather than silently changing
-                run semantics.
-            start_date: datetime.datetime | None overriding the current UTC start date.
+            run_after: datetime.datetime | None overriding the run-after date
+                (defaulted to the resolved data interval's end, then the current UTC
+                date). Airflow 3.x only -- the 2.x family has no run-after concept,
+                and passing it there raises ``ValueError`` rather than silently
+                changing run semantics.
+            start_date: datetime.datetime | None overriding the run's start date
+                (defaulted to the Dag's resolved ``start_date``, then the current
+                UTC date).
             dag_run_kwargs: Any forwarded to Airflow's scheduler Dag creation method.
 
         Raises:
             ValueError: ``run_after`` or an explicit ``logical_date=None`` was passed
-                on the Airflow 2.x family, or ``dag_run_kwargs`` sets a key
+                on the Airflow 2.x family, ``dag_run_kwargs`` sets a key
                 ``create_dagrun`` already supplies from its own parameters (e.g.
                 ``session``, ``execution_date``) -- see the message for the exact
-                remedy.
+                remedy -- or ``dag_run_kwargs["run_type"]`` names no ``DagRunType``
+                member.
         """
 
     def create_ti(

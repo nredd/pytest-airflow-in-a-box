@@ -135,7 +135,7 @@ The full reference, with scopes, database behavior, and Airflow-2.x availability
 | Fixture | One-liner |
 | ------- | --------- |
 | `dag_bag` | All Dags parsed from the configured Dag directory, once per worker process |
-| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it; upstream `tests_common` harness kwargs plus scheduler-side `serialized_dag`/`dag_model`/`timetable`/`sync_dagbag_to_db()` handles |
+| `dag_maker` | Build and persist a Dag authored in the test; `run()` / `run_ti()` execute it; upstream `tests_common` harness kwargs, deterministic run defaults (default `start_date`, `run_id="test"`, `logical_date=start_date`), and scheduler-side `serialized_dag`/`dag_model`/`timetable`/`sync_dagbag_to_db()` handles |
 | `create_task_instance` | One call: a `TaskInstance` with its Dag and DagRun rows, upstream-parity |
 | `create_dummy_dag` | One call: a single-`EmptyOperator` Dag plus a scheduled DagRun, upstream-parity |
 | `run_dag` | Run an externally-authored Dag, e.g. one pulled from `dag_bag` |

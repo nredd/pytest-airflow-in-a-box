@@ -60,6 +60,14 @@ _RESERVED_DAG_RUN_KWARGS_REMEDY = {
     "session": "the run is created on the fixture-owned session -- use `dag_maker.session`",
     "execution_date": "pass `logical_date` instead; this shim maps it to 2.x's `execution_date`",
 }
+# Upstream `tests_common`'s fixed default run id, used when the caller passes neither
+# `run_id` nor `run_type`. Collision safety comes from the per-test derived `dag_id`
+# (DagRun uniqueness is per `(dag_id, run_id)`, and the hashed ids this replaced never
+# encoded worker identity anyway); see docs/adr/0003.
+DEFAULT_RUN_ID = "test"
+# Airflow 3.2 renamed `next_dagrun_info`'s parameter: 2.x and 3.1 spell it
+# `last_automated_dagrun`, 3.2+ spell it `last_automated_run_info`.
+_NEXT_DAGRUN_INFO_KWARG_BREAK: tuple[int, int, int] = (3, 2, 0)
 
 if TYPE_CHECKING:
     from airflow.models.dagrun import DagRun
@@ -959,39 +967,151 @@ def get_dag_model(record: DagPersistenceRecord) -> Any:
     return dag_model
 
 
+def _next_automated_run_info(scheduler_dag: Any) -> Any:
+    """Ask the timetable for the first automated run's info.
+
+    Upstream ``tests_common`` derives a non-manual run's default ``logical_date`` from
+    ``next_dagrun_info``; the returned info also carries the timetable's own
+    ``data_interval``, which trigger-style and custom timetables report where
+    whitelist-based inference would crash. The keyword differs by release: Airflow 3.2
+    renamed 2.x/3.1's ``last_automated_dagrun`` to ``last_automated_run_info``.
+
+    Parameters:
+        scheduler_dag: Any containing the persisted scheduler Dag.
+
+    Returns:
+        Any containing the timetable's first ``DagRunInfo``, or ``None`` when the
+        timetable schedules nothing (e.g. ``schedule=None``).
+    """
+
+    keyword = (
+        "last_automated_run_info"
+        if not _is_v2() and resolve_capabilities().release >= _NEXT_DAGRUN_INFO_KWARG_BREAK
+        else "last_automated_dagrun"
+    )
+    return scheduler_dag.next_dagrun_info(**{keyword: None})
+
+
+def _infer_automated_data_interval(scheduler_dag: Any, logical_date: Any) -> Any:
+    """Infer a non-manual run's data interval for one logical date.
+
+    Airflow 3.1 moved the helper out of ``DAG`` into a module-level function taking
+    the timetable; the 2.x family keeps the instance method. Both whitelist the
+    cron/delta/null/once shapes and hard-raise ``ValueError: Not a valid timetable``
+    for trigger-style and custom timetables -- those all implement manual inference,
+    so this degrades to it rather than import upstream's crash into this plugin's
+    first-class custom-timetable support (deliberate deviation, docs/adr/0003).
+
+    Parameters:
+        scheduler_dag: Any containing the persisted scheduler Dag.
+        logical_date: Any containing the resolved UTC logical date.
+
+    Returns:
+        Any containing the inferred data interval.
+    """
+
+    try:
+        if _is_v2():
+            return scheduler_dag.infer_automated_data_interval(logical_date)
+        # Deferred private model access is isolated in the compatibility package.
+        from airflow.models.dag import infer_automated_data_interval
+
+        return infer_automated_data_interval(scheduler_dag.timetable, logical_date)
+    except ValueError:
+        return scheduler_dag.timetable.infer_manual_data_interval(run_after=logical_date)
+
+
+def _generate_run_id(
+    scheduler_dag: Any,
+    *,
+    run_type: Any,
+    run_after: Any,
+    data_interval: Any,
+) -> str:
+    """Generate the timetable-shaped run id upstream uses for explicit run types.
+
+    Parameters:
+        scheduler_dag: Any containing the persisted scheduler Dag.
+        run_type: Any containing the coerced ``DagRunType`` member.
+        run_after: Any containing the date the id is derived from -- the resolved
+            logical date, or the current UTC date for a run without one. The 3.x
+            family spells the keyword ``run_after``; 2.x spells it ``logical_date``.
+        data_interval: Any containing the resolved data interval, or ``None``.
+
+    Returns:
+        str containing the generated run identifier.
+    """
+
+    date_keyword = "logical_date" if _is_v2() else "run_after"
+    return str(
+        scheduler_dag.timetable.generate_run_id(
+            run_type=run_type,
+            data_interval=data_interval,
+            **{date_keyword: run_after},
+        )
+    )
+
+
 def create_dag_run(
     scheduler_dag: Any,
     authoring_dag: DAG,
     record: DagPersistenceRecord,
     *,
-    run_id: str,
+    run_id: str | None,
     logical_date: datetime | UnsetType | None,
     run_after: datetime | None,
     start_date: datetime | None,
     dag_run_kwargs: dict[str, Any],
+    default_logical_date: datetime | None = None,
+    default_start_date: datetime | None = None,
+    upstream_defaults: bool = False,
 ) -> DagRun:
     """Create a DagRun through the persisted scheduler Dag contract.
+
+    With ``upstream_defaults``, omitted ``run_id`` and ``logical_date`` follow
+    upstream ``tests_common``'s deterministic defaults (docs/adr/0003): the run id is
+    ``test`` when the caller passed no ``run_type`` and the timetable-generated id
+    when they did, and the logical date is ``default_logical_date`` for manual runs or
+    the timetable's first automated date for explicit non-manual run types --
+    degrading to ``default_logical_date`` and then the current UTC date when the
+    timetable schedules nothing. ``data_interval`` inference then follows the run
+    type: manual runs use ``infer_manual_data_interval``, non-manual runs the
+    timetable's own run-info interval (falling back to
+    ``infer_automated_data_interval``). Without the flag -- ``run_dag``'s adopted
+    externally-authored Dags -- every run keeps manual inference and the
+    ``default_logical_date``-then-now dating regardless of ``run_type``.
 
     Parameters:
         scheduler_dag: pytest_airflow_in_a_box.types.SerializedDag persisted for scheduling.
         authoring_dag: airflow.sdk.DAG containing executable task objects.
         record: DagPersistenceRecord receiving exact metadata ownership.
-        run_id: str containing the validated collision-safe run identifier.
-        logical_date: datetime.datetime | UnsetType | None overriding the current UTC
+        run_id: str | None containing the validated run identifier, or ``None`` for
+            upstream's default ladder.
+        logical_date: datetime.datetime | UnsetType | None overriding the default
             logical date, where an explicit ``None`` requests a 3.x run with no logical
             date at all; rejected on the 2.x family, which cannot express one.
-        run_after: datetime.datetime | None overriding the current UTC run-after date;
-            rejected on the 2.x family, which has no run-after concept.
-        start_date: datetime.datetime | None overriding the current UTC start date.
+        run_after: datetime.datetime | None overriding the run-after date (defaulted
+            to the resolved data interval's end, then the current UTC date); rejected
+            on the 2.x family, which has no run-after concept.
+        start_date: datetime.datetime | None overriding the run's start date.
         dag_run_kwargs: dict[str, Any] forwarded to Airflow's scheduler Dag.
+        default_logical_date: datetime.datetime | None supplying the caller's default
+            logical date -- ``dag_maker`` passes its resolved Dag ``start_date`` --
+            or ``None`` to fall through to the current UTC date.
+        default_start_date: datetime.datetime | None supplying the run's default
+            start date the same way.
+        upstream_defaults: bool applying upstream's timetable-derived non-manual
+            dates and automated data-interval inference. ``dag_maker`` sets it;
+            ``run_dag`` does not, keeping its documented current-UTC dating.
 
     Returns:
         airflow.models.dagrun.DagRun committed with verified task instances.
 
     Raises:
         ValueError: `run_after` or an explicit ``logical_date=None`` was passed on the
-            Airflow 2.x family, or `dag_run_kwargs` sets a key `create_dag_run` already
-            assigns from its own parameters.
+            Airflow 2.x family, `dag_run_kwargs` sets a key `create_dag_run` already
+            assigns from its own parameters, or `dag_run_kwargs["run_type"]` names no
+            ``DagRunType`` member.
         DagRunCreationError: Airflow cannot create or verify the DagRun metadata.
     """
 
@@ -1032,17 +1152,35 @@ def create_dag_run(
     from airflow.utils.state import DagRunState
     from airflow.utils.types import DagRunType
 
-    operation = "resolving UTC dates"
+    kwargs = dict(dag_run_kwargs)
+    run_type_supplied = "run_type" in kwargs
+    # Coerced eagerly, and before the try: the run-id and data-interval defaults below
+    # branch on the member, and a misspelled run type is a caller error (`ValueError`),
+    # not a `DagRunCreationError`.
+    run_type = DagRunType(kwargs.get("run_type", DagRunType.MANUAL))
+    kwargs["run_type"] = run_type
+
+    operation = "resolving the default logical date"
     try:
         now = utcnow()
+        automated_info: Any = None
+        if isinstance(logical_date, UnsetType):
+            default: Any = default_logical_date
+            if upstream_defaults and run_type is not DagRunType.MANUAL:
+                # Upstream derives an automated run's date from the timetable; a
+                # schedule-less Dag yields nothing there, so degrade to the Dag's
+                # start date (then to now) instead of upstream's hard crash.
+                automated_info = _next_automated_run_info(scheduler_dag)
+                if automated_info is not None:
+                    default = automated_info.logical_date
+            logical_date = default if default is not None else now
+        operation = "resolving UTC dates"
         resolved_logical_date = (
-            None
-            if logical_date is None
-            else convert_to_utc(
-                coerce_datetime(now if isinstance(logical_date, UnsetType) else logical_date)
-            )
+            None if logical_date is None else convert_to_utc(coerce_datetime(logical_date))
         )
-        resolved_start_date = convert_to_utc(coerce_datetime(start_date or now))
+        resolved_start_date = convert_to_utc(
+            coerce_datetime(start_date or default_start_date or now)
+        )
         dag_version: Any = None
         if not is_v2:
             from airflow.models.dag_version import DagVersion
@@ -1054,15 +1192,38 @@ def create_dag_run(
                     f"Airflow did not return a current DagVersion for '{record.dag_id}'"
                 )
 
-        kwargs = dict(dag_run_kwargs)
         # A run without a logical date has no interval to infer; leave `data_interval`
         # to the caller (or absent) exactly as Airflow's asset-triggered runs do.
         if "data_interval" not in kwargs and resolved_logical_date is not None:
-            kwargs["data_interval"] = scheduler_dag.timetable.infer_manual_data_interval(
-                run_after=resolved_logical_date
-            )
-        kwargs.setdefault("run_type", DagRunType.MANUAL)
+            operation = "inferring the data interval"
+            if run_type is DagRunType.MANUAL or not upstream_defaults:
+                kwargs["data_interval"] = scheduler_dag.timetable.infer_manual_data_interval(
+                    run_after=resolved_logical_date
+                )
+            elif automated_info is not None:
+                # The timetable's own run info carries the authoritative interval --
+                # legitimately None for trigger-style timetables, exactly what the
+                # real scheduler passes for their runs.
+                kwargs["data_interval"] = automated_info.data_interval
+            else:
+                kwargs["data_interval"] = _infer_automated_data_interval(
+                    scheduler_dag, resolved_logical_date
+                )
         kwargs.setdefault("state", DagRunState.RUNNING)
+        operation = "resolving the run identifier"
+        if run_id is None:
+            # Upstream's ladder (docs/adr/0003): a fixed `test` id when the caller
+            # passed no `run_type` at all, the timetable-generated one when they did
+            # -- including an explicit `run_type=MANUAL`, exactly as upstream does.
+            if run_type_supplied:
+                run_id = _generate_run_id(
+                    scheduler_dag,
+                    run_type=run_type,
+                    run_after=resolved_logical_date if resolved_logical_date is not None else now,
+                    data_interval=kwargs.get("data_interval"),
+                )
+            else:
+                run_id = DEFAULT_RUN_ID
         operation = "calling the persisted scheduler Dag's create_dagrun"
         if is_v2:
             # 2.x: `execution_date` interface, no `triggered_by`/`run_after`. No
@@ -1080,7 +1241,17 @@ def create_dag_run(
         else:
             from airflow.utils.types import DagRunTriggeredByType
 
-            resolved_run_after = convert_to_utc(coerce_datetime(run_after or now))
+            # Upstream's default under the flag: the resolved interval's end, then
+            # the current UTC date -- so an explicit or inferred `data_interval` and
+            # the run-after date agree by construction. `run_dag` keeps plain now.
+            if run_after is not None:
+                base_run_after: Any = run_after
+            elif upstream_defaults:
+                interval = kwargs.get("data_interval")
+                base_run_after = interval[-1] if interval else now
+            else:
+                base_run_after = now
+            resolved_run_after = convert_to_utc(coerce_datetime(base_run_after))
             kwargs.setdefault("triggered_by", DagRunTriggeredByType.TEST)
             dag_run = scheduler_dag.create_dagrun(
                 run_id=run_id,
@@ -1128,9 +1299,11 @@ def create_dag_run(
         return dag_run
     except Exception as error:
         record.session.rollback()
+        # A failure ahead of run-id resolution has no identifier yet to report.
+        display_run_id = run_id if run_id is not None else "<unresolved>"
         raise DagRunCreationError(
-            f"Could not create Airflow DagRun '{run_id}' for Dag '{record.dag_id}' while "
-            f"{operation}: {error}"
+            f"Could not create Airflow DagRun '{display_run_id}' for Dag '{record.dag_id}' "
+            f"while {operation}: {error}"
         ) from error
 
 
@@ -1459,6 +1632,7 @@ def cleanup_dag(record: DagPersistenceRecord) -> None:
 
 
 __all__ = (
+    "DEFAULT_RUN_ID",
     "UNSET",
     "DagCleanupError",
     "DagPersistenceError",

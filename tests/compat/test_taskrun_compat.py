@@ -9,7 +9,6 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
-from airflow.models.taskinstance import TaskInstance
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box._compat import taskrun
@@ -28,11 +27,19 @@ from pytest_airflow_in_a_box.taskinstance import (
 class _Session:
     """Record transaction and identity-map lifecycle operations."""
 
-    def __init__(self) -> None:
-        """Initialize lifecycle counters."""
+    def __init__(self, lookup_result: Any = None) -> None:
+        """Initialize lifecycle counters.
+
+        Parameters:
+            lookup_result: Any returned by the persisted-instance identity query
+                (`_run_sdk_task_instance` selects the fresh row itself since Airflow
+                3.2.0's `TaskInstance.get_task_instance` dropped `dag_id` from its
+                filter), or None for tests that never reach the runner.
+        """
 
         self.commits = 0
         self.expirations = 0
+        self.lookup_result = lookup_result
 
     def commit(self) -> None:
         """Record one commit."""
@@ -43,6 +50,19 @@ class _Session:
         """Record one identity-map expiration."""
 
         self.expirations += 1
+
+    def execute(self, query: Any) -> Any:
+        """Serve the identity query with the preset persisted-row result.
+
+        Parameters:
+            query: Any containing the SQLAlchemy select (unused by the fake).
+
+        Returns:
+            Any exposing `scalar_one_or_none` like a SQLAlchemy result.
+        """
+
+        del query
+        return SimpleNamespace(scalar_one_or_none=lambda: self.lookup_result)
 
 
 class _TaskInstance:
@@ -313,16 +333,18 @@ def test_resolve_task_falls_back_when_task_absent_from_registered_dag(
 
 def _prepare_sdk_runner(
     monkeypatch: pytest.MonkeyPatch,
-    ti: _TaskInstance,
     result: Any,
     *,
     dag_run_refresh: bool = False,
 ) -> list[tuple[Any, Any]]:
     """Install deterministic Airflow 3.2+ task-run internals.
 
+    The persisted-instance lookup is served by `_Session.lookup_result`, not patched
+    here: `_run_sdk_task_instance` queries the full identity itself since Airflow
+    3.2.0's `TaskInstance.get_task_instance` dropped `dag_id` from its filter.
+
     Parameters:
         monkeypatch: pytest.MonkeyPatch applying replacements.
-        ti: _TaskInstance returned by the persisted-instance lookup.
         result: Any returned by Airflow's private task runner.
         dag_run_refresh: bool selecting the Airflow 3.3 refresh signature.
 
@@ -344,7 +366,6 @@ def _prepare_sdk_runner(
     monkeypatch.setattr(
         taskrun, "_scheduler_task", lambda _instance, _session: (dag_run, scheduler_task)
     )
-    monkeypatch.setattr(TaskInstance, "get_task_instance", lambda **_kwargs: ti)
 
     def run_task(*, ti: Any, task: Any) -> Any:
         """Record and return one private runner result."""
@@ -366,7 +387,7 @@ def test_sdk_runner_checks_dependencies_and_refreshes_original(
     ti: Any = _TaskInstance()
     session: Any = _Session()
     task: Any = object()
-    calls = _prepare_sdk_runner(monkeypatch, ti, SimpleNamespace(error=None), dag_run_refresh=True)
+    calls = _prepare_sdk_runner(monkeypatch, SimpleNamespace(error=None), dag_run_refresh=True)
 
     result = run_task_instance(
         ti,
@@ -397,7 +418,7 @@ def test_sdk_mark_success_skips_private_runner(monkeypatch: pytest.MonkeyPatch) 
     ti: Any = _TaskInstance()
     session: Any = _Session()
     task: Any = object()
-    calls = _prepare_sdk_runner(monkeypatch, ti, SimpleNamespace(error=None))
+    calls = _prepare_sdk_runner(monkeypatch, SimpleNamespace(error=None))
 
     result = run_task_instance(ti, task, mark_success=True, session=session)
 
@@ -473,7 +494,7 @@ def test_sdk_dependency_rejection_returns_refreshed_original(
     ti.check_and_change_state_before_execution = lambda **_kwargs: False
     session: Any = _Session()
     task: Any = object()
-    calls = _prepare_sdk_runner(monkeypatch, ti, SimpleNamespace(error=None))
+    calls = _prepare_sdk_runner(monkeypatch, SimpleNamespace(error=None))
 
     result = run_task_instance(ti, task, session=session)
 
@@ -489,7 +510,7 @@ def test_sdk_no_result_raises_after_refresh(monkeypatch: pytest.MonkeyPatch) -> 
     ti: Any = _TaskInstance()
     session: Any = _Session()
     task: Any = object()
-    _prepare_sdk_runner(monkeypatch, ti, None)
+    _prepare_sdk_runner(monkeypatch, None)
 
     with pytest.raises(RuntimeError, match="failed to finish with a result"):
         run_task_instance(ti, task, session=session)
@@ -505,7 +526,7 @@ def test_sdk_result_error_is_propagated_after_refresh(monkeypatch: pytest.Monkey
     session: Any = _Session()
     task: Any = object()
     failure = ValueError("task failed")
-    _prepare_sdk_runner(monkeypatch, ti, SimpleNamespace(error=failure))
+    _prepare_sdk_runner(monkeypatch, SimpleNamespace(error=failure))
 
     with pytest.raises(ValueError, match="task failed") as caught:
         run_task_instance(ti, task, session=session)
