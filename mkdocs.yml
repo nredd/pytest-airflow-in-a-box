@@ -71,4 +71,5 @@ nav:
       - Markers: reference/markers.md
       - Defaults: reference/defaults.md
       - Diagnostics: reference/diagnostics.md
+  - Vision: vision.md
   - Development: development.md
