@@ -1,6 +1,52 @@
-# Report artifacts
+# Logs and JUnit XML you can trust
 
-One opt-in flag turns a run into archivable evidence:
+Two of your CI artifacts are wrong before you read them, and neither failure announces
+itself. The plugin fixes both on every run, with no flag.
+
+## The log file every xdist worker opens
+
+pytest's own `_pytest/logging.py` has no worker guard. Under `pytest -n auto`, every worker
+opens the same `--log-file` destination and the writers race. You get one file, silently
+interleaved, with records from different tests spliced together and an unknowable amount
+missing. The run is green, the artifact is garbage, and the only time you read it is when you
+are already debugging something else.
+
+The plugin scopes `log_file` per worker instead: `reports/pytest.gw0.log`,
+`reports/pytest.gw1.log`, and so on. Controller and serial runs are untouched.
+
+`-n auto` is the default CI shape for the repo this plugin is for. If your workflow runs
+xdist and archives a log file, you were hitting this.
+
+JUnit XML needs no equivalent handling: pytest's `junitxml` plugin already skips writing on
+xdist workers, so only the controller writes it.
+
+## The isolated child that overwrites the parent's XML
+
+`@pytest.mark.airflow_isolated` runs marked tests in a child pytest process. That child is
+*not* an xdist worker, so pytest's controller-only guard does not apply to it -- it inherits
+the parent's configuration, writes `pytest.xml`, and clobbers the parent's file with just its
+own batch. Your JUnit report ends up holding three tests instead of four hundred.
+
+The child carries `PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER` in its environment, and the
+plugin uses that identity to scope its XML destination exactly like a worker id, to
+`pytest.<identity>.xml`. It scopes the child's `log_file` the same way.
+
+What the marker is for: [Entry points and packaging](isolated-tests.md).
+
+## Coverage data files, but only when nothing else owns them
+
+The same identity scopes `COVERAGE_FILE` when it is set in the environment, which is how an
+*externally* orchestrated coverage run collides: one data file, several writers.
+
+It is scoped only when `pytest-cov` is not loaded. `pytest-cov` does its own per-worker
+data-file handling, and a second layer of renaming on top of it breaks the combine step. Run
+`pytest --cov` and the plugin keeps its hands off.
+
+## `--airflow-report-dir`, the convenience on top
+
+Since all three collisions are handled anyway, the flag's job is narrower than it looks: it
+saves you wiring three unrelated pytest options, and it puts the derived destinations
+somewhere the scoping above can act on them.
 
 ```console
 pytest --airflow-report-dir=reports
@@ -18,13 +64,16 @@ Or persistently, via the `airflow_report_dir` ini option:
 airflow_report_dir = reports
 ```
 
-The plugin writes no report files unless one of those is set -- this deliberately sits outside
-the [zero-ini defaults](../reference/defaults.md), which are display-only and never put files
-in your repository.
+The plugin writes no report files unless one of those is set. Report artifacts deliberately
+sit outside the [zero-ini defaults](configuration.md), which are display-only and never put
+files in your repository.
 
 Every derived destination yields to an explicit one, so `--log-file`, `--log-file-level`,
 `--log-level`, and `--junit-xml` (and their ini forms) always win. Mixing is fine:
 `--airflow-report-dir=reports --log-file-level=INFO` still writes both artifacts, at `INFO`.
+
+Deriving runs before scoping, which is what lets a derived log file get worker-suffixed
+exactly like a hand-written one.
 
 !!! note "The derived `DEBUG` level is not write-only"
 
@@ -35,15 +84,10 @@ Every derived destination yields to an explicit one, so `--log-file`, `--log-fil
     alone. Set `--log-file-level` or `--log-level` (pytest's own fallback for the former, and
     honored here for exactly that reason) to keep the session's level where it was.
 
-Under `pytest-xdist` the log file is scoped per worker (`reports/pytest.gw0.log`,
-`reports/pytest.gw1.log`, ...) because pytest's logging plugin has no worker guard and the
-writers would otherwise race. The JUnit XML needs no such handling: pytest already writes it
-once, from the controller.
-
 ## In CI
 
-Point the flag at a directory and archive it on both outcomes -- a report from a *green* run is
-nice, a report from a red one is the point:
+Archive on both outcomes. A report from a *green* run is nice, a report from a red one is the
+point:
 
 ```yaml
 - run: pytest --airflow-smoke --airflow-report-dir=${{ github.workspace }}/reports
@@ -54,27 +98,5 @@ nice, a report from a red one is the point:
     path: ${{ github.workspace }}/reports
 ```
 
-The [composite action](https://github.com/nredd/pytest-airflow-in-a-box/tree/main/action) has a
-`report-dir` input that does the flag half for you: it creates the directory and appends
-`--airflow-report-dir` to `PYTEST_ADDOPTS`, so your plain `pytest` invocation picks it up with
-no changes, and exposes the absolute path as the `report-dir` output for the upload step:
-
-```yaml
-- uses: nredd/pytest-airflow-in-a-box/action@main
-  id: airflow-env
-  with:
-    airflow-version: "3.3.0"
-    python-version: "3.12"
-    report-dir: reports
-- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest --airflow-smoke
-- if: always()
-  uses: actions/upload-artifact@v7
-  with:
-    name: reports
-    path: ${{ steps.airflow-env.outputs.report-dir }}
-```
-
-The action provisions and stops -- it never invokes pytest -- so the upload step stays yours. A
-`plugin-version` older than the release that introduced `--airflow-report-dir` is detected and
-skipped with a warning annotation rather than poisoning `PYTEST_ADDOPTS` with a flag that
-installation cannot parse.
+The composite action has a `report-dir` input that does the flag half for you and hands the
+absolute path back as an output. See [The GitHub Action](ci/github-action.md).

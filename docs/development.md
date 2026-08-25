@@ -1,4 +1,4 @@
-# Development
+# Working on the plugin itself
 
 ```console
 uv sync
