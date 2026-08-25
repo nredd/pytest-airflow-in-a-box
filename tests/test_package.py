@@ -260,6 +260,7 @@ def test_public_surface_is_explicit() -> None:
         "RunTask",
         "SchedulerTimetable",
         "SerializedDag",
+        "StructlogCapture",
         "TaskContext",
         "TaskContextHandle",
         "TaskRunResult",
