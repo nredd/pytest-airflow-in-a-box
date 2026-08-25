@@ -8,6 +8,54 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.11.1] - 2026-08-25
+
+### Added
+
+- `dag_maker.timetable` exposes the persisted scheduler Dag's timetable (typed as the structural `SchedulerTimetable` protocol) -- the migration target for upstream's `dag.timetable.infer_manual_data_interval(...)` pattern, which Airflow 3.2+ removed from the yielded authoring Dag's timetable -- and `dag_maker.run_ti` accepts upstream `tests_common`'s `session=` keyword, routed to the task-execution step. The task-execution guide gains a migration table for scheduler-side Dag calls on the yield (`clear`, `partial_subset`, `set_task_instance_state`, direct `create_dagrun`), reaffirmed wontfix as Dag attributes in the amended ADR 0002.
+  ([#261](https://github.com/nredd/pytest-airflow-in-a-box/issues/261)).
+- `dag_corpus` fixture: the same portable, fan-out-eligible `DagCorpus` the bundled `--airflow-smoke` catalog builds, exposed for repository-defined whole-corpus checks. Under `--dist loadgroup`, every surviving `dag_corpus` consumer joins the bundled catalog's shared xdist group.
+  ([#277](https://github.com/nredd/pytest-airflow-in-a-box/issues/277)).
+- `dagcorpus.dags_under` filters a `dag_corpus`/`DagCorpus` down to Dags whose file lives under one subdirectory of the configured Dag folder, mirroring `_compat/executor.py::relative_dag_path`'s resolve-then-check-containment approach so relative and absolute `subdir` inputs normalize to the same result.
+  ([#279](https://github.com/nredd/pytest-airflow-in-a-box/issues/279)).
+- Add the `get-it-merged` agent skill: land parallel PRs as a serialized merge train under strict required status checks, running CI only on the head-of-train and canceling runs that a later rebase would invalidate.
+- Name standing agent skills (`tdd`, `codebase-design`, `diagnosing-bugs`, `code-review`, `ship-issue`) in `AGENTS.md`'s Agent skills section, with a delegation rule to name the applicable skill explicitly when spawning a subagent.
+- Vendor Matt Pocock's engineering and productivity agent skills (MIT) into `skills/mattpocock/`, alongside this project's own `skills/redd/get-it-merged` and `skills/redd/ship-issue`, with `.claude/skills/` and `.agents/skills/` symlinking into it so every clone of the repo has these skills available without a global install.
+
+### Changed
+
+- `dag_maker` now follows upstream `tests_common`'s deterministic run defaults (ADR 0003): every Dag gets a default `start_date` (explicit kwarg > `default_args` > the test module's `DEFAULT_DATE` > `2016-01-01` UTC, exposed as `dag_maker.start_date`, with an explicit `start_date=None` opting out); a bare `create_dagrun()` gets `run_id="test"` and `logical_date=start_date` instead of a hashed id and `utcnow()`, so upstream-shaped run lookups find it and 2016-vintage `start_date`/`end_date` windows keep their task instances; and an explicit `run_type=` switches to the timetable-generated run id, the `next_dagrun_info`-derived logical date, and automated `data_interval` inference. BREAKING: a second bare `create_dagrun()` on one Dag now collides loudly on `(dag_id, "test")` exactly as upstream does, and two runs sharing the default logical date collide on `(dag_id, logical_date)` -- pass explicit `run_id`s and distinct `logical_date`s for multi-run tests. `run_dag` keeps its derived ids and current-UTC dating.
+  ([#259](https://github.com/nredd/pytest-airflow-in-a-box/issues/259)).
+- On a serial run, re-registering a `dag_id` the plugin itself persisted earlier in the same process now replaces the leftover metadata instead of raising `ValueError: Dag metadata already exists` -- upstream suites freely re-create short ids (`dag`, `test1`) across and within tests. The error is kept for metadata the process never wrote (foreign rows) and for any collision on a `pytest-xdist` worker, where a leftover is indistinguishable from another worker's live registration -- `pytest.mark.xdist_group` remains the cross-worker mitigation.
+  ([#262](https://github.com/nredd/pytest-airflow-in-a-box/issues/262)).
+
+### Fixed
+
+- `dag_maker` fixture teardown now clears `Backfill`/`BackfillDagRun` rows -- and the
+  DagRuns Airflow's Backfill machinery created for them -- even when the test created the
+  backfills directly instead of through the fixture, instead of raising
+  `sqlite3.IntegrityError: FOREIGN KEY constraint failed` on the dag_id-scoped `Backfill`
+  delete (follow-up to the fixture-owned-row fix from
+  [#240](https://github.com/nredd/pytest-airflow-in-a-box/issues/240); Airflow 3.x only,
+  where backfill tables exist).
+  ([#258](https://github.com/nredd/pytest-airflow-in-a-box/issues/258)).
+- Keep the task instances `create_dagrun` refreshes alive for the fixture's lifetime: the refresh now targets the `dag_run.task_instances` relationship (upstream `tests_common`'s shape) and pins every refreshed instance on the persistence record. Previously the refresh targeted a transient query result the session's weak identity map dropped at the next garbage collection -- and the relationship collection alone still died at the `session.expire_all()` every task execution performs -- so later lookups rehydrated fresh rows with `ti.task = None`.
+  ([#259](https://github.com/nredd/pytest-airflow-in-a-box/issues/259)).
+- `create_task_instance(execution_date=...)` -- the Airflow 2 spelling 2.x-era upstream suites use -- no longer leaks into the authoring `DAG` constructor as a `TypeError`; it maps onto `logical_date` with a `DeprecationWarning`, exactly as upstream `tests_common` preserves it, and passing both spellings raises `ValueError`.
+  ([#261](https://github.com/nredd/pytest-airflow-in-a-box/issues/261)).
+- Roll back a borrowed `dag_maker(session=...)` session before teardown cleanup opens its fresh session, releasing any uncommitted write transaction. A test that flushed on the borrowed session without committing used to leave its SQLite connection idle in a write transaction across `dag_maker`'s finalizer, so cleanup's own deletes blocked for the full `busy_timeout` and then failed deterministically with `DagCleanupError` (`database is locked`).
+  ([#263](https://github.com/nredd/pytest-airflow-in-a-box/issues/263)).
+- `dag_maker` fixture teardown now clears DagRuns Airflow itself created for the
+  fixture's Dag outside the fixture -- `dag.test()`'s manual run and the Backfill
+  machinery's runs -- so their task instances no longer fail the `dag_version` delete
+  with `sqlite3.IntegrityError: FOREIGN KEY constraint failed`
+  (issue #266; `task_instance.dag_version_id` is the one `ondelete="RESTRICT"` foreign
+  key into `dag_version`; sibling of the backfill-row fix from #258; Airflow 3.x only,
+  where Dag versions exist).
+  ([#266](https://github.com/nredd/pytest-airflow-in-a-box/issues/266)).
+- Scope \`test_cleanup_dag_clears_a_referencing_backfill_dag_run\`'s leftover-row assertions to the test's own \`dag_id\`/run id so concurrent xdist workers' backfill rows no longer flake it ([#275](https://github.com/nredd/pytest-airflow-in-a-box/issues/275)).
+  ([#275](https://github.com/nredd/pytest-airflow-in-a-box/issues/275)).
+
 ## [0.11.0] - 2026-08-23
 
 ### Added

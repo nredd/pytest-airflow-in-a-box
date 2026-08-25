@@ -1,1 +1,0 @@
-Vendor Matt Pocock's engineering and productivity agent skills (MIT) into `skills/mattpocock/`, alongside this project's own `skills/redd/get-it-merged` and `skills/redd/ship-issue`, with `.claude/skills/` and `.agents/skills/` symlinking into it so every clone of the repo has these skills available without a global install.

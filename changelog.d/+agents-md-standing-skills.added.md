@@ -1,1 +1,0 @@
-Name standing agent skills (`tdd`, `codebase-design`, `diagnosing-bugs`, `code-review`, `ship-issue`) in `AGENTS.md`'s Agent skills section, with a delegation rule to name the applicable skill explicitly when spawning a subagent.

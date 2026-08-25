@@ -1,1 +1,0 @@
-Add the `get-it-merged` agent skill: land parallel PRs as a serialized merge train under strict required status checks, running CI only on the head-of-train and canceling runs that a later rebase would invalidate.
