@@ -15,6 +15,7 @@ from pytest_airflow_in_a_box._compat.dag import UNSET, UnsetType
 from pytest_airflow_in_a_box._compat.taskrun import DEFAULT_TRIGGER_TIMEOUT
 from pytest_airflow_in_a_box.config import ConfigOverrides, EnvOverrides
 from pytest_airflow_in_a_box.dagcorpus import CorpusDag, CorpusDagFileStat, CorpusTask, DagCorpus
+from pytest_airflow_in_a_box.logging import StructlogCapture
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -1047,6 +1048,7 @@ __all__ = (
     "RunTask",
     "SchedulerTimetable",
     "SerializedDag",
+    "StructlogCapture",
     "TaskContext",
     "TaskContextHandle",
     "TaskRunResult",
