@@ -1,12 +1,16 @@
 # Vision
 
+Status: the tree in section 8 is implemented. Sections 8 and 9 are the record of what
+changed and why, so they name paths as they were before the move. `internals/` and
+`why/` pages own every mechanism detail; this page does not restate their numbers.
+
 ## 1. Thesis
 
 > Your Dag files import cleanly and your callables pass -- this proves the seams between them work, in the repo's own CI, with no scheduler, no webserver, and no `~/airflow`.
 
 Everything between "the file parses" and "the function returns the right value" is currently untested in most Dag repos: trigger rules, branch skips, cross-Dag asset triggering, `depends_on_past`, rendered templates, `conn_id` resolution, serialization of your own operator's constructor args. Those failures are DagRun-shaped, so they surface at 03:00 on a scheduler you cannot attach a debugger to. This plugin moves them left into `pytest`.
 
-The moat is *timing*. Bootstrap runs from `pytest_load_initial_conftests`; pytest's own conftest collector is `trylast`. A consumer `conftest.py` structurally cannot win that race, so it cannot set `AIRFLOW_HOME`, the Airflow cfg, or ini-driven Airflow config before the first Airflow import. Every downstream capability -- `_compat/` absorbing ~45 private Airflow modules across 3.1-3.3, `run_task` driving the real Task SDK runner instead of a MagicMock `ti`, `cap_structlog` catching the Airflow 3 case where `caplog` returns empty -- depends on owning that slot.
+The moat is *timing*. Bootstrap runs from `pytest_load_initial_conftests`; pytest's own conftest collector is `trylast`. A consumer `conftest.py` structurally cannot win that race, so it cannot set `AIRFLOW_HOME`, the Airflow cfg, or ini-driven Airflow config before the first Airflow import. Every downstream capability -- `_compat/` absorbing the private Airflow surface across 3.1-3.3, `run_task` driving the real Task SDK runner instead of a MagicMock `ti`, `cap_structlog` catching the Airflow 3 case where `caplog` returns empty -- depends on owning that slot.
 
 ## 2. Who it is for
 
@@ -90,7 +94,7 @@ Everything else is optional. These are why anyone types `uv add --dev`.
 2. **Persisted execution** -- `dag_maker` / `run_dag` / `run_ti`. Real DagRun, real states, real XComs, real task relations. The product
 3. **DB-free execution** -- `run_task` / `render_task` / `task_context`. Real Task SDK runner over four private Task SDK modules including `_generated`. The fast inner rung
 4. **Corpus smoke checks** -- `--airflow-smoke`. Facts no per-Dag test and no text linter can phrase
-5. **`_compat/` version shielding** -- 12.5k lines absorbing ~45 private Airflow modules across 3.1-3.3, gated by capability probes. Invisible, and the only reason 1-4 survive a minor bump
+5. **`_compat/` version shielding** -- 12.5k lines absorbing the private Airflow surface across 3.1-3.3, gated by capability probes. `internals/compat-layer.md` owns the module count; do not restate it here. Invisible, and the only reason 1-4 survive a minor bump
 
 Core does not mean unblemished. Four core units have weak spots the rewrites must state, not hide:
 

@@ -1,113 +1,73 @@
 # pytest-airflow-in-a-box
 
-`pytest-airflow-in-a-box` is a pytest plugin for testing Apache Airflow DAGs without a live
-Airflow deployment. It provides the package + plugin foundation for a small, typed testing
-surface. It primarily targets Airflow 3 but maintains a certified Airflow 2.7-2.11
-compatibility tier.
+Your Dag files import cleanly and your callables pass. That proves neither that the *seams*
+between them work.
 
-It is for testing the Airflow code you wrote -- your Dags, plus the custom operators, hooks,
-sensors, decorators, and connection types they lean on -- rather than Airflow's own machinery.
-See [What to test](guide/testing-scope.md) for where that line falls.
+Trigger rules, branch skips, rendered templates, `conn_id` resolution, serialization of your
+own operator's constructor args -- those failures are DagRun-shaped, so they surface at 03:00
+on a scheduler you cannot attach a debugger to. This plugin moves them into `pytest`, in your
+repo's own CI, with no scheduler, no webserver, and no `~/airflow`.
 
-The package auto-registers with pytest, creates an isolated metadata database, and provides typed
-fixtures for persisted Dags, DagRuns, task instances, sessions, and Dag bags.
+Who this is for:
 
-## Requirements
+- A team owning a `dags/` repo on Airflow 3, deployed by someone else -- MWAA, Composer,
+  Astro, self-hosted. You do not run the scheduler
+- You write your own `BaseOperator` subclasses, hooks, sensors, `@task` decorators, and
+  connection types. That is the load-bearing qualifier. A repo that is 100% stock operators
+  does not need this
 
-- CPython 3.10 through 3.14
-- pytest 8 or newer
-- Apache Airflow 3.1 or newer, below 4 -- or Airflow 2.7 or newer, below 3, on the
-  certified 2.x compatibility tier
-- Linux or macOS for Airflow-backed tests
+Already have a dagbag import test and `dag.test()`? See
+[what they miss](why/dagbag-callable-gap.md) and
+[why not `dag.test()`, `DebugExecutor`, or your own `conftest.py`](why/why-not.md).
 
-Apache Airflow does not support native Windows installations. Windows development should use WSL2
-or the included devcontainer; platform-independent package checks alone do not imply full Windows
-Airflow support.
+## One green test
 
-The released compatibility matrix is exercised against Airflow 3.1.0, 3.1.1, 3.1.2, 3.1.3,
-3.1.5, 3.1.6, 3.1.7, 3.1.8, 3.2.0, 3.2.1, 3.2.2, 3.3.0, and 3.3.1 across CPython 3.10 through 3.14
-using Airflow's published constraints files, plus the certified Airflow 2.x releases 2.7.3,
-2.8.4, 2.9.3, 2.10.5, and 2.11.2 -- 2.9 and later on CPython 3.10-3.12, 2.7.3 and 2.8.4 on
-CPython 3.10-3.11 -- exercised through the end-user consumer contract (Airflow 2.x never
-supported 3.13).
-
-## Installation
-
-```console
-uv add --dev "pytest-airflow-in-a-box[airflow3]"
-```
-
-The plugin does not depend on Airflow directly -- the `airflow3` extra pins
-`apache-airflow>=3.1,<4`, and projects that pin Airflow themselves (for example through
-Airflow's published constraints files) can install the plugin bare. The `airflow2` extra
-(`apache-airflow>=2.7,<3`) installs the certified Airflow 2.x compatibility tier
-([#25](https://github.com/nredd/pytest-airflow-in-a-box/issues/25)): `dag_maker`
-(including whole-DagRun execution through `dag_maker.run()`), `run_ti`, `dag_bag`,
-`run_dag`, `clear_db`, seeding, the configuration surface (`airflow_config`,
-`airflow_configure`, `airflow_home`, `airflow_dags_folder`), and the bundled
-smoke checks run on both families, while
-`run_task`, `render_task`, `task_context`, `cap_structlog`, the REST API fixtures, and
-`run_dag(executor=...)` fail on 2.x with actionable errors naming the 2.x alternative.
-Driving a DagRun through an executor is AIP-72 machinery -- workloads, the Task Execution
-API -- that Airflow 2.x simply does not have.
-
-The `pytest11` entry point loads the plugin automatically. Consumer projects do not need to add a
-`pytest_plugins` declaration.
-
-`pytest-timeout` is an intentional runtime dependency: it backs up Airflow's per-file Dag parse
-watchdog with a corpus-scaled deadline on every bundled smoke item, so whichever worker produces
-the shared corpus cannot wedge the test session outside the per-file parser boundary.
-
-`pytest-xdist` is not required to use the plugin -- controller bootstrap state and worker-scoped
-artifacts are coordinated whenever xdist happens to be running, but nothing in the plugin imports
-it directly. Install the `xdist` extra to opt into parallel runs:
-`pip install "pytest-airflow-in-a-box[xdist]"`.
-
-The plugin is inert on runs without Airflow-facing tests: session startup only prepares a
-disposable run directory and `AIRFLOW__*` environment variables. Airflow itself is imported and
-the metadata database migrated lazily, on the first test that carries a `db_test`/`api_test`
-marker or uses a database-backed plugin fixture. A `pytest -k unrelated` run in a shared venv
-never pays the Airflow import or migration cost. Tests that touch the metadata database directly
-(their own `create_session` calls, for example) without a plugin fixture must carry `db_test` to
-trigger initialization.
-
-To disable the plugin entirely for a run:
-
-```console
-pytest -p no:pytest_airflow_in_a_box
-```
-
-## Quickstart
-
-Point the plugin at your repo's `dags/` folder and run a real Dag end to end:
+A branch skip is invisible to both halves of the usual suite: the file parses, every callable
+returns the right value, and `load` still runs when it should not have.
 
 ```python
-def test_my_dag(dag_bag, run_dag):
-    dag = dag_bag.dags["my_dag_id"]
+from airflow.sdk import task
 
-    result = run_dag(dag)
+from pytest_airflow_in_a_box.matchers import skipped
+
+
+def test_branch_skips_the_unselected_path(dag_maker):
+    with dag_maker(dag_id="branching"):
+
+        @task.branch
+        def choose() -> str:
+            return "chosen"
+
+        @task
+        def chosen() -> None: ...
+
+        @task
+        def rejected() -> None: ...
+
+        choose() >> [chosen(), rejected()]
+
+    result = dag_maker.run()
 
     assert result.success
-    assert result.order == ["extract", "load"]
+    assert result.order == ["choose", "chosen"]
+    assert result["rejected"] == skipped()
 ```
 
-```console
-pytest --dag-folder=dags
-```
+`result.order` is what *actually* executed, not graph topology. `dag.test()` cannot phrase
+either assertion: it clears task instances and swallows task exceptions, so the call itself
+never fails and you are left fishing state out of the returned `DagRun` -- see [why not
+`dag.test()`](why/why-not.md).
 
-`run_dag()` returns the same inert `DagRunResult` snapshot as `dag_maker.run()` does for a Dag
-authored directly in the test -- see [Task execution](guide/task-execution.md) for both paths,
-including the "testing a Dag defined elsewhere" walkthrough.
+## Start here
 
-## Where to go next
-
-- [What to test](guide/testing-scope.md) -- your Dags and custom components, not Airflow's
-  own machinery
-- [Task execution](guide/task-execution.md), including the `dag_maker` and `run_dag` fixtures
-- [Database backends](guide/database.md) -- SQLite by default, Postgres on request
-- [The isolated `AIRFLOW_HOME`](guide/airflow-home.md) -- where it lands, and how to keep it
-- [Markers](reference/markers.md) for a quick index of everything the plugin registers
-- [Development](development.md) to build the plugin itself
+- [Quickstart](quickstart.md) -- three rungs, one page
+- [Installing the plugin](install.md), then
+  [supported versions](compatibility.md)
+- [The fidelity ladder](guide/ladder.md) -- how much realism a test needs, and what each rung
+  costs
+- [Deciding which failures are yours](guide/testing-scope.md) -- where the line falls
+- [Fixtures](reference/fixtures.md) and [diagnosing a run](reference/diagnostics.md)
+- Upgrading off Airflow 2? [Start here](guide/migration/index.md)
 
 ## License
 

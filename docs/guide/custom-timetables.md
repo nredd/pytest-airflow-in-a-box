@@ -41,7 +41,7 @@ and `decode_timetable` raises `TimetableNotRegistered` on every release. In prod
 that lookup works because your deployment ships an `AirflowPlugin` listing the class in
 its `timetables` attribute; in a test process nothing has loaded any such plugin.
 
-The [`airflow_components`](custom-components.md#runtime-component-registration)
+The [`airflow_components`](custom-components-wiring.md#runtime-component-registration)
 registry closes that gap without you writing a plugin at all -- it synthesizes a
 throwaway `AirflowPlugin` carrying the class, registers it into the live plugins
 manager, and reverts everything when the test finishes:
