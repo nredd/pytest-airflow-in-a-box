@@ -45,6 +45,15 @@ worker's live row, so the guard stays loud there.
 The window already exists for `dag_maker(dag_id="fixed")` with an explicit pinned id. `run_dag`
 just makes a fixed real `dag_id` the only mode, which is why it is called out here.
 
+What cleanup will *not* do, since it is the obvious next worry: it never deletes a row by
+primary key alone. Airflow's `dag_run.id` is a plain `Integer` primary key with no
+`sqlite_autoincrement`, so on SQLite it is a rowid alias and the value is reused as soon as
+the highest row is deleted -- on a database every worker shares, an id one test owned can
+name another worker's live run by the time teardown runs. Per-Dag cleanup therefore
+re-checks `dag_id` on every run it deletes, and seeded Variables and Connections are matched
+on their `key`/`conn_id` as well as their id. Distinct identifiers are still yours to pick;
+this only guarantees that *unrelated* tests cannot delete each other.
+
 ## Executor-driven runs
 
 Everything above runs your task bodies in the pytest process. Pass `executor=` to run them

@@ -417,6 +417,63 @@ def test_cleanup_failure_still_closes_the_session(monkeypatch: pytest.MonkeyPatc
     assert connection.closed
 
 
+def test_cleanup_leaves_a_foreign_variable_sharing_an_owned_id(
+    airflow_variables: AirflowVariables,
+) -> None:
+    """Skip an owned Variable id whose row now carries another seed's `key`.
+
+    Regression test for issue #325: `variable.id` is a plain `Integer` primary key
+    with no `sqlite_autoincrement`, so on SQLite it is a rowid alias whose value is
+    reused once the highest row is deleted, and every xdist worker shares one metadata
+    database. Deleting by bare primary key therefore took another worker's live seed.
+    """
+
+    airflow_variables({"seed_pk_reuse_bystander": "value"})
+    with create_session() as session:
+        bystander_id = session.scalar(
+            select(Variable.id).where(Variable.key == "seed_pk_reuse_bystander")
+        )
+    assert bystander_id is not None
+
+    record = compat_seed.SeedRecord(
+        session=compat_seed.open_seed_session("Variables"), kind="Variables"
+    )
+    # The reused id: this record inserted it, another seed's row carries it now.
+    record.variable_ids.add(bystander_id)
+    record.variable_keys.add("seed_pk_reuse_owner")
+
+    compat_seed.cleanup_seeds(record)
+
+    assert _row_count(Variable, Variable.key, "seed_pk_reuse_bystander") == 1
+
+
+def test_cleanup_leaves_a_foreign_connection_sharing_an_owned_id(
+    airflow_connections: AirflowConnections,
+) -> None:
+    """Skip an owned Connection id whose row now carries another seed's `conn_id`.
+
+    The `Connection` half of issue #325 -- `connection.id` has the same reusable
+    `Integer` primary key as `variable.id`.
+    """
+
+    airflow_connections({"seed_pk_reuse_bystander_conn": {"host": "localhost"}})
+    with create_session() as session:
+        bystander_id = session.scalar(
+            select(Connection.id).where(Connection.conn_id == "seed_pk_reuse_bystander_conn")
+        )
+    assert bystander_id is not None
+
+    record = compat_seed.SeedRecord(
+        session=compat_seed.open_seed_session("Connections"), kind="Connections"
+    )
+    record.connection_ids.add(bystander_id)
+    record.connection_conn_ids.add("seed_pk_reuse_owner_conn")
+
+    compat_seed.cleanup_seeds(record)
+
+    assert _row_count(Connection, Connection.conn_id, "seed_pk_reuse_bystander_conn") == 1
+
+
 def test_cleanup_of_an_unused_record_closes_without_writing() -> None:
     """Skip every delete when the fixture committed nothing."""
 

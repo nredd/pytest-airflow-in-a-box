@@ -40,19 +40,34 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_nested_pytest_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate_nested_pytest_environment(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Prevent an outer xdist worker identity from leaking into pytester subprocesses.
 
     Every ``runpytest_subprocess`` child inherits this process's environment. When
     the outer suite itself runs under xdist, an inherited worker identity plus
     bootstrap state would make nested sessions reuse the outer session's Airflow
-    root instead of bootstrapping their own, so every test starts clean and the
+    root instead of bootstrapping their own, so a `pytester` test starts clean and the
     tests that assert inherited-state behavior set these variables explicitly.
 
+    Scoped to `pytester` consumers on purpose, NOT applied globally. The plugin reads
+    ``PYTEST_XDIST_WORKER`` from the live environment at call time, so a blanket scrub
+    silently disables the worker-keyed behaviour this suite exists to test: on a
+    worker, ``ensure_dag_registrable`` would take the serial purge path instead of
+    refusing a colliding ``dag_id``, and ``dag_maker``'s auto-generated ids would lose
+    their worker suffix and stop being unique across workers. Tests that want the
+    serial path on a worker say so themselves with their own ``delenv``.
+
     Parameters:
+        request: pytest.FixtureRequest whose fixture closure decides whether a nested
+            session can be spawned at all.
         monkeypatch: pytest.MonkeyPatch restoring the environment after each test.
     """
 
+    if "pytester" not in request.fixturenames:
+        return
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.delenv(ISOLATED_WORKER_ENVIRONMENT_VARIABLE, raising=False)

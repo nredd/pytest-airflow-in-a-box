@@ -1442,24 +1442,36 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
         ti.refresh_from_task(task, dag_run=dag_run)
 
 
-def _delete_dag_run_rows(session: Session, run_ids: set[int]) -> None:
-    """ORM-delete DagRun rows by primary key, flushing once at the end.
+def _delete_dag_run_rows(session: Session, run_ids: set[int], dag_id: str) -> None:
+    """ORM-delete one Dag's DagRun rows by primary key, flushing once at the end.
 
     ORM deletion (not a core ``DELETE``) is deliberate: it cascades each run's
     task-instance rows through the ``DagRun.task_instances`` relationship, exactly
-    like Airflow's own teardown paths. Absent rows are skipped so cleanup stays
-    idempotent after a failed operation.
+    like Airflow's own teardown paths.
+
+    A primary key alone is NOT sufficient identity here, which is why ``dag_id`` is
+    re-checked on every fetched row (issue #325). ``dag_run.id`` is a plain
+    ``Integer`` primary key with no ``sqlite_autoincrement``, so on SQLite it is a
+    rowid alias and the value is reused the moment the highest row is deleted --
+    Airflow guards exactly this on three asset tables with
+    ``{"sqlite_autoincrement": True}`` ("ensures PK values not reused") and does not
+    guard ``dag_run``. Every xdist worker shares one metadata database, so an absent
+    id does not stay absent: by teardown it can name another Dag's live run, and
+    deleting it cascades that run's task instances away. Rows that are absent, or
+    that now carry a different ``dag_id``, are both skipped -- which also keeps
+    cleanup idempotent after a failed operation.
 
     Parameters:
         session: sqlalchemy.orm.Session used for the deletes; not committed here.
         run_ids: set[int] containing DagRun primary keys to delete.
+        dag_id: str every deleted row must still carry.
     """
 
     from airflow.models.dagrun import DagRun
 
     for run_id in sorted(run_ids):
         dag_run = session.get(DagRun, run_id)
-        if dag_run is not None:
+        if dag_run is not None and str(dag_run.dag_id) == dag_id:
             session.delete(dag_run)
     session.flush()
 
@@ -1483,11 +1495,19 @@ def _delete_dag_runs(session: Session, dag_id: str, owned_run_ids: set[int]) -> 
     just their join rows) so a fixture-owned Dag leaves no backfill metadata behind,
     matching ``clear_db``'s ``backfill`` group.
 
+    ``owned_run_ids`` is a cross-check, NOT an addition to the deletion set. It used
+    to be unioned in on the reasoning that a fixture-owned run might no longer carry
+    ``dag_id``, but a bare primary key is not a stable identity on this database
+    (issue #325, see ``_delete_dag_run_rows``): under SQLite rowid reuse plus one
+    metadata database shared by every xdist worker, an owned id the sweep no longer
+    returns names another worker's live run at least as often as it names a drifted
+    row of ours. Owned ids the sweep misses are logged and left alone.
+
     Parameters:
         session: sqlalchemy.orm.Session used for the deletes; not committed here.
         dag_id: str identifying the Dag whose runs are swept.
-        owned_run_ids: set[int] containing fixture-owned DagRun primary keys to
-            delete even when their rows no longer carry ``dag_id``.
+        owned_run_ids: set[int] containing fixture-owned DagRun primary keys, used
+            only to report ids the ``dag_id`` sweep no longer returns.
     """
 
     from airflow.models.backfill import Backfill, BackfillDagRun
@@ -1495,14 +1515,19 @@ def _delete_dag_runs(session: Session, dag_id: str, owned_run_ids: set[int]) -> 
     from sqlalchemy import delete, select
 
     run_ids = set(session.scalars(select(DagRun.id).where(DagRun.dag_id == dag_id)))
-    run_ids |= owned_run_ids
+    unswept = owned_run_ids - run_ids
+    if unswept:
+        LOGGER.debug(
+            f"Leaving {len(unswept)} DagRun id(s) once owned by Dag '{dag_id}' that the "
+            f"dag_id sweep no longer returns: {sorted(unswept)}"
+        )
     backfill_ids = list(session.scalars(select(Backfill.id).where(Backfill.dag_id == dag_id)))
     session.execute(
         delete(BackfillDagRun).where(
             BackfillDagRun.dag_run_id.in_(run_ids) | BackfillDagRun.backfill_id.in_(backfill_ids)
         )
     )
-    _delete_dag_run_rows(session, run_ids)
+    _delete_dag_run_rows(session, run_ids, dag_id)
     if backfill_ids:
         session.execute(delete(Backfill).where(Backfill.id.in_(backfill_ids)))
 
@@ -1527,7 +1552,7 @@ def _cleanup_dag(record: DagPersistenceRecord) -> None:
     if _is_v2():
         # 2.x predates DagVersion and Backfill rows, so nothing outside the
         # fixture-owned runs can block the deletes below.
-        _delete_dag_run_rows(session, record.dag_run_ids)
+        _delete_dag_run_rows(session, record.dag_run_ids, record.dag_id)
         # 2.x has no DagVersion/bundle rows; serialized rows key on `dag_id`. The
         # `dag_code` row -- keyed on `fileloc` and shared by every Dag in one source
         # file -- is deliberately left in place: deleting it would re-arm issue #157's

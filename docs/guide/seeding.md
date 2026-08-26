@@ -47,6 +47,12 @@ database and the `conn_id` in the test's operator cannot be renamed per worker, 
 seeding the same name concurrently collide. Give each test unique identifiers, or group
 colliding tests onto one worker with `@pytest.mark.xdist_group`.
 
+Teardown, on the other hand, is safe under distinct names. `variable.id` and `connection.id`
+are plain `Integer` primary keys with no `sqlite_autoincrement`, so SQLite reuses the value
+once the highest row is deleted -- deleting seeded rows by id alone would take another
+worker's live seed. Cleanup matches the `key`/`conn_id` as well as the id, so a reused
+primary key misses instead of deleting a stranger's row.
+
 ## Lookups that run at Dag parse time
 
 A `Variable.get()` at Dag *top level* runs while the file is imported, not while a task

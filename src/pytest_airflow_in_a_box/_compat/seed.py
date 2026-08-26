@@ -63,17 +63,31 @@ class SeedCleanupError(RuntimeError):
 class SeedRecord:
     """Track the metadata rows one seeding fixture owns for one test.
 
+    Primary keys alone are not a stable identity on this database, so the natural key
+    is recorded alongside every id (issue #325). ``variable.id`` and ``connection.id``
+    are plain ``Integer`` primary keys with no ``sqlite_autoincrement``, so on SQLite
+    they are rowid aliases whose values are reused once the highest row is deleted --
+    Airflow guards exactly this on three asset tables with
+    ``{"sqlite_autoincrement": True}`` ("ensures PK values not reused") and guards
+    neither of these. Every xdist worker shares one metadata database, so cleanup that
+    deletes by bare primary key can take another worker's live seed.
+
     Parameters:
         session: sqlalchemy.orm.Session writing and removing owned rows.
         kind: str naming the seeded entity for failure diagnostics.
         variable_ids: set[int] containing owned ``variable`` primary keys.
         connection_ids: set[int] containing owned ``connection`` primary keys.
+        variable_keys: set[str] containing the owned Variables' ``key`` values.
+        connection_conn_ids: set[str] containing the owned Connections' ``conn_id``
+            values.
     """
 
     session: Session
     kind: str
     variable_ids: set[int] = field(default_factory=set)
     connection_ids: set[int] = field(default_factory=set)
+    variable_keys: set[str] = field(default_factory=set)
+    connection_conn_ids: set[str] = field(default_factory=set)
 
 
 def open_seed_session(kind: str) -> Session:
@@ -303,13 +317,25 @@ def _reject_existing_rows(record: SeedRecord, column: Any, keys: list[str]) -> N
         )
 
 
-def _persist(record: SeedRecord, rows: list[Any], owned: set[int]) -> None:
-    """Commit one batch of owned rows and record their primary keys.
+def _persist(
+    record: SeedRecord,
+    rows: list[Any],
+    owned: set[int],
+    owned_keys: set[str],
+    key_attribute: str,
+) -> None:
+    """Commit one batch of owned rows and record their primary keys and natural keys.
+
+    Both identities are recorded because cleanup predicates on both: a primary key on
+    its own can name another worker's row after SQLite reuses it (issue #325, see
+    ``SeedRecord``).
 
     Parameters:
         record: SeedRecord receiving the committed primary keys.
         rows: list[Any] containing unsaved Airflow model instances.
         owned: set[int] receiving the committed primary keys.
+        owned_keys: set[str] receiving the committed natural keys.
+        key_attribute: str naming the model attribute holding the natural key.
 
     Raises:
         SeedPersistenceError: The batch cannot be committed.
@@ -320,6 +346,7 @@ def _persist(record: SeedRecord, rows: list[Any], owned: set[int]) -> None:
         session.add_all(rows)
         session.flush()
         owned.update(row.id for row in rows)
+        owned_keys.update(str(getattr(row, key_attribute)) for row in rows)
         session.commit()
     except Exception as error:
         session.rollback()
@@ -350,7 +377,7 @@ def seed_variables(record: SeedRecord, variables: dict[str, str]) -> None:
 
     _reject_existing_rows(record, Variable.key, list(variables))
     rows = [Variable(key=key, val=value) for key, value in variables.items()]
-    _persist(record, rows, record.variable_ids)
+    _persist(record, rows, record.variable_ids, record.variable_keys, "key")
 
 
 def seed_connections(record: SeedRecord, connections: dict[str, dict[str, Any]]) -> None:
@@ -373,7 +400,7 @@ def seed_connections(record: SeedRecord, connections: dict[str, dict[str, Any]])
 
     _reject_existing_rows(record, Connection.conn_id, list(connections))
     rows = [Connection(conn_id=conn_id, **fields) for conn_id, fields in connections.items()]
-    _persist(record, rows, record.connection_ids)
+    _persist(record, rows, record.connection_ids, record.connection_conn_ids, "conn_id")
 
 
 def cleanup_seeds(record: SeedRecord) -> None:
@@ -398,7 +425,12 @@ def cleanup_seeds(record: SeedRecord) -> None:
 
 
 def _cleanup_seeds(record: SeedRecord) -> None:
-    """Delete only the primary keys this record inserted.
+    """Delete only the rows this record inserted, matched on id AND natural key.
+
+    The natural key is not redundant with the primary key here (issue #325): SQLite
+    reuses a deleted rowid, and every xdist worker shares one metadata database, so an
+    id this record inserted can name another worker's live row by teardown. Requiring
+    both identities makes a reused id miss rather than delete a stranger's seed.
 
     Parameters:
         record: SeedRecord identifying fixture-owned rows.
@@ -415,9 +447,19 @@ def _cleanup_seeds(record: SeedRecord) -> None:
     session = record.session
     session.rollback()
     if record.variable_ids:
-        session.execute(delete(Variable).where(Variable.id.in_(record.variable_ids)))
+        session.execute(
+            delete(Variable).where(
+                Variable.id.in_(record.variable_ids),
+                Variable.key.in_(record.variable_keys),
+            )
+        )
     if record.connection_ids:
-        session.execute(delete(Connection).where(Connection.id.in_(record.connection_ids)))
+        session.execute(
+            delete(Connection).where(
+                Connection.id.in_(record.connection_ids),
+                Connection.conn_id.in_(record.connection_conn_ids),
+            )
+        )
     session.commit()
 
 
