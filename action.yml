@@ -1,7 +1,7 @@
 name: pytest-airflow-in-a-box
 description: >-
   Provision a constraints-pinned Apache Airflow environment with
-  pytest-airflow-in-a-box installed from PyPI, for a Dag repo's own CI.
+  pytest-airflow-in-a-box from PyPI, for a Dag repo's own CI.
 author: nredd
 
 inputs:
