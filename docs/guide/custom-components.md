@@ -20,7 +20,7 @@ def test_my_timetable_conforms():
 
 Scope, because "custom component" is an overloaded phrase: this page covers the ten
 *pluggable extension kinds* Airflow discovers by registration -- timetable, listener,
-executor, XCom backend, weight strategy, notifier, secrets backend, policy, plugin,
+executor, `XCom` backend, weight strategy, notifier, secrets backend, policy, plugin,
 provider. Your own `BaseOperator` subclass, hook, sensor, or `@task` decorator is not one
 of them and has no shape to check; test those by running them, through
 [`run_task`](db-free-execution.md) or [`dag_maker`](task-execution.md).
@@ -57,7 +57,7 @@ component itself:
   makes `issubclass` against it always raise `TypeError`
 - **Listener** -- at least one `@hookimpl`-decorated method
 - **Executor** -- `BaseExecutor` subclassing
-- **XCom backend** -- `airflow.sdk.bases.xcom.BaseXCom` subclassing
+- **`XCom` backend** -- `airflow.sdk.bases.xcom.BaseXCom` subclassing
 - **Weight strategy** -- `airflow.task.priority_strategy.PriorityWeightStrategy`
   subclassing
 - **Notifier** -- `airflow.sdk.bases.notifier.BaseNotifier` subclassing
@@ -77,7 +77,7 @@ problems on 2.x.
 
 - `timetable-local-qualname` -- a timetable defined inside a function or method carries
   `<locals>` in `__qualname__`. Airflow's `find_registered_custom_timetable` matches a
-  custom timetable by qualified name, so a `<locals>` class can never match; every DagRun
+  custom timetable by qualified name, so a `<locals>` class can never match; every `DagRun`
   using it raises `TimetableNotRegistered` permanently, not just in a test
 - `timetable-missing-protocol-method` -- `infer_manual_data_interval` or
   `next_dagrun_info` is not overridden. Both default to `raise NotImplementedError()`;
@@ -122,7 +122,7 @@ timetables](custom-timetables.md).
   `sentry_integration: str`, unchanged through 3.3
 
 A clean report says the shape is sound. To find out whether the executor actually *runs*
-anything, drive a real DagRun through it with
+anything, drive a real `DagRun` through it with
 [`run_dag(dag, executor=...)`](task-execution.md#executor-driven-runs).
 
 ## A worked executor
@@ -175,7 +175,7 @@ dag_rel_path=workload.dag_rel_path, bundle_info=workload.bundle_info,
 token=workload.token, server=..., log_path=workload.log_path)` instead, resolving
 `server` from `[core] execution_api_server_url`.
 
-## XCom backend checks
+## `XCom` backend checks
 
 - `xcom-orm-deserialize-removed` -- the backend defines `orm_deserialize_value`, which
   does not exist anywhere on `BaseXCom` in Airflow 3. Nothing calls it; it ships silently

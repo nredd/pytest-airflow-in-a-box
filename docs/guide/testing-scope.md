@@ -24,9 +24,9 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
   [Task relations](../why/index.md#task-relations-trigger-rules-branching-and-cross-task-xcom)
 - Cross-Dag relations -- your producer's outlet actually triggering your consumer. See
   [Cross-Dag relations](../why/index.md#cross-dag-relations-asset-triggered-downstream-dags)
-- DagRun-to-DagRun relations -- `depends_on_past`, backfill-ish sequences, anything where run
+- `DagRun`-to-`DagRun` relations -- `depends_on_past`, backfill-ish sequences, anything where run
   N-1 conditions run N. See
-  [DagRun relations](../why/index.md#dagrun-relations-depends-on-past-and-backfill-ish-sequences)
+  [`DagRun` relations](../why/index.md#dagrun-relations-depends-on-past-and-backfill-ish-sequences)
 - Retry and failure behavior you configured -- attempt-dependent logic, `on_failure_callback`,
   the `trigger_rule` that decides whether your alert task fires
 - Rendered templates -- that *your* Jinja produces the string you expect, via

@@ -22,7 +22,7 @@ ini files and an array of strings in `pyproject.toml`.
 | `airflow_executor_timeout` | string | `300` | Seconds one task instance may take to settle during an executor-driven `run_dag` before the run fails naming the stuck instance | `--airflow-executor-timeout` |
 | `airflow_local_settings` | string | `""` | Dotted module path composed into the generated `airflow_local_settings.py` | -- |
 | `airflow_plugins_folder` | string | `""` | Directory whose entries are symlinked into the run's `plugins/` directory | -- |
-| `airflow_xcom_backend` | string | `""` | XCom backend written to `[core] xcom_backend` before the first Airflow import | -- |
+| `airflow_xcom_backend` | string | `""` | `XCom` backend written to `[core] xcom_backend` before the first Airflow import | -- |
 | `airflow_secrets_backend` | string | `""` | Secrets backend written to `[secrets] backend` before the first Airflow import | -- |
 | `airflow_secrets_backend_kwargs` | string | `""` | Secrets backend kwargs written to `[secrets] backend_kwargs` | -- |
 | `airflow_pools` | linelist | `[]` | Pools seeded before `test_pool_references_exist` runs, as `name = slots` lines | -- |

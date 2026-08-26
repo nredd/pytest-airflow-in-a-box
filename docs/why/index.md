@@ -1,6 +1,6 @@
 # The Wall
 
-## The failures that need a DagRun to exist
+## The failures that need a `DagRun` to exist
 
 Your `DagBag` has no import errors and `Callable`s pass. Your `DagRun`s are green. Your `TaskInstance`s still fail -- what the hell?
 
@@ -17,11 +17,11 @@ attach a debugger to.
 Most Dag repos have exactly two kinds of test against them: a `DagBag` import test asserting
 `import_errors == {}`, and unit tests that pull a Dag out of a `dag_bag` fixture and call
 `task_name.function(...)` directly. That proves "the Dag parses" and "the callable works".
-Everything between those two statements is untested, and it is where DagRun-shaped bugs live.
+Everything between those two statements is untested, and it is where `DagRun`-shaped bugs live.
 
 The next four sections walk one realistic `ingest` Dag seam by seam and show what the
 two-stage workflow cannot reach: task relations, cross-Dag asset triggering,
-DagRun-to-DagRun relations, and attempt-dependent logic. Every example is a real, passing
+`DagRun`-to-`DagRun` relations, and attempt-dependent logic. Every example is a real, passing
 test in `tests/enduser/test_cookbook_ingest.py` or `tests/enduser/test_cookbook_digest.py`,
 run on all 24 compatibility legs.
 
@@ -98,7 +98,7 @@ A minimal producer Dag -- `ingest`'s `notify` step, except it emits an outlet as
 second, minimal `digest` Dag scheduled on that asset. `dag_bag` can already prove a
 consumer's *schedule* is wired to the right asset, but neither that check nor a callable
 test ever sees a real `AssetEvent` or the data it carries. Run the producer for real, hand
-its `AssetEvent` to a `digest` DagRun the way the scheduler would, and let `digest`'s task
+its `AssetEvent` to a `digest` `DagRun` the way the scheduler would, and let `digest`'s task
 read it back through the real `triggering_asset_events` runtime context:
 
 ```python
@@ -160,7 +160,7 @@ To assert instead that the producer's event *causes* the consumer run to be crea
 use `evaluate_asset_schedules` -- see
 [Scheduling a consumer off a producer's outlet](../guide/cookbook.md#scheduling-a-consumer-off-a-producers-outlet).
 
-## DagRun relations: depends-on-past and backfill-ish sequences
+## `DagRun` relations: depends-on-past and backfill-ish sequences
 
 `extract` carries `depends_on_past=True`. Two sequential
 `dag_maker.create_dagrun(logical_date=...)` runs stand in for a backfill: day two's
@@ -206,7 +206,7 @@ def test_ingest_second_run_waits_on_the_first_days_extract(dag_maker) -> None:
 
 "Only page after the first failure" is a branch a callable test cannot reach: calling
 `load.function()` gives it no task instance to seed `try_number` on. `run_task(...,
-try_number=...)` needs neither a DagRun nor a real retry:
+try_number=...)` needs neither a `DagRun` nor a real retry:
 
 ```python
 from typing import Any
@@ -231,7 +231,7 @@ def test_load_only_pages_on_the_second_attempt(run_task) -> None:
 ```
 
 That is a synthetic attempt counter, not a retry -- `dag_maker.run()` never re-queues one
-(see [Whole-DagRun execution](../guide/task-execution.md#whole-dagrun-execution)). Driving a
+(see [Whole-`DagRun` execution](../guide/task-execution.md#whole-dagrun-execution)). Driving a
 real `up_for_retry` failure the rest of the way to success, and asserting `retry_delay` and
 `on_retry_callback` along the way, is the
 [retry recipe](../guide/cookbook.md#retry-behavior).
@@ -271,7 +271,7 @@ What it does, from `DAG.test` on Airflow 3:
   fail, so a bare `dag.test()` in a test body asserts nothing. You have to fish the state
   out of the returned `DagRun` yourself
 - It returns that ORM `DagRun` and nothing else. No execution order, no per-task drill-down,
-  no pulled XComs
+  no pulled `XCom`s
 
 It is also not a pytest plugin: no fixtures, no isolated `AIRFLOW_HOME`, no disposable
 metadata DB, no xdist support.
@@ -280,7 +280,7 @@ metadata DB, no xdist support.
 `workloads.ExecuteTask` onto a real executor, but nothing inside the test process serves the
 Task Execution API those supervised workers report to, so the workloads have nowhere to land
 (apache/airflow#59074). That is the gap `executor=` fills here, by standing the api-server up
-itself -- see [real DagRuns and real state](../guide/task-execution.md).
+itself -- see [real `DagRun`s and real state](../guide/task-execution.md).
 
 It is also mid-move upstream
 ([#61803](https://github.com/apache/airflow/issues/61803),

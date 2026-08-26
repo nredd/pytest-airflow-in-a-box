@@ -1,6 +1,6 @@
 # Quickstart
 
-You have a `dags/` folder, custom operators, and CI on Airflow 3. This gets you a real DagRun
+You have a `dags/` folder, custom operators, and CI on Airflow 3. This gets you a real `DagRun`
 in your suite in one file and one flag.
 
 Install first if you have not: [Installing the plugin](install.md).
@@ -72,7 +72,7 @@ from pytest_airflow_in_a_box.matchers import succeeded
 assert result == {"produce": succeeded(21), "consume": succeeded(42)}
 ```
 
-The full API: [Real DagRuns and real state](guide/task-execution.md).
+The full API: [Real `DagRun`s and real state](guide/task-execution.md).
 
 ## Catch a branch skip
 
@@ -113,7 +113,7 @@ def test_branch_skips_the_unselected_path(dag_maker):
 ## Run one operator without a database
 
 `run_task` executes a single operator in process through the Task SDK runner. No metadata DB,
-no DagRun, no migration. Airflow 3.x only:
+no `DagRun`, no migration. Airflow 3.x only:
 
 ```python
 from airflow.sdk import task

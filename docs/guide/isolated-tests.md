@@ -3,7 +3,7 @@
 Anything Airflow discovers through a setuptools entry point -- `airflow.plugins`,
 `apache_airflow_provider`, `airflow.policy` -- cannot be honestly tested in process.
 Discovery reads installed distribution metadata through a `functools.cache`d helper
-(vendored in two copies on Airflow 3.2+), and a custom XCom backend binds at module import
+(vendored in two copies on Airflow 3.2+), and a custom `XCom` backend binds at module import
 time. Monkeypatching those caches would test the patch, not your packaging.
 
 Reach for the real thing first. For a package you actually ship, installing it with
@@ -100,7 +100,7 @@ parallel one. Budget for it before scattering the marker across a suite.
 
 ## When not to reach for it
 
-Component *logic* needs none of this: a timetable's `next_dagrun_info`, an XCom backend's
+Component *logic* needs none of this: a timetable's `next_dagrun_info`, an `XCom` backend's
 `serialize_value`, or a policy callable are directly callable in process, and
 [`check_component`](custom-components.md) plus the
 [`airflow_components`](custom-components-wiring.md#runtime-component-registration)

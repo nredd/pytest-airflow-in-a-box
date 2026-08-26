@@ -43,7 +43,7 @@ carve-out in [What to test](testing-scope.md#out-of-scope).
 ## The trigger alone, no database
 
 `run_trigger` drives one trigger's async `run()` to its first `TriggerEvent` on a private event
-loop -- no triggerer job, no DagRun, no metadata database:
+loop -- no triggerer job, no `DagRun`, no metadata database:
 
 ```python
 from pytest_airflow_in_a_box.taskinstance import run_trigger

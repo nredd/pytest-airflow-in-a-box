@@ -116,7 +116,7 @@ Six more collect only once their ini option is configured, so defaults stay zero
 - `airflow_forbid_catchup = true` -- no scheduled Dag enables `catchup`, which backfills every
   missed interval the moment the Dag is unpaused; unscheduled Dags are skipped, since with no
   timetable there is nothing to backfill (`test_forbid_catchup`)
-- `airflow_forbid_unbounded_expand = true` -- no mapped task expands over runtime data (XCom
+- `airflow_forbid_unbounded_expand = true` -- no mapped task expands over runtime data (`XCom`
   or task output) without `max_active_tis_per_dag`; one oversized upstream result would
   otherwise fan out into an unbounded number of concurrent task instances. Literal expansions
   are bounded by construction and pass (`test_no_unbounded_expand`)

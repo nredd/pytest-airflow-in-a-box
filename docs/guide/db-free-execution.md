@@ -35,7 +35,7 @@ All three are pinned in `tests/fixtures/test_task_context.py`.
 ## Running one operator
 
 `run_task` executes one operator through the Task SDK in process, with no metadata database.
-XCom, Variable, and Connection traffic is answered from seeded dictionaries; unseeded lookups
+`XCom`, Variable, and Connection traffic is answered from seeded dictionaries; unseeded lookups
 fail exactly like a live deployment, with a hint naming the seeding keyword. Task callbacks and
 listeners stay silent unless the call passes `run_callbacks=True`.
 
@@ -61,7 +61,7 @@ reachable only on this rung ([the fidelity ladder](ladder.md) says why).
 
 `run_task` cannot prove anything that needs a second task or real metadata:
 
-- XCom is keyed by XCom key **alone**. There is no `task_ids`, `run_id`, or `map_index`
+- `XCom` is keyed by `XCom` key **alone**. There is no `task_ids`, `run_id`, or `map_index`
   scoping, so a green `xcom_pull` does not prove data flowed from A to B
 - Asset inlet/outlet validation is rubber-stamped: `ValidateInletsAndOutlets` always answers
   `inactive_assets=[]`, so an inactive asset never shows up here
@@ -152,7 +152,7 @@ cover.
 
 `task_context` prepares the same runner and then hands control back, so `execute()` and
 `post_execute()` can be driven by hand. Its job is the value `execute()` *returns* -- which
-`run_task` pushes to XCom and never shows you:
+`run_task` pushes to `XCom` and never shows you:
 
 ```python
 def test_operator_execute_result(task_context):

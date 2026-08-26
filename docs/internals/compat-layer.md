@@ -97,7 +97,7 @@ is compared without touching the comparison function. A mismatch fails the sessi
 
 The module is honest about what that proves, and so is this page. Only the ten fields in
 `_PROBED_FIELD_LABELS` (plus the `SerializedDAG` location) are real runtime observations that
-can contradict the certified row -- DagBag location, task-instance runner, the executor
+can contradict the certified row -- `DagBag` location, task-instance runner, the executor
 attribute contract, the SDK listener manager, and so on. The family-derived fields
 (`has_task_sdk`, `uses_structlog`, `dagrun_interface`, `api_surface`, `timezone_location`,
 `secrets_resolution`, ...) are computed from the same family on both sides, so their comparison
@@ -152,7 +152,7 @@ test survives.
 
 `_compat/taskrun.py::run_task_instance` is adapted from Airflow's own
 `devel-common/src/tests_common/test_utils/taskinstance.py`, and `_compat/asset_schedule.py`
-from the scheduler's asset-triggered DagRun creation. Both carry exact upstream commits in
+from the scheduler's asset-triggered `DagRun` creation. Both carry exact upstream commits in
 `PROVENANCE.md`, along with every Airflow source file the certified contract was read against.
 That file is the audit trail for what "certified" means on any given release.
 

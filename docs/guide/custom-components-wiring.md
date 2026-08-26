@@ -34,7 +34,7 @@ airflow_secrets_backend = tests.support.secrets.FakeSecretsBackend
 
 All five are ini-only, with no command-line flag: they are project facts, not
 per-invocation knobs. That matters most for `airflow_xcom_backend` -- Airflow's Task SDK
-resolves the configured XCom backend at MODULE IMPORT TIME
+resolves the configured `XCom` backend at MODULE IMPORT TIME
 (`airflow.sdk.execution_time.xcom`, imported transitively by every Dag through
 `airflow.sdk.definitions.xcom_arg`), so a per-test override would be a lie. A run-wide ini
 applied before Airflow imports at all is the only honest version, which is why all five

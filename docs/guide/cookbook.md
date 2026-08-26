@@ -13,7 +13,7 @@ cannot reach -- read [What a `DagBag` test and a callable test miss](../why/inde
 
 `evaluate_asset_schedules` does, without a scheduler, what the scheduler loop does once a
 producer task's outlet events are persisted: check whether a consumer Dag's asset condition
-is satisfied and create its `QUEUED` DagRun with the satisfying events attached. It is the
+is satisfied and create its `QUEUED` `DagRun` with the satisfying events attached. It is the
 only way to assert that your producer actually *triggers* your consumer, rather than that the
 consumer's `schedule=` mentions the right asset.
 
@@ -52,7 +52,7 @@ Signature and scope:
 - Returns `tuple[DagRun, ...]`, one entry per consumer whose condition was satisfied, in
   evaluation order. An unsatisfied condition contributes no entry -- an empty tuple is the
   assertion for "not yet triggered"
-- The DagRun comes back unrun. Pass it to
+- The `DagRun` comes back unrun. Pass it to
   `pytest_airflow_in_a_box.taskinstance.execute_dag_run` to run the consumer too
 - `dag_ids=None` sweeps every Dag with a pending queue row database-wide. That is serial-only
   for the same reason [`clear_db`](../internals/test-environments.md#the-disposable-metadata-database) is: another xdist worker's pending rows are
@@ -156,7 +156,7 @@ def test_hook_is_mocked(run_task):
 ## Asserting rendered templates
 
 Run the task, then read its rendered fields back from Airflow's `RenderedTaskInstanceFields`
-table instead of the operator's XCom output. The Airflow 2.x idiom
+table instead of the operator's `XCom` output. The Airflow 2.x idiom
 (`ti.get_template_context()` + `ti.render_templates()` on the ORM `TaskInstance`) does not
 carry over -- template rendering moved into the Task SDK's execution-time
 `RuntimeTaskInstance`, which this table is populated from. `MyOperator` must declare `query`

@@ -6,7 +6,7 @@ suite runs on, living in
 and never published to PyPI. This page is the call-site parity contract: which keywords route
 where, which upstream calls need a one-line rewrite, and every place this plugin differs on
 purpose. Everyday Dag testing does not need it -- start at
-[Real DagRuns and real state](../guide/task-execution.md).
+[Real `DagRun`s and real state](../guide/task-execution.md).
 
 ## Upstream harness keywords
 
@@ -74,7 +74,7 @@ def test_scheduler_state(dag_maker):
 - `sync_dagbag_to_db()` mirrors upstream's mutate-then-resync shape: re-persists the current
   authoring Dag, refreshes `serialized_dag`, and returns it. It commits the metadata session
   (on a borrowed `session=` that includes anything the caller had staged, exactly like
-  persistence at context exit). On 3.x a resync may record a new DagVersion; DagRuns created
+  persistence at context exit). On 3.x a resync may record a new `DagVersion`; `DagRun`s created
   before the resync keep their original version. Works on the certified 2.x family too, through
   that family's writers
 - `timetable` returns the persisted scheduler Dag's timetable (typed as the structural
@@ -121,7 +121,7 @@ def test_one_call(create_task_instance):
     assert ti.pool == "default_pool"
 ```
 
-Both are composition over `dag_maker`: the Dag, DagRun, and task-instance rows are owned and
+Both are composition over `dag_maker`: the Dag, `DagRun`, and task-instance rows are owned and
 cleaned up exactly as `dag_maker`'s are, and `**dag_kwargs` (including `serialized=`) route to
 `dag_maker` unchanged. `testing_dag_bundle` registers the shared `testing` Dag bundle row
 upstream core tests bulk-write metadata against (Airflow 3.x only).

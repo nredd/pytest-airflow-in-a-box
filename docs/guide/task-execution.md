@@ -1,7 +1,7 @@
-# Real DagRuns and real state
+# Real `DagRun`s and real state
 
-This is rung 2 and up on [the fidelity ladder](ladder.md): a real DagRun row, real task
-instances, real XComs, real state propagation. Reach for it when the assertion needs a second
+This is rung 2 and up on [the fidelity ladder](ladder.md): a real `DagRun` row, real task
+instances, real `XCom`s, real state propagation. Reach for it when the assertion needs a second
 task, an ordering, or a state that only a scheduler produces.
 
 ## Testing a Dag defined elsewhere
@@ -19,7 +19,7 @@ def test_orders_dag(dag_bag, run_dag):
     assert result["extract"].xcom == {"rows": 3}
 ```
 
-`run_dag` persists the Dag, creates a manual DagRun, executes every task instance in
+`run_dag` persists the Dag, creates a manual `DagRun`, executes every task instance in
 dependency order, and returns the same `DagRunResult` snapshot `dag_maker.run()` does (see
 below) -- keyed on the Dag's own `dag_id`, not a synthetic one, so `result.dag_id` matches what
 your real Dag declares. `--dag-folder`/`airflow_dags_folder` is a different option from
@@ -108,10 +108,10 @@ Writing an executor to test is easier than it sounds -- Airflow 3 removed `Seque
 from core, so a serial one is about fifteen lines. See
 [Custom components](custom-components.md#a-worked-executor) for the whole thing.
 
-## Whole-DagRun execution
+## Whole-`DagRun` execution
 
 For a Dag authored directly in the test, rather than loaded from your `dags/` folder,
-`dag_maker.run()` creates the DagRun (when you did not), executes every task instance in
+`dag_maker.run()` creates the `DagRun` (when you did not), executes every task instance in
 dependency order, and returns an inert `DagRunResult` snapshot:
 
 ```python
@@ -148,7 +148,7 @@ exist, and keys expand with them: `states` gains `"double[0]"`, `"double[1]"`, a
 Failure is captured the way the scheduler captures it: a raising task body lands in
 `result.errors`, blocked downstreams end as `upstream_failed`, and with default trigger rules
 `result.success` reports `False` -- testing an intentional-failure Dag needs no extra flag.
-`success` mirrors Airflow's leaf-task DagRun semantics, so a failure absorbed by an
+`success` mirrors Airflow's leaf-task `DagRun` semantics, so a failure absorbed by an
 `all_done`-style leaf still counts as `success`; assert `not result.errors` for "no task
 raised":
 
@@ -164,12 +164,12 @@ assert result.states == {
 assert isinstance(result.errors["boom"], ValueError)
 ```
 
-A deferring task settles as `deferred` (and the DagRun stays `running`) unless
+A deferring task settles as `deferred` (and the `DagRun` stays `running`) unless
 [`run_triggerer=True`](deferrable-operators.md) fires its persisted trigger inline. An explicit
 `dag_maker.create_dagrun(logical_date=...)` composes: pass it as `dag_maker.run(dag_run)`.
 
 Every task instance is attempted exactly *once* -- `retries` are never re-attempted. A
-retry-configured task that fails lands in `up_for_retry`, the DagRun stays `running`, and
+retry-configured task that fails lands in `up_for_retry`, the `DagRun` stays `running`, and
 a warning names the stranded instances; drop `retries` from Dags under test, or assert
 `up_for_retry` on purpose. Retry *classification* is reachable one rung down, through
 [`run_task(..., try_number=)`](db-free-execution.md#running-one-operator).
@@ -198,7 +198,7 @@ dating: it adopts externally-authored Dags whose `start_date` the plugin does no
 
 ## Bulk outcome matchers
 
-`pytest_airflow_in_a_box.matchers` asserts a whole DagRun in one expression. The mapping
+`pytest_airflow_in_a_box.matchers` asserts a whole `DagRun` in one expression. The mapping
 must cover every task key, and a mismatch renders a per-task diff:
 
 ```python
@@ -239,11 +239,11 @@ def test_task(dag_maker):
     assert ti.xcom_pull(task_ids="answer", session=dag_maker.session) == 42
 ```
 
-Passing `map_index` expands a mapped task on demand; upstream-XCom mapping works after its
-producer has run in the same DagRun. Passing `run_triggerer=True` resumes a deferred task
+Passing `map_index` expands a mapped task on demand; upstream-`XCom` mapping works after its
+producer has run in the same `DagRun`. Passing `run_triggerer=True` resumes a deferred task
 inline ([deferred tasks and your own triggers](deferrable-operators.md)).
 `run_ti(session=...)` mirrors upstream `tests_common`'s routing: the supplied session is used
-for the task-execution step only, while DagRun creation and task-instance selection stay on
+for the task-execution step only, while `DagRun` creation and task-instance selection stay on
 `dag_maker.session` exactly as upstream's do.
 
 Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `execute_dag_run`,
@@ -251,7 +251,7 @@ Public task helpers live in `pytest_airflow_in_a_box.taskinstance`: `execute_dag
 `DagRunDriveError`, `TaskResolutionError`, `TriggerExecutionError`, and `ExecutorRunError`.
 `run_task_instance` resolves the executable task automatically for any `dag_maker`-persisted
 Dag, including task instances queried through a different session (e.g. the `session`
-fixture); pass `task=` only for Dags the plugin does not own -- for that whole-DagRun case use
+fixture); pass `task=` only for Dags the plugin does not own -- for that whole-`DagRun` case use
 [`run_dag`](#testing-a-dag-defined-elsewhere) directly. The `DagMaker` protocol additionally
 exposes `run`, `create_dagrun`, `create_ti`, and `run_ti`.
 

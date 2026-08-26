@@ -12,9 +12,9 @@ you are not asserting on.
 | --- | --- | --- | --- |
 | 0 | `render_task` | no | [One operator, no database](db-free-execution.md) |
 | 1 | `run_task` / `task_context` | no | [One operator, no database](db-free-execution.md) |
-| 2 | `dag_maker` + `run_ti` | yes | [Real DagRuns and real state](task-execution.md) |
-| 3 | `dag_maker.run()` / `run_dag` | yes | [Real DagRuns and real state](task-execution.md) |
-| 4 | `run_dag(..., executor=...)` | yes | [Real DagRuns and real state](task-execution.md) |
+| 2 | `dag_maker` + `run_ti` | yes | [Real `DagRun`s and real state](task-execution.md) |
+| 3 | `dag_maker.run()` / `run_dag` | yes | [Real `DagRun`s and real state](task-execution.md) |
+| 4 | `run_dag(..., executor=...)` | yes | [Real `DagRun`s and real state](task-execution.md) |
 
 ## Rung 0 -- `render_task`
 
@@ -37,7 +37,7 @@ Cannot prove: anything involving a second task or real metadata --
 
 ## Rung 2 -- `dag_maker` + `run_ti`
 
-Proves: one task instance against real metadata -- real DagRun row, real XCom table, real
+Proves: one task instance against real metadata -- real `DagRun` row, real `XCom` table, real
 mapped expansion at a given `map_index`, real deferral through a persisted `Trigger` row.
 
 Costs: a lazy DB migration on first request, plus an authored Dag in the test body.
@@ -55,7 +55,7 @@ workers running the same Dag can tear each other's metadata down. See
 [the xdist caveat](task-execution.md#testing-a-dag-defined-elsewhere).
 
 Cannot prove: retries. Every instance is attempted exactly once
-([whole-DagRun execution](task-execution.md#whole-dagrun-execution) has the consequences).
+([whole-`DagRun` execution](task-execution.md#whole-dagrun-execution) has the consequences).
 
 ## Rung 4 -- `executor=`
 

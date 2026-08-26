@@ -80,7 +80,7 @@ Typed fixtures, grouped by the job:
 | Job | Reach for |
 | --- | --- |
 | Run one operator with no database | `run_task`, `render_task`, `task_context` |
-| Run a real DagRun and assert on it | `dag_maker`, `run_dag`, `dag_bag` |
+| Run a real `DagRun` and assert on it | `dag_maker`, `run_dag`, `dag_bag` |
 | Give the run its environment | `airflow_home`, `airflow_configure`, `airflow_variables`, `airflow_connections` |
 | Assert on what a task logged | `cap_structlog` |
 | Check every Dag at once | `dag_corpus` |
@@ -100,7 +100,7 @@ Airflow 2-to-3 migration toolkit fronted by the `airflow-migration-diff` console
 The [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/) follows the reader,
 one deep link per stage:
 
-- [Why do we test?](https://nredd.github.io/pytest-airflow-in-a-box/why/) -- the failures that need a DagRun to exist
+- [Why do we test?](https://nredd.github.io/pytest-airflow-in-a-box/why/) -- the failures that need a `DagRun` to exist
 - [Whose fail is it anyway?](https://nredd.github.io/pytest-airflow-in-a-box/guide/testing-scope/) -- what earns a test
 - [The fidelity ladder](https://nredd.github.io/pytest-airflow-in-a-box/guide/ladder/) -- which rung to stand on, and what each one costs
 - [Smoke Tests](https://nredd.github.io/pytest-airflow-in-a-box/guide/smoke-tests/) -- properties of the whole corpus
