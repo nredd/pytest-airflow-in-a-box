@@ -34,9 +34,8 @@ def _config(
     forbid_variable_access: object = True,
     forbid_io: object = True,
     io_modules: object = (),
-    parse_budget_ratio: object = "10",
-    forbid_catchup: object = True,
-    forbid_unbounded_expand: object = True,
+    forbid_catchup: object = False,
+    forbid_unbounded_expand: object = False,
     disable: object = (),
     fanout: object = None,
     ini_fanout: object = False,
@@ -64,7 +63,6 @@ def _config(
             ``airflow_forbid_top_level_variable_access`` ini value.
         forbid_io: object containing the ``airflow_forbid_top_level_io`` ini value.
         io_modules: object containing the ``airflow_top_level_io_modules`` ini value.
-        parse_budget_ratio: object containing the ``airflow_dag_parse_budget_ratio`` ini value.
         forbid_catchup: object containing the ``airflow_forbid_catchup`` ini value.
         forbid_unbounded_expand: object containing the ``airflow_forbid_unbounded_expand``
             ini value.
@@ -98,7 +96,6 @@ def _config(
         "airflow_top_level_io_modules": list(io_modules)
         if isinstance(io_modules, (list, tuple))
         else io_modules,
-        "airflow_dag_parse_budget_ratio": parse_budget_ratio,
         "airflow_forbid_catchup": forbid_catchup,
         "airflow_forbid_unbounded_expand": forbid_unbounded_expand,
         "airflow_smoke_disable": list(disable) if isinstance(disable, (list, tuple)) else disable,
@@ -525,8 +522,6 @@ def test_forbid_default_owner_rejects_non_boolean() -> None:
             lambda value: _config(forbid_variable_access=value),
         ),
         (smoke._forbid_top_level_io, lambda value: _config(forbid_io=value)),
-        (smoke._forbid_catchup, lambda value: _config(forbid_catchup=value)),
-        (smoke._forbid_unbounded_expand, lambda value: _config(forbid_unbounded_expand=value)),
     ],
 )
 def test_antipattern_boolean_readers_default_on_and_read_the_ini(
@@ -536,6 +531,22 @@ def test_antipattern_boolean_readers_default_on_and_read_the_ini(
 
     assert reader(_config()) is True
     assert reader(configure(False)) is False
+    with pytest.raises(pytest.UsageError, match="must be a boolean"):
+        reader(configure("yes"))
+
+
+@pytest.mark.parametrize(
+    ("reader", "configure"),
+    [
+        (smoke._forbid_catchup, lambda value: _config(forbid_catchup=value)),
+        (smoke._forbid_unbounded_expand, lambda value: _config(forbid_unbounded_expand=value)),
+    ],
+)
+def test_policy_boolean_readers_default_off_and_read_the_ini(reader: Any, configure: Any) -> None:
+    """Return disabled by default, honor an explicit enable, and reject a non-boolean."""
+
+    assert reader(_config()) is False
+    assert reader(configure(True)) is True
     with pytest.raises(pytest.UsageError, match="must be a boolean"):
         reader(configure("yes"))
 
@@ -562,29 +573,6 @@ def test_top_level_io_modules_reject_non_list_and_empty_names() -> None:
         smoke._top_level_io_modules(_config(io_modules="requests"))
     with pytest.raises(pytest.UsageError, match="must not contain empty module names"):
         smoke._top_level_io_modules(_config(io_modules=["requests", "  "]))
-
-
-def test_dag_parse_budget_ratio_defaults_to_ten() -> None:
-    """Return the default multiplier."""
-
-    assert smoke._dag_parse_budget_ratio(_config()) == 10.0
-
-
-def test_dag_parse_budget_ratio_zero_disables_the_check() -> None:
-    """Return no ratio when the ini value is `0`."""
-
-    assert smoke._dag_parse_budget_ratio(_config(parse_budget_ratio="0")) is None
-
-
-def test_dag_parse_budget_ratio_rejects_invalid_values() -> None:
-    """Reject a non-string, an unparsable string, and a negative number."""
-
-    with pytest.raises(pytest.UsageError, match="must be a number"):
-        smoke._dag_parse_budget_ratio(_config(parse_budget_ratio=10))
-    with pytest.raises(pytest.UsageError, match="must be a number: 'fast'"):
-        smoke._dag_parse_budget_ratio(_config(parse_budget_ratio="fast"))
-    with pytest.raises(pytest.UsageError, match="must be non-negative: '-1'"):
-        smoke._dag_parse_budget_ratio(_config(parse_budget_ratio="-1"))
 
 
 def test_snapshot_dir_returns_none_when_unset() -> None:
@@ -1698,53 +1686,6 @@ def test_io_item_skips_unresolved_and_unlisted_calls(tmp_path: Path) -> None:
     smoke._run_top_level_io(context, ("requests",))
 
 
-def test_parse_budget_item_passes_trivially_below_the_minimum_corpus(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Skip the relative budget when fewer than three files parsed."""
-
-    corpus: Any = SimpleNamespace(dagbag_stats=[_stat("a.py", 30.0), _stat("b.py", 0.1)])
-    context = _context(corpus=corpus)
-
-    with caplog.at_level(logging.INFO, logger=smoke.LOGGER.name):
-        smoke._run_dag_parse_budget(context, 10.0)
-
-    assert "Skipping the parse budget" in caplog.text
-
-
-def test_parse_budget_item_fails_the_outlier_against_the_median() -> None:
-    """Fail only the file exceeding `ratio x median`, floored at one second."""
-
-    corpus: Any = SimpleNamespace(
-        dagbag_stats=[
-            _stat("fast_a.py", 0.2),
-            _stat("fast_b.py", 0.2),
-            _stat("fast_c.py", 0.2),
-            _stat("outlier.py", 6.0),
-        ]
-    )
-    context = _context(corpus=corpus)
-
-    with pytest.raises(smoke.SmokeCheckFailure) as caught:
-        smoke._run_dag_parse_budget(context, 10.0)
-
-    message = str(caught.value)
-    assert "'outlier.py' took 6.000s" in message
-    assert "2.000s budget" in message
-    assert "fast_a.py" not in message
-
-
-def test_parse_budget_item_floor_absorbs_near_zero_medians() -> None:
-    """Pass a fast corpus whose ratio-scaled threshold falls under the absolute floor."""
-
-    corpus: Any = SimpleNamespace(
-        dagbag_stats=[_stat("a.py", 0.01), _stat("b.py", 0.01), _stat("c.py", 0.5)]
-    )
-    context = _context(corpus=corpus)
-
-    smoke._run_dag_parse_budget(context, 10.0)
-
-
 def _corpus_dag(dag_id: str, *, catchup: bool, can_be_scheduled: bool) -> dagcorpus.CorpusDag:
     """Create one portable corpus Dag with the given catchup characteristics.
 
@@ -2116,19 +2057,15 @@ def test_airflow_smoke_option_enables_the_catalog(pytester: pytest.Pytester) -> 
 
     result = pytester.runpytest_subprocess("-v", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     result.stdout.fnmatch_lines(
         [
             "*::smoke::test_dag_bag_integrity PASSED*",
             "*::smoke::test_dag_serialization_roundtrip PASSED*",
-            "*::smoke::test_no_duplicate_dag_ids PASSED*",
             "*::smoke::test_schedule_sanity PASSED*",
             "*::smoke::test_pool_references_exist PASSED*",
             "*::smoke::test_no_top_level_variable_access PASSED*",
             "*::smoke::test_no_top_level_io PASSED*",
-            "*::smoke::test_dag_parse_budget PASSED*",
-            "*::smoke::test_forbid_catchup PASSED*",
-            "*::smoke::test_no_unbounded_expand PASSED*",
         ]
     )
 
@@ -2172,7 +2109,7 @@ with DAG(dag_id="counted_dag", schedule=None, tags=["team-a"]) as dag:
 
     result = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     assert counter.read_text(encoding="utf-8").count("x") == 1
 
 
@@ -2199,7 +2136,7 @@ def test_smoke_integrity_enforces_parse_timeout_after_dag_bag_parses(
 
     result = pytester.runpytest_subprocess("-v", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=10, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
     # Distinguishes "the parse itself was hard-killed by the applied timeout" (this
     # message, only possible if AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT was set before
@@ -2216,7 +2153,7 @@ def test_ini_option_enables_the_catalog(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
 
 
 def test_serialization_sampling_bounds_the_catalog(pytester: pytest.Pytester) -> None:
@@ -2230,7 +2167,7 @@ def test_serialization_sampling_bounds_the_catalog(pytester: pytest.Pytester) ->
         "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     result.stdout.fnmatch_lines(["*deterministic sample of 1 of 2 Dags (seed '0')*"])
 
 
@@ -2263,7 +2200,7 @@ def test_smoke_disable_drops_one_item_but_keeps_serializing(pytester: pytest.Pyt
         "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
     )
 
-    result.assert_outcomes(passed=9)
+    result.assert_outcomes(passed=5)
     assert "::smoke::test_schedule_sanity" not in result.stdout.str()
     result.stdout.fnmatch_lines(["*Serialized Dag*"])
 
@@ -2286,7 +2223,7 @@ def test_smoke_disable_every_serialization_item_skips_the_serializer(
         "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
     )
 
-    result.assert_outcomes(passed=8)
+    result.assert_outcomes(passed=4)
     assert "::smoke::test_dag_serialization_roundtrip" not in result.stdout.str()
     assert "::smoke::test_schedule_sanity" not in result.stdout.str()
     assert "Serialized Dag" not in result.stdout.str()
@@ -2294,7 +2231,7 @@ def test_smoke_disable_every_serialization_item_skips_the_serializer(
 
 
 def test_smoke_disable_drops_every_non_serialization_item(pytester: pytest.Pytester) -> None:
-    """Drop three non-serialization core items, keeping the serialization pair and the rest."""
+    """Drop two non-serialization core items, keeping the serialization pair and the rest."""
 
     _write_dags(pytester, valid=VALID_DAG)
     pytester.makeini(
@@ -2302,13 +2239,12 @@ def test_smoke_disable_drops_every_non_serialization_item(pytester: pytest.Pytes
         "airflow_smoke = true\n"
         "airflow_smoke_disable =\n"
         "    test_dag_bag_integrity\n"
-        "    test_no_duplicate_dag_ids\n"
         "    test_pool_references_exist\n"
     )
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=4)
 
 
 def test_smoke_disable_rejects_unknown_item_name_at_startup(pytester: pytest.Pytester) -> None:
@@ -2356,8 +2292,8 @@ def test_smoke_disable_still_validates_the_disabled_checks_own_ini(
     `SmokeCollector.collect()` calls `check.enable(config)` for every catalog entry before
     testing whether it's disabled: `enable` is also a check's only ini validation, and a
     malformed value must be rejected even when `airflow_smoke_disable` names it -- looping in
-    disabled-check order would silently accept `airflow_dag_parse_budget_ratio = -1` (or any
-    other check's bad value) as long as the check naming it never collects.
+    disabled-check order would silently accept `airflow_pools = malformed` (or any other
+    check's bad value) as long as the check naming it never collects.
     """
 
     _write_dags(pytester, valid=VALID_DAG)
@@ -2365,16 +2301,16 @@ def test_smoke_disable_still_validates_the_disabled_checks_own_ini(
         "[pytest]\n"
         "airflow_smoke = true\n"
         "airflow_smoke_disable =\n"
-        "    test_dag_parse_budget\n"
+        "    test_pool_references_exist\n"
         "    test_dag_id_pattern\n"
-        "airflow_dag_parse_budget_ratio = -1\n"
+        "airflow_pools = malformed\n"
         "airflow_dag_id_pattern = [\n"
     )
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
 
     assert result.ret != 0
-    result.stderr.fnmatch_lines(["*`airflow_dag_parse_budget_ratio` must be non-negative: '-1'*"])
+    result.stderr.fnmatch_lines(["*`airflow_pools` line must be `name = slots`: 'malformed'*"])
 
 
 def test_smoke_disable_every_known_item_empties_the_catalog(pytester: pytest.Pytester) -> None:
@@ -2399,12 +2335,10 @@ def test_smoke_disable_every_known_item_empties_the_catalog(pytester: pytest.Pyt
         "airflow_smoke_disable =\n"
         "    test_dag_bag_integrity\n"
         "    test_dag_serialization_roundtrip\n"
-        "    test_no_duplicate_dag_ids\n"
         "    test_schedule_sanity\n"
         "    test_pool_references_exist\n"
         "    test_no_top_level_variable_access\n"
         "    test_no_top_level_io\n"
-        "    test_dag_parse_budget\n"
         "    test_forbid_catchup\n"
         "    test_no_unbounded_expand\n"
         "    test_dag_id_pattern\n"
@@ -2425,20 +2359,26 @@ def test_broken_dag_fails_integrity_with_traceback(pytester: pytest.Pytester) ->
 
     result = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=5, failed=1)
     result.stdout.fnmatch_lines(
         ["*Dag file import check failed*", "*deliberately broken smoke test Dag*"]
     )
 
 
-def test_duplicate_dag_ids_fail_dedicated_item(pytester: pytest.Pytester) -> None:
-    """Fail the dedicated duplicate-id item and name both colliding files."""
+def test_duplicate_dag_ids_fail_integrity(pytester: pytest.Pytester) -> None:
+    """Fail the integrity item and name both colliding files.
+
+    There is no dedicated duplicate-id catalog entry: a duplicate `dag_id` collision
+    surfaces as an ordinary `import_errors` entry, which `test_dag_bag_integrity`
+    already reports for every file regardless of the failure's cause.
+    """
 
     _write_dags(pytester, a=DUPLICATE_A, b=DUPLICATE_B)
 
-    result = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
+    result = pytester.runpytest_subprocess("-v", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=8, failed=2)
+    result.assert_outcomes(passed=5, failed=1)
+    result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
     # DagBag file-collection order is not stable across platforms, so the message
     # names the colliding pair in either order -- assert both filelocs appear.
     report = result.stdout.str()
@@ -2460,7 +2400,7 @@ def test_slowpoke_warns_without_failing(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     result.stdout.fnmatch_lines(["*SlowDagParseWarning*"])
 
 
@@ -2472,7 +2412,7 @@ def test_timeout_crossing_fails_the_run(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-v", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=5, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
 
 
@@ -2484,12 +2424,12 @@ def test_pool_seed_option_allows_a_configured_pool_reference(pytester: pytest.Py
     unconfigured = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
-    unconfigured.assert_outcomes(passed=9, failed=1)
+    unconfigured.assert_outcomes(passed=5, failed=1)
     unconfigured.stdout.fnmatch_lines(["*references unknown pool `batch`*"])
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_pools =\n    batch = 4\n")
     configured = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
-    configured.assert_outcomes(passed=10)
+    configured.assert_outcomes(passed=6)
 
 
 def test_pool_seed_option_rejects_malformed_lines(pytester: pytest.Pytester) -> None:
@@ -2512,7 +2452,7 @@ def test_pool_seed_option_rejects_collision_with_existing_pool(pytester: pytest.
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=5, failed=1)
     result.stdout.fnmatch_lines(["*cannot seed `default_pool`*"])
 
 
@@ -2522,12 +2462,12 @@ def test_dag_id_pattern_policy_appears_only_when_configured(pytester: pytest.Pyt
     _write_dags(pytester, valid=VALID_DAG)
 
     disabled = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
-    disabled.assert_outcomes(passed=10)
+    disabled.assert_outcomes(passed=6)
     assert "test_dag_id_pattern" not in disabled.stdout.str()
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_id_pattern = ^valid_\n")
     enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags")
-    enabled.assert_outcomes(passed=11)
+    enabled.assert_outcomes(passed=7)
     enabled.stdout.fnmatch_lines(["*::smoke::test_dag_id_pattern PASSED*"])
 
 
@@ -2539,7 +2479,7 @@ def test_dag_id_pattern_policy_fails_on_mismatch(pytester: pytest.Pytester) -> N
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=10, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*does not match pattern*"])
 
 
@@ -2553,7 +2493,7 @@ def test_required_dag_tags_policy_appears_only_when_configured(pytester: pytest.
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_required_dag_tags =\n    team-a\n")
     enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags")
-    enabled.assert_outcomes(passed=11)
+    enabled.assert_outcomes(passed=7)
     enabled.stdout.fnmatch_lines(["*::smoke::test_required_dag_tags PASSED*"])
 
 
@@ -2567,7 +2507,7 @@ def test_required_dag_tags_policy_fails_on_missing_tag(pytester: pytest.Pytester
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=10, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*missing required tags*'team-b'*"])
 
 
@@ -2583,7 +2523,7 @@ def test_forbid_default_owner_policy_appears_only_when_configured(
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_forbid_default_owner = true\n")
     enabled = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
-    enabled.assert_outcomes(passed=10, failed=1)
+    enabled.assert_outcomes(passed=6, failed=1)
     enabled.stdout.fnmatch_lines(["*owned by the stock*`airflow`*owner*"])
 
 
@@ -2593,12 +2533,12 @@ def test_dag_snapshot_policy_appears_only_when_configured(pytester: pytest.Pytes
     _write_dags(pytester, valid=VALID_DAG)
 
     disabled = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
-    disabled.assert_outcomes(passed=10)
+    disabled.assert_outcomes(passed=6)
     assert "test_dag_serialization_snapshot" not in disabled.stdout.str()
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
     enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags", "--airflow-smoke-update")
-    enabled.assert_outcomes(passed=11)
+    enabled.assert_outcomes(passed=7)
     enabled.stdout.fnmatch_lines(["*::smoke::test_dag_serialization_snapshot PASSED*"])
 
 
@@ -2612,7 +2552,7 @@ def test_dag_snapshot_update_flag_writes_snapshot_file(pytester: pytest.Pytester
         "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     snapshot_path = pytester.path / "snapshots" / "valid_dag.json"
     assert snapshot_path.is_file()
     assert '"dag_id": "valid_dag"' in snapshot_path.read_text(encoding="utf-8")
@@ -2625,11 +2565,11 @@ def test_dag_snapshot_second_run_passes_without_update(pytester: pytest.Pytester
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
     pytester.runpytest_subprocess(
         "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
-    ).assert_outcomes(passed=11)
+    ).assert_outcomes(passed=7)
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
 
 
 def test_dag_snapshot_fails_on_drift(pytester: pytest.Pytester) -> None:
@@ -2639,14 +2579,14 @@ def test_dag_snapshot_fails_on_drift(pytester: pytest.Pytester) -> None:
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
     pytester.runpytest_subprocess(
         "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
-    ).assert_outcomes(passed=11)
+    ).assert_outcomes(passed=7)
 
     (pytester.path / "dags" / "valid.py").write_text(
         VALID_DAG.replace('tags=["team-a"]', 'tags=["team-b"]'), encoding="utf-8"
     )
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=10, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*drifted from its committed snapshot*"])
 
 
@@ -2665,12 +2605,12 @@ def test_smoke_marker_selects_exactly_the_bundled_items(pytester: pytest.Pyteste
     selected = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
-    selected.assert_outcomes(passed=10, deselected=1)
+    selected.assert_outcomes(passed=6, deselected=1)
 
     deselected = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke"
     )
-    deselected.assert_outcomes(passed=1, deselected=10)
+    deselected.assert_outcomes(passed=1, deselected=6)
 
 
 def test_explicit_node_id_and_file_args_exclude_smoke_catalog(
@@ -2722,7 +2662,7 @@ def test_explicit_mark_expression_overrides_positional_exclusion(
     file_selected = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke", "test_regular.py"
     )
-    file_selected.assert_outcomes(passed=10, deselected=1)
+    file_selected.assert_outcomes(passed=6, deselected=1)
 
     node_selected = pytester.runpytest_subprocess(
         "-q",
@@ -2732,7 +2672,7 @@ def test_explicit_mark_expression_overrides_positional_exclusion(
         "smoke",
         "test_regular.py::test_regular",
     )
-    node_selected.assert_outcomes(passed=10, deselected=1)
+    node_selected.assert_outcomes(passed=6, deselected=1)
 
     file_excluded = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke", "test_regular.py"
@@ -2769,7 +2709,7 @@ def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
         "smoke and db_test",
         "test_regular.py",
     )
-    with_db_test.assert_outcomes(passed=2, deselected=9)
+    with_db_test.assert_outcomes(passed=2, deselected=5)
 
     without_db_test = pytester.runpytest_subprocess(
         "-q",
@@ -2779,22 +2719,23 @@ def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
         "smoke and not db_test",
         "test_regular.py",
     )
-    without_db_test.assert_outcomes(passed=8, deselected=3)
+    without_db_test.assert_outcomes(passed=4, deselected=3)
 
 
 def test_markexpr_override_reaches_every_conditional_smoke_item(
     pytester: pytest.Pytester,
 ) -> None:
-    """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 10.
+    """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 6.
 
     `_SMOKE_ITEM_MARK_SETS` is derived from `SMOKE_CATALOG`'s `marks` fields, not
     hand-maintained -- but this test still pins that the derived sets match the marks a real
     collected item carries at runtime. The other `-m`-override regression tests only enable
-    the ten default-enabled checks; enabling all four opt-in ini-gated policies too (every
+    the six default-enabled checks; enabling all six opt-in ini-gated policies too (every
     item, like every other, carries only `smoke` + `timeout`) would catch a future check
     adding a mark `SMOKE_CATALOG` doesn't declare. The Dag sets an explicit
     non-stock owner so `airflow_forbid_default_owner` passes rather than exercising its
-    failure path.
+    failure path, and has no catchup or mapped-expand tasks so the two opt-in policy
+    checks pass too.
     """
 
     _write_dags(pytester, valid=VALID_DAG_WITH_OWNER)
@@ -2805,6 +2746,8 @@ def test_markexpr_override_reaches_every_conditional_smoke_item(
         "airflow_required_dag_tags =\n    team-a\n"
         "airflow_forbid_default_owner = true\n"
         "airflow_dag_snapshot_dir = snapshots\n"
+        "airflow_forbid_catchup = true\n"
+        "airflow_forbid_unbounded_expand = true\n"
     )
     pytester.makepyfile(
         test_regular="""
@@ -2821,12 +2764,12 @@ def test_markexpr_override_reaches_every_conditional_smoke_item(
         "smoke and timeout",
         "test_regular.py",
     )
-    every_item.assert_outcomes(passed=14, deselected=1)
+    every_item.assert_outcomes(passed=12, deselected=1)
 
     only_db_test = pytester.runpytest_subprocess(
         "-q", "--dag-folder=dags", "-m", "smoke and db_test", "test_regular.py"
     )
-    only_db_test.assert_outcomes(passed=2, deselected=13)
+    only_db_test.assert_outcomes(passed=2, deselected=11)
 
 
 def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
@@ -2843,7 +2786,7 @@ def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> 
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", ".")
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
 
 
 def test_keyword_expression_deselects_smoke_items(pytester: pytest.Pytester) -> None:
@@ -2863,7 +2806,7 @@ def test_keyword_expression_deselects_smoke_items(pytester: pytest.Pytester) -> 
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-k", "test_regular")
 
-    result.assert_outcomes(passed=1, deselected=10)
+    result.assert_outcomes(passed=1, deselected=6)
 
 
 def test_testpaths_file_glob_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
@@ -2880,7 +2823,7 @@ def test_testpaths_file_glob_keeps_smoke_catalog(pytester: pytest.Pytester) -> N
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
 
 
 def test_deselect_prunes_single_smoke_item(pytester: pytest.Pytester) -> None:
@@ -2893,7 +2836,7 @@ def test_deselect_prunes_single_smoke_item(pytester: pytest.Pytester) -> None:
         "-q", "--dag-folder=dags", "--deselect", "::smoke::test_dag_bag_integrity"
     )
 
-    result.assert_outcomes(passed=9, deselected=1)
+    result.assert_outcomes(passed=5, deselected=1)
 
 
 VARIABLE_DAG = """
@@ -2979,16 +2922,6 @@ with DAG(dag_id="bounded_dag", schedule=None) as dag:
     sink.expand(value=source())
 """
 
-BUDGET_BUSTER_DAG = """
-import time
-
-time.sleep(1.3)
-
-from airflow.sdk import DAG
-
-budget_buster = DAG(dag_id="budget_buster", schedule=None)
-"""
-
 
 def test_top_level_variable_access_fails_via_ast_and_runtime(
     pytester: pytest.Pytester,
@@ -3001,7 +2934,7 @@ def test_top_level_variable_access_fails_via_ast_and_runtime(
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=5, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_no_top_level_variable_access FAILED*"])
     report = result.stdout.str()
     assert 'Variable.get("threshold", default="1")' in report
@@ -3017,7 +2950,7 @@ def test_top_level_io_fails_on_known_module_call(pytester: pytest.Pytester) -> N
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=5, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_no_top_level_io FAILED*"])
     assert "socket.gethostname()" in result.stdout.str()
 
@@ -3026,12 +2959,13 @@ def test_forbid_catchup_fails_a_catchup_dag(pytester: pytest.Pytester) -> None:
     """Fail the catchup item and name the offending Dag file."""
 
     _write_dags(pytester, offender=CATCHUP_DAG)
+    pytester.makeini("[pytest]\nairflow_forbid_catchup = true\n")
 
     result = pytester.runpytest_subprocess(
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_forbid_catchup FAILED*"])
     assert "Dag `catchup_dag`" in result.stdout.str()
 
@@ -3042,58 +2976,37 @@ def test_unbounded_expand_fails_only_the_uncapped_mapped_task(
     """Fail the expand item for the uncapped task while the capped sibling passes."""
 
     _write_dags(pytester, uncapped=UNBOUNDED_EXPAND_DAG, capped=BOUNDED_EXPAND_DAG)
+    pytester.makeini("[pytest]\nairflow_forbid_unbounded_expand = true\n")
 
     result = pytester.runpytest_subprocess(
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=9, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_no_unbounded_expand FAILED*"])
     report = result.stdout.str()
     assert "Dag `unbounded_dag` task `sink`" in report
     assert "Dag `bounded_dag`" not in report
 
 
-def test_parse_budget_fails_the_outlier_file(pytester: pytest.Pytester) -> None:
-    """Fail the budget item for one slow file against three fast siblings."""
-
-    fast_b = VALID_DAG.replace("valid_dag", "fast_b_dag")
-    fast_c = VALID_DAG.replace("valid_dag", "fast_c_dag")
-    _write_dags(pytester, fast_a=VALID_DAG, fast_b=fast_b, fast_c=fast_c, buster=BUDGET_BUSTER_DAG)
-
-    result = pytester.runpytest_subprocess(
-        "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
-    )
-
-    result.assert_outcomes(passed=9, failed=1)
-    result.stdout.fnmatch_lines(["*::smoke::test_dag_parse_budget FAILED*"])
-    assert "buster.py" in result.stdout.str()
-
-
 def test_antipattern_checks_disable_via_their_inis(pytester: pytest.Pytester) -> None:
     """Drop every anti-pattern item when its disable ini is set, even on offenders."""
 
-    _write_dags(pytester, variables=VARIABLE_DAG, io=IO_DAG, catchup=CATCHUP_DAG)
+    _write_dags(pytester, variables=VARIABLE_DAG, io=IO_DAG)
     pytester.makeini(
         "[pytest]\n"
         "airflow_smoke = true\n"
         "airflow_forbid_top_level_variable_access = false\n"
         "airflow_forbid_top_level_io = false\n"
-        "airflow_dag_parse_budget_ratio = 0\n"
-        "airflow_forbid_catchup = false\n"
-        "airflow_forbid_unbounded_expand = false\n"
     )
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=5)
+    result.assert_outcomes(passed=4)
     report = result.stdout.str()
     for name in (
         "test_no_top_level_variable_access",
         "test_no_top_level_io",
-        "test_dag_parse_budget",
-        "test_forbid_catchup",
-        "test_no_unbounded_expand",
     ):
         assert name not in report
 
@@ -3110,4 +3023,4 @@ def test_top_level_io_modules_ini_replaces_the_builtin_list(
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)

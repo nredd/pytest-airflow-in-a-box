@@ -251,7 +251,7 @@ def test_smoke_catalog_and_dag_bag_consumers_share_one_xdist_group(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=13)
+    result.assert_outcomes(passed=9)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
@@ -315,7 +315,7 @@ def test_colocation_skips_a_dag_bag_consumer_dropped_by_mark_expression(
         "smoke",
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     assert groups
     assert all(group == smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP for group in groups.values())
@@ -356,7 +356,7 @@ def test_colocation_is_a_noop_without_the_xdist_plugin(pytester: pytest.Pytester
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     output = result.stdout.str() + result.stderr.str()
     assert "INTERNALERROR" not in output
 
@@ -437,7 +437,7 @@ def test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" in output
     assert "carries an explicit `xdist_group` marker" in output
@@ -488,7 +488,7 @@ def test_missing_anchor_warns_when_the_mark_expression_drops_every_dag_bag_consu
         "smoke",
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" in output
     assert "is about to be deselected by the active `-m` expression" in output
@@ -532,7 +532,7 @@ def test_smoke_only_run_falls_back_to_one_xdist_group_under_dash_n(
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" not in output
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
@@ -577,7 +577,7 @@ def test_missing_anchor_is_silent_when_the_run_has_no_dag_bag_consumer(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" not in output
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
@@ -629,7 +629,7 @@ def test_a_derived_fixture_consumer_still_anchors_the_smoke_catalog(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" not in output
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
@@ -765,7 +765,7 @@ def test_smoke_catalog_and_every_dag_corpus_consumer_share_one_xdist_group(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=13)
+    result.assert_outcomes(passed=9)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
@@ -819,7 +819,7 @@ def test_dag_corpus_colocation_takes_precedence_over_dag_bag_colocation(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=12)
+    result.assert_outcomes(passed=8)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
@@ -872,7 +872,7 @@ def test_missing_dag_corpus_anchor_warns_when_every_consumer_is_pre_grouped(
         "-q", "--dist=loadgroup", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" in output
     assert "carries an explicit `xdist_group` marker" in output
@@ -918,7 +918,7 @@ def test_dag_corpus_colocation_is_a_noop_without_loadgroup_dist(
         "-q", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     assert all(group is None for group in groups.values())
 
