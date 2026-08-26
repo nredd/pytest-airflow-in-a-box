@@ -96,10 +96,10 @@ resolved capability field, around thirty lines.
   credentials. See [the disposable metadata database](../guide/database.md)
 - **Airflow config overrides** -- every override declared through the [`airflow_config` ini
   option](../guide/configuration.md). Those travel on the environment and never appear in the
-  generated `airflow.cfg`, so this readback is the only place they are visible -- `airflow
-  info` included. A value whose option name reads like a credential (`password`, `secret`,
-  `key`, `token`, `conn`, `url`) is replaced by its length; the name is always shown, because
-  "which options are set" is the question
+  generated `airflow.cfg`, so this readback is the only place they are visible -- not even
+  `airflow info` shows them. A value whose option name reads like a credential (`password`,
+  `secret`, `key`, `token`, `conn`, `url`) is replaced by its length; the name is always shown,
+  because "which options are set" is the question
 - **Versions and capabilities** -- plugin, pytest, Python, and Airflow versions, plus the full
   resolved capability contract. An uncertified Airflow release adds a `DEGRADED:` bullet
   saying the capabilities were resolved by live probing rather than byte-verified

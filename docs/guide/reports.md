@@ -28,15 +28,16 @@ the parent's configuration, writes `pytest.xml`, and clobbers the parent's file 
 own batch. Your JUnit report ends up holding three tests instead of four hundred.
 
 The child carries `PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER` in its environment, and the
-plugin uses that identity to scope its XML destination exactly like a worker id, to
+plugin uses that identity to scope its XML destination exactly like a worker id:
 `pytest.<identity>.xml`. It scopes the child's `log_file` the same way.
 
 What the marker is for: [Entry points and packaging](isolated-tests.md).
 
 ## Coverage data files, but only when nothing else owns them
 
-The same identity scopes `COVERAGE_FILE` when it is set in the environment, which is how an
-*externally* orchestrated coverage run collides: one data file, several writers.
+The same identity scopes `COVERAGE_FILE` when it is set in the environment -- that's the
+case where an *externally* orchestrated coverage run would otherwise collide: one data
+file, several writers.
 
 It is scoped only when `pytest-cov` is not loaded. `pytest-cov` does its own per-worker
 data-file handling, and a second layer of renaming on top of it breaks the combine step. Run

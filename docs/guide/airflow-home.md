@@ -101,8 +101,8 @@ WARNING: '/dev/shm' is RAM-backed, so this directory holds memory until it is re
   stopped on every policy, `all` included; only the directory removal is conditional
 - One known gap: pytest raises the exit status to `MAX_WARNINGS_ERROR` *after* every
   `pytest_sessionfinish` hook has run, so a run that fails only on `--max-warnings` is
-  recorded as the clean status pytest reported at the time and its directory goes under
-  `failed`. Pass `--airflow-home-retention=all` to inspect one
+  recorded as the clean status pytest reported at the time, and the default `failed`
+  policy removes its directory anyway. Pass `--airflow-home-retention=all` to inspect one
 
 ## Reaching it from a test
 

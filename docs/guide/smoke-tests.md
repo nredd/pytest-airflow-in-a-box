@@ -49,9 +49,9 @@ directory positionals (`pytest tests/`), bare runs, and `testpaths`-driven runs 
 unless an explicit `-m` expression mentions `smoke` and would itself select a real smoke item
 (`-m smoke`, `-m "smoke and db_test"`), in which case that unambiguous opt-in overrides the
 file/node-ID scoping and the catalog stays in. An `-m` expression that never mentions `smoke`
-(`-m db_test`, `-m "not slow"`) does not, even if it happens to match some smoke item's other
-marks -- otherwise an unrelated filter on an explicitly scoped run could silently pull in the
-whole catalog. `-k` and `--deselect ::smoke::<name>` apply to the items as usual.
+(`-m db_test`, `-m "not slow"`) does not override that scoping, even if it happens to match
+some smoke item's other marks -- otherwise an unrelated filter on an explicitly scoped run
+could silently pull in the whole catalog. `-k` and `--deselect ::smoke::<name>` apply to the items as usual.
 
 Drop an item permanently with `airflow_smoke_disable`, a list of item names. Unlike
 `--deselect`, which filters after collection, a disabled item is never synthesized at all --
@@ -102,7 +102,7 @@ On by default whenever the catalog is enabled:
   an AST scan over exactly the files Airflow parsed (direct calls like `Variable.get(...)`,
   `Connection.get(...)`, `BaseHook.get_connection(...)`, with exact file and line), and runtime
   interception that patches the secrets entry points while the shared corpus fills its `DagBag`,
-  which also catches lookups hidden behind helper functions. The `dag_bag` parse is instrumented
+  and also catches lookups hidden behind helper functions. The `dag_bag` parse is instrumented
   the same way whenever the catalog is enabled, so the runtime pass survives either parse
   ordering; a `DagBag` that was somehow parsed without instrumentation degrades the check to
   AST-only with a logged note. Disable with `airflow_forbid_top_level_variable_access = false`

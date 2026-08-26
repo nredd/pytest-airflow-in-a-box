@@ -70,8 +70,8 @@ A `pytest.UsageError` aborts the session before any test runs when:
   origin file.
 
 Resolving a dotted path executes every parent package's module-level code, which is your code;
-it is caught broadly and reported as one actionable usage error rather than a raw traceback out
-of `pytest_configure`.
+any exception from it is caught broadly and reported as one actionable usage error rather than a
+raw traceback out of `pytest_configure`.
 
 ## Timing, and the case it misses
 

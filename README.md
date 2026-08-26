@@ -94,7 +94,6 @@ one deep link per stage:
 - [Smoke checks over every Dag](https://nredd.github.io/pytest-airflow-in-a-box/guide/smoke-tests/) -- properties of the whole corpus
 - [Migrating from Airflow 2 to 3](https://nredd.github.io/pytest-airflow-in-a-box/guide/migration/) -- arrive migrating, leave with a suite
 - [Under the hood](https://nredd.github.io/pytest-airflow-in-a-box/internals/compat-layer/) -- what `_compat/` absorbs, and why
-- [Vision](https://nredd.github.io/pytest-airflow-in-a-box/vision/) -- what this is for, and what it is not
 
 Contributing, the local gate, and running CI with `act`:
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and

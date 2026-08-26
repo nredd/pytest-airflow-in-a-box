@@ -162,7 +162,7 @@ to outrank the file channel. Set one or the other.
 
 ## Hazards at the sandbox seam
 
-Sharp edges of the live-mutation channel. Each is documented contract pinned by a test,
+Sharp edges of the live-mutation channel. Each is a documented contract pinned by a test,
 not an accident to discover:
 
 - **Teardown restores secrets backend *instances*, not configuration.** The sandbox
@@ -170,7 +170,7 @@ not an accident to discover:
   objects by slice assignment; it never calls upstream's `ensure_secrets_loaded()` rebuild.
   A substrate backend that accumulated state during a test -- an open client, a populated
   cache -- is resurrected as that same live object in every later test
-- **`ensure_secrets_loaded()` hides nothing today, by upstream heuristic.** It returns the
+- **`ensure_secrets_loaded()` hides nothing today, by upstream's heuristic.** It returns the
   live `secrets_backend_list` UNLESS the list holds exactly two entries, its two built-in
   defaults, in which case it rebuilds from configuration instead without touching the
   module global. A sandbox-registered backend always grows the list past two, so it stays
@@ -191,5 +191,5 @@ not an accident to discover:
 - **An ini plugins-folder listener survives teardown through the listener snapshot.** The
   listener-manager getters are `functools.cache`d and deliberately never cleared, so the
   manager persists across tests, and sandbox construction resolves the managers -- building
-  them if nothing had yet -- before snapshotting, putting the ini-seeded listener inside
-  the snapshot teardown restores
+  them if nothing had done so yet -- before snapshotting, putting the ini-seeded listener
+  inside the snapshot teardown restores

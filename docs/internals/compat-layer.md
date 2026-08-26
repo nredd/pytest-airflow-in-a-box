@@ -143,7 +143,7 @@ arm, musl, and pytest-floor legs. The Airflow 2.x legs run `tests/enduser` and *
 `tests/enduser`: the inner unit suite imports 3.x-only modules at module scope and cannot
 collect on 2.x, so the consumer contract is the whole 2.x signal.
 `tests/enduser/conftest.py` drops the four genuinely 3.x-only modules by `collect_ignore` and
-everything else authors dynamically through `tests/enduser/_authoring.py`, marking its 3.x-only
+authors everything else dynamically through `tests/enduser/_authoring.py`, marking its 3.x-only
 tests `requires_airflow3` so they are collected and skipped rather than never seen.
 
 Adding a probe without adding an end-user test proves a symbol exists. It does not prove your

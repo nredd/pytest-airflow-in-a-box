@@ -1,8 +1,8 @@
 # Fixtures
 
 Every public fixture the plugin registers, in one place. "DB" means requesting the fixture
-triggers lazy metadata-database initialization (they are the members of
-`fixtures.DATABASE_FIXTURE_NAMES`); DB-free fixtures never import Airflow's ORM or run a
+triggers lazy metadata-database initialization; fixtures marked "DB" are the members of
+`fixtures.DATABASE_FIXTURE_NAMES`. DB-free fixtures never import Airflow's ORM or run a
 migration. "3.x only" fixtures fail on the Airflow 2.x tier with an actionable error naming
 the 2.x alternative.
 

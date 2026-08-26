@@ -1,6 +1,6 @@
 # pytest-airflow-in-a-box
 
-Your Dag files import cleanly and your callables pass. That proves neither that the *seams*
+Your Dag files import cleanly and your callables pass. That doesn't prove the *seams*
 between them work.
 
 Trigger rules, branch skips, rendered templates, `conn_id` resolution, serialization of your
