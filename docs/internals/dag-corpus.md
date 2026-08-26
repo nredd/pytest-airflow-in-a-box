@@ -65,7 +65,9 @@ an `xdist_group` marker, in three shapes, tried in order:
 - **Fallback**: when neither an eligible `dag_corpus` nor `dag_bag` consumer exists -- a
   smoke-only run (`-m smoke`) is the common case -- the catalog groups with *itself* under a
   plugin-owned `SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, so all of it still lands on one worker
-  even with nothing to anchor onto
+  even with nothing to anchor onto. For a smoke-only `-n auto` run, this is the whole run: it
+  now executes serially on that one worker rather than spread across every `-n` worker,
+  trading wall-clock time for the bounded memory above
 
 When more than one kind exists, the catalog joins the `dag_corpus` group over the `dag_bag` one,
 and either over the fallback. An item that already carries its own explicit `xdist_group` is

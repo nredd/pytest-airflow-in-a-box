@@ -104,7 +104,7 @@ from pytest_airflow_in_a_box.reporting import configure_report_dir, configure_re
 from pytest_airflow_in_a_box.results import assertrepr_compare
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Generator, Iterable, Sequence
 
 __all__ = (
     "airflow_components",
@@ -692,9 +692,14 @@ def _warn_missing_anchor(
     context captures it into the terminal summary; `config.issue_config_time_warning`,
     used elsewhere in this plugin, is configure-time only and cannot reach this hook.
     Deliberately never called by either pass for a run with no consumer of its fixture at
-    all: the catalog then owns the only Dag parse in the run, so there is nothing to
-    co-locate with and nothing lost -- warning there would fire on every ordinary
-    smoke-only run.
+    all: there was never a live `DagBag`/requested corpus to reuse in the first place, so
+    there is nothing lost -- warning there would fire on every ordinary smoke-only run.
+    Either way, the catalog itself is never left ungrouped by the time
+    `pytest_collection_modifyitems` returns: `_colocate_smoke_catalog_with_dag_bag` falls
+    back to `SMOKE_CATALOG_FALLBACK_XDIST_GROUP` (`_group_smoke_catalog_fallback`)
+    whenever it, too, finds no anchor, including right after this warning fires. So the
+    message below names what was actually lost -- reuse of an existing parse -- rather
+    than claiming the catalog stays ungrouped, which it does not.
 
     Parameters:
         fixture_name: str naming the fixture whose consumers were searched.
@@ -712,12 +717,13 @@ def _warn_missing_anchor(
     joined = " or ".join(dict.fromkeys(reasons))
     warnings.warn(
         smoke.SmokeColocationWarning(
-            f"Smoke catalog left ungrouped under `--dist loadgroup`: every test using "
-            f"the `{fixture_name}` fixture in this run {joined}, so none can {verb} the "
-            f"`{group_name}` group. The catalog's corpus builder will parse the Dag "
-            f"folder itself, adding one full Dag parse to this run. Leave one "
-            f"`{fixture_name}` consumer ungrouped and selected to avoid it, or silence "
-            f"this with `-W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
+            f"Smoke catalog could not co-locate with `{fixture_name}` under `--dist "
+            f"loadgroup`: every test using the `{fixture_name}` fixture in this run "
+            f"{joined}, so none can {verb} the `{group_name}` group. The catalog's "
+            f"corpus builder will parse the Dag folder itself, adding one full Dag "
+            f"parse to this run. Leave one `{fixture_name}` consumer ungrouped and "
+            f"selected to avoid it, or silence this with `-W "
+            f"ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning`"
         ),
         stacklevel=1,
     )
@@ -817,8 +823,7 @@ def _colocate_dag_corpus_consumers(
             reasons=disqualifications,
         )
         return False
-    for item in (*smoke_items, *consumers):
-        item.add_marker(pytest.mark.xdist_group(name=DAG_CORPUS_XDIST_GROUP))
+    _apply_xdist_group((*smoke_items, *consumers), DAG_CORPUS_XDIST_GROUP)
     return True
 
 
@@ -898,8 +903,7 @@ def _colocate_smoke_catalog_with_dag_bag(
             )
         _group_smoke_catalog_fallback(smoke_items)
         return
-    for item in (*smoke_items, anchor):
-        item.add_marker(pytest.mark.xdist_group(name=DAG_BAG_XDIST_GROUP))
+    _apply_xdist_group((*smoke_items, anchor), DAG_BAG_XDIST_GROUP)
 
 
 def _group_smoke_catalog_fallback(smoke_items: list[pytest.Item]) -> None:
@@ -923,8 +927,28 @@ def _group_smoke_catalog_fallback(smoke_items: list[pytest.Item]) -> None:
         None. Mutates every item in place by adding an `xdist_group` marker.
     """
 
-    for item in smoke_items:
-        item.add_marker(pytest.mark.xdist_group(name=smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP))
+    _apply_xdist_group(smoke_items, smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP)
+
+
+def _apply_xdist_group(items: Iterable[pytest.Item], group_name: str) -> None:
+    """Add a common `xdist_group` marker to every item, forcing them onto one worker.
+
+    The shared mechanics behind all three co-location shapes in this module: every
+    `dag_corpus` consumer plus the catalog (`_colocate_dag_corpus_consumers`), the
+    catalog plus its one `dag_bag` anchor (`_colocate_smoke_catalog_with_dag_bag`), and
+    the catalog alone (`_group_smoke_catalog_fallback`) all reduce to marking a set of
+    items with the same group name once their caller has picked it.
+
+    Parameters:
+        items: Iterable[pytest.Item] to mark with the same xdist group.
+        group_name: str naming the `xdist_group` every item joins.
+
+    Returns:
+        None. Mutates each item in place by adding an `xdist_group` marker.
+    """
+
+    for item in items:
+        item.add_marker(pytest.mark.xdist_group(name=group_name))
 
 
 def _loadgroup_dist_active(config: pytest.Config) -> bool:
