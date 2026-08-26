@@ -642,15 +642,25 @@ def test_a_derived_fixture_consumer_still_anchors_the_smoke_catalog(
     assert derived_group == DAG_BAG_XDIST_GROUP
 
 
-def test_missing_anchor_warning_names_every_distinct_reason_once() -> None:
+def test_missing_anchor_warning_names_every_distinct_reason_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Join distinct disqualification reasons and drop repeats, preserving order.
 
     A suite can disqualify several consumers for the same reason; repeating it once
     per consumer would make the message scale with suite size instead of with the
     number of distinct problems. `dict.fromkeys` dedupes without sorting, so the
     message reads in the order collection actually hit the reasons.
+
+    The worker variable is cleared because `_warn_missing_anchor` elects `gw0` to issue
+    the warning: this test asserts the message shape, not the election, and would
+    otherwise pass or fail on which worker xdist happened to hand it.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch clearing the outer run's worker identity.
     """
 
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     with pytest.warns(smoke.SmokeColocationWarning) as caught:
         plugin._warn_missing_anchor(
             fixture_name=plugin.DAG_BAG_FIXTURE_NAME,
@@ -956,15 +966,22 @@ def test_dag_corpus_request_forces_serialization_without_loadgroup_dist(
     assert "INTERNALERROR" not in output
 
 
-def test_missing_dag_corpus_anchor_warning_names_every_distinct_reason_once() -> None:
+def test_missing_dag_corpus_anchor_warning_names_every_distinct_reason_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Join distinct disqualification reasons and drop repeats, preserving order.
 
     Mirrors `test_missing_anchor_warning_names_every_distinct_reason_once` for the
     `dag_corpus` pass's call into the shared `_warn_missing_anchor`, which reuses the
     exact same disqualification reason constants since both passes share
-    `_anchor_disqualification`.
+    `_anchor_disqualification` -- including that test's reason for clearing the worker
+    variable.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch clearing the outer run's worker identity.
     """
 
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     with pytest.warns(smoke.SmokeColocationWarning) as caught:
         plugin._warn_missing_anchor(
             fixture_name=plugin.DAG_CORPUS_FIXTURE_NAME,

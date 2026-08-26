@@ -1393,6 +1393,150 @@ def test_cleanup_dag_clears_unowned_dag_run_task_instances() -> None:
     assert _row_counts("unowned_run_cleanup") == (0, 0, 0, 0)
 
 
+def test_cleanup_dag_leaves_a_foreign_dag_run_sharing_an_owned_id() -> None:
+    """Refuse to delete a DagRun whose primary key an owned id names but whose Dag differs.
+
+    Regression test for issue #325: `dag_run.id` is a plain `Integer` primary key, so
+    on SQLite it is a rowid alias with no `AUTOINCREMENT` and the value is reused the
+    moment the highest row is deleted -- Airflow guards exactly this on three asset
+    tables with `{"sqlite_autoincrement": True}` ("ensures PK values not reused") and
+    does not guard `dag_run`. Every xdist worker shares one metadata database, so an
+    id `record.dag_run_ids` owned can name another Dag's live run by teardown, and
+    deleting it by bare primary key cascaded that run's task instances away through
+    the `DagRun.task_instances` relationship. The observed symptom was an unrelated
+    test on another worker asserting against an empty `get_task_instances` result.
+
+    The reuse itself is not fabricated here: an owned id naming a foreign row is the
+    state that matters, and asserting on it directly keeps the test backend-agnostic
+    (Postgres sequences never reuse, so the flake is SQLite-only but the guard is not).
+    """
+
+    from airflow.models.taskinstance import TaskInstance
+
+    bystander_session = dag_compat.open_dag_session("pk_reuse_bystander")
+    bystander_record = dag_compat.DagPersistenceRecord(
+        dag_id="pk_reuse_bystander",
+        bundle_name=_bundle_name("pk_reuse_bystander"),
+        session=bystander_session,
+    )
+    bystander_dag = dag_compat.build_dag("pk_reuse_bystander", __file__, {})
+    EmptyOperator(task_id="first", dag=bystander_dag)
+    EmptyOperator(task_id="second", dag=bystander_dag)
+    bystander_scheduler_dag = dag_compat.persist_dag(bystander_dag, bystander_record)
+    bystander_run = dag_compat.create_dag_run(
+        bystander_scheduler_dag,
+        bystander_dag,
+        bystander_record,
+        run_id="pk_reuse_bystander_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+    )
+
+    session = dag_compat.open_dag_session("pk_reuse_owner")
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="pk_reuse_owner",
+        bundle_name=_bundle_name("pk_reuse_owner"),
+        session=session,
+    )
+    dag = dag_compat.build_dag("pk_reuse_owner", __file__, {})
+    EmptyOperator(task_id="owned_task", dag=dag)
+    scheduler_dag = dag_compat.persist_dag(dag, record)
+    owned_run = dag_compat.create_dag_run(
+        scheduler_dag,
+        dag,
+        record,
+        run_id="pk_reuse_owner_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+    )
+    # The reused id: this record owned it, another Dag's live run carries it now. The
+    # dynamic annotation matches `_attach_backfill`'s: Airflow's ORM models expose
+    # `InstrumentedAttribute` to the checker, not `int`.
+    bystander_run_id: Any = bystander_run.id
+    record.dag_run_ids.add(bystander_run_id)
+
+    try:
+        dag_compat.cleanup_dag(record)
+
+        with create_session() as verify_session:
+            assert verify_session.get(DagRun, owned_run.id) is None
+            assert verify_session.get(DagRun, bystander_run_id) is not None
+            assert (
+                verify_session.scalar(
+                    select(func.count())
+                    .select_from(TaskInstance)
+                    .where(TaskInstance.dag_id == "pk_reuse_bystander")
+                )
+                == 2
+            )
+    finally:
+        dag_compat.cleanup_dag(bystander_record)
+
+
+def test_cleanup_dag_leaves_a_foreign_backfill_join_row_sharing_an_owned_id() -> None:
+    """Refuse to delete `BackfillDagRun` rows an owned id names on another Dag's run.
+
+    The second half of issue #325: `_delete_dag_runs` fed the same unioned id set into
+    `delete(BackfillDagRun).where(BackfillDagRun.dag_run_id.in_(...))`, so a reused
+    primary key took another Dag's backfill join row even when the run itself survived.
+    """
+
+    from airflow.models.backfill import BackfillDagRun
+
+    bystander_session = dag_compat.open_dag_session("pk_reuse_backfill_bystander")
+    bystander_record = dag_compat.DagPersistenceRecord(
+        dag_id="pk_reuse_backfill_bystander",
+        bundle_name=_bundle_name("pk_reuse_backfill_bystander"),
+        session=bystander_session,
+    )
+    bystander_dag = dag_compat.build_dag("pk_reuse_backfill_bystander", __file__, {})
+    EmptyOperator(task_id="only_task", dag=bystander_dag)
+    bystander_scheduler_dag = dag_compat.persist_dag(bystander_dag, bystander_record)
+    bystander_run = dag_compat.create_dag_run(
+        bystander_scheduler_dag,
+        bystander_dag,
+        bystander_record,
+        run_id="pk_reuse_backfill_bystander_run",
+        logical_date=None,
+        run_after=None,
+        start_date=None,
+        dag_run_kwargs={},
+    )
+    backfill_id = _attach_backfill("pk_reuse_backfill_bystander", bystander_run.id)
+
+    session = dag_compat.open_dag_session("pk_reuse_backfill_owner")
+    record = dag_compat.DagPersistenceRecord(
+        dag_id="pk_reuse_backfill_owner",
+        bundle_name=_bundle_name("pk_reuse_backfill_owner"),
+        session=session,
+    )
+    dag = dag_compat.build_dag("pk_reuse_backfill_owner", __file__, {})
+    EmptyOperator(task_id="owned_task", dag=dag)
+    dag_compat.persist_dag(dag, record)
+    # Dynamically annotated for the same reason as the sibling test above.
+    bystander_run_id: Any = bystander_run.id
+    record.dag_run_ids.add(bystander_run_id)
+
+    try:
+        dag_compat.cleanup_dag(record)
+
+        with create_session() as verify_session:
+            assert (
+                verify_session.scalar(
+                    select(func.count())
+                    .select_from(BackfillDagRun)
+                    .where(BackfillDagRun.backfill_id == backfill_id)
+                )
+                == 1
+            )
+    finally:
+        dag_compat.cleanup_dag(bystander_record)
+
+
 def test_cleanup_accepts_missing_owned_rows() -> None:
     """Make cleanup idempotent when a failed operation did not create metadata rows."""
 
