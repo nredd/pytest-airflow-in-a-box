@@ -8,6 +8,25 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.12.0] - 2026-08-26
+
+### Added
+
+- Guard the Markdown mirrors of plugin surface with `tests/test_docs_sync.py`: exported fixtures against `docs/reference/fixtures.md`, registered markers against `docs/reference/markers.md`, and `README.md`'s Quickstart against `docs/quickstart.md`.
+  ([#284](https://github.com/nredd/pytest-airflow-in-a-box/issues/284)).
+
+### Changed
+
+- Restructure the docs site from a flat 22-page `Guide` into 11 job-named sections following the reader story: why test, how to test, what to test, what ships, how deep it goes. Adds `guide/ladder.md`, `why/`, `internals/`, and `guide/migration/`; merges `reference/defaults.md` into `guide/configuration.md`.
+  ([#284](https://github.com/nredd/pytest-airflow-in-a-box/issues/284)).
+- Trim `README.md` from ~400 lines to ~105: drop the fixtures and markers mirror tables, the GitHub Action reference, and the full compatibility matrix in favour of one deep link per reader stage. Removes the false claim that CI exercises every listed Airflow/Python combination.
+  ([#296](https://github.com/nredd/pytest-airflow-in-a-box/issues/296)).
+
+### Fixed
+
+- Re-export `StructlogCapture` from `pytest_airflow_in_a_box.types`, so `cap_structlog`'s return type is a public typed contract like every other fixture's.
+  ([#313](https://github.com/nredd/pytest-airflow-in-a-box/issues/313)).
+
 ## [0.11.1] - 2026-08-25
 
 ### Added
