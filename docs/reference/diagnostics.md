@@ -1,4 +1,4 @@
-# Diagnosing a run
+# Airflow Doctor
 
 Your Dag coverage report says 100%. It measured nothing.
 
@@ -90,12 +90,12 @@ resolved capability field, around thirty lines.
 
 - **Storage** -- which rung of the storage ladder the run landed on and why, plus whether the
   chosen directory is on a network filesystem. See [where the run
-  lives](../guide/airflow-home.md)
+  lives](../internals/test-environments.md#the-isolated-airflow_home)
 - **`AIRFLOW_HOME` and database** -- the resolved root, the backend tier, and the database URL
   *scheme*. The full URL is withheld on purpose: a provisioned Postgres URL carries live
-  credentials. See [the disposable metadata database](../guide/database.md)
+  credentials. See [the disposable metadata database](../internals/test-environments.md#the-disposable-metadata-database)
 - **Airflow config overrides** -- every override declared through the [`airflow_config` ini
-  option](../guide/configuration.md). Those travel on the environment and never appear in the
+  option](../internals/test-environments.md#overriding-configuration). Those travel on the environment and never appear in the
   generated `airflow.cfg`, so this readback is the only place they are visible -- not even
   `airflow info` shows them. A value whose option name reads like a credential (`password`,
   `secret`, `key`, `token`, `conn`, `url`) is replaced by its length; the name is always shown,
@@ -115,7 +115,7 @@ resolved capability field, around thirty lines.
   worker or isolated child that inherits a drifted Airflow environment
 - **Dag coverage** -- the resolved Dag and collection folders, whether `pytest-cov` is
   installed and active, and the containment check above. See [proving your Dag files are
-  actually executed](../guide/dag-coverage.md)
+  actually executed](../guide/smoke-tests.md#dag-coverage)
 - **API server** -- always "not started". A diagnostic run never requests the fixture
 
 ## Coverage verdicts
@@ -135,4 +135,4 @@ The Dag coverage section is the one that fails you, so its verdicts are worth kn
 The `AIRFLOW_HOME` printed here belongs to the diagnostic run that just bootstrapped it, not
 to a previous test run, and it is removed on the way out unless you pass
 `--airflow-home-retention=all`. For the root of a session that actually ran tests, read the
-session header line the plugin adds (suppressed by `-q` and `--no-header`) -- see [where the run lives](../guide/airflow-home.md).
+session header line the plugin adds (suppressed by `-q` and `--no-header`) -- see [where the run lives](../internals/test-environments.md#the-isolated-airflow_home).

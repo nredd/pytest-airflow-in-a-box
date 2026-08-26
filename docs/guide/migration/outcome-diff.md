@@ -2,12 +2,12 @@
 
 "Which tests pass on 2.11 but fail on 3.x" cannot be an in-run switch -- one environment is one
 Airflow, and the `airflow2`/`airflow3` extras are declared mutually exclusive (see
-[Supported Airflow and Python versions](../../compatibility.md)). It is a two-run workflow the
+[Certification](../../internals/certification.md)). It is a two-run workflow the
 plugin owns: record outcomes in one environment, compare them against a second.
 
 This is the last and most expensive layer of the migration funnel. Run
 [ruff's `AIR3xx` rules](ruff-air-rules.md) and [`--airflow-migration-strict`](strict.md) first
-and let this catch the *executed* breakage they structurally cannot see. It does not subsume
+and let this catch the *executed* breakage neither of them can see. It does not subsume
 them: this layer only ever sees what your tests exercise.
 
 ## Record, then compare
@@ -47,7 +47,7 @@ pytest --airflow-baseline=baseline.json --airflow-baseline-select=passing
   `fail` projection the comparison uses)
 - `new` -- nodeids absent from the baseline
 
-Composes with `-k`/`-m`. `missing` is not selectable -- nothing to collect. Only a genuinely
+Composes with `-k`/`-m`. `missing` is not selectable -- nothing to collect. Only a
 neutral baseline entry (a non-gated `skipped`) is eligible for none of the three selectors,
 matching how the comparison folds a neutral outcome away from `regression`/`fixed`.
 
@@ -65,7 +65,7 @@ it as `xfailed`, not `failed`, and the marking must stay self-sustaining across 
 pytest --airflow-baseline=baseline.json --airflow-baseline-xfail=prior-live.json
 ```
 
-This keeps migration CI green while a regression is being worked on. Each fix surfaces as an
+This keeps migration CI green while a regression is being worked on. Each fix shows up as an
 XPASS, and the terminal summary names those nodeids and prompts a re-record of the live artifact
 so the xfail set catches up. A test's own `xfail` marker always wins -- the plugin never
 double-marks.

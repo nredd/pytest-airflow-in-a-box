@@ -8,7 +8,7 @@ The climbing rule, one sentence: **stand on the lowest rung that can still fail 
 you care about.** If the test would fail identically one rung down, you are paying for fidelity
 you are not asserting on.
 
-| Rung | Surface | Metadata DB | Page |
+| Rung | Fixture | Metadata DB | Page |
 | --- | --- | --- | --- |
 | 0 | `render_task` | no | [One operator, no database](db-free-execution.md) |
 | 1 | `run_task` / `task_context` | no | [One operator, no database](db-free-execution.md) |
@@ -32,9 +32,8 @@ only here, via `try_number=` plus the operator's own `retries`.
 
 Costs: the Task SDK in-process runner. Airflow 3.x only.
 
-Cannot prove: anything involving a second task. XCom is keyed by key alone, with no
-`task_ids`/`run_id`/`map_index` scoping, so a passing pull does not prove data flowed from A to
-B. Asset inlet/outlet validation is rubber-stamped.
+Cannot prove: anything involving a second task or real metadata --
+[where this rung stops](db-free-execution.md#where-this-rung-stops) itemizes the gaps.
 
 ## Rung 2 -- `dag_maker` + `run_ti`
 
@@ -47,7 +46,7 @@ Cannot prove: ordering, or how a run settles. One instance is one instance.
 
 ## Rung 3 -- `dag_maker.run()` / `run_dag`
 
-Proves: `result.order` (what actually executed, not graph topology), `result.states` including
+Proves: `result.order`, `result.states` including
 `upstream_failed` propagation, and mid-run mapped expansion. `run_dag` additionally proves your
 *real* file in `dags/` does this, under its real `dag_id`.
 
@@ -55,34 +54,34 @@ Costs: with `run_dag` the real `dag_id` becomes a shared metadata key, so two `p
 workers running the same Dag can tear each other's metadata down. See
 [the xdist caveat](task-execution.md#testing-a-dag-defined-elsewhere).
 
-Cannot prove: retries. Every instance is attempted exactly once, so a retry-configured task
-that fails strands at `up_for_retry`.
+Cannot prove: retries. Every instance is attempted exactly once
+([whole-DagRun execution](task-execution.md#whole-dagrun-execution) has the consequences).
 
 ## Rung 4 -- `executor=`
 
 Proves: your task body survives re-import in a subprocess, and your executor round-trips
-through a live Task Execution API. `dag.test(use_executor=True)` cannot reach this rung
-([apache/airflow#59074](https://github.com/apache/airflow/issues/59074)).
+through a live Task Execution API. `dag.test(use_executor=True)` cannot reach this rung -- see
+[why not `dag.test()`](../why/index.md#dagtest).
 
 Costs: the Dag must be a file in your Dag folder, `result.errors` degrades to best-effort, and
-each instance carries a timeout.
+each instance carries a timeout ([executor-driven runs](task-execution.md#executor-driven-runs)
+has all three in full).
 
 Cannot prove: an executor's own concurrency. Instances are dispatched one at a time to keep
 `result.order` meaningful.
 
 ## Off the ladder
 
-Two surfaces are not fidelity increments:
+Two tools are not fidelity increments:
 
-- [`run_trigger`](deferrable-operators.md) -- defer, fire, resume. Spans rungs 1 and 2. It is
-  single-shot: the first event only, one resume. A poll-loop trigger is not modeled
-- [The live REST API](rest-api.md) -- a different surface entirely, for code *you* wrote that
+- [`run_trigger`](deferrable-operators.md) -- defer, fire, resume. Spans rungs 1 and 2;
+  that page lists what is not modeled
+- [The live REST API](rest-api.md) -- a different thing entirely, for code *you* wrote that
   resolves `conf.get("api", "base_url")` or calls `/api/v2`
 
 ## Corpus checking is a different axis
 
 The ladder varies fidelity over one unit of code. [Smoke checks](smoke-tests.md),
-[per-file collection](dag-collection.md), and [Dag coverage](dag-coverage.md) vary *breadth*
-over every unit at fixed parse-only fidelity, and assert properties of the whole set that no
-single-Dag test can phrase at any rung: duplicate `dag_id`s across files, a per-file parse
-budget, `catchup=True` anywhere, an unbounded `.expand()`.
+[per-file collection](smoke-tests.md#one-pytest-item-per-dag-file), and [Dag coverage](smoke-tests.md#dag-coverage) vary *breadth*
+over every unit at fixed parse-only fidelity, asserting whole-corpus properties no single-Dag
+test can phrase at any rung.

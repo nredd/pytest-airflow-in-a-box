@@ -1,4 +1,4 @@
-# Working on the plugin itself
+# Developing the plugin
 
 ```console
 uv sync
@@ -24,25 +24,18 @@ act pull_request
 
 ## Compatibility suite
 
-The repository's `tests/enduser/` suite is a sanitized consumer-style catalog run on every
-certified matrix leg. It covers custom operators, TaskFlow and mapping, hooks and connections,
-SQLite provider SQL, sensors, deferral, callbacks and retries, assets, provider-shaped packages,
-DagBag/collection, logging, xdist, and REST API CRUD. The provider-shaped corpus verifies user
-package composition and execution, and the `airflow_isolated` marker covers real distribution
-discovery: `tests/enduser/test_isolated_discovery.py` registers a provider's
-`apache_airflow_provider` entry point through a synthetic distribution in a one-shot child
-process and resolves it through a live `ProvidersManager`, with no monkeypatching of Airflow's
-cached entry-point grouping. `check_component`'s `ComponentKind.PROVIDER` checks complement that
-statically: given an already-installed provider's `get_provider_info` callable, they
-validate its return value against the shipped `provider_info.schema.json`, cross-check its
-declared `package-name` against the owning distribution's real name, and confirm that the
-distribution actually registers an `apache_airflow_provider` entry point -- one way a provider
-silently vanishes from discovery (no entry point at all) and two ways discovery hard-fails with a
-raised exception instead of a warning (a schema violation, a `package-name` disagreement), all
-catchable without a live scheduler or webserver. All three call the already-loaded callable
-directly and attribute it to its owning distribution by file manifest; the `airflow_isolated`
-end-to-end test is the one that exercises real `entry_points()` resolution through a live
-`ProvidersManager`.
+`tests/enduser/` is a sanitized consumer-style catalog run on every certified matrix leg
+-- the consumer contract, exercised the way a user's own suite would. It covers custom
+operators, TaskFlow and mapping, hooks and connections, SQLite provider SQL, sensors,
+deferral, callbacks and retries, assets, provider packages, `DagBag`/collection,
+logging, `xdist`, and REST API CRUD.
+
+Provider discovery gets two angles: `tests/enduser/test_isolated_discovery.py` (marked
+`airflow_isolated`) registers a provider's `apache_airflow_provider` entry point through a
+synthetic distribution in a one-shot child process and resolves it through a live
+`ProvidersManager`, and `check_component`'s `ComponentKind.PROVIDER` checks catch the same
+discovery failure modes statically -- see
+[Providers, if you are shipping one](guide/custom-components.md#providers-if-you-are-shipping-one).
 
 ## Concurrent local runs
 
@@ -53,27 +46,19 @@ scratch run -- can rarely end a session with a non-zero exit code even though ev
 FileNotFoundError: .../pytest-current
 ```
 
-raised from `_pytest/pathlib.py::cleanup_dead_symlinks`, which both sessions reach via
-`pytest_sessionfinish` because both share one `$TMPDIR/pytest-of-<user>/` root. The race itself
-is pytest's own -- an unguarded `unlink()` on a symlink two processes both see as dead -- but this
-plugin's zero-ini defaults make it far likelier to trip than a bare pytest install: `defaults.py`
-sets `tmp_path_retention_policy = "failed"` (pytest's own default is `"all"`), so a *passing*
-session removes its own numbered directory in `pytest_sessionfinish`, which is exactly the
-directory `pytest-current` points to. That leaves `pytest-current` dangling for whichever
-concurrent session's cleanup runs next, and the first of the two to call `unlink()` on it wins.
-Under pytest's own `all` default the symlink's target is never removed on a pass, so the
-dangling state -- and the race -- essentially doesn't arise. The isolated `AIRFLOW_HOME` is not
-involved either way -- that is a per-session `mkdtemp` outside `pytest-of-<user>/`.
+The race is pytest's own dangling-`pytest-current` symlink cleanup in the shared
+`pytest-of-<user>/` root, but this plugin's zero-ini `tmp_path_retention_policy = "failed"`
+default (pytest's own is `"all"`) makes it far likelier to trip than a bare pytest install.
+The isolated `AIRFLOW_HOME` is not involved -- that is a per-session `mkdtemp` outside
+`pytest-of-<user>/`.
 
 Two ways to avoid it, cheapest first:
 
-- `pytest -o tmp_path_retention_policy=all` restores pytest's own default for that run, removing
-  the dangling-symlink precondition at no storage cost.
-- `PYTEST_DEBUG_TEMPROOT=<dir>` relocates pytest's own `pytest-of-<user>/` root without touching
-  `TMPDIR`, so it does not affect where `AIRFLOW_HOME` lands (see below).
+- `pytest -o tmp_path_retention_policy=all` restores pytest's own default for that run,
+  removing the precondition at no storage cost.
+- `PYTEST_DEBUG_TEMPROOT=<dir>` relocates pytest's own `pytest-of-<user>/` root without
+  touching `TMPDIR`, so it does not affect where `AIRFLOW_HOME` lands.
 
-`TMPDIR` per checkout also works, but it doubles as the `caller-temp` rung of the `AIRFLOW_HOME`
-storage ladder in [The isolated AIRFLOW_HOME](guide/airflow-home.md), which outranks the
-RAM-backed `shared-memory` rung (`/dev/shm`) that usually wins on Linux -- so it trades that
-speed away too. `--basetemp` does not dodge this tradeoff either: this plugin reads its parent
-directory as the same `caller-temp` candidate.
+`TMPDIR` per checkout (or `--basetemp`) also works, but both feed the `caller-temp` rung
+of the `AIRFLOW_HOME` storage ladder and so trade away the faster rungs -- see
+[The isolated AIRFLOW_HOME](internals/test-environments.md#the-isolated-airflow_home).

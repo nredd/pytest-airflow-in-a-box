@@ -98,7 +98,7 @@ that ask. The other is a database fixture in the test's closure (`dag_maker`, `r
 `session`, `api_client`, and friends), which the plugin detects without any marker at all.
 
 - `db_test`: require the isolated metadata database. Marking it triggers the lazy
-  initialization -- see [the disposable metadata database](../guide/database.md)
+  initialization -- see [the disposable metadata database](../internals/test-environments.md#the-disposable-metadata-database)
 - `api_test`: additionally start the isolated REST API server and publish its URL as
   `AIRFLOW__API__BASE_URL` for the duration of the test, so code under test resolves it
   through `conf.get("api", "base_url")` -- see [talking to a live Airflow
@@ -131,7 +131,7 @@ packaging](../guide/isolated-tests.md).
 Note the collision: this marker's `environment=` keyword is `AIRFLOW__*` variables for the
 child, unrelated to the `environment(name)` sentinel gate above. Every override name must
 start with `AIRFLOW__`, and a name bootstrap already owns (`AIRFLOW__CORE__DAGS_FOLDER`,
-`AIRFLOW__CORE__UNIT_TEST_MODE`, and the rest of the isolation surface) is a
+`AIRFLOW__CORE__UNIT_TEST_MODE`, and the rest of the bootstrap-owned names) is a
 `pytest.UsageError` -- configure those through the plugin's ini options instead.
 
 The marker is refused on an xdist worker with a `pytest.UsageError`: an isolated child
@@ -145,9 +145,9 @@ No gating behavior. These exist so `-m` can select or exclude a group.
 
 - `postgres`: this test needs a provisioned Postgres metadata database (the `postgres`
   extra plus Docker). Nothing skips it for you -- select it, or deselect it with
-  `-m "not postgres"`. See [the disposable metadata database](../guide/database.md)
+  `-m "not postgres"`. See [the disposable metadata database](../internals/test-environments.md#the-disposable-metadata-database)
 - `compat`: exercises the public plugin surface across certified runtimes. Used by this
-  repo's own matrix -- see [supported Airflow and Python versions](../compatibility.md)
+  repo's own matrix -- see [Certification](../internals/certification.md#what-ci-actually-exercises)
 - `smoke`: carried by the bundled zero-boilerplate corpus checks, which are collected only
   when `--airflow-smoke` / `airflow_smoke` is on. See [smoke checks over every
   Dag](../guide/smoke-tests.md)

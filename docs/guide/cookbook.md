@@ -1,12 +1,13 @@
-# Recipes for the seams between tasks
+# Cookbook
 
-Lookup-shaped recipes for testing questions that come up often -- most distilled from
+Recipes for testing questions that come up often -- most distilled from
 [apache/airflow#63941](https://github.com/apache/airflow/discussions/63941), plus retry
 behavior ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)). Each names
-the test in `tests/enduser/` that keeps it honest.
+the test in `tests/enduser/` that keeps it honest. For checks over the whole corpus rather
+than one Dag, see [Smoke Tests](smoke-tests.md).
 
-For the argument -- what a dagbag import test plus a direct `task.function` call structurally
-cannot reach -- read [What a dagbag test and a callable test miss](../why/dagbag-callable-gap.md).
+For the argument -- what a `DagBag` import test plus a direct `task.function` call
+cannot reach -- read [What a `DagBag` test and a callable test miss](../why/index.md).
 
 ## Scheduling a consumer off a producer's outlet
 
@@ -54,7 +55,7 @@ Signature and scope:
 - The DagRun comes back unrun. Pass it to
   `pytest_airflow_in_a_box.taskinstance.execute_dag_run` to run the consumer too
 - `dag_ids=None` sweeps every Dag with a pending queue row database-wide. That is serial-only
-  for the same reason [`clear_db`](database.md) is: another xdist worker's pending rows are
+  for the same reason [`clear_db`](../internals/test-environments.md#the-disposable-metadata-database) is: another xdist worker's pending rows are
   indistinguishable from yours
 - Raises `ValueError` for a named Dag with no persisted serialized representation, or one not
   scheduled by an `Asset`/`Dataset` at all
@@ -63,7 +64,7 @@ Signature and scope:
 
 Emit an outlet event through `dag_maker` and query it back scoped to the run that produced it
 -- `AssetEvent` is a database-global, accumulating table (see
-[Seeded names are database-global](seeding.md)), so an unscoped query can match a different
+[Seeded names are database-global](../internals/test-environments.md#seeding-variables-and-connections)), so an unscoped query can match a different
 test's event. `EmitAssetOperator.execute` attaches the metadata via
 `context["outlet_events"][self.outlets[0]].extra` (`tests/enduser/test_assets.py`):
 
@@ -97,7 +98,7 @@ def test_outlet_event_is_persisted(dag_maker):
 Static schedule assertions (`consumer.timetable.asset_condition`) go through `dag_bag`
 against a real Dag folder -- see `test_asset_dags_survive_serialization` in the same file.
 Reading an event back from *inside* the consumer's own execution is the
-[cross-Dag seam](../why/dagbag-callable-gap.md#cross-dag-relations-asset-triggered-downstream-dags).
+[cross-Dag gap](../why/index.md#cross-dag-relations-asset-triggered-downstream-dags).
 
 ## SQL operators with mocked connections
 
@@ -185,13 +186,13 @@ operators that render from *inside* `execute()`.
 
 ## Retry behavior
 
-`dag_maker.run()` / `dag_maker.run_ti()` execute a `TaskInstance` once, scheduler-shaped: a
+`dag_maker.run()` / `dag_maker.run_ti()` execute a `TaskInstance` once, the way the scheduler would: a
 retry-configured failure settles `up_for_retry` rather than being re-attempted (see
 [Task execution](task-execution.md)). Drive it the rest of the way with a second, explicit
 `run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against the same persisted
 instance -- `ignore_task_deps` bypasses Airflow's "Not In Retry Period" dependency instead of
 waiting out `retry_delay` for real. Bump `try_number` before each `run_ti` call, including
-the first. That mirrors the scheduler-shaped step Airflow's own `Dag.test()` takes before
+the first. That mirrors the scheduler-side step Airflow's own `Dag.test()` takes before
 every attempt -- a step a direct `run_ti` call does not take on its own. Skip the first
 bump and you understate how close the retry is to exhausting `max_tries`. Airflow 2.x's pre-2.10
 `try_number` is a read-only derived property rather than a plain column, so this recipe is
@@ -245,13 +246,13 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
 
 To test *attempt-dependent* logic rather than the retry itself, seed a synthetic `try_number`
 with the DB-free `run_task` fixture instead --
-[`try_number` without a real retry](../why/dagbag-callable-gap.md#attempt-dependent-logic-try_number-without-a-real-retry).
+[`try_number` without a real retry](../why/index.md#attempt-dependent-logic-try_number-without-a-real-retry).
 
 ## Elsewhere in this guide
 
-- Pinned-`Param` cases -- [Dag-file collection](dag-collection.md)
+- Pinned-`Param` cases -- [Dag-file collection](smoke-tests.md#pinned-param-cases)
 - Deferrable operators -- [Deferrable operators](deferrable-operators.md)
 - Locating a test's own data files -- the plugin ships `airflow_home` and
-  `airflow_dags_folder` ([Where the run lives](airflow-home.md)) and nothing for your repo's
+  `airflow_dags_folder` ([Where the run lives](../internals/test-environments.md#the-isolated-airflow_home)) and nothing for your repo's
   `tests/` folder; use `request.path.parent`, or `pytestconfig.rootpath` /
   `pytestconfig.inipath` for the repo-root and config-file cases

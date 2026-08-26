@@ -3,8 +3,7 @@
 You have a `dags/` folder, custom operators, and CI on Airflow 3. This gets you a real DagRun
 in your suite in one file and one flag.
 
-Install first if you have not:
-[Installing the plugin](install.md).
+Install first if you have not: [Installing the plugin](install.md).
 
 ## Run a Dag from your own `dags/` folder
 
@@ -26,12 +25,12 @@ pytest --dag-folder=dags
 
 `dag_bag` parses that folder once per worker process. `--dag-folder` has an ini twin,
 `airflow_dags_folder`, so you set it once instead of on every invocation -- see
-[Where the run lives](guide/airflow-home.md).
+[Where the run lives](internals/test-environments.md#the-isolated-airflow_home).
 
-`run_dag` proves your *real file*, under its real `dag_id`, actually settles the way you
-think. `result.order` is the executed order, not graph topology.
+`run_dag` proves your *real file*, under its real `dag_id`, actually finishes in the states
+you think it does. `result.order` is the executed order, not graph topology.
 
-## Author the Dag in the test instead
+## Dags authored in the test
 
 `dag_maker` builds and persists a Dag written in the test body, so nothing has to exist on
 disk:
@@ -64,10 +63,8 @@ def test_dag(dag_maker):
 pytest
 ```
 
-`run_dag()` and `dag_maker.run()` return the same inert `DagRunResult` snapshot: `states`,
-`xcoms`, `errors`, `order`, and per-task access via `result["task_id"]`. One task at a time is
-`dag_maker.run_ti("produce")`. `pytest_airflow_in_a_box.matchers` collapses the whole snapshot
-into one expression:
+`run_dag()` and `dag_maker.run()` return the same inert `DagRunResult` snapshot.
+`pytest_airflow_in_a_box.matchers` collapses it into one expression:
 
 ```python
 from pytest_airflow_in_a_box.matchers import succeeded
@@ -75,9 +72,45 @@ from pytest_airflow_in_a_box.matchers import succeeded
 assert result == {"produce": succeeded(21), "consume": succeeded(42)}
 ```
 
-Full surface: [Real DagRuns and real state](guide/task-execution.md).
+The full API: [Real DagRuns and real state](guide/task-execution.md).
 
-## Run one operator with no database at all
+## Catch a branch skip
+
+A branch skip is invisible to both halves of the usual suite: the file parses, every callable
+returns the right value, and `rejected` still runs when it should not have.
+
+```python
+from airflow.sdk import task
+
+from pytest_airflow_in_a_box.matchers import skipped
+
+
+def test_branch_skips_the_unselected_path(dag_maker):
+    with dag_maker(dag_id="branching"):
+
+        @task.branch
+        def choose() -> str:
+            return "chosen"
+
+        @task
+        def chosen() -> None: ...
+
+        @task
+        def rejected() -> None: ...
+
+        choose() >> [chosen(), rejected()]
+
+    result = dag_maker.run()
+
+    assert result.success
+    assert result.order == ["choose", "chosen"]
+    assert result["rejected"] == skipped()
+```
+
+`dag.test()` cannot phrase either assertion -- see
+[why not `dag.test()`](why/index.md#why-not).
+
+## Run one operator without a database
 
 `run_task` executes a single operator in process through the Task SDK runner. No metadata DB,
 no DagRun, no migration. Airflow 3.x only:
@@ -97,20 +130,21 @@ def test_add(run_task):
     assert result.xcoms["return_value"] == 3
 ```
 
-Same family, different jobs: `render_task` resolves `template_fields` without calling
-`execute()`, and `task_context` hands you a real Task SDK context for a hand-driven
-`execute()`. See [One operator, no database](guide/db-free-execution.md).
+`render_task` and `task_context` stop earlier on the same machinery -- see
+[One operator, no database](guide/db-free-execution.md).
 
-## Which rung do I want
+## How deep do you go?
 
-Stand on the lowest rung that can still fail for the reason you care about. The full cost and
-capability of each -- and what each one structurally *cannot* prove -- is
+The decision behind every test on this page: how much Airflow machinery does the assertion
+need? Rendered `template_fields` only, one operator in process, or a real `DagRun` backed by a
+metadata DB? Each step up costs more setup and runtime. The full cost and capability
+comparison -- and what each rung *cannot* prove -- is
 [The fidelity ladder](guide/ladder.md).
 
 Next:
 
 - [Deciding which failures are yours](guide/testing-scope.md)
-- [Recipes for the seams between tasks](guide/cookbook.md)
+- [Recipes for the handoffs between tasks](guide/cookbook.md)
 - [Smoke checks over every Dag](guide/smoke-tests.md) -- properties of the whole corpus, not
   one Dag
 - [The GitHub Action](guide/ci/github-action.md)

@@ -1,4 +1,4 @@
-# Deciding which failures are yours
+# Whose fail is it anyway?
 
 Test the Airflow code *you* wrote. That means your Dags, and it also means the custom
 operators, hooks, sensors, decorators, and connection types those Dags lean on -- writing your
@@ -21,18 +21,18 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
   component needs persisted state
 - Wiring and task relations -- trigger rules, branching, mapped fan-out, and the data flowing
   between your tasks. See
-  [Task relations](../why/dagbag-callable-gap.md#task-relations-trigger-rules-branching-and-cross-task-xcom)
+  [Task relations](../why/index.md#task-relations-trigger-rules-branching-and-cross-task-xcom)
 - Cross-Dag relations -- your producer's outlet actually triggering your consumer. See
-  [Cross-Dag relations](../why/dagbag-callable-gap.md#cross-dag-relations-asset-triggered-downstream-dags)
+  [Cross-Dag relations](../why/index.md#cross-dag-relations-asset-triggered-downstream-dags)
 - DagRun-to-DagRun relations -- `depends_on_past`, backfill-ish sequences, anything where run
   N-1 conditions run N. See
-  [DagRun relations](../why/dagbag-callable-gap.md#dagrun-relations-depends-on-past-and-backfill-ish-sequences)
+  [DagRun relations](../why/index.md#dagrun-relations-depends-on-past-and-backfill-ish-sequences)
 - Retry and failure behavior you configured -- attempt-dependent logic, `on_failure_callback`,
   the `trigger_rule` that decides whether your alert task fires
 - Rendered templates -- that *your* Jinja produces the string you expect, via
   [`render_task`](db-free-execution.md#rendering-template-fields-without-running)
 - Hook and connection wiring -- that your operator reaches the connection you seeded, via
-  [`airflow_connections`](seeding.md)
+  [`airflow_connections`](../internals/test-environments.md#seeding-variables-and-connections)
 - Corpus-level habits -- top-level Variable access, import-time I/O, unbounded `expand`, and
   the rest of the [smoke checks](smoke-tests.md)
 
@@ -40,23 +40,19 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
 
 Airflow mechanisms. Toy two-task Dags asserting that xcom transports a value, that the
 scheduler honors a timetable, that a *stock* operator survives serialization, or that
-`BaseHook.get_connection` reads the metadata DB -- these cost runtime on every CI run and
-assert nothing about your code. When one passes it tells you nothing; when one fails you have
-found an Airflow bug, and the fix is an upstream issue, not a change to your Dag.
+`BaseHook.get_connection` reads the metadata DB -- when one fails you have found an Airflow
+bug, and the fix is an upstream issue, not a change to your Dag.
 
 Note the "stock" qualifier. It is what carves the two always-on
 [smoke catalog](smoke-tests.md) items out of this list:
 
-- `test_dag_serialization_roundtrip` -- worth running precisely because *your* operator's
-  constructor arguments are the part that can fail to serialize. Airflow's serializer is not
-  the subject; your Dag files are
-- `test_schedule_sanity` -- computes `next_dagrun_info` for every scheduled Dag in your
-  corpus. The subject is *your* `schedule=`, `start_date`, and any timetable you wrote, not
-  the timetable machinery
+- `test_dag_serialization_roundtrip` -- *your* operator's constructor arguments are the part
+  that can fail to serialize. Airflow's serializer is not the subject; your Dag files are
+- `test_schedule_sanity` -- the subject is *your* `schedule=`, `start_date`, and any timetable
+  you wrote, not the timetable code Airflow ships
 
-Both run once `--airflow-smoke` is on, over every Dag in your corpus, with no test body to
-write. Neither asserts anything about a stock component in isolation. Drop either with the
-`airflow_smoke_disable` ini option if your corpus makes it worthless.
+Neither asserts anything about a stock component in isolation. Mechanics and opt-outs are on
+the [smoke tests](smoke-tests.md#selecting-and-disabling-items) page.
 
 Same for the plugin itself. `dag_maker` persisting a Dag, `clear_db` truncating tables, the
 REST API fixture booting -- those are covered in `tests/` here, across the full compatibility
@@ -64,10 +60,9 @@ matrix.
 
 There is also an upper bound. This plugin is not a provider- or core-development harness:
 building a provider package for distribution, or changing Airflow itself, wants Airflow's own
-Breeze environment and `tests_common` -- the harness Airflow's core test suite runs on, aimed
-at testing Airflow itself and not published as a package for testing Dag-author code. The line
-is roughly "a component that lives in your repo alongside your Dags" versus "a component you
-are shipping to other people as part of Airflow".
+Breeze environment and [`tests_common`](../internals/tests-common-parity.md). The line is
+roughly "a component that lives in your repo alongside your Dags" versus "a component you are
+shipping to other people as part of Airflow".
 
 ## Same fixture, different subject
 
@@ -84,24 +79,19 @@ Both use the same `dag_maker` + `run()` shape. Only the first can fail because y
 
 Re-asserting mechanism behavior is the point when you are about to change the mechanism. Pin a
 suite against your current Airflow, capture how it behaves today, then run the same suite on
-the target version and diff -- that is a deliberate, temporary artifact with an expiry date,
-not a permanent part of your test suite.
+the target version and diff. For the duration of the migration those assertions *are* yours --
+the subject is your upgrade, not Airflow. But it is a bridge with an expiry date, not a second
+home -- see
+[Airflow 2.x support](../internals/certification.md#airflow-2x-is-a-migration-bridge-not-a-second-home)
+-- so delete the mechanism assertions once the upgrade lands.
 
-The plugin ships the machinery for exactly this workflow:
-
-- [Migration outcome diff](migration/outcome-diff.md) -- record outcomes on one Airflow, compare
-  against another
-- [Migration diff orchestrator](migration/orchestrator.md) -- `airflow-migration-diff` runs
-  both disposable environments and prints the categorized diff in one command
-- [Migration-strict mode](migration/strict.md) -- the cheaper structural layer to run first
-- The `requires_airflow2` / `requires_airflow3` [markers](../reference/markers.md), which
-  auto-skip on the other family so one suite stays green on both sides of the bump
-
-Delete the mechanism assertions once the upgrade lands.
+The plugin ships the tooling for exactly this workflow -- strict mode, the outcome diff, the
+orchestrator, and the `requires_airflow2` / `requires_airflow3` markers. The
+[migration tier](migration/index.md) lays out the layers in order.
 
 ## See also
 
-[What a dagbag test and a callable test miss](../why/dagbag-callable-gap.md) is the
+[What a `DagBag` test and a callable test miss](../why/index.md) is the
 complement to this page: this one is about tests that should not exist, that one is about the
-seams a dagbag import test plus a direct `task.function` call never reaches. The
-[cookbook](cookbook.md) holds the lookup-shaped recipes.
+gaps a `DagBag` import test plus a direct `task.function` call never reaches. The
+[cookbook](cookbook.md) holds the recipes.

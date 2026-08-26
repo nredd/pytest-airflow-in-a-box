@@ -1,4 +1,4 @@
-# Custom timetables
+# Timetables
 
 Upstream's timetable documentation says a custom timetable "must be a subclass of
 `Timetable`, and be registered as a part of a plugin" -- and offers zero testing
@@ -98,7 +98,7 @@ externally-authored Dags through the same serializer without it -- for those, ca
 
 ## Priority weight strategies
 
-The same registration story applies to `PriorityWeightStrategy` subclasses: Dag
+Registration works the same for `PriorityWeightStrategy` subclasses: Dag
 serialization refuses an operator's custom `weight_rule` unless the class is
 registered, and decoding re-instantiates it with no arguments (state must live on the
 class -- upstream's documented contract):
@@ -115,7 +115,7 @@ def test_operator_uses_my_weight_strategy(airflow_components, dag_maker):
 - Only a module-scope class can register: Airflow matches a custom timetable by
   qualified name, so a class defined inside a test function can never resolve -- the
   `timetable-local-qualname` conformance check refuses it up front with an explanation
-  instead of letting `TimetableNotRegistered` surface later
+  instead of letting `TimetableNotRegistered` show up later
 - Registration (like all of `airflow_components`) requires Airflow 3.x; on the 2.x
   family `dag_maker` behaves exactly as before and custom-timetable serialization is
   unsupported

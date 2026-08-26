@@ -6,7 +6,7 @@ and on how an outcome was derived. Both are public and both are specified here. 
 running the workflow, [Diffing outcomes across the upgrade](outcome-diff.md) is the page you
 want.
 
-Two importable surfaces:
+Two importable modules:
 
 - [`pytest_airflow_in_a_box.artifact`](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/src/pytest_airflow_in_a_box/artifact.py)
   -- `Outcome`, `OutcomeEntry`, `Artifact`, `ARTIFACT_SCHEMA_VERSION`, `load_artifact`,

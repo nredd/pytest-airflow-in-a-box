@@ -25,8 +25,7 @@ All three are pinned in `tests/fixtures/test_task_context.py`.
 
 ## Why not something else
 
-- `dag.test()` is whole-Dag and DB-backed. It cannot be the fast inner loop for one operator,
-  and it swallows task exceptions
+- `dag.test()` -- see [why not `dag.test()`](../why/index.md#dagtest)
 - Airflow's own `tests_common` harness targets core and provider development, not Dag-author
   code in your repo. See [Deciding which failures are yours](testing-scope.md)
 - Hand-rolling the runner means answering eight Task SDK supervisor message types and tracking
@@ -55,30 +54,25 @@ def test_operator(run_task):
 `TaskRunResult` carries `state`, `error`, `xcoms`, `msg`, and `sent`.
 
 `try_number=` selects the synthetic attempt, and the operator's own `retries` decides whether a
-failure classifies as `UP_FOR_RETRY` and fires its retry callback. This is the *only* rung where
-that classification is reachable -- a persisted run attempts each instance exactly once.
+failure classifies as `UP_FOR_RETRY` and fires its retry callback -- retry classification is
+reachable only on this rung ([the fidelity ladder](ladder.md) says why).
 
 ## Where this rung stops
 
-`run_task` is the fast inner rung. It cannot prove anything that needs a second task or real
-metadata:
+`run_task` cannot prove anything that needs a second task or real metadata:
 
 - XCom is keyed by XCom key **alone**. There is no `task_ids`, `run_id`, or `map_index`
   scoping, so a green `xcom_pull` does not prove data flowed from A to B
 - Asset inlet/outlet validation is rubber-stamped: `ValidateInletsAndOutlets` always answers
-  `inactive_assets=[]`, so an inactive asset never surfaces here
+  `inactive_assets=[]`, so an inactive asset never shows up here
 - Comms-backed `RuntimeTaskInstance` statics the fake supervisor does not answer (e.g.
   `get_dagrun_state`, `get_dr_count`) resolve to `None`, which the SDK then dereferences --
   expect an `AttributeError`, not a clean `None`
 
-When an assertion needs any of those, climb to [`dag_maker.run_ti`](task-execution.md) --
-[the fidelity ladder](ladder.md) lays out what each rung buys.
+When an assertion needs any of those, climb to [`dag_maker.run_ti`](task-execution.md).
 
-```text
-Airflow 2.x: `run_task`, `render_task`, and `task_context` all fail with an actionable
-error. The Task SDK in-process runner is a 3.x thing. Use `dag_maker.run_ti` or
-`run_task_instance` for DB-backed execution on that family.
-```
+On Airflow 2.x all three fixtures fail with an actionable error -- the Task SDK in-process
+runner is a 3.x thing; use [`dag_maker.run_ti`](task-execution.md#single-task-execution) there.
 
 ## Operators without a Dag
 
@@ -114,9 +108,8 @@ def test_add(run_task):
 The Task SDK requires every executing task to have a bound Dag, so `run_task`, `render_task`,
 and `task_context` bind an unbound operator IN PLACE to a synthetic
 `DAG(dag_id=..., schedule=None)`. Pass `dag_id="..."` to name it, or leave it off for a
-deterministic, bounded, xdist-safe identifier derived from the test's nodeid, the xdist worker,
-and a per-fixture invocation counter -- the same derivation `dag_maker` uses, salted so the two
-never collide. The identifier is visible as `{{ dag.dag_id }}` in templates and as
+deterministic, xdist-safe identifier derived from the test's nodeid, visible as
+`{{ dag.dag_id }}` in templates and as
 `operator.dag.dag_id` after the call. The synthetic Dag is stamped with the test module's
 location, so `template_ext` files (`.sql`, `.sh`, ...) resolve next to the test.
 
@@ -157,7 +150,7 @@ cover.
 
 ## Getting the raw return value of execute()
 
-`task_context` prepares the same machinery and then hands control back, so `execute()` and
+`task_context` prepares the same runner and then hands control back, so `execute()` and
 `post_execute()` can be driven by hand. Its job is the value `execute()` *returns* -- which
 `run_task` pushes to XCom and never shows you:
 
@@ -170,13 +163,9 @@ def test_operator_execute_result(task_context):
     assert tc.ti.log_url.startswith("http")
 ```
 
-Reach for it when a test needs that raw return value, when an operator renders its templates
-from *inside* `execute()`, or when application code reads incidental attributes off
-`context["ti"]`.
-
-Because the test drives `execute()` itself, nothing pushes the return value to XCom for you.
-`tc.xcoms` reflects only what the operator pushed explicitly through
-`context["ti"].xcom_push(...)`.
+Also reach for it when an operator renders its templates from *inside* `execute()`, or when
+application code reads incidental attributes off `context["ti"]`. Since the test drives
+`execute()` itself, `tc.xcoms` reflects only explicit `context["ti"].xcom_push(...)` calls.
 
 Always drive `tc.task`, not the operator you passed in: preparation happens on a
 `prepare_for_execution()` copy, and an in-execute `render_templates()` renders `ti.task`, which
@@ -195,5 +184,4 @@ def test_deferred_rendering(task_context):
 ```
 
 The fake supervisor is installed only inside the `with` block. `tc.xcoms` and `tc.sent` stay
-readable after exit; `tc.ti` and `tc.context` do not outlive it. Full lifecycle semantics are
-in [Fixtures](../reference/fixtures.md).
+readable after exit; `tc.ti` and `tc.context` do not outlive it.

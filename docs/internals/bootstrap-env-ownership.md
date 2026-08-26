@@ -1,6 +1,8 @@
-# Who owns AIRFLOW__\*
+# `pytest-xdist`
 
-You are probably here because an xdist run died before executing a single test:
+How this plugin behaves under `pytest-xdist`, and the gotchas that come with it. The
+biggest one first: you are probably here because an xdist run died before executing a
+single test:
 
 ```console
 ERROR: Inherited Airflow environment for the local xdist worker disagrees with state:
@@ -22,10 +24,10 @@ Ordering, on every process:
 
 1. pytest parses the command line and the ini file, folding `-o` overrides into the ini table.
 2. `plugin.pytest_load_initial_conftests` runs. Bootstrap installs the environment, then the
-   [`airflow_config` ini option](../guide/configuration.md) is applied on top.
+   [`airflow_config` ini option](test-environments.md#overriding-configuration) is applied on top.
 3. pytest's own conftest-collecting hookimpl runs. It is `trylast`, so it is strictly after
    step 2. This is the moat: a consumer `conftest.py` structurally cannot precede bootstrap.
-4. Anything a conftest imports is free to write over the whole surface.
+4. Anything a conftest imports is free to write over all of it.
 
 Step 4 is not hypothetical. An `import` with a module-scope `os.environ` assignment is a common
 harness shape, and Airflow's own `tests_common/pytest_plugin.py` is one of them.
@@ -70,7 +72,7 @@ so a name bootstrap starts owning is denied on the same commit.
 Two process kinds inherit state rather than bootstrapping their own: a local xdist worker
 (`PYTEST_XDIST_WORKER`) and the one-shot child an
 [`airflow_isolated`](../guide/isolated-tests.md) batch spawns
-(`PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER`) -- structurally an xdist worker of one, over the
+(`PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER`) -- in effect an xdist worker of one, over the
 identical environment channel.
 
 Each is spawned with a copy of the parent's environment, which by then may already have been

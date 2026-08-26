@@ -1,4 +1,4 @@
-# Wiring components into the run
+# Running them
 
 A clean [`check_component`](custom-components.md) report proves the component's shape. It
 says nothing about whether a test process can load it -- in production your deployment
@@ -68,8 +68,8 @@ match what this plugin has certified.
 The methods:
 
 - `plugin(component)` -- registers into every plugins-manager half the installed release
-  has (both core and Task SDK from 3.2 on; core only on 3.1.x, which carries no Task SDK
-  plugin-loading surface at all)
+  has (both core and Task SDK from 3.2 on; core only on 3.1.x, which has no Task SDK
+  plugin loading at all)
 - `listener(component, *, core=True, task=True)` -- registers with the core and/or Task
   SDK listener manager. Requesting `task=True` on 3.1.x raises rather than silently
   registering core-only; pass `task=False` explicitly on a test that intentionally spans
@@ -82,7 +82,7 @@ The methods:
   `get_airflow_context_vars`, `get_dagbag_import_timeout`) and registers it with Airflow's
   policy plugin manager. Never writes an `airflow_local_settings.py` file, so per-test
   policies are fully decoupled from the collision guard in [keeping your own
-  `airflow_local_settings.py`](cluster-policies.md). A registered
+  `airflow_local_settings.py`](../internals/test-environments.md#cluster-policies-and-airflow_local_settingspy). A registered
   `task_instance_mutation_hook` also flips the `is_noop` dispatch gate to False for the
   test, reverted at teardown -- Airflow short-circuits on that flag, so the hookimpl would
   otherwise register but never fire
@@ -114,7 +114,7 @@ The methods:
   SDK availability so a 3.1.x install round-trips core-only rather than raising. Not a
   substitute for `policy()`, which has no bare-component form to classify
 
-No *Airflow configuration* surface can select an executor alias. The `airflow_executor`
+No *Airflow configuration* option can select an executor alias. The `airflow_executor`
 ini is resolved before the first Airflow import, when no alias exists yet, and takes a
 real dotted class path; a `core.executor` override is silently ignored too, because
 `ExecutorLoader._get_executor_names()` memoizes its config parse into `_executor_names`
@@ -132,7 +132,7 @@ sandbox degrades instead of failing: capabilities resolve by live probing, unkno
 plugins-manager caches are snapshot and cleared generically by introspection, and drift
 from the certified tables is logged rather than raised. State isolation still holds
 byte-for-byte; what the degraded tier gives up is byte-verified vetting of Airflow's
-internals. It is surfaced three ways: one `UncertifiedAirflowWarning` per session at
+internals. It shows up three ways: one `UncertifiedAirflowWarning` per session at
 configure time, a `DEGRADED:` bullet in
 [`--airflow-doctor`](../reference/diagnostics.md), and
 `ComponentReport.certification == CertificationTier.PROBED` on every report.
@@ -148,7 +148,7 @@ configure time, a `DEGRADED:` bullet in
   secrets backend, or plugins-folder component is live before the sandbox snapshots, so it
   is exactly what restoration reinstates
 - **`airflow_config` environment overrides sit between the two.** A `with
-  airflow_config(...)` block, or the [`airflow_config` ini option](configuration.md) whose
+  airflow_config(...)` block, or the [`airflow_config` ini option](../internals/test-environments.md#overriding-configuration) whose
   context is the whole session, outranks the generated `airflow.cfg` for its duration,
   because the environment outranks every file on each `conf.get()`. It changes what
   Airflow *reads*, never the live registries the sandbox manages
@@ -156,8 +156,8 @@ configure time, a `DEGRADED:` bullet in
 One consequence worth spelling out: `airflow_executor` writes `[core] executor` into the
 generated `airflow.cfg`, while an `airflow_config` ini line `core.executor = ...` becomes
 the `AIRFLOW__CORE__EXECUTOR` environment variable -- so with both set, the
-`airflow_config` line wins for the whole session. Deliberate: `core.executor` is
-intentionally not on the `airflow_config` denylist, and the environment channel is defined
+`airflow_config` line wins for the whole session. That is intentional: `core.executor` is
+not on the `airflow_config` denylist, and the environment channel is defined
 to outrank the file channel. Set one or the other.
 
 ## Hazards at the sandbox seam

@@ -51,7 +51,6 @@ The contract:
   port rather than borrowing another worker's server
 - `AirflowApiClient.get`/`post`/`patch`/`delete` return an `ApiResponse` with `status` and a
   decoded `body`. HTTP error statuses are returned, not raised
-- Airflow 3.x only
 
 The server runs `--apps core,execution`, so the same process serves the Task Execution API that
 [executor-driven runs](task-execution.md#executor-driven-runs) point supervised workers at.

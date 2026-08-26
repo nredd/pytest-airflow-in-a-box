@@ -2,7 +2,7 @@
 
 Rename a key in your trigger's `TriggerEvent` payload and an ordinary suite stays green:
 
-- The dagbag test passes. The file still imports
+- The `DagBag` test passes. The file still imports
 - Calling `task.execute(context)` passes. `self.defer(...)` raises `TaskDeferred` before your
   `execute_complete` is ever reached, so the resume half is never executed
 - A plain `dag_maker` run passes. The instance settles `deferred`, nothing resumes it, and no
@@ -67,20 +67,12 @@ nothing raises `TriggerExecutionError` naming the trigger class instead of hangi
   modeled; test its loop directly with `run_trigger` and a trigger constructed to fire
 - **No triggerer semantics.** Trigger timeouts, `TriggerFailureReason`, high-availability
   assignment, and multiple triggers sharing one loop are the triggerer's job, not this
-- **`run_triggerer=` cannot be combined with `executor=`.** Combining them raises `ValueError`
-  by name: resuming a deferred task is a triggerer's job, and an
-  [executor-driven run](task-execution.md#executor-driven-runs) settles a deferring instance as
-  `deferred`
+- **`run_triggerer=` cannot be combined with `executor=`.** See
+  [executor-driven runs](task-execution.md#executor-driven-runs)
 
 ## Why not `dag.test(run_triggerer=True)`
 
-Upstream runs the trigger as `asyncio.run(anext(trigger.run(), None))` in
-`InProcessTestSupervisor.run_trigger_in_process`. Two consequences:
-
-- No timeout, and no `cleanup()`. A trigger that never fires hangs the run instead of failing it
-- `dag.test()` catches the resume exception, logs it as `[DAG TEST] Error running task`, and
-  marks the instance `failed`. It does not raise, so your renamed-key bug is a log line in a
-  green pytest run
-
-Here the trigger is bounded, `cleanup()` is guaranteed, and the failure is an exception in your
-test.
+[Why not `dag.test()`](../why/index.md#dagtest) covers the general case. The trigger-specific
+part: upstream runs the trigger as a bare `asyncio.run(anext(trigger.run(), None))` -- no
+timeout, no `cleanup()`, and the resume exception is logged, not raised. Here the trigger is
+bounded, `cleanup()` is guaranteed, and the failure is an exception in your test.

@@ -1,4 +1,4 @@
-# What `_compat/` absorbs
+# Compatibility
 
 Two ways you get here. Either you are deciding whether this plugin survives your next Airflow
 bump, or a run just died with:
@@ -15,7 +15,7 @@ fixture.
 
 ## The surface it stands on
 
-Airflow 3 has no supported testing surface for what this plugin does. Driving a real
+Airflow 3 has no supported testing API for what this plugin does. Driving a real
 `RuntimeTaskInstance`, persisting a `DagRun` with a `DagVersion` and a `DagBundleModel`,
 clearing the metadata DB table-group by table-group, evaluating an asset condition -- all of it
 runs through modules Airflow does not document as public and does not promise across minors.
@@ -27,8 +27,8 @@ Measured on this tree:
   `airflow.providers.standard.operators.empty`); the bulk are not -- `airflow.models.*` ORM
   tables, `airflow.sdk.execution_time.*`, `airflow.sdk.api.datamodels._generated`,
   `airflow._shared.*`, `airflow.serialization.*`, `airflow.executors.*`, `airflow.policies`
-- Certified across 13 Airflow 3.x releases (3.1.0 through 3.3.1) and 5 Airflow 2.x releases
-  (2.7.3, 2.8.4, 2.9.3, 2.10.5, 2.11.2)
+- Certified across 18 Airflow releases -- the certified matrix lives in
+  [Certification](certification.md)
 
 The version drift is not hypothetical. `DagBag` moved from `airflow.models.dagbag` to
 `airflow.dag_processing.dagbag`. `SerializedDAG` moved out of
@@ -127,22 +127,21 @@ live probing and the component sandbox degrades to generic snapshot/restore. ...
 `pytest --airflow-doctor` prints every capability field plus a `DEGRADED:` bullet explaining the
 tier. See [diagnosing a run](../reference/diagnostics.md).
 
-Below the floor, or outside the 3.x major, is a hard failure -- those releases are
-known-unsupported, not unknown. `airflow-canary.yml` runs weekly against the newest upstream
-release and files an issue, so certification work starts before you hit the degraded tier.
+The policy itself -- degrade above the certified set, hard-fail below the floor, weekly canary
+-- is stated in [Certification](certification.md).
 
 ## `tests/enduser/` is the consumer contract
 
 Unit tests of `_compat/` prove the shims behave. They do not prove a *user's* test still passes
 after a version bump. `tests/enduser/` does that: 32 modules marked `compat`, written against
-the public fixture surface only, exercising operators, sensors, TaskFlow, triggers, assets,
+the public fixtures only, exercising operators, sensors, TaskFlow, triggers, assets,
 callbacks, hooks, the REST API, `dag_corpus`, structlog capture, and executor runs.
 
 It runs on the whole compat matrix -- 3.1.0 through 3.3.1 across CPython 3.10-3.14, plus macOS,
 arm, musl, and pytest-floor legs. The Airflow 2.x legs run `tests/enduser` and *only*
 `tests/enduser`: the inner unit suite imports 3.x-only modules at module scope and cannot
 collect on 2.x, so the consumer contract is the whole 2.x signal.
-`tests/enduser/conftest.py` drops the four genuinely 3.x-only modules by `collect_ignore` and
+`tests/enduser/conftest.py` drops the four 3.x-only modules by `collect_ignore` and
 authors everything else dynamically through `tests/enduser/_authoring.py`, marking its 3.x-only
 tests `requires_airflow3` so they are collected and skipped rather than never seen.
 
@@ -157,8 +156,8 @@ from the scheduler's asset-triggered DagRun creation. Both carry exact upstream 
 `PROVENANCE.md`, along with every Airflow source file the certified contract was read against.
 That file is the audit trail for what "certified" means on any given release.
 
-For where `_compat/` sits relative to the rest of the machinery: bootstrap owns the environment
-before Airflow is ever imported ([who owns `AIRFLOW__*`](bootstrap-env-ownership.md)), the
-parse-time secrets shim is one of the private surfaces this layer holds
+For where `_compat/` sits relative to the rest of the plugin: bootstrap owns the environment
+before Airflow is ever imported ([`pytest-xdist`](bootstrap-env-ownership.md)), the
+parse-time secrets shim is one of the private pieces this layer holds
 ([parse-time secret resolution](parse-time-secrets.md)), and
-[supported versions](../compatibility.md) is the user-facing statement of the certified set.
+[Certification](certification.md) is the user-facing statement of the certified set.

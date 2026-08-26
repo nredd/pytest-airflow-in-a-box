@@ -24,7 +24,7 @@ dependency order, and returns the same `DagRunResult` snapshot `dag_maker.run()`
 below) -- keyed on the Dag's own `dag_id`, not a synthetic one, so `result.dag_id` matches what
 your real Dag declares. `--dag-folder`/`airflow_dags_folder` is a different option from
 `--collect-dag-folder`/`airflow_collect_dags_folder`, which drives
-[Dag-file collection](dag-collection.md) instead. The `airflow_dags_folder` fixture returns
+[Dag-file collection](smoke-tests.md#one-pytest-item-per-dag-file) instead. The `airflow_dags_folder` fixture returns
 whichever directory that ladder resolved, as a `pathlib.Path`, when a test needs the folder
 itself rather than the parsed bag.
 
@@ -32,7 +32,7 @@ Because the persisted `dag_id` is the real one, two `pytest-xdist` workers runni
 `dag_id` at the same time race on the shared metadata database, and the race does not fail
 cleanly: if both pass the absence check before either commits, they silently share one
 bundle/`DagModel` row, and whichever tears down first deletes metadata the other worker's
-still-running test depends on. It surfaces later as a `DagPersistenceError`,
+still-running test depends on. It shows up later as a `DagPersistenceError`,
 `DagRunCreationError`, or a task-resolution failure with no obvious link back to the race.
 
 The only mitigation is keeping such tests on one worker with `pytest.mark.xdist_group` -- which
@@ -75,16 +75,12 @@ import path, a `BaseExecutor` subclass, or an instance you built yourself. The a
 workers report to starts lazily on the first executor-driven call, exactly as `api_client`
 starts it, and `--apps core,execution` means it serves `/execution` as well as `/api/v2`.
 
-This is the piece upstream cannot offer. `dag.test(use_executor=True)` queues real workloads,
-but nothing in a test process serves the `/execution` API they need
-([apache/airflow#59074](https://github.com/apache/airflow/issues/59074)); this plugin already
-ships a live api-server, so pointing an executor at it is the whole trick. Nothing here is
-built on `dag.test`, which is mid-move upstream
-([#61803](https://github.com/apache/airflow/issues/61803),
-[#54658](https://github.com/apache/airflow/issues/54658)).
+This is the piece `dag.test(use_executor=True)` cannot offer -- see
+[why not `dag.test()`](../why/index.md#dagtest). This plugin already ships a live
+api-server, so pointing an executor at it is the whole trick.
 
 The result is the same `DagRunResult`, with the same ordering, mapped-task expansion, and
-settling semantics -- both paths share one driver. Three things differ, all of them inherent
+final-state semantics -- both paths share one driver. Three things differ, all of them inherent
 to tasks running in another process:
 
 - **The Dag must be a file inside your Dag folder.** Each task is re-imported from that file
@@ -93,21 +89,20 @@ to tasks running in another process:
 - **`result.errors` is best-effort.** A task's exception is raised inside the worker, so only
   what the executor itself attaches to a failure reaches your test. `result.states` stays
   authoritative, and the traceback is in the worker's log under the run's logs folder --
-  [`--airflow-home-retention=all`](airflow-home.md) keeps it around.
+  [`--airflow-home-retention=all`](../internals/test-environments.md#the-isolated-airflow_home) keeps it around.
 - **Instances are dispatched one at a time**, in dependency order, so an executor's own
   concurrency is not exercised. This is what keeps `result.order` meaningful.
 
 `run_triggerer=` cannot be combined with `executor=`: resuming a deferred task is a
-triggerer's job, and an executor-driven run settles a deferring instance as `deferred`.
+triggerer's job, and an executor-driven run leaves a deferring instance `deferred`.
 
-An instance that never settles fails the run naming the stuck task, rather than hanging.
+An instance that never reaches a final state fails the run naming the stuck task, rather than hanging.
 `--airflow-executor-timeout` (or the `airflow_executor_timeout` ini option) sets that budget
 per instance; it defaults to 300 seconds, which is generous for a worker subprocess that has
 to start up and parse a Dag file.
 
-Airflow 3.x only. `queue_workload`, `workloads.ExecuteTask` and the Task Execution API all
-arrived with AIP-72, so on the 2.x family `executor=` fails with an actionable error; drop it
-and the in-process path works there unchanged.
+On Airflow 2.x `executor=` fails with an actionable error (the Task Execution API is an
+AIP-72 / 3.x thing); drop it and the in-process path works there unchanged.
 
 Writing an executor to test is easier than it sounds -- Airflow 3 removed `SequentialExecutor`
 from core, so a serial one is about fifteen lines. See
@@ -150,11 +145,12 @@ topology), `tis`, `dag_run`, and per-task access via `result["task_id"]` or
 `result["mapped_task", map_index]`. Mapped tasks expand mid-run once their upstream values
 exist, and keys expand with them: `states` gains `"double[0]"`, `"double[1]"`, and so on.
 
-Failure is captured scheduler-shaped: a raising task body lands in `result.errors`, blocked
-downstreams settle as `upstream_failed`, and with default trigger rules `result.success`
-reports `False` -- testing an intentional-failure Dag needs no extra flag. `success` mirrors
-Airflow's leaf-task DagRun semantics, so a failure absorbed by an `all_done`-style leaf still
-settles as `success`; assert `not result.errors` for "no task raised":
+Failure is captured the way the scheduler captures it: a raising task body lands in
+`result.errors`, blocked downstreams end as `upstream_failed`, and with default trigger rules
+`result.success` reports `False` -- testing an intentional-failure Dag needs no extra flag.
+`success` mirrors Airflow's leaf-task DagRun semantics, so a failure absorbed by an
+`all_done`-style leaf still counts as `success`; assert `not result.errors` for "no task
+raised":
 
 ```python
 result = dag_maker.run()
@@ -169,13 +165,13 @@ assert isinstance(result.errors["boom"], ValueError)
 ```
 
 A deferring task settles as `deferred` (and the DagRun stays `running`) unless
-`run_triggerer=True` fires its persisted trigger inline. An explicit
+[`run_triggerer=True`](deferrable-operators.md) fires its persisted trigger inline. An explicit
 `dag_maker.create_dagrun(logical_date=...)` composes: pass it as `dag_maker.run(dag_run)`.
 
 Every task instance is attempted exactly *once* -- `retries` are never re-attempted. A
-retry-configured task that fails settles as `up_for_retry`, the DagRun stays `running`, and
+retry-configured task that fails lands in `up_for_retry`, the DagRun stays `running`, and
 a warning names the stranded instances; drop `retries` from Dags under test, or assert
-`up_for_retry` deliberately. Retry *classification* is reachable one rung down, through
+`up_for_retry` on purpose. Retry *classification* is reachable one rung down, through
 [`run_task(..., try_number=)`](db-free-execution.md#running-one-operator).
 
 ### Deterministic run defaults
@@ -244,8 +240,8 @@ def test_task(dag_maker):
 ```
 
 Passing `map_index` expands a mapped task on demand; upstream-XCom mapping works after its
-producer has run in the same DagRun. Passing `run_triggerer=True` runs the persisted trigger
-event and resumes a deferred task inline, bounded by `trigger_timeout` seconds.
+producer has run in the same DagRun. Passing `run_triggerer=True` resumes a deferred task
+inline ([deferred tasks and your own triggers](deferrable-operators.md)).
 `run_ti(session=...)` mirrors upstream `tests_common`'s routing: the supplied session is used
 for the task-execution step only, while DagRun creation and task-instance selection stay on
 `dag_maker.session` exactly as upstream's do.
@@ -264,4 +260,4 @@ exposes `run`, `create_dagrun`, `create_ti`, and `run_ti`.
 `dag_maker` also accepts upstream `tests_common`'s harness keywords, exposes scheduler-side
 handles, and ships the `create_task_instance` / `create_dummy_dag` one-call factories. The
 call-site parity contract, the ADR 0002 migration table, and every deliberate deviation are in
-[Upstream tests_common parity](../internals/tests-common-parity.md).
+[Us vs Them](../internals/tests-common-parity.md).

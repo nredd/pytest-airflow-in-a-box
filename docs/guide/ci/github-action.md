@@ -44,7 +44,7 @@ jobs:
       - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
 ```
 
-Which pairs are legal is on [Supported Airflow and Python versions](../../compatibility.md).
+Which pairs are legal is on [Certification](../../internals/certification.md#what-ci-actually-exercises).
 The action does not validate the pair against the support matrix -- it only rejects
 malformed inputs.
 

@@ -1,8 +1,11 @@
-# Upstream tests_common parity
+# Us vs Them
 
-For a suite porting off Airflow's internal `tests_common` harness. This page is the call-site
-parity contract: which keywords route where, which upstream calls need a one-line rewrite, and
-every place this plugin deliberately differs. Everyday Dag testing does not need it -- start at
+For a suite porting off Airflow's internal `tests_common` harness -- the plugin Airflow's own
+suite runs on, living in
+[`devel-common/src/tests_common`](https://github.com/apache/airflow/tree/main/devel-common/src/tests_common)
+and never published to PyPI. This page is the call-site parity contract: which keywords route
+where, which upstream calls need a one-line rewrite, and every place this plugin differs on
+purpose. Everyday Dag testing does not need it -- start at
 [Real DagRuns and real state](../guide/task-execution.md).
 
 ## Upstream harness keywords
@@ -33,7 +36,7 @@ def test_upstream_style(dag_maker, session):
   (persistence, `create_dagrun`, `create_ti`), and `dag_maker.session` returns it. The fixture
   never closes a supplied session; teardown cleanup opens its own. Persistence *commits* on it,
   which narrows what the rollback-isolated `session` fixture guarantees -- see
-  [Sessions](../guide/database.md#sessions)
+  [Sessions](test-environments.md#the-disposable-metadata-database)
 - `bundle_name=` overrides the derived per-Dag bundle row name. The derived name is unique per
   Dag on purpose -- it is the mitigation for cross-worker bundle-row contention under
   `pytest-xdist` -- so supplying your own opts out of that isolation. A shared row is still
@@ -98,10 +101,10 @@ Dag (ADR 0002), so those call sites move to a factory handle -- each is a one-li
 class is reachable -- the rows above are the patterns upstream suites actually hit. Signatures
 beyond `infer_manual_data_interval` follow the installed Airflow release (e.g.
 `partial_subset(exclude_original=...)` exists only where upstream added it); private attributes
-such as `_time_restriction` are deliberately not part of any plugin contract.
-`create_dagrun_after` has no equivalent -- deliberately deferred in
+such as `_time_restriction` are not part of any plugin contract.
+`create_dagrun_after` has no equivalent -- deferred in
 [#261](https://github.com/nredd/pytest-airflow-in-a-box/issues/261) until consumer demand
-justifies its per-version run-info machinery (see ADR 0002's amendment).
+justifies its per-version run-info handling (see ADR 0002's amendment).
 
 ## Upstream one-call factories
 
@@ -151,7 +154,7 @@ All nine are rooted in this plugin's own persistence machinery rather than upstr
 - `create_task_instance(execution_date=...)` -- the Airflow 2 spelling 2.x-era upstream suites
   use -- is accepted on both families and mapped onto `logical_date` with a
   `DeprecationWarning`, exactly as upstream preserves it; passing both spellings raises
-  `ValueError`. `dag_maker.create_dagrun` deliberately does *not* grow the alias:
+  `ValueError`. `dag_maker.create_dagrun` does *not* grow the alias:
   `dag_run_kwargs={"execution_date": ...}` keeps its loud rejection, whose message names the
   `logical_date` remedy
 - `dag_maker`-routed keywords upstream supports (`session=`, `bundle_name=`, `bundle_version=`)

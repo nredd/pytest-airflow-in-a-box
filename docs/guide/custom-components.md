@@ -1,4 +1,4 @@
-# Checking a custom component
+# `check_component`
 
 You wrote a `Timetable`, a listener, or a `BaseExecutor` subclass, the class definition
 imported fine, and the suite is green. That proves nothing: `BaseExecutor` is not an ABC,
@@ -237,11 +237,11 @@ token=workload.token, server=..., log_path=workload.log_path)` instead, resolvin
 Both checks model a policy registered as an `@hookimpl`-decorated class through the
 `airflow.policy` entry point -- the shape `ComponentKind.POLICY`'s classifier requires. A
 plain module-level function in `airflow_local_settings.py`, the older and still-common
-way, is a different surface: `make_plugin_from_local_settings` loads it through a
+way, is a different mechanism: `make_plugin_from_local_settings` loads it through a
 generated shim that calls it positionally and deliberately tolerates a name or arity
 mismatch. Forcing `kind=ComponentKind.POLICY` on such a function finds nothing either,
 since a plain function is never `@hookimpl`-marked. See [keeping your own
-`airflow_local_settings.py`](cluster-policies.md).
+`airflow_local_settings.py`](../internals/test-environments.md#cluster-policies-and-airflow_local_settingspy).
 
 ## Plugin checks
 
@@ -271,7 +271,7 @@ Pass the `get_provider_info` callable itself, not its return value:
 `check_component(get_provider_info)`. The last two checks need the callable's module
 attributed to a real installed distribution, done by matching the distribution's recorded
 file list, falling back to the source root(s) named in its `.pth` file for an editable
-install. That root is deliberately narrower than the project checkout: a `src/`-layout
+install. That root is narrower than the project checkout on purpose: a `src/`-layout
 package is exposed only under `src/`, so a sibling `tests/` directory is not attributed
 to it. A callable that cannot be attributed -- one defined in a test file, say -- is
 silently skipped by both.

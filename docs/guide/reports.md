@@ -66,7 +66,7 @@ airflow_report_dir = reports
 ```
 
 The plugin writes no report files unless one of those is set. Report artifacts deliberately
-sit outside the [zero-ini defaults](configuration.md), which are display-only and never put
+sit outside the [zero-ini defaults](../reference/ini-options.md), which are display-only and never put
 files in your repository.
 
 Every derived destination yields to an explicit one, so `--log-file`, `--log-file-level`,
@@ -88,16 +88,6 @@ exactly like a hand-written one.
 ## In CI
 
 Archive on both outcomes. A report from a *green* run is nice, a report from a red one is the
-point:
-
-```yaml
-- run: pytest --airflow-smoke --airflow-report-dir=${{ github.workspace }}/reports
-- if: always()
-  uses: actions/upload-artifact@v7
-  with:
-    name: reports
-    path: ${{ github.workspace }}/reports
-```
-
-The composite action has a `report-dir` input that does the flag half for you and hands the
-absolute path back as an output. See [The GitHub Action](ci/github-action.md).
+point. The `upload-artifact` recipe, and the composite action's `report-dir` input that does
+the flag half for you, are on
+[The GitHub Action](ci/github-action.md#report-artifacts).

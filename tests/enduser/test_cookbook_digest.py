@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from airflow.models.asset import AssetEvent, AssetModel
+from airflow.models.asset import AssetEvent
 from airflow.sdk import Asset, BaseOperator
 from sqlalchemy import select
 
@@ -47,10 +47,7 @@ def test_digest_reads_the_ingest_run_that_triggered_it(dag_maker: DagMaker) -> N
     producer_ti = dag_maker.run_ti("notify")
 
     event_id = dag_maker.session.scalar(
-        select(AssetEvent.id)
-        .join(AssetModel, AssetModel.id == AssetEvent.asset_id)
-        .where(
-            AssetModel.uri == REPORT.uri,
+        select(AssetEvent.id).where(
             AssetEvent.source_dag_id == producer_ti.dag_id,
             AssetEvent.source_run_id == producer_ti.run_id,
             AssetEvent.source_task_id == producer_ti.task_id,

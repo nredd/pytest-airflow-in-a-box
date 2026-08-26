@@ -1,4 +1,4 @@
-# Parse-time secret resolution
+# Secrets
 
 You are here because a Dag file that reads a Variable or a Connection at *top level* fails to
 import under test, with one of two symptoms:
@@ -21,12 +21,12 @@ lazy-init `InProcessExecutionAPI`.
 
 `_compat/parse_time.py` assigns a `SUPERVISOR_COMMS` of its own for the duration of a parse and
 answers lookups from the metadata database -- the same rows
-[`airflow_variables` / `airflow_connections`](../guide/seeding.md) commit, read back through
+[`airflow_variables` / `airflow_connections`](test-environments.md#seeding-variables-and-connections) commit, read back through
 the ORM so Fernet decryption runs. Assigning the attribute satisfies 3.1's direct import *and*
 selects 3.2+'s client chain, so one shim covers every certified 3.x release.
 
 Every parse site the plugin owns installs it: the `dag_bag` fixture,
-[`--collect-dag-folder`](../guide/dag-collection.md) import and params items, and the
+[`--collect-dag-folder`](../guide/smoke-tests.md#one-pytest-item-per-dag-file) import and params items, and the
 [smoke](../guide/smoke-tests.md) corpus build. Nothing touches the database until a Dag issues
 a lookup, so a Dag folder that never reads a Variable or a Connection pays nothing.
 

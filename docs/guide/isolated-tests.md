@@ -1,4 +1,4 @@
-# Entry points and packaging
+# Entry points
 
 Anything Airflow discovers through a setuptools entry point -- `airflow.plugins`,
 `apache_airflow_provider`, `airflow.policy` -- cannot be honestly tested in process.

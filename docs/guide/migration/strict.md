@@ -3,7 +3,7 @@
 `--airflow-migration-strict` turns an Airflow 2.11 test run into a forecast of 3.x breakage,
 with no 3.x environment needed. Airflow 2.11 is deliberately saturated with deprecation
 warnings pointing at what changes in 3.x; error-promoting the right two categories during the
-runtest phase surfaces exactly the code paths a real 3.x migration will break, today, on the
+runtest phase flags exactly the code paths a real 3.x migration will break, today, on the
 2.x environment already in CI:
 
 ```console
@@ -26,7 +26,7 @@ subclassing `DeprecationWarning`:
 - `airflow.exceptions.RemovedInAirflow3Warning`
 - `airflow.exceptions.AirflowProviderDeprecationWarning`
 
-Plain `DeprecationWarning` is deliberately excluded. A lot of it reaches a test through
+Plain `DeprecationWarning` is excluded on purpose. A lot of it reaches a test through
 Airflow's own call frames without being an Airflow-authored migration signal -- third-party
 library noise, stdlib deprecations, and the like. Only Airflow's own two public deprecation
 categories are trustworthy enough to fail a test over.
