@@ -38,7 +38,7 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
 
 ## Out of scope
 
-Airflow mechanisms. A toy two-task Dag asserting that xcom transports a value, that the
+Airflow mechanisms. Toy two-task Dags asserting that xcom transports a value, that the
 scheduler honors a timetable, that a *stock* operator survives serialization, or that
 `BaseHook.get_connection` reads the metadata DB -- these cost runtime on every CI run and
 assert nothing about your code. When one passes it tells you nothing; when one fails you have

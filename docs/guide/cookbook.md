@@ -191,9 +191,9 @@ retry-configured failure settles `up_for_retry` rather than being re-attempted (
 `run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against the same persisted
 instance -- `ignore_task_deps` bypasses Airflow's "Not In Retry Period" dependency instead of
 waiting out `retry_delay` for real. Bump `try_number` before each `run_ti` call, including
-the first: that mirrors the same scheduler-shaped step Airflow's own `Dag.test()` takes
-before every attempt, which a direct `run_ti` call does not, and skipping the first bump
-would understate how close a retry is to exhausting `max_tries`. Airflow 2.x's pre-2.10
+the first. That mirrors the scheduler-shaped step Airflow's own `Dag.test()` takes before
+every attempt -- a step a direct `run_ti` call does not take on its own. Skip the first
+bump and you understate how close the retry is to exhausting `max_tries`. Airflow 2.x's pre-2.10
 `try_number` is a read-only derived property rather than a plain column, so this recipe is
 3.x-only (`tests/enduser/test_dag_run_result.py`):
 

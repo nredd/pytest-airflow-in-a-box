@@ -72,5 +72,5 @@ pytest -p no:pytest_airflow_in_a_box
 ## Not on Windows
 
 Apache Airflow has no native Windows support, so neither does this. Use WSL2 or the repo's
-devcontainer. Platform-independent package checks passing on Windows does not imply Airflow
+devcontainer. Platform-independent package checks passing on Windows do not imply Airflow
 works there.

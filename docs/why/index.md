@@ -1,12 +1,15 @@
 # The wall you hit at 500 tasks
 
-In 2024 my team moved its nightly regressions off Jenkins and onto Airflow. Rewriting a pile
-of unversioned shell scripts into documented, statically-checked, unit-tested Python was the
-fun part. Then the Dag templates grew. A few hundred lines of generator, 500+ tasks on the
-other side, and not one of the failures I actually cared about was reachable without a live
-Airflow instance. Every check was a deploy and a wait.
-
-This plugin is the thing I wanted then. It is a `pytest` run 🫡
+In 2024, I learned that my team was abandoning Jenkins for our nightly regressions. A
+righteous tear rolled down my cheek when I heard the replacement was Airflow: a
+Python-native workflow platform. As a lover of all things slick and hyper-engineered, I was
+overjoyed to rewrite all those DISGUSTING unversioned shell scripts into a beautiful
+library of documented, statically-analyzed, and unit-tested code. Fast forward a few
+months--I have some crazy 500+ task DAG templates underway (for convoluted semiconductor
+design methodologies) that were IMPOSSIBLE to fully verify outside of a live Airflow
+instance. I yearned for a far-off land where I could develop alone in my teched-out Python
+cave, talk to absolutely no one, and ship complete Methodologies without a whisper in the
+night. This plugin is the closest thing we have 🫡
 
 ## The failures that need a DagRun to exist
 

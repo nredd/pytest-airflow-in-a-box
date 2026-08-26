@@ -65,8 +65,8 @@ component itself:
 - **Policy** -- at least one `airflow.policies.hookimpl`-decorated method
 - **Plugin** -- the same MRO name-and-module duck typing Airflow's own `is_valid_plugin`
   uses (`base.__name__ == "AirflowPlugin" and "plugins_manager" in base.__module__`)
-  rather than `issubclass`, since the shared plugin base is reachable via different
-  symlinked paths from core and the Task SDK, which Python treats as distinct classes
+  rather than `issubclass`, since core and the Task SDK reach the plugin base through
+  different symlinked paths, and Python treats the two as distinct classes
 - **Provider** -- a non-class callable named exactly `get_provider_info`
 
 A component matching none of these, with no `kind` given, returns a clean, empty report

@@ -57,7 +57,7 @@ matching how the comparison folds a neutral outcome away from `regression`/`fixe
 (produced by `--airflow-record` alongside a `--airflow-baseline` run) and non-strict xfail-marks
 every known regression -- a nodeid that passed (or xpassed) on the baseline and failed, errored, or
 xfailed in that prior live run. The prior-live side accepts `xfailed` too, on purpose: once a
-regression has been auto-marked once, re-recording the live side while it is still unfixed records
+regression has been auto-marked, re-recording the live side while it is still unfixed records
 it as `xfailed`, not `failed`, and the marking must stay self-sustaining across repeated
 `--airflow-baseline-xfail` runs rather than losing track of it:
 

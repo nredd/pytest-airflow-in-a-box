@@ -145,7 +145,7 @@ Failure is captured scheduler-shaped: a raising task body lands in `result.error
 downstreams settle as `upstream_failed`, and with default trigger rules `result.success`
 reports `False` -- testing an intentional-failure Dag needs no extra flag. `success` mirrors
 Airflow's leaf-task DagRun semantics, so a failure absorbed by an `all_done`-style leaf still
-settles `success`; assert `not result.errors` for "no task raised":
+settles as `success`; assert `not result.errors` for "no task raised":
 
 ```python
 result = dag_maker.run()

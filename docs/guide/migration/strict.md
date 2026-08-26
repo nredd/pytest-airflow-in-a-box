@@ -51,7 +51,7 @@ own copy of the ini list.
 ## Allowlisting a specific warning
 
 No bespoke allowlist option exists, because pytest's own `filterwarnings` precedence already
-does the job: the plugin *prepends* its two error filters below every user-supplied line, and
+does the job: the plugin *prepends* its two error filters ahead of every user-supplied line, and
 pytest applies `filterwarnings` lines in order with later lines winning. A later, more specific
 line downgrades the plugin's default:
 

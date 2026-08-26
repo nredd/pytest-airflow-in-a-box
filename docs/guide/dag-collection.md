@@ -25,7 +25,7 @@ What it costs you:
 - One item, one assert. Fifty broken files are one failure, and you cannot `-k` a single file,
   shard the corpus, or get a JUnit row per file
 - No Dag-free-file check. A file that imports clean and declares zero Dags passes that assert
-  and then quietly does not exist as far as the scheduler is concerned. Collected items fail it
+  and then quietly does not exist as far as the scheduler is concerned. Collected items fail
   with `Dag file defines no Dags`
 - Top-level `Variable.get()` resolves differently than it will in production. Airflow 3 routes
   those lookups through the Task SDK, and a bare `DagBag()` parse has no supervisor answering:

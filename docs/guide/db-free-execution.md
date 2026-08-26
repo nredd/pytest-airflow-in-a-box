@@ -5,9 +5,9 @@ call `op.execute(context)`. That harness gets three things wrong, and two of the
 
 **1. Template fields are never rendered.** Rendering happens in the task runner, not in
 `execute()`. A hand-rolled call hands your operator the literal string, so an operator whose
-`sql="SELECT {{ ds }}"` ships `{{ ds }}` to the warehouse passes a test that asserts on the
-same literal. `run_task`, `render_task`, and `task_context` render exactly like a real run --
-`"{{ 21 * 2 }}"` arrives at `execute()` as `"42"`.
+`sql="SELECT {{ ds }}"` -- which ships `{{ ds }}` to the warehouse -- passes a test that
+asserts on the same literal. `run_task`, `render_task`, and `task_context` render exactly like
+a real run -- `"{{ 21 * 2 }}"` arrives at `execute()` as `"42"`.
 
 **2. There is no active `get_current_context()`.** Passing a context as an argument does not
 publish it. Any code the operator calls that reaches for
@@ -181,8 +181,8 @@ Because the test drives `execute()` itself, nothing pushes the return value to X
 Always drive `tc.task`, not the operator you passed in: preparation happens on a
 `prepare_for_execution()` copy, and an in-execute `render_templates()` renders `ti.task`, which
 must be the object whose `execute()` is running. For a mapped operator, `tc.task` is the
-concrete unmapped instance for `map_index` -- with the default `render=True` only, since
-Airflow unmaps inside `render_template_fields`, so a mapped operator with `render=False` raises
+concrete unmapped instance for `map_index` -- but only with the default `render=True`, since
+Airflow unmaps inside `render_template_fields`. A mapped operator with `render=False` raises
 `ValueError`.
 
 Template fields are pre-rendered like a real run by default. Pass `render=False` for the

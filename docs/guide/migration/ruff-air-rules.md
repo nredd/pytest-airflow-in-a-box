@@ -73,9 +73,9 @@ opt-in, but setting `unsafe-fixes = true` in `[tool.ruff]` is enough of an opt-i
 apply too.
 
 So: `AIR301`/`AIR302` as errors immediately, since a removed symbol is broken on 3.x no matter
-when you look at it, and `AIR311`/`AIR312` deferred until the 3.x cutover is the last thing
-left. The autofix hazard is the loud reason, but not the real one -- the real one is that the
-suggestion tier is *unactionable* on a dual-family codebase. Any compliant rewrite breaks 2.x,
+when you look at it, and `AIR311`/`AIR312` deferred until the 3.x cutover -- that's the last
+thing left. The autofix hazard is the loud reason, but not the real one -- the real one is that
+the suggestion tier is *unactionable* on a dual-family codebase. Any compliant rewrite breaks 2.x,
 by hand exactly as it does by autofix, so gating on those two rules means a permanently red
 build with no legal way to turn it green. Come the cutover both facts invert at once and the
 autofixes become the fastest way to land the rewrite.

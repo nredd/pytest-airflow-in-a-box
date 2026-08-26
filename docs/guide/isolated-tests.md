@@ -6,9 +6,9 @@ Discovery reads installed distribution metadata through a `functools.cache`d hel
 (vendored in two copies on Airflow 3.2+), and a custom XCom backend binds at module import
 time. Monkeypatching those caches would test the patch, not your packaging.
 
-Reach for the real thing first. For a package you actually ship, `uv pip install -e .`
-into the test environment and then asserting discovery is the more faithful test: it
-exercises the entry points your own `pyproject.toml` declares. The marker below
+Reach for the real thing first. For a package you actually ship, installing it with
+`uv pip install -e .` into the test environment and then asserting discovery is the
+more faithful test: it exercises the entry points your own `pyproject.toml` declares. The marker below
 synthesizes `entry_points.txt` from a string literal in the test, so a typo in the real
 `pyproject.toml` still goes green.
 

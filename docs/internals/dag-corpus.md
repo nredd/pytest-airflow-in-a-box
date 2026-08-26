@@ -52,7 +52,7 @@ an `xdist_group` marker, in two shapes:
 
 - **`dag_corpus` consumers**: *every* surviving consumer joins the catalog's group. They are
   expected to be few, cheap, read-only checks, so sharing a worker costs nothing and leaving
-  one behind would make it pay the flock-wait and decode itself
+  one behind would make it pay the flock-wait and decode the artifact itself
 - **`dag_bag` consumers**: exactly *one* is chosen as an anchor. Grouping all of them would
   trade one avoided parse for serializing a whole suite's execution onto one worker
 

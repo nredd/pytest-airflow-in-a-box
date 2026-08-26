@@ -110,5 +110,3 @@ nav:
       - Parse-time secret resolution: internals/parse-time-secrets.md
       - Corpus parsing, parallelism, and dag_corpus: internals/dag-corpus.md
       - Working on the plugin itself: development.md
-
-  - Vision: vision.md
