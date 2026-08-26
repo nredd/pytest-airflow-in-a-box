@@ -399,7 +399,7 @@ def test_cleanup_failure_still_closes_the_session(monkeypatch: pytest.MonkeyPatc
     record = compat_seed.SeedRecord(
         session=compat_seed.open_seed_session("Variables"), kind="Variables"
     )
-    record.variable_ids.add(-1)
+    record.variables[-1] = "never_seeded"
     connection = record.session.connection()
 
     # Deferred because the failure under test is raised by SQLAlchemy.
@@ -415,6 +415,130 @@ def test_cleanup_failure_still_closes_the_session(monkeypatch: pytest.MonkeyPatc
         compat_seed.cleanup_seeds(record)
 
     assert connection.closed
+
+
+def test_cleanup_leaves_a_foreign_variable_sharing_an_owned_id(
+    airflow_variables: AirflowVariables,
+) -> None:
+    """Skip an owned Variable id whose row now carries another seed's `key`.
+
+    Regression test for issue #325: `variable.id` is a plain `Integer` primary key
+    with no `sqlite_autoincrement`, so on SQLite it is a rowid alias whose value is
+    reused once the highest row is deleted, and every xdist worker shares one metadata
+    database. Deleting by bare primary key therefore took another worker's live seed.
+
+    Parameters:
+        airflow_variables: AirflowVariables seeding the bystander row this record must
+            not delete.
+    """
+
+    airflow_variables({"seed_pk_reuse_bystander": "value"})
+    with create_session() as session:
+        bystander_id = session.scalar(
+            select(Variable.id).where(Variable.key == "seed_pk_reuse_bystander")
+        )
+    assert bystander_id is not None
+
+    record = compat_seed.SeedRecord(
+        session=compat_seed.open_seed_session("Variables"), kind="Variables"
+    )
+    # The reused id: this record inserted it under its own key, and another seed's row
+    # carries that id now.
+    record.variables[bystander_id] = "seed_pk_reuse_owner"
+
+    compat_seed.cleanup_seeds(record)
+
+    assert _row_count(Variable, Variable.key, "seed_pk_reuse_bystander") == 1
+
+
+def test_cleanup_pairs_each_owned_id_with_its_own_key(
+    airflow_variables: AirflowVariables,
+) -> None:
+    """Skip a row holding one owned id and a *different* owned key.
+
+    The predicate has to be an OR of per-row `(id, key)` pairs. Matching an id set
+    against a key set independently is a cross product: with two or more owned rows, a
+    stranger's row that reused owned id `A` while carrying owned key `B` satisfies both
+    halves and gets deleted anyway, which is the same issue #325 failure the pairing is
+    supposed to close.
+
+    Parameters:
+        airflow_variables: AirflowVariables seeding the bystander row this record must
+            not delete.
+    """
+
+    airflow_variables({"seed_cross_product_bystander": "value"})
+    with create_session() as session:
+        bystander_id = session.scalar(
+            select(Variable.id).where(Variable.key == "seed_cross_product_bystander")
+        )
+    assert bystander_id is not None
+
+    record = compat_seed.SeedRecord(
+        session=compat_seed.open_seed_session("Variables"), kind="Variables"
+    )
+    # This record owned `bystander_id` under a different key, and owned
+    # `seed_cross_product_bystander` under a different id. Neither pair matches the
+    # live row; only a cross product would.
+    record.variables[bystander_id] = "seed_cross_product_owner"
+    record.variables[bystander_id + 10_000] = "seed_cross_product_bystander"
+
+    compat_seed.cleanup_seeds(record)
+
+    assert _row_count(Variable, Variable.key, "seed_cross_product_bystander") == 1
+
+
+def test_cleanup_chunks_a_batch_past_sqlite_expression_depth(
+    airflow_variables: AirflowVariables,
+) -> None:
+    """Clean an owned batch larger than SQLite's expression-tree depth cap.
+
+    The paired predicate contributes one `AND` node per owned row to an `OR` chain, and
+    SQLite caps an expression tree at depth 1000 -- a single statement covering a batch
+    that size raises `sqlite3.OperationalError: Expression tree is too large`, which
+    surfaces as a `SeedCleanupError` in teardown rather than in the test body. The batch
+    here is deliberately over `DELETE_PAIR_CHUNK_SIZE` and over the 1000 cap.
+
+    Parameters:
+        airflow_variables: AirflowVariables seeding the oversized owned batch.
+    """
+
+    size = compat_seed.DELETE_PAIR_CHUNK_SIZE * 6 + 1
+    assert size > 1000
+    airflow_variables({f"seed_bulk_{index}": "value" for index in range(size)})
+
+    assert _row_count(Variable, Variable.key, "seed_bulk_0") == 1
+    assert _row_count(Variable, Variable.key, f"seed_bulk_{size - 1}") == 1
+
+
+def test_cleanup_leaves_a_foreign_connection_sharing_an_owned_id(
+    airflow_connections: AirflowConnections,
+) -> None:
+    """Skip an owned Connection id whose row now carries another seed's `conn_id`.
+
+    The `Connection` half of issue #325 -- `connection.id` has the same reusable
+    `Integer` primary key as `variable.id`.
+
+    Parameters:
+        airflow_connections: AirflowConnections seeding the bystander row this record
+            must not delete.
+    """
+
+    airflow_connections({"seed_pk_reuse_bystander_conn": {"host": "localhost"}})
+    with create_session() as session:
+        bystander_id = session.scalar(
+            select(Connection.id).where(Connection.conn_id == "seed_pk_reuse_bystander_conn")
+        )
+    assert bystander_id is not None
+
+    record = compat_seed.SeedRecord(
+        session=compat_seed.open_seed_session("Connections"), kind="Connections"
+    )
+    record.connections[bystander_id] = "seed_pk_reuse_owner_conn"
+
+    compat_seed.cleanup_seeds(record)
+
+    assert _row_count(Connection, Connection.conn_id, "seed_pk_reuse_bystander_conn") == 1
 
 
 def test_cleanup_of_an_unused_record_closes_without_writing() -> None:

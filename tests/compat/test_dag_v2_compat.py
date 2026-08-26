@@ -868,9 +868,16 @@ def test_expand_mapped_task_uses_the_operator_method_on_v2(
 
 
 class _FakeV2CleanupSession:
-    """Record ORM and core delete traffic for v2 `_cleanup_dag` probes."""
+    """Record ORM and core delete traffic for v2 `_cleanup_dag` probes.
 
-    def __init__(self) -> None:
+    Parameters:
+        run_dag_id: str the fetched `DagRun` rows report as their own `dag_id`.
+            `_delete_dag_run_rows` re-checks it on every row (issue #325), so the
+            fake must carry it; a value other than the record's leaves every run.
+    """
+
+    def __init__(self, run_dag_id: str = "fake_dag") -> None:
+        self.run_dag_id = run_dag_id
         self.deleted: list[Any] = []
         self.executed: list[str] = []
         self.committed = False
@@ -880,9 +887,9 @@ class _FakeV2CleanupSession:
 
     def get(self, model: Any, key: Any) -> Any:
         name = getattr(model, "__name__", str(model))
-        if name == "DagModel":
-            return SimpleNamespace(kind=f"{name}:{key}")
-        return f"{name}:{key}"
+        if name == "DagRun":
+            return SimpleNamespace(kind=f"{name}:{key}", dag_id=self.run_dag_id)
+        return SimpleNamespace(kind=f"{name}:{key}")
 
     def delete(self, row: Any) -> None:
         self.deleted.append(row)
@@ -912,10 +919,33 @@ def test_cleanup_dag_deletes_the_v2_row_set() -> None:
 
     dag_module._cleanup_dag(record)
 
-    assert session.deleted[0].endswith(":5")
+    assert session.deleted[0].kind.endswith(":5")
     assert any("serialized_dag" in statement for statement in session.executed)
     assert session.deleted[-1].kind.endswith(":fake_dag")
     assert not any("dag_code" in statement for statement in session.executed)
+    assert session.committed is True
+
+
+@pytest.mark.usefixtures("v2_capabilities")
+def test_cleanup_dag_leaves_a_foreign_dag_run_sharing_an_owned_id() -> None:
+    """Skip an owned DagRun id whose row now carries another Dag's `dag_id`.
+
+    Regression test for issue #325 on the 2.x branch, which passes `record.dag_run_ids`
+    straight through with no `dag_id` sweep in front of it. `dag_run.id` is a rowid
+    alias on SQLite with no `AUTOINCREMENT`, so the value is reused once the highest
+    row is deleted, and every xdist worker shares one metadata database -- an owned id
+    can name another Dag's live run by teardown, and an ORM delete would cascade that
+    run's task instances away.
+    """
+
+    session = _FakeV2CleanupSession(run_dag_id="another_worker_dag")
+    record = _record(session=session)
+    record.dag_run_ids.add(5)
+
+    dag_module._cleanup_dag(record)
+
+    assert not any(getattr(row, "kind", "").startswith("DagRun:") for row in session.deleted)
+    assert session.deleted[-1].kind.endswith(":fake_dag")
     assert session.committed is True
 
 

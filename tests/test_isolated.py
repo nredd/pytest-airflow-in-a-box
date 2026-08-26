@@ -333,6 +333,10 @@ def test_apply_xdist_refusal_branches(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch: pytest.MonkeyPatch controlling the worker environment variables.
     """
 
+    # The unset-worker branch below is the first thing asserted, so the outer run's own
+    # worker identity has to go first -- this suite runs under `-n auto` in CI.
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    monkeypatch.delenv("PYTEST_AIRFLOW_IN_A_BOX_ISOLATED_WORKER", raising=False)
     marked = _node(pytest.mark.airflow_isolated(entry_points={"g": "x = y:Z"}))
 
     isolated.apply_xdist_refusal(_node(None))
