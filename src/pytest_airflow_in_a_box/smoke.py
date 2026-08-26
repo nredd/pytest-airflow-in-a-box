@@ -20,7 +20,6 @@ import difflib
 import json
 import logging
 import re
-import statistics
 import time
 import warnings
 from dataclasses import dataclass
@@ -47,7 +46,6 @@ from pytest_airflow_in_a_box.dagcorpus import (
     get_dag_corpus,
 )
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
-from pytest_airflow_in_a_box.parallel_dagbag import DUPLICATE_ID_MARKER
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -63,11 +61,6 @@ RUN_DEPENDENT_SERIALIZED_DAG_KEYS = frozenset(
     {"_processor_dags_folder", "fileloc", "relative_fileloc"}
 )
 SERIALIZATION_TIMEOUT_FLOOR_SECONDS = 30.0
-# Absolute floor under the relative parse-budget threshold, so tiny fast corpora with a
-# near-zero median do not fail on CI timing jitter.
-PARSE_BUDGET_FLOOR_SECONDS = 1.0
-# Below this many parsed files a relative-to-median budget is statistical noise.
-PARSE_BUDGET_MINIMUM_FILES = 3
 
 
 @dataclass(frozen=True)
@@ -274,21 +267,16 @@ def register_options(parser: pytest.Parser) -> None:
         default=[],
     )
     parser.addini(
-        "airflow_dag_parse_budget_ratio",
-        "Fail Dag files parsing slower than this multiple of the corpus median; 0 disables.",
-        default="10",
-    )
-    parser.addini(
         "airflow_forbid_catchup",
         "Fail Dags that enable catchup.",
         type="bool",
-        default=True,
+        default=False,
     )
     parser.addini(
         "airflow_forbid_unbounded_expand",
         "Fail mapped tasks expanding over runtime data without max_active_tis_per_dag.",
         type="bool",
-        default=True,
+        default=False,
     )
     group.addoption(
         "--airflow-dag-bag-fanout",
@@ -698,36 +686,6 @@ def _top_level_io_modules(config: pytest.Config) -> tuple[str, ...]:
             "Ini option `airflow_top_level_io_modules` must not contain empty module names"
         )
     return modules or DEFAULT_TOP_LEVEL_IO_MODULES
-
-
-def _dag_parse_budget_ratio(config: pytest.Config) -> float | None:
-    """Read the relative parse-budget multiple of the corpus median parse duration.
-
-    Parameters:
-        config: pytest.Config containing the ``airflow_dag_parse_budget_ratio`` ini value.
-
-    Returns:
-        float | None containing the positive multiplier, or ``None`` when ``0`` disables
-        the check.
-
-    Raises:
-        pytest.UsageError: The ini value is not a non-negative number.
-    """
-
-    value: object = config.getini("airflow_dag_parse_budget_ratio")
-    if not isinstance(value, str):
-        raise pytest.UsageError("Ini option `airflow_dag_parse_budget_ratio` must be a number")
-    try:
-        ratio = float(value)
-    except ValueError as error:
-        raise pytest.UsageError(
-            f"Ini option `airflow_dag_parse_budget_ratio` must be a number: '{value}'"
-        ) from error
-    if ratio < 0:
-        raise pytest.UsageError(
-            f"Ini option `airflow_dag_parse_budget_ratio` must be non-negative: '{value}'"
-        )
-    return ratio if ratio > 0 else None
 
 
 def _forbid_catchup(config: pytest.Config) -> bool:
@@ -1140,27 +1098,6 @@ def _run_dag_serialization_roundtrip(context: SmokeContext, _enabled: bool) -> N
     table = _log_serialization_table(entries, deserialize_seconds, frozenset(failed_ids))
     if failures:
         raise SmokeCheckFailure("\n\n".join(failures) + f"\n\n{table}")
-
-
-def _run_no_duplicate_dag_ids(context: SmokeContext, _enabled: bool) -> None:
-    """Surface every duplicated ``dag_id`` collision the Dag bag recorded.
-
-    Parameters:
-        context: SmokeContext bundling the session and config this check runs against.
-        _enabled: bool, unused; `test_no_duplicate_dag_ids` takes no payload.
-
-    Raises:
-        SmokeCheckFailure: Any Dag file was dropped for duplicating a ``dag_id``.
-    """
-
-    dag_bag = context.corpus
-    failures = [
-        f"'{path}': {message}"
-        for path, message in sorted(dag_bag.import_errors.items())
-        if DUPLICATE_ID_MARKER in message
-    ]
-    if failures:
-        raise SmokeCheckFailure("\n\n".join(failures))
 
 
 def _run_schedule_sanity(context: SmokeContext, _enabled: bool) -> None:
@@ -1593,46 +1530,6 @@ def _run_top_level_io(context: SmokeContext, io_modules: tuple[str, ...]) -> Non
         raise SmokeCheckFailure("\n\n".join(failures))
 
 
-def _run_dag_parse_budget(context: SmokeContext, ratio: float) -> None:
-    """Compare every file's parse duration against the relative budget threshold.
-
-    The threshold is ``max(ratio * median, PARSE_BUDGET_FLOOR_SECONDS)``, so the check
-    is independent of absolute CI speed and a near-zero median on a small fast corpus
-    cannot fail on timing jitter. Below `PARSE_BUDGET_MINIMUM_FILES` parsed files the
-    median is statistical noise and the check passes trivially.
-
-    Parameters:
-        context: SmokeContext bundling the session and config this check runs against.
-        ratio: float containing the budget multiple of the corpus median.
-
-    Raises:
-        SmokeCheckFailure: Any file's parse duration exceeds the budget threshold.
-    """
-
-    corpus = context.corpus
-    durations = [stat.duration.total_seconds() for stat in corpus.dagbag_stats]
-    if len(durations) < PARSE_BUDGET_MINIMUM_FILES:
-        LOGGER.info(
-            f"Skipping the parse budget over {len(durations)} file(s); a relative "
-            f"budget needs at least {PARSE_BUDGET_MINIMUM_FILES}"
-        )
-        return
-    median = statistics.median(durations)
-    threshold = max(ratio * median, PARSE_BUDGET_FLOOR_SECONDS)
-    failures: list[str] = []
-    for stat in corpus.dagbag_stats:
-        seconds = stat.duration.total_seconds()
-        if seconds > threshold:
-            failures.append(
-                f"Dag file '{stat.file}' took {seconds:.3f}s to parse, exceeding the "
-                f"{threshold:.3f}s budget ({ratio:g} x the {median:.3f}s corpus "
-                f"median, floored at {PARSE_BUDGET_FLOOR_SECONDS:.1f}s); tune "
-                f"`airflow_dag_parse_budget_ratio` or move slow work out of module scope"
-            )
-    if failures:
-        raise SmokeCheckFailure("\n\n".join(failures))
-
-
 def _enable_forbid_catchup(config: pytest.Config) -> bool | None:
     """Report whether the catchup check is enabled.
 
@@ -1895,12 +1792,6 @@ SMOKE_CATALOG: tuple[SmokeCheck[Any], ...] = (
         run=_run_dag_serialization_roundtrip,
     ),
     SmokeCheck(
-        name="test_no_duplicate_dag_ids",
-        enable=_always_enabled,
-        marks=frozenset(),
-        run=_run_no_duplicate_dag_ids,
-    ),
-    SmokeCheck(
         name="test_schedule_sanity",
         enable=_always_enabled,
         marks=frozenset(),
@@ -1923,12 +1814,6 @@ SMOKE_CATALOG: tuple[SmokeCheck[Any], ...] = (
         enable=_enable_top_level_io,
         marks=frozenset(),
         run=_run_top_level_io,
-    ),
-    SmokeCheck(
-        name="test_dag_parse_budget",
-        enable=_dag_parse_budget_ratio,
-        marks=frozenset(),
-        run=_run_dag_parse_budget,
     ),
     SmokeCheck(
         name="test_forbid_catchup",

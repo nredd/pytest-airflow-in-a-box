@@ -1,9 +1,9 @@
 # Smoke checks over every Dag
 
 Properties of the *set* of Dags, asserted with no test body to write: no two files claim the
-same `dag_id`, no file fetches a Variable at import time, no scheduled Dag has `catchup=True`,
-no mapped task expands over runtime data without a concurrency cap. A per-Dag test cannot
-phrase any of those, because none of them are about one Dag.
+same `dag_id`, no file fetches a Variable at import time, and -- opt-in -- no scheduled Dag has
+`catchup=True`, no mapped task expands over runtime data without a concurrency cap. A per-Dag
+test cannot phrase any of those, because none of them are about one Dag.
 
 Turn the catalog on:
 
@@ -11,7 +11,7 @@ Turn the catalog on:
 pytest --airflow-smoke --dag-folder=dags/
 ```
 
-or persistently via the `airflow_smoke` ini option. Ten items collect by default; four more
+or persistently via the `airflow_smoke` ini option. Six items collect by default; six more
 appear once you configure the ini option that enables them.
 
 ## Why the default items are in scope
@@ -32,7 +32,7 @@ Neither asserts anything about a stock component in isolation. Drop either with
 ## Overlap with `--collect-dag-folder`
 
 Both parse the same corpus, and the import-failure message is byte-identical
-(`smoke.py:1069` vs `collection.py:341`). Enabling both parses the Dag folder **twice**.
+(`smoke.py:1027` vs `collection.py:341`). Enabling both parses the Dag folder **twice**.
 
 Rule: `--airflow-smoke` when you want corpus-wide policy and one row per check;
 [`--collect-dag-folder`](dag-collection.md) when you want one selectable pytest item per Dag
@@ -75,14 +75,15 @@ On by default whenever the catalog is enabled:
   (`airflow_dag_parse_timeout`, default `30` seconds, exported as
   `AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT` so Airflow hard-kills runaway files); warns with
   `SlowDagParseWarning` on files above `airflow_dag_parse_slowpoke_ratio` (default `0.75`) of
-  the timeout without failing the run; logs a slowest-first parse-timing table
+  the timeout without failing the run; logs a slowest-first parse-timing table. There is no
+  separate item for a duplicate `dag_id`: the scheduler keeps one of the two files and you do
+  not get to pick which, and that collision already surfaces here as an ordinary import error,
+  naming both files
 - `test_dag_serialization_roundtrip` -- every parsed Dag survives Airflow's scheduler
   serialization round trip. A Dag that does not is dropped by the scheduler entirely. Logs a
   slowest-first per-Dag timing table and carries a corpus-scaled `pytest-timeout` deadline
   (floored at 30 seconds, so a tuned-down parse timeout cannot starve the serialization pass)
   so a pathological Dag is named before an outer CI timeout
-- `test_no_duplicate_dag_ids` -- no two Dag files declare the same `dag_id`. The scheduler
-  keeps one of them and you do not get to pick which
 - `test_schedule_sanity` -- every scheduled Dag computes its next run without raising
 - `test_pool_references_exist` -- every task's pool exists in the metadata database (`db_test`).
   A fresh metadata database only knows Airflow's stock pools; seed consumer-defined ones with
@@ -112,21 +113,16 @@ On by default whenever the catalog is enabled:
   `boto3.client(...)`, `create_engine(...)`), so aliased indirection escapes by design rather
   than risking false positives. `airflow_top_level_io_modules` *replaces* the built-in module
   list (copy it to extend it); disable with `airflow_forbid_top_level_io = false`
-- `test_dag_parse_budget` -- no Dag file's parse duration exceeds
-  `max(ratio x corpus median, 1.0s)`, with `airflow_dag_parse_budget_ratio` defaulting to `10`.
-  Relative to the run's own median, so it is independent of absolute CI speed; the one-second
-  floor keeps tiny fast corpora from failing on timing jitter, and fewer than three parsed files
-  pass trivially. `airflow_dag_parse_budget_ratio = 0` disables the check
-- `test_forbid_catchup` -- no scheduled Dag enables `catchup`, which backfills every missed
-  interval the moment the Dag is unpaused; unscheduled Dags are skipped, since with no timetable
-  there is nothing to backfill. Disable with `airflow_forbid_catchup = false`
-- `test_no_unbounded_expand` -- no mapped task expands over runtime data (XCom or task output)
-  without `max_active_tis_per_dag`; one oversized upstream result would otherwise fan out into an
-  unbounded number of concurrent task instances. Literal expansions are bounded by construction
-  and pass. Disable with `airflow_forbid_unbounded_expand = false`
 
-Four more collect only once their ini option is configured, so defaults stay zero-config:
+Six more collect only once their ini option is configured, so defaults stay zero-config:
 
+- `airflow_forbid_catchup = true` -- no scheduled Dag enables `catchup`, which backfills every
+  missed interval the moment the Dag is unpaused; unscheduled Dags are skipped, since with no
+  timetable there is nothing to backfill (`test_forbid_catchup`)
+- `airflow_forbid_unbounded_expand = true` -- no mapped task expands over runtime data (XCom or
+  task output) without `max_active_tis_per_dag`; one oversized upstream result would otherwise
+  fan out into an unbounded number of concurrent task instances. Literal expansions are bounded
+  by construction and pass (`test_no_unbounded_expand`)
 - `airflow_dag_id_pattern` -- every `dag_id` matches the given regex
 - `airflow_required_dag_tags` -- every Dag carries the listed tags
 - `airflow_forbid_default_owner` -- no task is owned by the stock `airflow` owner

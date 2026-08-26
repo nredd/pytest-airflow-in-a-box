@@ -37,12 +37,12 @@ What it costs you:
 ## Overlap with `--airflow-smoke`
 
 Both parse the same corpus, and the import-failure message is byte-identical
-(`collection.py:341` vs `smoke.py:1069`). Enabling both parses the Dag folder **twice**.
+(`collection.py:341` vs `smoke.py:1027`). Enabling both parses the Dag folder **twice**.
 
 Rule: `--collect-dag-folder` when you want per-file granularity in the report;
-[`--airflow-smoke`](smoke-tests.md) when you want corpus-wide policy -- duplicate `dag_id`s, a
-parse budget, `catchup=True` anywhere -- which no per-file item can phrase. Pick one unless you
-genuinely want both shapes of report.
+[`--airflow-smoke`](smoke-tests.md) when you want corpus-wide policy -- duplicate `dag_id`s, no
+top-level Variable access, `catchup=True` anywhere (opt-in) -- which no per-file item can
+phrase. Pick one unless you genuinely want both shapes of report.
 
 ## The two Dag folder options
 

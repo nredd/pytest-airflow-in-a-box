@@ -32,12 +32,13 @@ the two tests most repos already have, and exactly where they stop.
 Scale does not just add more of the same failures. It adds failures that are properties of
 the *set*, which no single-Dag test can phrase at any fidelity:
 
-- Two templates rendering the same `dag_id`. `test_no_duplicate_dag_ids`
+- Two templates rendering the same `dag_id`. The scheduler keeps one of them and does not
+  care which; `test_dag_bag_integrity` names both files
 - One template doing import-time I/O, multiplied by every file it generates and paid on every
-  scheduler parse loop. `test_dag_parse_budget` fails a file parsing slower than
-  `airflow_dag_parse_budget_ratio` (default `10`) times the corpus median
+  scheduler parse loop. `test_no_top_level_io` flags a top-level call into a known network or
+  database module before it ships
 - An `.expand()` over runtime data with no `max_active_tis_per_dag`, where one oversized
-  upstream result fans out unbounded. `test_no_unbounded_expand`
+  upstream result fans out unbounded. `test_no_unbounded_expand` (opt-in)
 
 Those ship as `--airflow-smoke`, a catalog you opt into rather than write. See
 [smoke checks over every Dag](../guide/smoke-tests.md).

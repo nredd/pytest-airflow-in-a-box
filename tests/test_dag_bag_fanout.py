@@ -53,7 +53,7 @@ def test_fanout_matches_serial_and_respects_ancestor_ignore(pytester: pytest.Pyt
         "-q", "--airflow-smoke", f"--dag-folder={CORPUS}", "--airflow-dag-bag-fanout"
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     assert "should_be_ignored" not in result.stdout.str()
 
 
@@ -63,7 +63,7 @@ def test_fanout_disabled_produces_the_same_outcome(pytester: pytest.Pytester) ->
 
     result = pytester.runpytest_subprocess("-q", "--airflow-smoke", f"--dag-folder={CORPUS}")
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     assert "should_be_ignored" not in result.stdout.str()
 
 
@@ -108,11 +108,11 @@ def test_fanout_detects_duplicate_dag_id_spanning_two_shards(pytester: pytest.Py
         "smoke",
     )
 
-    # Matches `test_smoke.py::test_duplicate_dag_ids_fail_dedicated_item`'s real,
-    # serial-parse outcome shape exactly: `test_dag_bag_integrity` also treats a
-    # non-empty `import_errors` as a failure, on top of the dedicated item.
-    result.assert_outcomes(passed=8, failed=2)
-    result.stdout.fnmatch_lines(["*test_no_duplicate_dag_ids*"])
+    # Matches `test_smoke.py::test_duplicate_dag_ids_fail_integrity`'s real, serial-parse
+    # outcome shape exactly: `test_dag_bag_integrity` treats a non-empty `import_errors`
+    # as a failure, whatever the underlying cause.
+    result.assert_outcomes(passed=5, failed=1)
+    result.stdout.fnmatch_lines(["*test_dag_bag_integrity*"])
     result.stdout.fnmatch_lines(["*AirflowDagDuplicatedIdException*"])
     assert "also found in" in result.stdout.str()
 
@@ -151,7 +151,7 @@ def test_fanout_pool_spawns_exactly_once_under_xdist(pytester: pytest.Pytester) 
         "--airflow-home-retention=all",
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     # `--airflow-home` names a base directory; the run root is a generated subdirectory
     # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
     logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
@@ -195,7 +195,7 @@ def test_fanout_pool_spawns_exactly_once_with_dag_corpus_and_smoke_mixed(
         "--airflow-home-retention=all",
     )
 
-    result.assert_outcomes(passed=11)
+    result.assert_outcomes(passed=7)
     # `--airflow-home` names a base directory; the run root is a generated subdirectory
     # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
     logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
@@ -299,7 +299,7 @@ def test_fanout_and_serial_dag_corpus_import_errors_agree_on_a_duplicate_dag_id(
 
     Companion to `test_fanout_detects_duplicate_dag_id_spanning_two_shards`, which pins
     this "same ... duplicate-DAG-id behavior" acceptance criterion (issue #277) for the
-    bundled smoke catalog's `test_no_duplicate_dag_ids` check; this pins the same
+    bundled smoke catalog's `test_dag_bag_integrity` check; this pins the same
     guarantee for the public `dag_corpus` fixture directly, reusing the same
     `_DUPLICATE_DAG` two-shard layout. The losing fileloc is NOT compared for exact
     equality: `parallel_dagbag.merge_shard_payloads` documents that which file lands as
@@ -390,5 +390,5 @@ def test_fanout_children_inherit_the_parents_sys_path(pytester: pytest.Pytester)
         "-q", "--airflow-smoke", f"--dag-folder={dag_folder}", "--airflow-dag-bag-fanout"
     )
 
-    result.assert_outcomes(passed=10)
+    result.assert_outcomes(passed=6)
     assert "ModuleNotFoundError" not in result.stdout.str()
