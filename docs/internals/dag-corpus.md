@@ -31,13 +31,20 @@ consumer ([ADR 0004](../adr/0004-extract-dag-corpus-from-smoke.md)).
 
 ## One parse per run, not per worker
 
-Under `pytest-xdist`, bundled items stay independently schedulable across workers. The first
-item to need the corpus takes an exclusive `fcntl.flock` on the isolated run root, parses the
-Dag folder once, and publishes a versioned JSON artifact (`.airflow-dag-corpus.json`) beside
-the lock; every other worker *blocks on that lock* and then decodes the artifact rather than
-reparsing. A run therefore pays at most one corpus parse no matter how many workers or bundled
-items it has -- a cold worker pays a short wait, not a second parse. The `smoke` marker itself
-has no scheduling effect, so user-authored smoke tests remain fully parallel.
+Under `pytest-xdist`, bundled items stay independently schedulable across workers unless the
+co-location below forces them onto one. The first item to need the corpus takes an exclusive
+`fcntl.flock` on the isolated run root, parses the Dag folder once, and publishes a versioned
+JSON artifact (`.airflow-dag-corpus.json`) beside the lock; every other worker *blocks on that
+lock* and then decodes the artifact rather than reparsing. A run therefore pays at most one
+corpus parse no matter how many workers or bundled items it has -- a cold worker pays a short
+wait, not a second parse. The `smoke` marker itself has no scheduling effect, so user-authored
+smoke tests remain fully parallel.
+
+Decoding the artifact still retains a full `DagCorpus` in that worker's `session.stash` for the
+rest of the run, so *which* workers decode it matters even though none of them reparse: an
+uncolocated bundled catalog spread across several workers under `--dist loadgroup` retained one
+full decoded corpus per worker it landed on, multiplying peak memory on a large corpus (issue
+#327). Co-location below exists to bound that to one worker, not just to save the parse.
 
 Within one process, a `dag_bag` already parsed is reused instead of parsed again (the catalog
 is always collected last, so this is the common case). While the catalog is enabled,
@@ -48,16 +55,21 @@ lands in `dag_bag.import_errors` instead of `dag_bag.dags`.
 
 Same-process reuse needs the corpus builder and a consumer on the same worker, which
 load-balanced scheduling does not guarantee. Under `--dist loadgroup` the plugin forces it with
-an `xdist_group` marker, in two shapes:
+an `xdist_group` marker, in three shapes, tried in order:
 
 - **`dag_corpus` consumers**: *every* surviving consumer joins the catalog's group. They are
   expected to be few, cheap, read-only checks, so sharing a worker costs nothing and leaving
   one behind would make it pay the flock-wait and decode the artifact itself
 - **`dag_bag` consumers**: exactly *one* is chosen as an anchor. Grouping all of them would
   trade one avoided parse for serializing a whole suite's execution onto one worker
+- **Fallback**: when neither an eligible `dag_corpus` nor `dag_bag` consumer exists -- a
+  smoke-only run (`-m smoke`) is the common case -- the catalog groups with *itself* under a
+  plugin-owned `SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, so all of it still lands on one worker
+  even with nothing to anchor onto
 
-When both kinds exist, the catalog joins the `dag_corpus` group, not the `dag_bag` one. An item
-that already carries its own explicit `xdist_group` is never chosen or overwritten.
+When more than one kind exists, the catalog joins the `dag_corpus` group over the `dag_bag` one,
+and either over the fallback. An item that already carries its own explicit `xdist_group` is
+never chosen or overwritten.
 
 Consumers are found through pytest's full fixture *closure*, not a test's own signature: a
 project fixture that itself declares `dag_bag` (`def subdir_bag(dag_bag): ...`) anchors the
@@ -84,8 +96,9 @@ pytest -W ignore::pytest_airflow_in_a_box.smoke.SmokeColocationWarning
 ```
 
 Promote it on a suite that treats parallel-efficiency regressions as bugs; silence it
-otherwise. A smoke-only run with no consumer at all warns nothing and loses nothing: the
-catalog owns the only Dag parse in the run either way.
+otherwise. A smoke-only run with no `dag_bag`/`dag_corpus` consumer at all warns nothing: there
+was never a live `DagBag` or requested corpus to reuse, so nothing was missed. It still falls
+back to grouping with itself (above) rather than staying ungrouped.
 
 ## Fanning the parse out across subprocess workers
 

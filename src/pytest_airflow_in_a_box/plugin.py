@@ -849,10 +849,16 @@ def _colocate_smoke_catalog_with_dag_bag(
     signature, so a project fixture that itself declares `dag_bag` anchors the catalog
     exactly like a direct consumer. A consumer reaching the bag only through
     `request.getfixturevalue` is outside that closure, is invisible here, and gets no
-    warning either. Every case where co-location is wanted but unreachable is reported
-    with `SmokeColocationWarning`; a run with no `dag_bag` consumer at all is silent by
-    design, because the catalog then owns the only Dag parse in the run and loses
-    nothing.
+    warning either. Every case where an eligible anchor was wanted but unreachable --
+    a `dag_bag` consumer exists but is pre-grouped or about to be deselected -- is
+    reported with `SmokeColocationWarning`; a run with no `dag_bag` consumer at all is
+    silent, because there was never a live `DagBag` to reuse in the first place. Either
+    way, when no anchor is found the catalog still falls back to grouping with itself
+    (`SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, applied by `_group_smoke_catalog_fallback`):
+    without it, `--dist loadgroup` load-balances the ungrouped catalog items
+    individually, so each worker they land on independently pays
+    `dagcorpus.get_dag_corpus`'s decode-and-retain cost instead of at most one worker
+    paying it once (issue #327).
 
     Parameters:
         items: list[pytest.Item] surviving collection, inspected for `dag_bag` use.
@@ -861,7 +867,7 @@ def _colocate_smoke_catalog_with_dag_bag(
 
     Returns:
         None. Mutates matching items in place by adding an `xdist_group` marker, and
-        may issue `SmokeColocationWarning` when co-location is unreachable.
+        may issue `SmokeColocationWarning` when a `dag_bag` anchor is unreachable.
     """
 
     if not smoke_items:
@@ -890,9 +896,35 @@ def _colocate_smoke_catalog_with_dag_bag(
                 verb="anchor",
                 reasons=disqualifications,
             )
+        _group_smoke_catalog_fallback(smoke_items)
         return
     for item in (*smoke_items, anchor):
         item.add_marker(pytest.mark.xdist_group(name=DAG_BAG_XDIST_GROUP))
+
+
+def _group_smoke_catalog_fallback(smoke_items: list[pytest.Item]) -> None:
+    """Group the smoke catalog with itself when no `dag_corpus`/`dag_bag` anchor exists.
+
+    Called by `_colocate_smoke_catalog_with_dag_bag` once it has established that
+    `--dist loadgroup` is active, the `dag_corpus` pass did not already group the
+    catalog, and no eligible `dag_bag` consumer was found to anchor onto. Without this,
+    an ungrouped smoke catalog is load-balanced item-by-item like any other test under
+    `--dist loadgroup`, so its items can land on several different workers -- each one
+    independently calling `dagcorpus.get_dag_corpus`, which decodes and retains the
+    full shared corpus artifact in that worker's own `session.stash` (issue #327).
+    Grouping every smoke item under one plugin-owned name guarantees they all run on a
+    single worker, bounding that retained memory to one worker no matter how many the
+    run has.
+
+    Parameters:
+        smoke_items: list[pytest.Item] containing the synthesized smoke catalog items.
+
+    Returns:
+        None. Mutates every item in place by adding an `xdist_group` marker.
+    """
+
+    for item in smoke_items:
+        item.add_marker(pytest.mark.xdist_group(name=smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP))
 
 
 def _loadgroup_dist_active(config: pytest.Config) -> bool:

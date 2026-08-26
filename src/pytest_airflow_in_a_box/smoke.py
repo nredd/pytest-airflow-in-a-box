@@ -26,7 +26,7 @@ import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Generic, TypeVar
 
 import pytest
 
@@ -102,6 +102,15 @@ class SlowDagParseWarning(RuntimeWarning):
 
 class SmokeColocationWarning(RuntimeWarning):
     """Warn that the smoke catalog could not share an xdist worker with `dag_bag`."""
+
+
+SMOKE_CATALOG_FALLBACK_XDIST_GROUP: Final[str] = "pytest-airflow-in-a-box::smoke-catalog-fallback"
+"""xdist group the smoke catalog falls back to when no `dag_corpus`/`dag_bag` anchor exists.
+
+Keeps every bundled smoke item on one `--dist loadgroup` worker even when this run has no other
+consumer to anchor onto, so `dagcorpus.get_dag_corpus`'s decoded `DagCorpus` is retained by at
+most one worker instead of one per worker the catalog happens to be scheduled across.
+"""
 
 
 class SmokeCheckFailure(Exception):
@@ -2019,6 +2028,7 @@ def collect_smoke_items(
 
 __all__ = (
     "SMOKE_CATALOG",
+    "SMOKE_CATALOG_FALLBACK_XDIST_GROUP",
     "PoolSeed",
     "SerializedDagEntry",
     "SlowDagParseWarning",

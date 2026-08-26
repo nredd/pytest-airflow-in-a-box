@@ -105,7 +105,10 @@ _SMOKE_REPORTING_CONFTST = """
         if report.when != "call" or "::smoke::" not in report.nodeid:
             return
         worker = getattr(report, "worker_id", os.environ.get("PYTEST_XDIST_WORKER", "master"))
-        name = report.nodeid.rsplit("::", 1)[-1]
+        # A grouped item's nodeid gets an `@<xdist_group>` suffix, and this plugin's
+        # own group names contain `::` -- `rsplit("::", 1)` would collide every
+        # grouped item onto one filename, so every separator is replaced instead.
+        name = report.nodeid.replace("/", "_").replace("::", "-").replace("@", "-")
         record = {{"worker": worker, "nodeid": report.nodeid}}
         (RECORD_DIR / f"item-{{worker}}-{{name}}.json").write_text(
             json.dumps(record), encoding="utf-8"
@@ -136,10 +139,22 @@ def test_dag_bag_is_identical_on_every_worker(pytester: pytest.Pytester) -> None
 
 
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
-def test_smoke_items_share_one_parse_while_remaining_distributed(
+def test_smoke_items_share_one_parse_and_one_worker(
     pytester: pytest.Pytester,
 ) -> None:
-    """Parse on one worker while independently scheduling the bundled items."""
+    """Keep the whole bundled catalog, and its one parse, on a single worker.
+
+    Regression test for issue #327: this run has neither a `dag_bag` nor a
+    `dag_corpus` consumer to anchor onto (the DAG file only records its own import,
+    the standalone `test_user_smoke` never touches either fixture), so before this
+    fix the bundled smoke items were left ungrouped and `--dist loadgroup` load
+    balanced them individually -- each worker they landed on independently called
+    `dagcorpus.get_dag_corpus`, decoding and retaining the full serialized corpus.
+    `_group_smoke_catalog_fallback` now forces every item onto one worker via
+    `SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, so both the corpus parse (already shared
+    through the on-disk artifact -- `dagcorpus._shared_dag_corpus`) and the retained
+    decoded `DagCorpus` are bounded to that single worker.
+    """
 
     record_dir = pytester.path / "smoke-records"
     record_dir.mkdir()
@@ -181,7 +196,7 @@ def test_smoke_items_share_one_parse_while_remaining_distributed(
     ]
     assert len(import_records) == 1
     assert len(item_records) == 10
-    assert len({record["worker"] for record in item_records}) > 1
+    assert len({record["worker"] for record in item_records}) == 1
 
 
 _COLOCATION_DAG = """

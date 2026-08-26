@@ -170,6 +170,7 @@ def test_ensure_database_warning_does_not_fail_first_test_under_xdist(
 
 _XDIST_GROUP_REPORTING_CONFTEST = """
     import json
+    import os
     from pathlib import Path
 
     import pytest
@@ -179,6 +180,13 @@ _XDIST_GROUP_REPORTING_CONFTEST = """
 
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(items):
+        # Every worker under real `-n` distribution collects independently and would
+        # otherwise race on this write; each sees the same full pre-distribution item
+        # list, so recording once from the controller/gw0 (matching
+        # `plugin._warns_for_this_process`'s own election) loses no signal.
+        worker = os.environ.get("PYTEST_XDIST_WORKER")
+        if worker not in (None, "gw0"):
+            return
         record = {{}}
         for item in items:
             marker = item.get_closest_marker("xdist_group")
@@ -270,12 +278,15 @@ def test_colocation_skips_a_dag_bag_consumer_dropped_by_mark_expression(
     Regression test for issue #163: this plugin's collection hook is `tryfirst`, so it
     runs before `_pytest.mark`'s own `-m`/`-k` deselection (normal priority). Deciding
     co-location without predicting that would group the catalog with a consumer that
-    never actually runs in this session, wasting the catalog's normal cross-worker
-    distribution (`test_smoke_items_share_one_parse_while_remaining_distributed`,
-    `tests/enduser/test_parallel_collection.py`) for zero reuse benefit. `-m smoke` is
-    also this plugin's own documented way to run just the catalog
+    never actually runs in this session -- a pointless `DAG_BAG_XDIST_GROUP` grouping,
+    since the deselected consumer's `LIVE_DAG_BAG_KEY` cache is never actually built.
+    `-m smoke` is also this plugin's own documented way to run just the catalog
     (`docs/guide/smoke-tests.md`), making this exact combination a realistic case, not
-    a corner one.
+    a corner one. The deselected consumer is not itself in `groups.json` (`-m`
+    deselection runs before this test's own reporting hook, at normal priority,
+    dropping it from `items` first), so the only groups left to check are the smoke
+    catalog's own -- which now fall back to `SMOKE_CATALOG_FALLBACK_XDIST_GROUP`
+    (issue #327) rather than staying ungrouped.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
@@ -306,7 +317,8 @@ def test_colocation_skips_a_dag_bag_consumer_dropped_by_mark_expression(
 
     result.assert_outcomes(passed=10)
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
-    assert all(group is None for group in groups.values())
+    assert groups
+    assert all(group == smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP for group in groups.values())
 
 
 def test_colocation_is_a_noop_without_the_xdist_plugin(pytester: pytest.Pytester) -> None:
@@ -397,7 +409,9 @@ def test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped(
     collisions, so a suite where *every* consumer is pre-grouped is a realistic
     outcome of following the documentation -- and it leaves the catalog with no
     eligible anchor. The pre-existing behavior was to return silently, costing one
-    extra full Dag parse with no signal at all.
+    extra full Dag parse with no signal at all; the catalog now also falls back to
+    grouping with itself (`SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, issue #327), so it
+    stays on one worker even though it lost its `dag_bag` anchor.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
@@ -431,7 +445,9 @@ def test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped(
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
-    assert all(group is None for group in smoke_groups.values())
+    assert all(
+        group == smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP for group in smoke_groups.values()
+    )
     pre_grouped_group = next(
         group for name, group in groups.items() if name.endswith("::test_pre_grouped")
     )
@@ -478,23 +494,78 @@ def test_missing_anchor_warns_when_the_mark_expression_drops_every_dag_bag_consu
     assert "is about to be deselected by the active `-m` expression" in output
 
 
-def test_missing_anchor_is_silent_when_the_run_has_no_dag_bag_consumer(
+def test_smoke_only_run_falls_back_to_one_xdist_group_under_dash_n(
     pytester: pytest.Pytester,
 ) -> None:
-    """Stay silent when the run has no `dag_bag` consumer to co-locate with at all.
+    """Group every smoke item together on a real `-n 3 --dist loadgroup` run.
 
-    The branch that keeps issue #242's diagnostic from firing on every ordinary
-    smoke-only run: with no consumer anywhere, the catalog's corpus builder owns the
-    only Dag parse in the run, so there is nothing to share a worker with and nothing
-    lost. Warning here would be pure noise.
+    Regression test for issue #327: a smoke-only invocation (`-m smoke`, no
+    `dag_bag`/`dag_corpus` consumer in the run) had no anchor to group onto, so the
+    old silent-and-ungrouped branch let `--dist loadgroup` load-balance the bundled
+    smoke items individually across workers -- each one independently calling
+    `dagcorpus.get_dag_corpus`, which decodes and retains the full serialized corpus
+    in that worker's own `session.stash`. Reproduces the reported invocation shape
+    (`pytest --airflow-smoke -m smoke -n auto --dist loadgroup`) at a smaller scale
+    and pins that every smoke item now shares one `xdist_group`, regardless of which
+    of the `-n 3` workers ends up running it.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
     """
 
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
     dag_folder = pytester.path / "dags"
     dag_folder.mkdir()
     (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
+
+    result = pytester.runpytest_subprocess(
+        "-q",
+        "-n",
+        "3",
+        "--dist=loadgroup",
+        "--airflow-smoke",
+        "-m",
+        "smoke",
+        "--dag-folder",
+        str(dag_folder),
+    )
+
+    result.assert_outcomes(passed=10)
+    output = result.stdout.str() + result.stderr.str()
+    assert "SmokeColocationWarning" not in output
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(
+        group == smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP for group in smoke_groups.values()
+    )
+
+
+def test_missing_anchor_is_silent_when_the_run_has_no_dag_bag_consumer(
+    pytester: pytest.Pytester,
+) -> None:
+    """Stay silent, but still fall back-group, when the run has no `dag_bag` consumer.
+
+    The branch that keeps issue #242's diagnostic from firing on every ordinary
+    smoke-only run: with no consumer anywhere, there was never a live `DagBag` to
+    reuse, so warning about a missed anchor would be pure noise. But the catalog still
+    needs to end up on one worker -- `_group_smoke_catalog_fallback` groups every
+    smoke item under `SMOKE_CATALOG_FALLBACK_XDIST_GROUP` here, closing issue #327
+    (an ungrouped catalog was otherwise load-balanced item-by-item across workers,
+    each one independently decoding and retaining the full serialized `DagCorpus`).
+
+    Parameters:
+        pytester: pytest.Pytester running the generated suite in a subprocess.
+    """
+
+    record_dir = pytester.path / "records"
+    record_dir.mkdir()
+    dag_folder = pytester.path / "dags"
+    dag_folder.mkdir()
+    (dag_folder / "colocate.py").write_text(dedent(_COLOCATION_DAG), encoding="utf-8")
+    pytester.makeconftest(_XDIST_GROUP_REPORTING_CONFTEST.format(record_dir=str(record_dir)))
     pytester.makepyfile(
         """
         def test_no_fixtures():
@@ -509,6 +580,12 @@ def test_missing_anchor_is_silent_when_the_run_has_no_dag_bag_consumer(
     result.assert_outcomes(passed=11)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" not in output
+    groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
+    smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
+    assert smoke_groups
+    assert all(
+        group == smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP for group in smoke_groups.values()
+    )
 
 
 def test_a_derived_fixture_consumer_still_anchors_the_smoke_catalog(
@@ -755,7 +832,11 @@ def test_missing_dag_corpus_anchor_warns_when_every_consumer_is_pre_grouped(
     Companion to `test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped`
     for the `dag_corpus` pass: with no eligible consumer to group the catalog onto, the
     corpus builder parses the Dag folder itself, and that now costs a diagnostic instead
-    of a silent extra parse.
+    of a silent extra parse. The run has no `dag_bag` consumer at all, so the
+    `_colocate_smoke_catalog_with_dag_bag` pass that runs next finds no anchor either
+    and falls the catalog back to grouping with itself
+    (`SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, issue #327) rather than leaving it
+    ungrouped.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.
@@ -789,7 +870,9 @@ def test_missing_dag_corpus_anchor_warns_when_every_consumer_is_pre_grouped(
     groups = json.loads((record_dir / "groups.json").read_text(encoding="utf-8"))
     smoke_groups = {name: group for name, group in groups.items() if "::smoke::" in name}
     assert smoke_groups
-    assert all(group is None for group in smoke_groups.values())
+    assert all(
+        group == smoke.SMOKE_CATALOG_FALLBACK_XDIST_GROUP for group in smoke_groups.values()
+    )
     pre_grouped_group = next(
         group for name, group in groups.items() if name.endswith("::test_pre_grouped")
     )
