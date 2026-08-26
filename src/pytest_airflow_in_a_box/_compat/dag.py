@@ -1482,8 +1482,7 @@ def _delete_dag_runs(session: Session, dag_id: str, owned_run_ids: set[int]) -> 
     Fixture ownership is not enough of a predicate here: Airflow creates DagRuns for a
     Dag that never pass through ``create_dag_run`` -- ``dag.test()`` makes its own
     manual run, and the Backfill machinery makes runs for a test-created ``Backfill``
-    (issue #258) -- so the sweep is scoped by ``dag_id``, unioned with the
-    fixture-owned ids for explicitness. Every run is ORM-deleted so task-instance
+    (issue #258) -- so the sweep is scoped by ``dag_id``. Every run is ORM-deleted so task-instance
     rows cascade identically to the fixture-owned path; leaving any behind blocks the
     ``dag_version`` delete, whose one restrictive foreign key is
     ``task_instance.dag_version_id`` (``ondelete="RESTRICT"``, issue #266).

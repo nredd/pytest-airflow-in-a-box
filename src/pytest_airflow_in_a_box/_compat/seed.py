@@ -63,8 +63,11 @@ class SeedCleanupError(RuntimeError):
 class SeedRecord:
     """Track the metadata rows one seeding fixture owns for one test.
 
-    Primary keys alone are not a stable identity on this database, so the natural key
-    is recorded alongside every id (issue #325). ``variable.id`` and ``connection.id``
+    Primary keys alone are not a stable identity on this database, so each id is
+    recorded *paired with its own row's* natural key (issue #325). A pairing, not two
+    parallel sets: matching id-set against key-set independently is a cross product,
+    and a stranger's row carrying one owned id and a different owned key satisfies
+    both halves. ``variable.id`` and ``connection.id``
     are plain ``Integer`` primary keys with no ``sqlite_autoincrement``, so on SQLite
     they are rowid aliases whose values are reused once the highest row is deleted --
     Airflow guards exactly this on three asset tables with
@@ -75,19 +78,16 @@ class SeedRecord:
     Parameters:
         session: sqlalchemy.orm.Session writing and removing owned rows.
         kind: str naming the seeded entity for failure diagnostics.
-        variable_ids: set[int] containing owned ``variable`` primary keys.
-        connection_ids: set[int] containing owned ``connection`` primary keys.
-        variable_keys: set[str] containing the owned Variables' ``key`` values.
-        connection_conn_ids: set[str] containing the owned Connections' ``conn_id``
-            values.
+        variables: dict[int, str] mapping each owned ``variable`` primary key to that
+            row's own ``key``.
+        connections: dict[int, str] mapping each owned ``connection`` primary key to
+            that row's own ``conn_id``.
     """
 
     session: Session
     kind: str
-    variable_ids: set[int] = field(default_factory=set)
-    connection_ids: set[int] = field(default_factory=set)
-    variable_keys: set[str] = field(default_factory=set)
-    connection_conn_ids: set[str] = field(default_factory=set)
+    variables: dict[int, str] = field(default_factory=dict)
+    connections: dict[int, str] = field(default_factory=dict)
 
 
 def open_seed_session(kind: str) -> Session:
@@ -317,25 +317,21 @@ def _reject_existing_rows(record: SeedRecord, column: Any, keys: list[str]) -> N
         )
 
 
-def _persist(
-    record: SeedRecord,
-    rows: list[Any],
-    owned: set[int],
-    owned_keys: set[str],
-    key_attribute: str,
-) -> None:
-    """Commit one batch of owned rows and record their primary keys and natural keys.
+def _persist(record: SeedRecord, rows: list[tuple[str, Any]], owned: dict[int, str]) -> None:
+    """Commit one batch of owned rows and record each primary key with its natural key.
 
-    Both identities are recorded because cleanup predicates on both: a primary key on
-    its own can name another worker's row after SQLite reuses it (issue #325, see
-    ``SeedRecord``).
+    Rows arrive already paired with their natural key so the mapping cannot be built
+    from two independently-collected halves; cleanup predicates on the pair, because a
+    primary key on its own can name another worker's row after SQLite reuses it (issue
+    #325, see ``SeedRecord``). The pairing is written only after ``flush`` assigns the
+    keys and is discarded with the session on failure, so it can never disagree with
+    what was committed.
 
     Parameters:
-        record: SeedRecord receiving the committed primary keys.
-        rows: list[Any] containing unsaved Airflow model instances.
-        owned: set[int] receiving the committed primary keys.
-        owned_keys: set[str] receiving the committed natural keys.
-        key_attribute: str naming the model attribute holding the natural key.
+        record: SeedRecord receiving the committed identities.
+        rows: list[tuple[str, Any]] pairing each natural key with its unsaved Airflow
+            model instance.
+        owned: dict[int, str] receiving primary key to natural key for each row.
 
     Raises:
         SeedPersistenceError: The batch cannot be committed.
@@ -343,10 +339,9 @@ def _persist(
 
     session = record.session
     try:
-        session.add_all(rows)
+        session.add_all([row for _, row in rows])
         session.flush()
-        owned.update(row.id for row in rows)
-        owned_keys.update(str(getattr(row, key_attribute)) for row in rows)
+        owned.update({row.id: key for key, row in rows})
         session.commit()
     except Exception as error:
         session.rollback()
@@ -376,8 +371,8 @@ def seed_variables(record: SeedRecord, variables: dict[str, str]) -> None:
     from airflow.models.variable import Variable
 
     _reject_existing_rows(record, Variable.key, list(variables))
-    rows = [Variable(key=key, val=value) for key, value in variables.items()]
-    _persist(record, rows, record.variable_ids, record.variable_keys, "key")
+    rows = [(key, Variable(key=key, val=value)) for key, value in variables.items()]
+    _persist(record, rows, record.variables)
 
 
 def seed_connections(record: SeedRecord, connections: dict[str, dict[str, Any]]) -> None:
@@ -399,8 +394,10 @@ def seed_connections(record: SeedRecord, connections: dict[str, dict[str, Any]])
     from airflow.models.connection import Connection
 
     _reject_existing_rows(record, Connection.conn_id, list(connections))
-    rows = [Connection(conn_id=conn_id, **fields) for conn_id, fields in connections.items()]
-    _persist(record, rows, record.connection_ids, record.connection_conn_ids, "conn_id")
+    rows = [
+        (conn_id, Connection(conn_id=conn_id, **fields)) for conn_id, fields in connections.items()
+    ]
+    _persist(record, rows, record.connections)
 
 
 def cleanup_seeds(record: SeedRecord) -> None:
@@ -424,42 +421,77 @@ def cleanup_seeds(record: SeedRecord) -> None:
         record.session.close()
 
 
+DELETE_PAIR_CHUNK_SIZE = 200
+"""Owned ``(primary key, natural key)`` pairs per cleanup ``DELETE``.
+
+Each pair contributes one ``AND`` node to an ``OR`` chain, and SQLite caps an
+expression tree at depth 1000 -- a single statement covering ~1000 pairs raises
+``sqlite3.OperationalError: Expression tree is too large``. A seeding fixture can own
+arbitrarily many rows (``airflow_variables`` accumulates across calls), so the
+predicate is issued in chunks. 200 leaves generous headroom under the cap while
+keeping the statement count trivial for the batch sizes tests actually use.
+"""
+
+
+def _delete_owned_rows(
+    session: Session,
+    model: Any,
+    id_column: Any,
+    key_column: Any,
+    owned: dict[int, str],
+) -> None:
+    """Delete rows matching owned ``(primary key, natural key)`` pairs, in chunks.
+
+    The predicate is an OR of per-row pairs rather than an id set ANDed with a key set
+    (issue #325). The latter is a cross product: a stranger's row carrying one owned id
+    and a *different* owned key satisfies both halves, which is the same deletion the
+    pairing exists to prevent. Chunked per ``DELETE_PAIR_CHUNK_SIZE`` so a large owned
+    batch cannot exceed SQLite's expression-tree depth cap.
+
+    Parameters:
+        session: sqlalchemy.orm.Session used for the deletes; not committed here.
+        model: Any containing the SQLAlchemy mapped class to delete from.
+        id_column: Any containing the model's primary key column.
+        key_column: Any containing the model's unique natural-key column.
+        owned: dict[int, str] mapping each owned primary key to its own natural key.
+    """
+
+    # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
+    from sqlalchemy import and_, delete, or_
+
+    pairs = sorted(owned.items())
+    for start in range(0, len(pairs), DELETE_PAIR_CHUNK_SIZE):
+        chunk = pairs[start : start + DELETE_PAIR_CHUNK_SIZE]
+        session.execute(
+            delete(model).where(
+                or_(*(and_(id_column == row_id, key_column == key) for row_id, key in chunk))
+            )
+        )
+
+
 def _cleanup_seeds(record: SeedRecord) -> None:
-    """Delete only the rows this record inserted, matched on id AND natural key.
+    """Delete only the rows this record inserted, matched on each id WITH its own key.
 
     The natural key is not redundant with the primary key here (issue #325): SQLite
     reuses a deleted rowid, and every xdist worker shares one metadata database, so an
-    id this record inserted can name another worker's live row by teardown. Requiring
-    both identities makes a reused id miss rather than delete a stranger's seed.
+    id this record inserted can name another worker's live row by teardown. The
+    predicate shape and its chunking live in ``_delete_owned_rows``.
 
     Parameters:
         record: SeedRecord identifying fixture-owned rows.
     """
 
-    if not record.variable_ids and not record.connection_ids:
+    if not record.variables and not record.connections:
         return
 
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     from airflow.models.connection import Connection
     from airflow.models.variable import Variable
-    from sqlalchemy import delete
 
     session = record.session
     session.rollback()
-    if record.variable_ids:
-        session.execute(
-            delete(Variable).where(
-                Variable.id.in_(record.variable_ids),
-                Variable.key.in_(record.variable_keys),
-            )
-        )
-    if record.connection_ids:
-        session.execute(
-            delete(Connection).where(
-                Connection.id.in_(record.connection_ids),
-                Connection.conn_id.in_(record.connection_conn_ids),
-            )
-        )
+    _delete_owned_rows(session, Variable, Variable.id, Variable.key, record.variables)
+    _delete_owned_rows(session, Connection, Connection.id, Connection.conn_id, record.connections)
     session.commit()
 
 
