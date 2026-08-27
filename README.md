@@ -42,10 +42,10 @@ def test_my_dag(dag_bag, run_dag):
 pytest --dag-folder=dags
 ```
 
-`dag_bag` parses that folder once per worker process. `run_dag` proves your *real file*,
-under its real `dag_id`, actually finishes in the states you think it does. `result.order`
-is the executed order, not graph topology. In-test Dags (`dag_maker`), single operators with no database
-(`run_task`), and matchers are in the
+`run_dag` proves your *real file*, under its real `dag_id`, actually finishes in the states
+you expect. `dag_bag` parses the folder once per worker process, and `result.order` records
+execution order rather than graph topology. In-test Dags (`dag_maker`), single operators
+without a database (`run_task`), and matchers are in the
 [Quickstart](https://nredd.github.io/pytest-airflow-in-a-box/quickstart/).
 
 ## Installation
@@ -85,7 +85,7 @@ Typed fixtures, grouped by the job:
 | Run one operator with no database | `run_task`, `render_task`, `task_context` |
 | Run a real `DagRun` and assert on it | `dag_maker`, `run_dag`, `dag_bag` |
 | Give the run its environment | `airflow_home`, `airflow_configure`, `airflow_variables`, `airflow_connections` |
-| Check or register a custom component | `check_component`, `airflow_components` |
+| Register a custom component for one test | `airflow_components` |
 | Assert on what a task logged | `cap_structlog` |
 | Check every Dag at once | `dag_corpus` |
 | Talk to a live Airflow API | `api_client`, `api_base_url` |

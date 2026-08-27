@@ -19,7 +19,7 @@ cross-task data, and relations between runs.
 - A top-level Variable or connection lookup turns every scheduler parse into network or
   database I/O.
 
-The [Quickstart](../quickstart.md#catch-the-gap-a-callable-test-misses) gives branching one
+The [Quickstart](../quickstart.md#verify-branching-behavior) gives branching one
 canonical example. The [Cookbook](cookbook.md) covers assets, templates, hooks, and retries.
 
 ## In scope
