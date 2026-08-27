@@ -87,7 +87,7 @@ home -- see
 
 The plugin ships the tooling for exactly this workflow -- strict mode, the outcome diff, the
 orchestrator, and the `requires_airflow2` / `requires_airflow3` markers. The
-[migration tier](migration/index.md) lays out the layers in order.
+[migration tier](migration.md) lays out the layers in order.
 
 ## See also
 

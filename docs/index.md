@@ -27,7 +27,7 @@ Already have a `DagBag` import test and `dag.test()`? See
 - [The fidelity ladder](guide/ladder.md) -- how much to test
 - [Deciding which failures are yours](guide/testing-scope.md) -- where the line falls
 - [Fixtures](reference/fixtures.md) and [diagnosing a run](reference/diagnostics.md)
-- Still on Airflow 2? [Start here](guide/migration/index.md)
+- Still on Airflow 2? [Start here](guide/migration.md)
 
 ## Supported versions
 

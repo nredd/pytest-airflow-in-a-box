@@ -21,7 +21,7 @@ them would skip, the run initializes no database at all.
 
 Run this test only on the named Airflow family, auto-skip elsewhere. This is the marker pair
 that lets one suite stay green on both sides of a 2 -> 3 upgrade -- see
-[Migrating from Airflow 2 to 3](../guide/migration/strict.md).
+[Migrating from Airflow 2 to 3](../guide/migration.md#migration-strict-mode).
 
 ```python
 import pytest
@@ -46,7 +46,7 @@ Airflow-free environment skips *both* directions, since neither requirement can 
 The probe never imports Airflow, so gating costs nothing.
 
 `would_family_gate()` recomputes the same condition semantically -- it does not parse a skip
-reason -- so the [migration outcome diff](../guide/migration/outcome-diff.md)'s
+reason -- so the [migration outcome diff](../guide/migration.md#diffing-outcomes-across-the-upgrade)'s
 `--airflow-record` can tag an outcome `gated` and never mistake an environment-caused skip
 on a family-marked test for a family gate.
 

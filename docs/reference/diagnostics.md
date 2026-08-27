@@ -109,7 +109,7 @@ resolved capability field, around thirty lines.
   an `INCOMPATIBLE:` bullet when the configured executor is multi-threaded, because Airflow
   2.x's `ready_to_reschedule` sensor dependency rejects that combination with no indication of
   the cause
-- **Migration-strict** -- whether [`--airflow-migration-strict`](../guide/migration/strict.md)
+- **Migration-strict** -- whether [`--airflow-migration-strict`](../guide/migration.md#migration-strict-mode)
   is on, flagged as a no-op off the 2.x family
 - **Worker environment drift** -- the configured `airflow_worker_env_drift` policy for a
   worker or isolated child that inherits a drifted Airflow environment

@@ -145,7 +145,7 @@ The `venv-path` output is what makes the Airflow 2 to 3 tooling reachable -- the
 `airflow-migration-diff` console script lives in the venv's `bin/`, and `pytest --airflow-record`
 / `--airflow-baseline` run through `python-path` like any other invocation. Wiring for both
 families in one workflow is on
-[Running both families in CI](../migration/orchestrator-in-ci.md).
+[Running both families in CI](../migration.md#running-both-families-in-ci).
 
 ## Pinning
 

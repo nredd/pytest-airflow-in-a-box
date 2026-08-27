@@ -76,14 +76,7 @@ nav:
       - Reports: guide/reports.md
       - Smoke Tests: guide/smoke-tests.md
       - Airflow Doctor: reference/diagnostics.md
-      - Airflow 2->3 Migration:
-          - guide/migration/index.md
-          - Migration-strict mode: guide/migration/strict.md
-          - Diffing outcomes across the upgrade: guide/migration/outcome-diff.md
-          - Driving both families in one run: guide/migration/orchestrator.md
-          - Running both families in CI: guide/migration/orchestrator-in-ci.md
-          - Pairing migration-strict with ruff's AIR rules: guide/migration/ruff-air-rules.md
-          - Baseline artifact contract: guide/migration/baseline-artifact.md
+      - Airflow 2->3 Migration: guide/migration.md
 
   - Under the hood:
       - Certification: internals/certification.md
