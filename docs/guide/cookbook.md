@@ -1,25 +1,14 @@
 # Cookbook
 
-Recipes for testing questions that come up often -- most distilled from
-[apache/airflow#63941](https://github.com/apache/airflow/discussions/63941), plus retry
-behavior ([#167](https://github.com/nredd/pytest-airflow-in-a-box/issues/167)). Each names
-the test in `tests/enduser/` that keeps it honest. For checks over the whole corpus rather
-than one Dag, see [Smoke Tests](smoke-tests.md).
-
-For the argument -- what a `DagBag` import test plus a direct `task.function` call
-cannot reach -- read [Whose fail is it anyway?](testing-scope.md).
+Use these recipes for targeted integration tests: asset handoffs, real or mocked connections,
+rendered fields, retries, and executor workloads. Start with the
+[fidelity ladder](ladder.md); use [Smoke Tests](smoke-tests.md) for corpus-wide policies.
 
 ## Scheduling a consumer off a producer's outlet
 
-`evaluate_asset_schedules` does, without a scheduler, what the scheduler loop does once a
-producer task's outlet events are persisted: check whether a consumer Dag's asset condition
-is satisfied and create its `QUEUED` `DagRun` with the satisfying events attached. It is the
-only way to assert that your producer actually *triggers* your consumer, rather than that the
-consumer's `schedule=` mentions the right asset.
-
-The consumer must be persisted *before* the producer's task runs -- Airflow queues an asset
-event only against Dags already naming themselves as subscribers, the same ordering a live
-deployment requires (`tests/enduser/test_asset_scheduling.py`):
+Use `evaluate_asset_schedules` to prove that a producer event creates a consumer `DagRun`, not
+merely that the consumer names the asset in `schedule=`. Persist the consumer before running
+the producer; Airflow queues events only for consumers already registered as subscribers.
 
 ```python
 from airflow.providers.standard.operators.empty import EmptyOperator
@@ -45,28 +34,29 @@ def test_consumer_dagrun_is_created(dag_maker):
     assert consumer_run.state == DagRunState.QUEUED
 ```
 
-Signature and scope:
+The example uses Airflow 3 names. On Airflow 2.10 or newer, use `Dataset` and
+`DagRunType.DATASET_TRIGGERED` instead.
 
-- `evaluate_asset_schedules(dag_ids=None, *, session)`. `dag_ids` takes one `dag_id` or a
-  collection; `session` is required and raises `ValueError` when omitted
-- Returns `tuple[DagRun, ...]`, one entry per consumer whose condition was satisfied, in
-  evaluation order. An unsatisfied condition contributes no entry -- an empty tuple is the
-  assertion for "not yet triggered"
-- The `DagRun` comes back unrun. Pass it to
-  `pytest_airflow_in_a_box.taskinstance.execute_dag_run` to run the consumer too
-- `dag_ids=None` sweeps every Dag with a pending queue row database-wide. That is serial-only
+The evaluator follows the scheduler's asset-condition path without starting a scheduler:
+
+- Pass one `dag_id`, a collection, or `None`; `session=` is required.
+- It returns one unrun, queued `DagRun` per satisfied consumer, in evaluation order. An empty
+  tuple means no named condition was satisfied.
+- Pass a returned run to
+  `pytest_airflow_in_a_box.taskinstance.execute_dag_run` to run the consumer too.
+- `dag_ids=None` sweeps every pending consumer database-wide. That is serial-only
   for the same reason [`clear_db`](../internals/test-environments.md#the-disposable-metadata-database) is: another xdist worker's pending rows are
-  indistinguishable from yours
-- Raises `ValueError` for a named Dag with no persisted serialized representation, or one not
-  scheduled by an `Asset`/`Dataset` at all
+  indistinguishable from yours.
+- It raises `ValueError` when a named Dag has no persisted serialized representation or is not
+  scheduled by an `Asset`/`Dataset`.
 
 ## Persisting and querying an outlet event
 
-Emit an outlet event through `dag_maker` and query it back scoped to the run that produced it
--- `AssetEvent` is a database-global, accumulating table (see
+Query an outlet event by its asset URI and complete task-instance identity. `AssetEvent` is a
+database-global, accumulating table (see
 [Seeded names are database-global](../internals/test-environments.md#seeding-variables-and-connections)), so an unscoped query can match a different
-test's event. `EmitAssetOperator.execute` attaches the metadata via
-`context["outlet_events"][self.outlets[0]].extra` (`tests/enduser/test_assets.py`):
+test's event. Here, `EmitAssetOperator.execute` sets
+`context["outlet_events"][self.outlets[0]].extra = {"rows": 3}`:
 
 ```python
 from airflow.models.asset import AssetEvent, AssetModel
@@ -95,15 +85,13 @@ def test_outlet_event_is_persisted(dag_maker):
     assert event.extra == {"rows": 3}
 ```
 
-Static schedule assertions (`consumer.timetable.asset_condition`) go through `dag_bag`
-against a real Dag folder -- see `test_asset_dags_survive_serialization` in the same file.
-Reading an event back from *inside* the consumer's own execution is the
-[cross-Dag relations](testing-scope.md#the-failures-worth-catching).
+Use `dag_bag` against the real Dag folder for static schedule assertions such as
+`consumer.timetable.asset_condition`.
 
 ## SQL operators with mocked connections
 
-Point a real provider operator at a synthetic SQLite file instead of a live warehouse, via
-`airflow_connections` (`tests/enduser/test_hooks.py`):
+Seed a temporary SQLite connection with `airflow_connections`, then execute the real provider
+operator. This tests hook resolution, execution, and XCom without a warehouse:
 
 ```python
 import sqlite3
@@ -132,10 +120,8 @@ def test_sql_operator_against_a_fake_warehouse(airflow_connections, dag_maker, t
 
 ## Mocking your own hooks with `unittest.mock`
 
-Patch the hook directly and skip the metastore entirely -- plain `unittest.mock`/`monkeypatch`
-layers on top of `run_task` like any other Python attribute patch. `MyOperator.execute` must
-actually construct `MyHook` and return `get_conn()` for the patch to reach it
-(`tests/enduser/test_hooks.py`):
+When connection lookup is not the subject, patch your hook and use DB-free `run_task`.
+`MyOperator.execute` must construct `MyHook` for this patch to intercept the call:
 
 ```python
 from unittest import mock
@@ -155,13 +141,9 @@ def test_hook_is_mocked(run_task):
 
 ## Asserting rendered templates
 
-Run the task, then read its rendered fields back from Airflow's `RenderedTaskInstanceFields`
-table instead of the operator's `XCom` output. The Airflow 2.x idiom
-(`ti.get_template_context()` + `ti.render_templates()` on the ORM `TaskInstance`) does not
-carry over -- template rendering moved into the Task SDK's execution-time
-`RuntimeTaskInstance`, which this table is populated from. `MyOperator` must declare `query`
-in `template_fields` (and `".sql"` in `template_ext` for a file-backed field) for it to render
-at all (`tests/enduser/test_operators.py`):
+To verify persisted rendered fields, run the task and query
+`RenderedTaskInstanceFields`—not XCom or the original operator. `MyOperator` must include
+`query` in `template_fields` and `".sql"` in `template_ext`:
 
 ```python
 from airflow.models.renderedtifields import RenderedTaskInstanceFields
@@ -179,24 +161,24 @@ def test_rendered_query(dag_maker, tmp_path):
     assert rendered["query"] == "SELECT 42"
 ```
 
-Cheaper alternatives when the database is not the point: the DB-free
+When persistence is not the subject, the DB-free
 [`render_task`](ladder.md#rendering-template-fields-without-running) returns the
 rendered values with no run at all, and [`task_context`](ladder.md#one-operator-no-database) covers
 operators that render from *inside* `execute()`.
 
 ## Retry behavior
 
-`dag_maker.run()` / `dag_maker.run_ti()` execute a `TaskInstance` once, the way the scheduler would: a
-retry-configured failure settles `up_for_retry` rather than being re-attempted (see
-[a whole `DagRun`, real state](ladder.md#a-whole-dagrun-real-state)). Drive it the rest of the way with a second, explicit
-`run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against the same persisted
-instance -- `ignore_task_deps` bypasses Airflow's "Not In Retry Period" dependency instead of
-waiting out `retry_delay` for real. Bump `try_number` before each `run_ti` call, including
-the first. That mirrors the scheduler-side step Airflow's own `Dag.test()` takes before
-every attempt -- a step a direct `run_ti` call does not take on its own. Skip the first
-bump and you understate how close the retry is to exhausting `max_tries`. Airflow 2.x's pre-2.10
-`try_number` is a read-only derived property rather than a plain column, so this recipe is
-3.x-only (`tests/enduser/test_dag_run_result.py`):
+`run()` and `run_ti()` make one attempt. A retryable failure settles `up_for_retry`; they do not
+wait and requeue it. On Airflow 3, drive the next attempt against the same `DagRun`:
+
+1. Increment and commit `try_number` before every attempt, including the first. This mirrors
+   the scheduler's bookkeeping.
+2. Assert the first failure, state, retry deadline, and callback.
+3. Increment and commit again, then call `run_ti(..., ignore_ti_state=True,
+   ignore_task_deps=True)` to bypass the existing state and “Not In Retry Period” dependency.
+
+This recipe is 3.x-only; earlier Airflow 2 releases expose `try_number` as a read-only derived
+property.
 
 ```python
 from datetime import timedelta
@@ -242,19 +224,47 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
 
     assert ti.try_number == 2
     assert ti.state == TaskInstanceState.SUCCESS
+    assert ti.xcom_pull(task_ids="flaky", session=dag_maker.session) == "done"
 ```
 
-To test *attempt-dependent* logic rather than the retry itself, seed a synthetic `try_number`
-with the DB-free `run_task` fixture instead --
-[`run_task`](ladder.md#one-operator-no-database).
+For attempt-dependent task logic without retry scheduling, seed `try_number` through the
+DB-free [`run_task`](ladder.md#one-operator-no-database) fixture.
 
 ## A minimal serial executor
 
-Airflow 3 removed `SequentialExecutor` from core. A small custom executor can still drive one
-workload at a time:
+Airflow 3 removed `SequentialExecutor` from core. This executor runs workloads serially across
+Airflow 3.1–3.3:
 
 ```python
+from typing import Any
+
 from airflow.executors.base_executor import BaseExecutor
+
+
+def _run_workload(workload: Any) -> None:
+    runner = getattr(BaseExecutor, "run_workload", None)
+    if runner is not None:
+        runner(workload)
+        return
+
+    from airflow.configuration import conf
+    from airflow.sdk.execution_time.supervisor import supervise
+
+    base_url = conf.get("api", "base_url", fallback="/")
+    if base_url.startswith("/"):
+        base_url = f"http://localhost:8080{base_url}"
+    supervise(
+        ti=workload.ti,
+        dag_rel_path=workload.dag_rel_path,
+        bundle_info=workload.bundle_info,
+        token=workload.token,
+        server=conf.get(
+            "core",
+            "execution_api_server_url",
+            fallback=f"{base_url.rstrip('/')}/execution/",
+        ),
+        log_path=workload.log_path,
+    )
 
 
 class SerialExecutor(BaseExecutor):
@@ -268,7 +278,7 @@ class SerialExecutor(BaseExecutor):
             key = workload.ti.key
             self.queued_tasks.pop(key, None)
             try:
-                BaseExecutor.run_workload(workload)
+                _run_workload(workload)
             except Exception as error:
                 self.fail(key, error)
             else:
@@ -281,11 +291,10 @@ class SerialExecutor(BaseExecutor):
         """No workload is left to kill."""
 ```
 
-Key on `workload.ti.key`, not `workload.key`, for compatibility across Airflow 3.1–3.3. On
-3.1 and 3.2, `BaseExecutor.run_workload` is unavailable; call the Task SDK supervisor directly
-with the workload's task instance, Dag path, bundle, token, server, and log path. Validate the
-class with [`check_component`](custom-components.md#execution-components), then exercise it
-through [`run_dag(..., executor=...)`](ladder.md#executor-driven-runs).
+Key on `workload.ti.key`, not `workload.key`, for compatibility across Airflow 3.1–3.3. The
+fallback calls the older Task SDK supervisor when `BaseExecutor.run_workload` is unavailable.
+Validate the class with [`check_component`](custom-components.md#execution-components), then
+exercise it through [`run_dag(..., executor=...)`](ladder.md#executor-driven-runs).
 
 ## Elsewhere in this guide
 
