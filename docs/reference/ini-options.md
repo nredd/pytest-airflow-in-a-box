@@ -50,7 +50,6 @@ All read only when the catalog is enabled (`airflow_smoke` / `--airflow-smoke`);
 | `airflow_smoke` | bool | `False` | Enable the bundled opt-in `smoke` test catalog | `--airflow-smoke` |
 | `airflow_dag_parse_timeout` | string | `30` | Per-file Dag parse timeout in seconds for the smoke integrity test. Also pins `core.dagbag_import_timeout` and scales the slowpoke budget | -- |
 | `airflow_dag_parse_slowpoke_ratio` | string | `0.75` | Fraction of the parse timeout above which a file is a slowpoke | -- |
-| `airflow_dag_parse_budget_ratio` | string | `10` | Fail Dag files parsing slower than this multiple of the corpus median; `0` disables | -- |
 | `airflow_dag_id_pattern` | string | `""` | Regex every collected `dag_id` must match | -- |
 | `airflow_required_dag_tags` | linelist | `[]` | Tags every collected Dag must carry | -- |
 | `airflow_smoke_disable` | linelist | `[]` | Bundled smoke item names to drop from the catalog (e.g. `test_schedule_sanity`) | -- |
