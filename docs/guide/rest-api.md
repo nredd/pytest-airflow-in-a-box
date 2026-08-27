@@ -22,7 +22,7 @@ def test_hook_targets_the_running_server(api_server_url: str) -> None:
 Activation is the `api_test` marker, or a fixture closure containing `api_client` or
 `api_server_url` -- either one publishes the URL. Every other test starts nothing.
 
-`api_client` is a typed client bound to that server, authenticated through SimpleAuthManager.
+`api_client` is a typed client bound to that server, authenticated through `SimpleAuthManager`.
 Use it to assert on state your code produced, not on stock endpoints -- for example that a
 Connection you seeded in the pytest process decrypts in the server's *separate* process, which
 is the run's pinned `AIRFLOW__CORE__FERNET_KEY` doing its job:
