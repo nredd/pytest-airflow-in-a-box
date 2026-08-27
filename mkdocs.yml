@@ -64,8 +64,11 @@ nav:
           - Talking to a live Airflow API: guide/rest-api.md
       - Custom Airflow components:
           - check_component: guide/custom-components.md
-          - Running them: guide/custom-components-wiring.md
+          - Execution: guide/custom-components-execution.md
+          - Observability: guide/custom-components-observability.md
+          - Distribution: guide/custom-components-distribution.md
           - Timetables: guide/custom-timetables.md
+          - Running them: guide/custom-components-wiring.md
           - Entry points: guide/isolated-tests.md
 
   - Cookbook: guide/cookbook.md

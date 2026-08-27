@@ -52,4 +52,4 @@ AIP-72 / 3.x thing); drop it and the in-process path works there unchanged.
 
 Writing an executor to test is easier than it sounds -- Airflow 3 removed `SequentialExecutor`
 from core, so a serial one is about fifteen lines. See
-[Custom components](custom-components.md#a-worked-executor) for the whole thing.
+[Custom components](custom-components-execution.md#a-worked-executor) for the whole thing.

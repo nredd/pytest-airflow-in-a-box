@@ -52,11 +52,32 @@ def test_timetable_round_trips(airflow_components):
 ```
 
 That single call registers the class, runs the timetable conformance checks (see
-[Timetable checks](custom-components.md#timetable-checks)), and asserts
+[Static shape checks](#static-shape-checks) below), and asserts
 `decode_timetable(encode_timetable(...))` reconstructs the instance -- catching "not
 registered", serialize/deserialize asymmetry, and (when the class defines its own
 `__eq__`) equality problems in one shot. To register without the round-trip assertion,
 call `airflow_components.timetable(WorkdayTimetable)` instead.
+
+## Static shape checks
+
+[`check_component`](custom-components.md) catches the same registration hazards before
+you even get to a live `DagRun`, with no metadata database:
+
+- `timetable-local-qualname` -- a timetable defined inside a function or method carries
+  `<locals>` in `__qualname__`. Airflow's `find_registered_custom_timetable` matches a
+  custom timetable by qualified name, so a `<locals>` class can never match; every `DagRun`
+  using it raises `TimetableNotRegistered` permanently, not just in a test
+- `timetable-missing-protocol-method` -- `infer_manual_data_interval` or
+  `next_dagrun_info` is not overridden. Both default to `raise NotImplementedError()`;
+  every other Protocol member (the data attributes, `serialize`/`deserialize`,
+  `validate`, the partition hooks) has a usable default
+- `timetable-serialize-pair-incomplete` -- exactly one of `serialize`/`deserialize` is
+  overridden. The default `deserialize` reconstructs the class with `cls()`, silently
+  dropping whatever state a custom `serialize` emits
+- `timetable-serialize-not-json` -- an instance's `serialize()` does not return a
+  JSON-serializable mapping. Only checked against an already-built instance; a bare class
+  skips this one check, since calling `serialize()` needs a real instance and
+  `check_component` never constructs one
 
 ## dag_maker registers for you
 
@@ -88,7 +109,7 @@ Two scope notes. A class the registered lookup ALREADY resolves -- deployed the
 supported way, through the run's plugins folder or a venv entry point -- is left
 entirely alone. And the transparent path's conformance gate is registration-scoped:
 only `timetable-local-qualname` (registration would be futile) hard-fails; every other
-[timetable check](custom-components.md#timetable-checks) finding is logged as a warning,
+[static shape check](#static-shape-checks) finding is logged as a warning,
 since upstream's own default `deserialize` handles a stateless serialize-only timetable
 fine. The explicit `airflow_components.timetable()` call keeps the full gate.
 

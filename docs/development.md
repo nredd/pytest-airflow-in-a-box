@@ -35,7 +35,7 @@ Provider discovery gets two angles: `tests/enduser/test_isolated_discovery.py` (
 synthetic distribution in a one-shot child process and resolves it through a live
 `ProvidersManager`, and `check_component`'s `ComponentKind.PROVIDER` checks catch the same
 discovery failure modes statically -- see
-[Providers, if you are shipping one](guide/custom-components.md#providers-if-you-are-shipping-one).
+[Providers, if you are shipping one](guide/custom-components-distribution.md#providers-if-you-are-shipping-one).
 
 ## Concurrent local runs
 
