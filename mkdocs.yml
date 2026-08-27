@@ -60,8 +60,8 @@ nav:
           - One task, real state: guide/single-task-execution.md
           - A whole DagRun, real state: guide/dagrun-execution.md
           - Executor-driven runs: guide/executor-driven-runs.md
-          - Deferred tasks and your own triggers: guide/deferrable-operators.md
-          - Talking to a live Airflow API: guide/rest-api.md
+      - Deferred tasks and your own triggers: guide/deferrable-operators.md
+      - Talking to a live Airflow API: guide/rest-api.md
       - Custom Airflow components:
           - check_component: guide/custom-components.md
           - Execution: guide/custom-components-execution.md
