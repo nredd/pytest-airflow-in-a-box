@@ -8,8 +8,8 @@ the assertion needs a second task or an ordering that only a scheduler produces.
 ## Whole-`DagRun` execution
 
 For a Dag authored directly in the test, rather than loaded from your `dags/` folder,
-`dag_maker.run()` creates the `DagRun` (when you did not), executes every task instance in
-dependency order, and returns an inert `DagRunResult` snapshot:
+`dag_maker.run()` creates the `DagRun` (when you did not) and runs it to completion, returning
+an inert `DagRunResult` snapshot:
 
 ```python
 from airflow.sdk import task
@@ -108,10 +108,10 @@ def test_orders_dag(dag_bag, run_dag):
     assert result["extract"].xcom == {"rows": 3}
 ```
 
-`run_dag` persists the Dag, creates a manual `DagRun`, executes every task instance in
-dependency order, and returns the same `DagRunResult` snapshot `dag_maker.run()` does (see
-above) -- keyed on the Dag's own `dag_id`, not a synthetic one, so `result.dag_id` matches what
-your real Dag declares. `--dag-folder`/`airflow_dags_folder` is a different option from
+`run_dag` persists the Dag, creates a manual `DagRun`, and runs it the same way `dag_maker.run()`
+does (see above), returning the same `DagRunResult` snapshot -- keyed on the Dag's own `dag_id`,
+not a synthetic one, so `result.dag_id` matches what your real Dag declares.
+`--dag-folder`/`airflow_dags_folder` is a different option from
 `--collect-dag-folder`/`airflow_collect_dags_folder`, which drives
 [Dag-file collection](smoke-tests.md#one-pytest-item-per-dag-file) instead. The `airflow_dags_folder` fixture returns
 whichever directory that ladder resolved, as a `pathlib.Path`, when a test needs the folder
