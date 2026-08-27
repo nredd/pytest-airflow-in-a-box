@@ -1,8 +1,8 @@
 # Distribution components
 
-Static [`check_component`](custom-components.md) checks for the three pluggable kinds that
-matter once a component ships outside your own repo: secrets backends, plugins, and
-providers.
+Static [`check_component`](custom-components.md) checks for the three pluggable kinds
+Airflow discovers by name or package metadata, rather than by direct reference in your
+code: secrets backends, plugins, and providers.
 
 ## Secrets backend checks
 
