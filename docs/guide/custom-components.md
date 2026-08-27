@@ -18,7 +18,7 @@ def test_my_timetable_conforms():
     check_component(MyTimetable).raise_for_problems()
 ```
 
-Scope, because "custom component" is an overloaded phrase: this page covers the ten
+Scope, because "custom component" is an overloaded phrase: this guide covers the ten
 *pluggable extension kinds* Airflow discovers by registration -- timetable, listener,
 executor, `XCom` backend, weight strategy, notifier, secrets backend, policy, plugin,
 provider. Your own `BaseOperator` subclass, hook, sensor, or `@task` decorator is not one
