@@ -1,4 +1,4 @@
-# Compatibility
+# Compatibility and certification
 
 Two ways you get here. Either you are deciding whether this plugin survives your next Airflow
 bump, or a run just died with:
@@ -12,6 +12,36 @@ Both questions have the same answer: `_compat/` is the *only* place in this pack
 touches Airflow, every symbol it touches is probed before use, and a symbol that moved fails
 at resolve time with the module path in the message rather than three frames deep inside a
 fixture.
+
+## Supported and certified
+
+- All major Apache Airflow versions
+- CPython 3.10 through 3.14
+- pytest 8 or newer
+- Linux or macOS; use WSL2 or the devcontainer on Windows
+
+Certified releases carry a byte-verified capability row. A newer or skipped release whose
+family meets its structural floor resolves by live probing instead: the suite continues, one
+`UncertifiedAirflowWarning` names the last certified release, and `--airflow-doctor` reports a
+degraded tier. A release below its family's structural floor fails.
+
+### What CI actually exercises
+
+The compatibility matrix samples every supported Python version across Airflow 3.1–3.3 rather
+than running every Cartesian pair. It includes pytest's supported floor, macOS, ARM, musl, a
+serial reference leg, and a real-Docker Postgres job. Airflow 3 legs run the whole suite under
+`-n auto --dist loadgroup`.
+
+### Airflow 2.x is a migration bridge, not a second home
+
+Certified 2.x releases exist so one consumer suite can stay green across a cutover: 2.7.3 and
+2.8.4 through Python 3.11, and 2.9.3, 2.10.5, and 2.11.2 through Python 3.12. The 2.x legs run
+only `tests/enduser` on Linux/SQLite.
+
+`dag_maker`, `run_ti`, `dag_bag`, `run_dag`, cleanup, seeding, configuration, and smoke checks
+work on both families. Task SDK runners, structlog capture, the REST API, component sandbox, and
+executor-driven runs fail on 2.x with an actionable alternative. The
+[Fixtures](../reference/fixtures.md) table is the per-feature source of truth.
 
 ## The surface it stands on
 
@@ -27,8 +57,7 @@ Measured on this tree:
   `airflow.providers.standard.operators.empty`); the bulk are not -- `airflow.models.*` ORM
   tables, `airflow.sdk.execution_time.*`, `airflow.sdk.api.datamodels._generated`,
   `airflow._shared.*`, `airflow.serialization.*`, `airflow.executors.*`, `airflow.policies`
-- Certified across 18 Airflow releases -- the certified matrix lives in
-  [Certification](certification.md)
+- Certified across Airflow 2 and 3 releases listed above
 
 The version drift is not hypothetical. `DagBag` moved from `airflow.models.dagbag` to
 `airflow.dag_processing.dagbag`. `SerializedDAG` moved out of
@@ -128,7 +157,7 @@ live probing and the component sandbox degrades to generic snapshot/restore. ...
 tier. See [diagnosing a run](../reference/diagnostics.md).
 
 The policy itself -- degrade above the certified set, hard-fail below the floor, weekly canary
--- is stated in [Certification](certification.md).
+-- is stated under [Supported and certified](#supported-and-certified).
 
 ## `tests/enduser/` is the consumer contract
 
@@ -157,7 +186,5 @@ from the scheduler's asset-triggered `DagRun` creation. Both carry exact upstrea
 That file is the audit trail for what "certified" means on any given release.
 
 For where `_compat/` sits relative to the rest of the plugin: bootstrap owns the environment
-before Airflow is ever imported ([`pytest-xdist`](bootstrap-env-ownership.md)), the
-parse-time secrets shim is one of the private pieces this layer holds
-([parse-time secret resolution](parse-time-secrets.md)), and
-[Certification](certification.md) is the user-facing statement of the certified set.
+before Airflow is imported, and parse-time secret resolution is one of the private pieces this
+layer holds. Both are documented in [Test Environments](test-environments.md).

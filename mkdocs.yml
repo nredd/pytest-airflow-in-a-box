@@ -47,42 +47,36 @@ plugins:
 
 nav:
   - Home: index.md
-  - Install: install.md
   - Quickstart: quickstart.md
 
-  - Why do we test?: why/index.md
-
-  - What do we test?:
+  - Testing your Dags:
       - Whose fail is it anyway?: guide/testing-scope.md
       - The Fidelity Ladder: guide/ladder.md
+      - Cookbook: guide/cookbook.md
       - Deferred tasks: guide/deferrable-operators.md
       - REST API: guide/rest-api.md
-      - Custom components:
-          - check_component: guide/custom-components.md
-          - Execution: guide/custom-components-execution.md
-          - Observability: guide/custom-components-observability.md
-          - Distribution: guide/custom-components-distribution.md
-          - Timetables: guide/custom-timetables.md
-          - Running them: guide/custom-components-wiring.md
-          - Entry points: guide/isolated-tests.md
+      - Smoke Tests: guide/smoke-tests.md
 
-  - Cookbook: guide/cookbook.md
-  - GitHub Action: guide/ci/github-action.md
+  - Custom components:
+      - Checking components: guide/custom-components.md
+      - Timetables: guide/custom-timetables.md
+      - Registration and packaging: guide/custom-components-wiring.md
+
+  - CI and migration:
+      - GitHub Actions and reports: guide/ci/github-action.md
+      - Airflow 2->3 Migration: guide/migration.md
 
   - Plugin reference:
+      - Dependencies and extras: reference/dependencies.md
       - Fixtures: reference/fixtures.md
       - Markers: reference/markers.md
       - INI options: reference/ini-options.md
-      - Reports: guide/reports.md
-      - Smoke Tests: guide/smoke-tests.md
+      - Smoke catalog and corpus mechanics: reference/smoke.md
+      - Migration artifacts: reference/migration.md
       - Airflow Doctor: reference/diagnostics.md
-      - Airflow 2->3 Migration: guide/migration.md
 
   - Under the hood:
-      - Certification: internals/certification.md
-      - Compatibility: internals/compat-layer.md
-      - pytest-xdist: internals/bootstrap-env-ownership.md
-      - Secrets: internals/parse-time-secrets.md
+      - Compatibility and certification: internals/compat-layer.md
       - Test Environments: internals/test-environments.md
       - Us vs Them: internals/tests-common-parity.md
       - Developing the plugin: development.md

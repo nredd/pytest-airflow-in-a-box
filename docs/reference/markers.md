@@ -126,7 +126,7 @@ Runs the test in a one-shot child pytest process with a synthetic entry-point di
 `PYTHONPATH` and `AIRFLOW__*` overrides applied before the first Airflow import. Every
 keyword is optional. Tests sharing a payload share one child process, so cost scales with
 distinct isolation environments, not with tests. See [entry points and
-packaging](../guide/isolated-tests.md).
+packaging](../guide/custom-components-wiring.md#isolated-entry-point-discovery).
 
 Note the collision: this marker's `environment=` keyword is `AIRFLOW__*` variables for the
 child, unrelated to the `environment(name)` sentinel gate above. Every override name must
@@ -147,7 +147,8 @@ No gating behavior. These exist so `-m` can select or exclude a group.
   extra plus Docker). Nothing skips it for you -- select it, or deselect it with
   `-m "not postgres"`. See [the disposable metadata database](../internals/test-environments.md#the-disposable-metadata-database)
 - `compat`: exercises the public plugin surface across certified runtimes. Used by this
-  repo's own matrix -- see [Certification](../internals/certification.md#what-ci-actually-exercises)
+  repo's own matrix -- see
+  [Compatibility and certification](../internals/compat-layer.md#what-ci-actually-exercises)
 - `smoke`: carried by the bundled zero-boilerplate corpus checks, which are collected only
   when `--airflow-smoke` / `airflow_smoke` is on. See [smoke checks over every
   Dag](../guide/smoke-tests.md)

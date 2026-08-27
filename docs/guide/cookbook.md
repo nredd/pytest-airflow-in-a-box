@@ -7,7 +7,7 @@ the test in `tests/enduser/` that keeps it honest. For checks over the whole cor
 than one Dag, see [Smoke Tests](smoke-tests.md).
 
 For the argument -- what a `DagBag` import test plus a direct `task.function` call
-cannot reach -- read [What a `DagBag` test and a callable test miss](../why/index.md).
+cannot reach -- read [Whose fail is it anyway?](testing-scope.md).
 
 ## Scheduling a consumer off a producer's outlet
 
@@ -98,7 +98,7 @@ def test_outlet_event_is_persisted(dag_maker):
 Static schedule assertions (`consumer.timetable.asset_condition`) go through `dag_bag`
 against a real Dag folder -- see `test_asset_dags_survive_serialization` in the same file.
 Reading an event back from *inside* the consumer's own execution is the
-[cross-Dag gap](../why/index.md#cross-dag-relations-asset-triggered-downstream-dags).
+[cross-Dag relations](testing-scope.md#the-failures-worth-catching).
 
 ## SQL operators with mocked connections
 
@@ -246,7 +246,46 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
 
 To test *attempt-dependent* logic rather than the retry itself, seed a synthetic `try_number`
 with the DB-free `run_task` fixture instead --
-[`try_number` without a real retry](../why/index.md#attempt-dependent-logic-try_number-without-a-real-retry).
+[`run_task`](ladder.md#one-operator-no-database).
+
+## A minimal serial executor
+
+Airflow 3 removed `SequentialExecutor` from core. A small custom executor can still drive one
+workload at a time:
+
+```python
+from airflow.executors.base_executor import BaseExecutor
+
+
+class SerialExecutor(BaseExecutor):
+    is_local = True
+
+    def sync(self) -> None:
+        """Nothing async to reconcile."""
+
+    def _process_workloads(self, workload_items) -> None:
+        for workload in workload_items:
+            key = workload.ti.key
+            self.queued_tasks.pop(key, None)
+            try:
+                BaseExecutor.run_workload(workload)
+            except Exception as error:
+                self.fail(key, error)
+            else:
+                self.success(key)
+
+    def end(self) -> None:
+        """No workload is left in flight."""
+
+    def terminate(self) -> None:
+        """No workload is left to kill."""
+```
+
+Key on `workload.ti.key`, not `workload.key`, for compatibility across Airflow 3.1–3.3. On
+3.1 and 3.2, `BaseExecutor.run_workload` is unavailable; call the Task SDK supervisor directly
+with the workload's task instance, Dag path, bundle, token, server, and log path. Validate the
+class with [`check_component`](custom-components.md#execution-components), then exercise it
+through [`run_dag(..., executor=...)`](ladder.md#executor-driven-runs).
 
 ## Elsewhere in this guide
 

@@ -1,29 +1,37 @@
 # pytest-airflow-in-a-box
 
-Your `DagBag` has no import errors and your `DagRun`s are green. Why are things still breaking???
+Your Dag files import. Your task callables pass. Production still breaks. Why?
 
-Trigger rules, branch skips, rendered templates, `conn_id` resolution, operator serialization -- these failures are `DagRun`-shaped, and production is the
-first place a `DagRun` exists. This plugin moves them (and so much more!) into `pytest`. Run it wherever you please--no instance required!
+Well, you never really __verified__ the `DAG`. That leaves trigger rules, branch skips,
+rendered templates, connection resolution, and operator serialization untested until
+deployment.
 
-Who is this for:
-- You want to write `DAG`s that don't break
-- You write your own `BaseOperator` subclasses, hooks, sensors, `@task` decorators, and
-  connection types
-- You ship custom components -- timetables, listeners, executors -- or code that talks to the REST API
-- You need help migrating from Airflow 2 to 3
+
+!!! abstract ""
+    `pytest-airflow-in-a-box` runs those seams in `pytest`—no scheduler, webserver, or Airflow
+    instance required.
+
+## Who is this for?
+
+Use this plugin when you:
+
+- Own an Airflow Dag repo and need failures to surface before production deployment.
+- Write custom operators, hooks, sensors, TaskFlow decorators, or connection types.
+- Ship timetables, listeners, executors, policies, providers, or other Airflow extensions.
+- Test code that calls Airflow's REST API.
+- Are migrating a test suite from Airflow 2 to 3.
 
 !!! tip ""
     If your repo is 100% stock operators, `dag.test()` plus a `DagBag` import test is
-    enough. This is for the repos where the interesting code is yours.
+    enough. Use this plugin when the interesting Airflow behavior is yours.
 
 Already have a `DagBag` import test and `dag.test()`? See
-[what they miss](why/index.md) and
-[why not `dag.test()`, `DebugExecutor`, or your own `conftest.py`](why/index.md#why-not).
+[what they miss](guide/testing-scope.md#the-failures-worth-catching) and
+[why not `dag.test()`, `DebugExecutor`, or your own `conftest.py`](guide/testing-scope.md#why-not-dagtest).
 
 ## Start here
 
-- [Quickstart](quickstart.md)
-- [Installing the plugin](install.md)
+- [Install and Quickstart](quickstart.md)
 - [The fidelity ladder](guide/ladder.md) -- how much to test
 - [Deciding which failures are yours](guide/testing-scope.md) -- where the line falls
 - [Fixtures](reference/fixtures.md) and [diagnosing a run](reference/diagnostics.md)
@@ -31,9 +39,10 @@ Already have a `DagBag` import test and `dag.test()`? See
 
 ## Supported versions
 
-Run `pytest --airflow-doctor` ([Airflow Doctor](reference/diagnostics.md)) and read the
-answer for the environment you actually have. The map behind that answer -- the pin,
-certified releases, CI legs, and the 2.x tier -- is [Certification](internals/certification.md).
+Supported: all major Apache Airflow versions, CPython 3.10–3.14, pytest 8 or newer, and Linux
+or macOS. See [Compatibility and certification](internals/compat-layer.md#supported-and-certified)
+for the exact Airflow/Python combinations exercised in CI, or use
+[`pytest --airflow-doctor`](reference/diagnostics.md) to verify the environment you installed.
 
 
 ## Manifesto

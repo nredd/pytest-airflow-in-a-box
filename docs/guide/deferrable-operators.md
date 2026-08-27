@@ -72,7 +72,7 @@ nothing raises `TriggerExecutionError` naming the trigger class instead of hangi
 
 ## Why not `dag.test(run_triggerer=True)`
 
-[Why not `dag.test()`](../why/index.md#dagtest) covers the general case. The trigger-specific
+[Why not `dag.test()`](testing-scope.md#why-not-dagtest) covers the general case. The trigger-specific
 part: upstream runs the trigger as a bare `asyncio.run(anext(trigger.run(), None))` -- no
 timeout, no `cleanup()`, and the resume exception is logged, not raised. Here the trigger is
 bounded, `cleanup()` is guaranteed, and the failure is an exception in your test.

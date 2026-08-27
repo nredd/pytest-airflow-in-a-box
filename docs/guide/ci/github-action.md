@@ -1,4 +1,4 @@
-# The GitHub Action
+# GitHub Actions and reports
 
 Your CI job needs an Airflow that actually resolves. Installing `apache-airflow==3.3.0` with
 plain `pip` picks whatever transitive versions today's index happens to offer, so a job that
@@ -44,7 +44,8 @@ jobs:
       - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
 ```
 
-Which pairs are legal is on [Certification](../../internals/certification.md#what-ci-actually-exercises).
+Which pairs are legal is under
+[Compatibility and certification](../../internals/compat-layer.md#what-ci-actually-exercises).
 The action does not validate the pair against the support matrix -- it only rejects
 malformed inputs.
 
@@ -136,8 +137,26 @@ Two behaviors worth knowing:
   an empty `path`, burying the real error. Use a literal path in the upload step if you want
   the original failure to stay legible
 
-What lands in those files, and the collisions the plugin fixes on your behalf, are on
-[Logs and JUnit XML you can trust](../reports.md).
+`--airflow-report-dir` derives `pytest.log` at `DEBUG` and `pytest.xml` in xunit2 format. An
+explicit `--log-file`, log level, or `--junit-xml` always wins, so mixing the convenience flag
+with project-specific pytest options is safe.
+
+Under xdist, pytest's own log-file handling lets every worker open the same path. The plugin
+scopes it to `pytest.gw0.log`, `pytest.gw1.log`, and so on. JUnit XML is controller-only under
+xdist, but an [`airflow_isolated`](../custom-components-wiring.md#isolated-entry-point-discovery)
+child is a separate serial pytest process; its XML and log files receive the same identity
+suffix so they cannot overwrite the parent's artifacts.
+
+When `COVERAGE_FILE` is set externally, isolated children receive scoped coverage filenames as
+well. That behavior is disabled when `pytest-cov` is loaded because it already owns worker data
+files.
+
+!!! note "The derived DEBUG level affects caplog"
+
+    pytest implements `--log-file-level` by lowering the root logger for the session. A test
+    asserting an exact number of `caplog` records may therefore see more records when
+    `--airflow-report-dir` is enabled. Set an explicit `--log-file-level` or `--log-level` to
+    keep the previous threshold.
 
 ## Migration runs
 

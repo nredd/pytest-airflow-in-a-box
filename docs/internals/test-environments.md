@@ -167,7 +167,7 @@ tests with `@pytest.mark.xdist_group`. Teardown is safe under distinct names: `v
 `key`/`conn_id` as well as the id -- a reused primary key misses instead of deleting another
 worker's row. Field shapes and error behavior:
 [Fixtures](../reference/fixtures.md). Parse-time `Variable.get()` resolution:
-[Parse-time secret resolution](parse-time-secrets.md).
+[Parse-time secret resolution](#parse-time-secret-resolution).
 
 ## Captured logs
 
@@ -203,3 +203,41 @@ policy scoped to one test, `airflow_components.policy(task_policy=...)` register
 directly without touching the settings module. Failure modes and option grammar:
 [INI options](../reference/ini-options.md); per-test registration:
 [Custom components](../guide/custom-components-wiring.md#runtime-component-registration).
+
+## pytest-xdist and environment ownership
+
+Bootstrap owns `AIRFLOW__*` until `pytest_load_initial_conftests` finishes. Pytest imports
+consumer conftests afterward; anything they import may mutate the environment, but it cannot
+precede bootstrap. The plugin refuses to start if Airflow was already imported.
+
+An xdist worker or isolated child inherits the controller's serialized `BootstrapState` and
+cross-checks every owned variable before continuing. Drift usually means a conftest or another
+plugin wrote `AIRFLOW__*` at module scope. The default policy is an error because the Dag
+folder, Fernet key, auth manager, or database may no longer belong to this run.
+
+When the foreign write cannot be removed:
+
+```ini
+[pytest]
+airflow_worker_env_drift = repair
+```
+
+`repair` reinstalls the inherited state and warns. It makes a worker match the serial process
+at the same lifecycle point; it cannot prevent the foreign conftest from writing again later.
+`--airflow-doctor` prints the active policy. At teardown, ini overrides unwind first and
+bootstrap restores the original pre-run environment.
+
+## Parse-time secret resolution
+
+Airflow 3 normally routes Variable and Connection lookups through a Task SDK supervisor. A Dag
+parse has no supervisor, so 3.1 raises and 3.2+ may quietly miss. During every plugin-owned
+parse, a compatibility shim answers from the environment and metadata backends instead.
+
+Prefer `AIRFLOW_VAR_*` and `AIRFLOW_CONN_*` for simple parse-time values. Metastore values must
+be seeded at session scope before the first `dag_bag`, collection item, or smoke item parses the
+folder; a function-scoped fixture is too late. For a lookup in a test body rather than a file
+parse, seed with `airflow_variables` or `airflow_connections`, then request
+`airflow_parse_secrets`.
+
+Set `--airflow-parse-secrets=off` (or the ini equivalent) when unmodified Airflow resolution is
+the subject. The setting is a no-op on Airflow 2, which reads the metastore directly.
