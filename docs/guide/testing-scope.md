@@ -43,16 +43,12 @@ scheduler honors a timetable, that a *stock* operator survives serialization, or
 `BaseHook.get_connection` reads the metadata DB -- when one fails you have found an Airflow
 bug, and the fix is an upstream issue, not a change to your Dag.
 
-Note the "stock" qualifier. It is what carves the two always-on
-[smoke catalog](smoke-tests.md) items out of this list:
-
-- `test_dag_serialization_roundtrip` -- *your* operator's constructor arguments are the part
-  that can fail to serialize. Airflow's serializer is not the subject; your Dag files are
-- `test_schedule_sanity` -- the subject is *your* `schedule=`, `start_date`, and any timetable
-  you wrote, not the timetable code Airflow ships
-
-Neither asserts anything about a stock component in isolation. Mechanics and opt-outs are on
-the [smoke tests](smoke-tests.md#selecting-and-disabling-items) page.
+Note the "stock" qualifier. It is what carves the two always-on smoke catalog items,
+`test_dag_serialization_roundtrip` and `test_schedule_sanity`, out of this list -- neither
+asserts anything about a stock component in isolation. See
+[why the default items are in scope](smoke-tests.md#why-the-default-items-are-in-scope) for the
+reasoning, and [selecting and disabling items](smoke-tests.md#selecting-and-disabling-items) for
+the mechanics.
 
 Same for the plugin itself. `dag_maker` persisting a Dag, `clear_db` truncating tables, the
 REST API fixture booting -- those are covered in `tests/` here, across the full compatibility
