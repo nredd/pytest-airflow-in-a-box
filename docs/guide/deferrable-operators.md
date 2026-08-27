@@ -1,49 +1,20 @@
 # Deferred tasks
 
-Rename a key in your trigger's `TriggerEvent` payload and an ordinary suite stays green:
+Choose the test by the handoff you need to verify:
 
-- The `DagBag` test passes. The file still imports
-- Calling `task.execute(context)` passes. `self.defer(...)` raises `TaskDeferred` before your
-  `execute_complete` is ever reached, so the resume half is never executed
-- A plain `dag_maker` run passes. The instance settles `deferred`, nothing resumes it, and no
-  error is recorded
+| Test | Use | What it proves |
+| --- | --- | --- |
+| One trigger | `run_trigger(...)` | The trigger emits the expected first event |
+| One deferrable operator | `dag_maker.run_ti(..., run_triggerer=True)` | Airflow persists and reconstructs the trigger, then passes its event to the resume method |
+| A whole Dag | `dag_maker.run(run_triggerer=True)` or `run_dag(..., run_triggerer=True)` | Resumed tasks and their downstream dependencies settle together |
 
-The triggerer fires the real event in prod hours later and `execute_complete` raises
-`KeyError: 'value'`.
-
-`run_triggerer=True` is the assertion that catches it. It fires the *persisted* trigger and
-feeds the event back into the deferred instance, so `execute_complete` actually runs:
-
-```python
-import pytest
-from airflow.utils.state import TaskInstanceState
-
-
-@pytest.mark.db_test
-def test_deferred_operator_resumes(dag_maker):
-    with dag_maker(dag_id="deferred_demo"):
-        MyDeferrableOperator(task_id="wait")
-
-    ti = dag_maker.run_ti("wait", run_triggerer=True, trigger_timeout=5.0)
-
-    assert ti.state == TaskInstanceState.SUCCESS
-    assert ti.trigger_id is None
-    assert ti.xcom_pull(task_ids="wait", session=dag_maker.session) == 42
-```
-
-A `KeyError` in `execute_complete` propagates out of `run_ti` and fails the test. Same keyword
-on `dag_maker.run(...)` and [`run_dag(...)`](ladder.md#a-whole-dagrun-real-state), which resume every deferring
-instance in the run.
-
-This also exercises your trigger's *serialization*: the resume rehydrates the trigger from the
-persisted `Trigger` row's `classpath` and `kwargs`, not from the object your `execute` built.
-A `serialize()` that drops a constructor argument fails here. That is the "your own component"
-carve-out in [What to test](testing-scope.md#out-of-scope).
+Use the persisted path for any contract crossing from `defer()` to `execute_complete()`.
+Trigger-only tests cannot catch broken serialization or a mismatched resume payload.
 
 ## The trigger alone, no database
 
 `run_trigger` drives one trigger's async `run()` to its first `TriggerEvent` on a private event
-loop -- no triggerer job, no `DagRun`, no metadata database:
+loop. It needs no triggerer job, `DagRun`, or metadata database:
 
 ```python
 from pytest_airflow_in_a_box.taskinstance import run_trigger
@@ -55,24 +26,51 @@ def test_trigger_fires():
     assert event.payload == {"value": 42}
 ```
 
-`cleanup()` always runs, including on timeout and on a raising trigger. A trigger that emits
-nothing raises `TriggerExecutionError` naming the trigger class instead of hanging the suite.
-`timeout` defaults to 10 seconds (`DEFAULT_TRIGGER_TIMEOUT`).
+Use this when polling and the event payload are the subject. `cleanup()` always runs, even when
+the trigger raises or times out. Completing without an event raises `TriggerExecutionError`
+naming the trigger class. `timeout` must be positive and defaults to 10 seconds
+(`DEFAULT_TRIGGER_TIMEOUT`).
+
+## The complete defer-and-resume handoff
+
+Pass `run_triggerer=True` to persist the trigger, fire it, submit its first event, and resume the
+task through `execute_complete()`:
+
+```python
+from airflow.utils.state import TaskInstanceState
+
+
+def test_deferred_operator_resumes(dag_maker):
+    with dag_maker(dag_id="deferred_demo"):
+        MyDeferrableOperator(task_id="wait")
+
+    ti = dag_maker.run_ti("wait", run_triggerer=True, trigger_timeout=5.0)
+
+    assert ti.state == TaskInstanceState.SUCCESS
+    assert ti.trigger_id is None
+    assert ti.xcom_pull(task_ids="wait", session=dag_maker.session) == 42
+```
+
+The runner reconstructs the trigger from the persisted `Trigger` row's `classpath` and
+`kwargs`; it does not reuse the object created by `execute()`. Dropped constructor arguments,
+payload mismatches, and exceptions from the trigger or resume method therefore fail the test.
+
+Without `run_triggerer=True`, a deferring task simply settles `deferred`. For a whole-Dag
+assertion, pass the same keyword to `dag_maker.run(...)` or
+[`run_dag(...)`](ladder.md#a-whole-dagrun-real-state); the runner resumes each deferring task
+before settling downstream states.
 
 ## What is not modeled
 
-- **Single-shot.** `run_trigger` takes the *first* event only, and the resume runs exactly
-  once. A task that defers a second time comes back `deferred`, with no error and no second
-  trigger run. A poll-loop trigger -- one that yields nothing until the Nth iteration -- is not
-  modeled; test its loop directly with `run_trigger` and a trigger constructed to fire
-- **No triggerer semantics.** Trigger timeouts, `TriggerFailureReason`, high-availability
-  assignment, and multiple triggers sharing one loop are the triggerer's job, not this
-- **`run_triggerer=` cannot be combined with `executor=`.** See
-  [executor-driven runs](ladder.md#executor-driven-runs)
+- **One event and one resume.** The trigger may poll internally until its first event, but later
+  events are ignored. If `execute_complete()` defers again, the task remains `deferred`; the
+  runner does not fire a second trigger.
+- **A production triggerer.** High-availability assignment, multiple triggers sharing an event
+  loop, task deferral deadlines, and `TriggerFailureReason` handling remain Airflow's job.
+  `trigger_timeout` only bounds how long this test waits for the first event.
+- **An executor and triggerer together.** `run_triggerer=True` cannot be combined with
+  `executor=`. Use an [executor-driven run](ladder.md#executor-driven-runs) to test the worker
+  boundary, or this page's persisted path to test resumption.
 
-## Why not `dag.test(run_triggerer=True)`
-
-[Why not `dag.test()`](testing-scope.md#why-not-dagtest) covers the general case. The trigger-specific
-part: upstream runs the trigger as a bare `asyncio.run(anext(trigger.run(), None))` -- no
-timeout, no `cleanup()`, and the resume exception is logged, not raised. Here the trigger is
-bounded, `cleanup()` is guaranteed, and the failure is an exception in your test.
+For the broader boundary between testing your component and retesting Airflow itself, see
+[Whose fail is it anyway?](testing-scope.md#out-of-scope).

@@ -52,8 +52,8 @@ nav:
   - Testing your Dags:
       - Whose fail is it anyway?: guide/testing-scope.md
       - The Fidelity Ladder: guide/ladder.md
-      - Cookbook: guide/cookbook.md
       - Deferred tasks: guide/deferrable-operators.md
+      - Cookbook: guide/cookbook.md
       - REST API: guide/rest-api.md
       - Smoke Tests: guide/smoke-tests.md
 

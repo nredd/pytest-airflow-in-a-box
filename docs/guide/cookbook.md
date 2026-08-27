@@ -299,7 +299,7 @@ exercise it through [`run_dag(..., executor=...)`](ladder.md#executor-driven-run
 ## Elsewhere in this guide
 
 - Pinned-`Param` cases -- [Dag-file collection](smoke-tests.md#pinned-param-cases)
-- Deferrable operators -- [Deferrable operators](deferrable-operators.md)
+- Deferred tasks -- [Deferred tasks](deferrable-operators.md)
 - Locating a test's own data files -- the plugin ships `airflow_home` and
   `airflow_dags_folder` ([Where the run lives](../internals/test-environments.md#the-isolated-airflow_home)) and nothing for your repo's
   `tests/` folder; use `request.path.parent`, or `pytestconfig.rootpath` /
