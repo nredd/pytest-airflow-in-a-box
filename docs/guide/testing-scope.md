@@ -1,18 +1,18 @@
 # Whose fail is it anyway?
 
-Test the Airflow code *you* wrote. If the test fails, is the bug yours?
-A useful failure should point toward code your team can actually change.
+Test the Airflow behavior your team owns. A useful failure should identify code your team can
+change.
 
 A `DagBag` import test proves the file parses. Calling `task.function(...)` proves the Python
-callable works. Neither creates a `DagRun`, so everything between those statements remains
-untested: trigger rules, branch skips, rendered templates, serialization, mapped expansion,
-cross-task data, and relations between runs.
+callable works. Those checks still do not verify how Airflow executes the Dag: trigger rules,
+branch skips, rendered templates, serialization, mapped expansion, cross-task data, and
+relations between runs remain untested.
 
 ## The failures worth catching
 
 - A branch skips one path, but the downstream task's `trigger_rule` prevents it from running.
 - A `template_fields` entry is missing, so `{{ ds }}` ships literally.
-- A constructor argument is not JSON-serializable, so the scheduler drops the Dag.
+- A constructor argument is not JSON-serializable, so the scheduler cannot load the Dag.
 - A producer emits an asset, but the intended consumer is not actually triggered.
 - `depends_on_past` blocks the second run because the first never reached the expected state.
 - Attempt-dependent logic reads the wrong `try_number`.
@@ -24,33 +24,32 @@ canonical example. The [Cookbook](cookbook.md) covers assets, templates, hooks, 
 
 ## In scope
 
-- Your TaskFlow callables and operator `python_callable`s.
-- Your custom operators, hooks, sensors, decorators, connection types, timetables, listeners,
-  executors, policies, and triggers.
-- Your task wiring: trigger rules, branching, mapped fan-out, and cross-task data.
-- Your cross-Dag and cross-run relations: assets, `depends_on_past`, and backfill-like sequences.
+- TaskFlow callables, operator `python_callable`s, and custom operators, hooks, sensors, and
+  decorators.
+- Task wiring: trigger rules, branching, mapped fan-out, and cross-task data.
+- Cross-Dag and cross-run behavior: assets, `depends_on_past`, and backfill-like sequences.
 - Retry and failure behavior you configured, including callbacks and attempt-dependent logic.
-- Your rendered templates, connection resolution, and serialization inputs.
-- Corpus-wide habits such as duplicate `dag_id`s, import-time I/O, and unbounded expansion.
+- Rendered templates, connection resolution, and serialization inputs.
+- Extension points you own: connection types, timetables, listeners, executors, policies, and
+  triggers.
+- Corpus-wide rules such as unique `dag_id`s, no import-time I/O, and bounded expansion.
 
 Use the [fidelity ladder](ladder.md) to choose the cheapest runner that exposes the state your
 assertion needs. Use [Smoke Tests](smoke-tests.md) for properties of the whole Dag folder.
 
 ## Out of scope
 
-Do not retest stock Airflow mechanisms in isolation. A toy Dag proving that XCom transports a
-value, that a stock timetable schedules, that a stock operator serializes, or that
-`BaseHook.get_connection` reads the metastore fails because Airflow is wrong—not because your
-Dag is wrong. Airflow's own suite owns those assertions.
+Do not retest stock Airflow mechanisms in isolation. Airflow's own suite owns assertions that
+XCom transports a value, a stock timetable schedules, a stock operator serializes, or
+`BaseHook.get_connection` reads the metastore.
 
 The stock qualifier matters. Asserting that *your* branch selected `quarantine`, causing
 `notify` to run under `all_done`, is in scope. Asserting only that a value pushed to XCom can be
 pulled back is not. Both tests may use `dag_maker`; the subject is different.
 
-The plugin itself is also out of scope for consumers: this repository already tests
-`dag_maker`, cleanup, and API bootstrap across the compatibility matrix. Provider and Airflow
-core development sit beyond the other boundary and belong in Breeze with upstream
-`tests_common`.
+The plugin itself is also out of scope for consumers: this repository already tests its
+fixtures, cleanup, and API bootstrap across the compatibility matrix. Provider and Airflow
+core development belong in Breeze with upstream `tests_common`.
 
 The exception is a pre-upgrade regression suite. While moving from Airflow 2 to 3, mechanism
 behavior is temporarily yours because the subject is the upgrade. Delete those assertions
@@ -59,10 +58,9 @@ after cutover; the [migration guide](migration.md) is a bridge, not a second hom
 ## Why not `dag.test()`?
 
 `DAG.test()` is a useful debugger, not a pytest harness. On Airflow 3 it clears task instances
-for the logical date, catches task-body exceptions and keeps looping, and returns only an ORM
-`DagRun`. A bare call therefore asserts nothing; you must recover and inspect state yourself.
-It also supplies no isolated `AIRFLOW_HOME`, disposable database, fixtures, result snapshot, or
-xdist coordination.
+for the logical date, catches task-body exceptions so the loop can continue, and returns an ORM
+`DagRun`. You must inspect that run yourself to make an assertion. It also supplies no isolated
+`AIRFLOW_HOME`, disposable database, result snapshot, fixtures, or xdist coordination.
 
 `dag.test(use_executor=True)` queues real workloads, but the test process does not serve the
 Task Execution API those workers report to. The plugin's
@@ -77,14 +75,13 @@ It does not exist on Airflow 3. The equivalent of “run one task in process und
 ## Why not a hand-rolled `conftest.py`?
 
 Airflow reads `AIRFLOW_HOME`, its cfg file, and `AIRFLOW__*` at first import. This plugin
-bootstraps from `pytest_load_initial_conftests`; pytest's conftest collector runs later on the
-same hook. A consumer `conftest.py` cannot win that race, especially when a test module imports
+bootstraps from `pytest_load_initial_conftests`, before pytest imports consumer conftests. A
+consumer `conftest.py` cannot establish that boundary, especially when a test module imports
 Airflow at module scope.
 
-The rest is maintenance. Airflow 3 has no public testing API, so private interfaces move across
-minor versions. This plugin contains those changes behind capability probes and verifies the
-consumer contract across certified releases. A hand-roll discovers the same changes when the
-upgrade breaks.
+Airflow 3 also has no public testing API. This plugin contains moving private interfaces behind
+capability probes and verifies the consumer contract across certified releases. A hand-rolled
+harness discovers those changes when an upgrade breaks it.
 
 ## Scale is a different axis
 
