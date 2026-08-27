@@ -440,7 +440,7 @@ dispatched one at a time to keep `result.order` meaningful.
 
 Pass `executor=` to run your task bodies through a real Airflow executor instead of the pytest
 process itself -- workloads queued, heartbeats pumped, task bodies executing in supervised
-worker subprocesses that report back to a live Task Execution API:
+worker subprocesses:
 
 ```python
 def test_orders_dag_through_our_executor(dag_bag, run_dag):
