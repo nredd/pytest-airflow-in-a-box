@@ -26,7 +26,8 @@ watch or react to a run without driving it: listeners, notifiers, and policies.
 - `notifier-template-fields-unresolvable` -- an instance's `template_fields` names an
   attribute the instance does not carry. `_update_context` does a plain `getattr(self, f)`
   for every entry, raising `AttributeError` the first time the notifier actually fires.
-  Instance-only, for the same reason as `timetable-serialize-not-json`
+  Instance-only, for the same reason as
+  [`timetable-serialize-not-json`](custom-timetables.md#static-shape-checks)
 
 ## Policy checks
 
