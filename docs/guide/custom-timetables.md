@@ -86,7 +86,6 @@ automatically before serialization -- the round trip through `SerializedDagModel
 works, without the test touching `airflow_components` or knowing plugins are involved:
 
 ```python
-@pytest.mark.need_serialized_dag
 def test_dag_scheduled_by_my_timetable(dag_maker):
     with dag_maker(schedule=WorkdayTimetable(hours=2)):
         EmptyOperator(task_id="scheduled")
@@ -119,10 +118,10 @@ externally-authored Dags through the same serializer without it -- for those, ca
 
 ## Priority weight strategies
 
-Registration works the same for `PriorityWeightStrategy` subclasses: Dag
-serialization refuses an operator's custom `weight_rule` unless the class is
-registered, and decoding re-instantiates it with no arguments (state must live on the
-class -- upstream's documented contract):
+Registration works the same for `PriorityWeightStrategy` subclasses -- same rationale
+as [above](#what-registration-is-actually-for), swapping timetable serialization for
+an operator's `weight_rule`. State must live on the class: deserialization
+re-instantiates with no arguments:
 
 ```python
 def test_operator_uses_my_weight_strategy(airflow_components, dag_maker):
