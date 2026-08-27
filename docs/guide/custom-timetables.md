@@ -69,7 +69,7 @@ you even get to a live `DagRun`, with no metadata database:
   using it raises `TimetableNotRegistered` permanently, not just in a test
 - `timetable-missing-protocol-method` -- `infer_manual_data_interval` or
   `next_dagrun_info` is not overridden. Both default to `raise NotImplementedError()`;
-  every other Protocol member (the data attributes, `serialize`/`deserialize`,
+  every other `Protocol` member (the data attributes, `serialize`/`deserialize`,
   `validate`, the partition hooks) has a usable default
 - `timetable-serialize-pair-incomplete` -- exactly one of `serialize`/`deserialize` is
   overridden. The default `deserialize` reconstructs the class with `cls()`, silently
