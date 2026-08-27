@@ -1,8 +1,8 @@
 # Distribution components
 
 Static [`check_component`](custom-components.md) checks for the three pluggable kinds
-Airflow discovers by name or package metadata, rather than by direct reference in your
-code: secrets backends, plugins, and providers.
+Airflow discovers by name or distribution metadata, rather than by direct reference in
+your code: secrets backends, plugins, and providers.
 
 ## Secrets backend checks
 
