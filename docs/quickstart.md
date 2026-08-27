@@ -72,7 +72,7 @@ from pytest_airflow_in_a_box.matchers import succeeded
 assert result == {"produce": succeeded(21), "consume": succeeded(42)}
 ```
 
-The full API: [a whole `DagRun`, real state](guide/dagrun-execution.md).
+The full API: [a whole `DagRun`, real state](guide/ladder.md#a-whole-dagrun-real-state).
 
 ## Catch a branch skip
 
@@ -131,7 +131,7 @@ def test_add(run_task):
 ```
 
 `render_task` and `task_context` stop earlier on the same machinery -- see
-[One operator, no database](guide/db-free-execution.md).
+[One operator, no database](guide/ladder.md#one-operator-no-database).
 
 ## How deep do you go?
 

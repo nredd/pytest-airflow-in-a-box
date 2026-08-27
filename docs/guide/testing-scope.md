@@ -12,12 +12,12 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
 ## In scope
 
 - Your callables -- the Python inside a `@task` or an operator's `python_callable`. Fastest
-  through the DB-free [`run_task`](db-free-execution.md) fixture
+  through the DB-free [`run_task`](ladder.md#one-operator-no-database) fixture
 - Your custom components -- a `BaseOperator` subclass you wrote, a custom hook, a sensor's
   `poke`, a `@task`-style decorator, a custom connection type. `execute()` and `poke()` are
   your code; check the component's shape with [`check_component`](custom-components.md), drive
   them through `run_task` for the DB-free path, hand-drive `execute()` against a real Task SDK
-  context via [`task_context`](db-free-execution.md), or use `dag_maker` + `run_ti` when the
+  context via [`task_context`](ladder.md#one-operator-no-database), or use `dag_maker` + `run_ti` when the
   component needs persisted state
 - Wiring and task relations -- trigger rules, branching, mapped fan-out, and the data flowing
   between your tasks. See
@@ -30,7 +30,7 @@ The fastest way to tell whether a test earns its runtime: if it fails, is the bu
 - Retry and failure behavior you configured -- attempt-dependent logic, `on_failure_callback`,
   the `trigger_rule` that decides whether your alert task fires
 - Rendered templates -- that *your* Jinja produces the string you expect, via
-  [`render_task`](db-free-execution.md#rendering-template-fields-without-running)
+  [`render_task`](ladder.md#rendering-template-fields-without-running)
 - Hook and connection wiring -- that your operator reaches the connection you seeded, via
   [`airflow_connections`](../internals/test-environments.md#seeding-variables-and-connections)
 - Corpus-level habits -- top-level Variable access, import-time I/O, unbounded `expand`, and

@@ -180,15 +180,15 @@ def test_rendered_query(dag_maker, tmp_path):
 ```
 
 Cheaper alternatives when the database is not the point: the DB-free
-[`render_task`](db-free-execution.md#rendering-template-fields-without-running) returns the
-rendered values with no run at all, and [`task_context`](db-free-execution.md) covers
+[`render_task`](ladder.md#rendering-template-fields-without-running) returns the
+rendered values with no run at all, and [`task_context`](ladder.md#one-operator-no-database) covers
 operators that render from *inside* `execute()`.
 
 ## Retry behavior
 
 `dag_maker.run()` / `dag_maker.run_ti()` execute a `TaskInstance` once, the way the scheduler would: a
 retry-configured failure settles `up_for_retry` rather than being re-attempted (see
-[a whole `DagRun`, real state](dagrun-execution.md)). Drive it the rest of the way with a second, explicit
+[a whole `DagRun`, real state](ladder.md#a-whole-dagrun-real-state)). Drive it the rest of the way with a second, explicit
 `run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against the same persisted
 instance -- `ignore_task_deps` bypasses Airflow's "Not In Retry Period" dependency instead of
 waiting out `retry_delay` for real. Bump `try_number` before each `run_ti` call, including

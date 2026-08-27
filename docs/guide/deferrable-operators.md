@@ -32,7 +32,7 @@ def test_deferred_operator_resumes(dag_maker):
 ```
 
 A `KeyError` in `execute_complete` propagates out of `run_ti` and fails the test. Same keyword
-on `dag_maker.run(...)` and [`run_dag(...)`](dagrun-execution.md), which resume every deferring
+on `dag_maker.run(...)` and [`run_dag(...)`](ladder.md#a-whole-dagrun-real-state), which resume every deferring
 instance in the run.
 
 This also exercises your trigger's *serialization*: the resume rehydrates the trigger from the
@@ -68,7 +68,7 @@ nothing raises `TriggerExecutionError` naming the trigger class instead of hangi
 - **No triggerer semantics.** Trigger timeouts, `TriggerFailureReason`, high-availability
   assignment, and multiple triggers sharing one loop are the triggerer's job, not this
 - **`run_triggerer=` cannot be combined with `executor=`.** See
-  [executor-driven runs](executor-driven-runs.md)
+  [executor-driven runs](ladder.md#executor-driven-runs)
 
 ## Why not `dag.test(run_triggerer=True)`
 

@@ -23,7 +23,7 @@ Scope, because "custom component" is an overloaded phrase: this guide covers the
 executor, `XCom` backend, weight strategy, notifier, secrets backend, policy, plugin,
 provider. Your own `BaseOperator` subclass, hook, sensor, or `@task` decorator is not one
 of them and has no shape to check; test those by running them, through
-[`run_task`](db-free-execution.md) or [`dag_maker`](single-task-execution.md).
+[`run_task`](ladder.md#one-operator-no-database) or [`dag_maker`](ladder.md#one-task-real-state).
 
 ## The report
 

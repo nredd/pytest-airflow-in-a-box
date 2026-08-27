@@ -19,7 +19,7 @@ run your workloads: executors, `XCom` backends, and weight strategies.
 
 A clean report says the shape is sound. To find out whether the executor actually *runs*
 anything, drive a real `DagRun` through it with
-[`run_dag(dag, executor=...)`](executor-driven-runs.md).
+[`run_dag(dag, executor=...)`](ladder.md#executor-driven-runs).
 
 ## A worked executor
 

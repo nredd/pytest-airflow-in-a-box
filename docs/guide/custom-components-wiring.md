@@ -91,7 +91,7 @@ The methods:
 - `executor(component, *, alias="test") -> str` -- registers an executor class under
   `alias` and returns it, for `ExecutorLoader.load_executor(alias)` /
   `ExecutorLoader.lookup_executor_name_by_str(alias)` and for
-  [`run_dag(dag, executor=alias)`](executor-driven-runs.md) within the same
+  [`run_dag(dag, executor=alias)`](ladder.md#executor-driven-runs) within the same
   test. `component` must be defined at module scope somewhere importable -- Airflow
   resolves it later by dotted import path, and a class defined inside a test function has
   none

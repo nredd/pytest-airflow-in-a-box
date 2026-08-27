@@ -193,7 +193,7 @@ They are different options and this is the canonical statement of the difference
 
 | Option / ini | Feeds |
 | --- | --- |
-| `--dag-folder` / `airflow_dags_folder` | The `dag_bag` fixture (and through it [`run_dag`](dagrun-execution.md#testing-a-dag-defined-elsewhere)), the smoke catalog, and `dag_corpus` |
+| `--dag-folder` / `airflow_dags_folder` | The `dag_bag` fixture (and through it [`run_dag`](ladder.md#testing-a-dag-defined-elsewhere)), the smoke catalog, and `dag_corpus` |
 | `--collect-dag-folder` / `airflow_collect_dags_folder` | Dag-file collection, this section |
 
 They are usually the same directory. Set both if you want both features, and cover both under
@@ -255,7 +255,7 @@ so operator and TaskFlow bodies are measured, not just top-level Dag definitions
 needed.
 
 The one path that is not in-process:
-[`run_dag(dag, executor=...)`](executor-driven-runs.md) re-imports the Dag
+[`run_dag(dag, executor=...)`](ladder.md#executor-driven-runs) re-imports the Dag
 *file* in a fresh supervised worker subprocess and executes the task body there. Lines that
 only ever execute inside that worker are not recorded, so a task body reached *only* through
 an `executor=` run reads as uncovered. Nothing in this plugin wires up coverage's subprocess

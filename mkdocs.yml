@@ -54,12 +54,7 @@ nav:
 
   - What do we test?:
       - Whose fail is it anyway?: guide/testing-scope.md
-      - The Fidelity Ladder:
-          - guide/ladder.md
-          - One operator, no database: guide/db-free-execution.md
-          - One task, real state: guide/single-task-execution.md
-          - A whole DagRun, real state: guide/dagrun-execution.md
-          - Executor-driven runs: guide/executor-driven-runs.md
+      - The Fidelity Ladder: guide/ladder.md
       - Deferred tasks and your own triggers: guide/deferrable-operators.md
       - Talking to a live Airflow API: guide/rest-api.md
       - Custom Airflow components:
