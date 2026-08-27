@@ -231,7 +231,7 @@ def test_load_only_pages_on_the_second_attempt(run_task) -> None:
 ```
 
 That is a synthetic attempt counter, not a retry -- `dag_maker.run()` never re-queues one
-(see [Whole-`DagRun` execution](../guide/task-execution.md#whole-dagrun-execution)). Driving a
+(see [Whole-`DagRun` execution](../guide/dagrun-execution.md#whole-dagrun-execution)). Driving a
 real `up_for_retry` failure the rest of the way to success, and asserting `retry_delay` and
 `on_retry_callback` along the way, is the
 [retry recipe](../guide/cookbook.md#retry-behavior).
@@ -280,7 +280,7 @@ metadata DB, no xdist support.
 `workloads.ExecuteTask` onto a real executor, but nothing inside the test process serves the
 Task Execution API those supervised workers report to, so the workloads have nowhere to land
 (apache/airflow#59074). That is the gap `executor=` fills here, by standing the api-server up
-itself -- see [real `DagRun`s and real state](../guide/task-execution.md).
+itself -- see [executor-driven runs](../guide/executor-driven-runs.md).
 
 It is also mid-move upstream
 ([#61803](https://github.com/apache/airflow/issues/61803),
@@ -299,7 +299,7 @@ still gates SQLite on a single-threaded executor.
 
 If you landed here from that search: the Airflow 3 equivalent of "run my task in-process
 under a debugger" is [`run_task`](../guide/db-free-execution.md), and the equivalent of
-"run my whole Dag" is [`run_dag`](../guide/task-execution.md).
+"run my whole Dag" is [`run_dag`](../guide/dagrun-execution.md).
 
 ### A hand-rolled `conftest.py`
 

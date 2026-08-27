@@ -188,7 +188,7 @@ operators that render from *inside* `execute()`.
 
 `dag_maker.run()` / `dag_maker.run_ti()` execute a `TaskInstance` once, the way the scheduler would: a
 retry-configured failure settles `up_for_retry` rather than being re-attempted (see
-[Task execution](task-execution.md)). Drive it the rest of the way with a second, explicit
+[a whole `DagRun`, real state](dagrun-execution.md)). Drive it the rest of the way with a second, explicit
 `run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` call against the same persisted
 instance -- `ignore_task_deps` bypasses Airflow's "Not In Retry Period" dependency instead of
 waiting out `retry_delay` for real. Bump `try_number` before each `run_ti` call, including

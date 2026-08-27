@@ -53,7 +53,7 @@ The contract:
   decoded `body`. HTTP error statuses are returned, not raised
 
 The server runs `--apps core,execution`, so the same process serves the Task Execution API that
-[executor-driven runs](task-execution.md#executor-driven-runs) point supervised workers at.
+[executor-driven runs](executor-driven-runs.md) point supervised workers at.
 
 Airflow 2.x has no `airflow api-server`, so on the 2.x family these fixtures fail with an
 actionable error. A FAB `airflow webserver` tier is demand-driven

@@ -72,7 +72,7 @@ from pytest_airflow_in_a_box.matchers import succeeded
 assert result == {"produce": succeeded(21), "consume": succeeded(42)}
 ```
 
-The full API: [Real `DagRun`s and real state](guide/task-execution.md).
+The full API: [a whole `DagRun`, real state](guide/dagrun-execution.md).
 
 ## Catch a branch skip
 

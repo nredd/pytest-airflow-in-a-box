@@ -23,7 +23,7 @@ Scope, because "custom component" is an overloaded phrase: this page covers the 
 executor, `XCom` backend, weight strategy, notifier, secrets backend, policy, plugin,
 provider. Your own `BaseOperator` subclass, hook, sensor, or `@task` decorator is not one
 of them and has no shape to check; test those by running them, through
-[`run_task`](db-free-execution.md) or [`dag_maker`](task-execution.md).
+[`run_task`](db-free-execution.md) or [`dag_maker`](single-task-execution.md).
 
 ## The report
 
@@ -123,7 +123,7 @@ timetables](custom-timetables.md).
 
 A clean report says the shape is sound. To find out whether the executor actually *runs*
 anything, drive a real `DagRun` through it with
-[`run_dag(dag, executor=...)`](task-execution.md#executor-driven-runs).
+[`run_dag(dag, executor=...)`](executor-driven-runs.md).
 
 ## A worked executor
 

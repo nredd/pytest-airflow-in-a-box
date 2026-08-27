@@ -12,9 +12,9 @@ you are not asserting on.
 | --- | --- | --- | --- |
 | 0 | `render_task` | no | [One operator, no database](db-free-execution.md) |
 | 1 | `run_task` / `task_context` | no | [One operator, no database](db-free-execution.md) |
-| 2 | `dag_maker` + `run_ti` | yes | [Real `DagRun`s and real state](task-execution.md) |
-| 3 | `dag_maker.run()` / `run_dag` | yes | [Real `DagRun`s and real state](task-execution.md) |
-| 4 | `run_dag(..., executor=...)` | yes | [Real `DagRun`s and real state](task-execution.md) |
+| 2 | `dag_maker` + `run_ti` | yes | [One task, real state](single-task-execution.md) |
+| 3 | `dag_maker.run()` / `run_dag` | yes | [A whole DagRun, real state](dagrun-execution.md) |
+| 4 | `run_dag(..., executor=...)` | yes | [Executor-driven runs](executor-driven-runs.md) |
 
 ## Rung 0 -- `render_task`
 
@@ -52,10 +52,10 @@ Proves: `result.order`, `result.states` including
 
 Costs: with `run_dag` the real `dag_id` becomes a shared metadata key, so two `pytest-xdist`
 workers running the same Dag can tear each other's metadata down. See
-[the xdist caveat](task-execution.md#testing-a-dag-defined-elsewhere).
+[the xdist caveat](dagrun-execution.md#testing-a-dag-defined-elsewhere).
 
 Cannot prove: retries. Every instance is attempted exactly once
-([whole-`DagRun` execution](task-execution.md#whole-dagrun-execution) has the consequences).
+([whole-`DagRun` execution](dagrun-execution.md#whole-dagrun-execution) has the consequences).
 
 ## Rung 4 -- `executor=`
 
@@ -64,7 +64,7 @@ through a live Task Execution API. `dag.test(use_executor=True)` cannot reach th
 [why not `dag.test()`](../why/index.md#dagtest).
 
 Costs: the Dag must be a file in your Dag folder, `result.errors` degrades to best-effort, and
-each instance carries a timeout ([executor-driven runs](task-execution.md#executor-driven-runs)
+each instance carries a timeout ([executor-driven runs](executor-driven-runs.md)
 has all three in full).
 
 Cannot prove: an executor's own concurrency. Instances are dispatched one at a time to keep
@@ -85,3 +85,9 @@ The ladder varies fidelity over one unit of code. [Smoke checks](smoke-tests.md)
 [per-file collection](smoke-tests.md#one-pytest-item-per-dag-file), and [Dag coverage](smoke-tests.md#dag-coverage) vary *breadth*
 over every unit at fixed parse-only fidelity, asserting whole-corpus properties no single-Dag
 test can phrase at any rung.
+
+## Coming from upstream's `tests_common`?
+
+`dag_maker` also accepts upstream's harness keywords, exposes scheduler-side handles, and
+ships the `create_task_instance` / `create_dummy_dag` one-call factories. The call-site
+parity contract lives in [Us vs Them](../internals/tests-common-parity.md).

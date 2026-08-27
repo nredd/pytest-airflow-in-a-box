@@ -57,7 +57,9 @@ nav:
       - The Fidelity Ladder:
           - guide/ladder.md
           - One operator, no database: guide/db-free-execution.md
-          - Real DagRuns and real state: guide/task-execution.md
+          - One task, real state: guide/single-task-execution.md
+          - A whole DagRun, real state: guide/dagrun-execution.md
+          - Executor-driven runs: guide/executor-driven-runs.md
           - Deferred tasks and your own triggers: guide/deferrable-operators.md
           - Talking to a live Airflow API: guide/rest-api.md
       - Custom Airflow components:

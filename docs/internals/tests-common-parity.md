@@ -6,7 +6,7 @@ suite runs on, living in
 and never published to PyPI. This page is the call-site parity contract: which keywords route
 where, which upstream calls need a one-line rewrite, and every place this plugin differs on
 purpose. Everyday Dag testing does not need it -- start at
-[Real `DagRun`s and real state](../guide/task-execution.md).
+[a whole `DagRun`, real state](../guide/dagrun-execution.md).
 
 ## Upstream harness keywords
 
@@ -162,5 +162,5 @@ All nine are rooted in this plugin's own persistence machinery rather than upstr
 
 Upstream's `dag_id="dag"` default is kept verbatim, so two concurrent tests relying on it
 contend on the shared metadata database exactly like any repeated `dag_id` -- see
-[the xdist caveat](../guide/task-execution.md#testing-a-dag-defined-elsewhere), or pass explicit
+[the xdist caveat](../guide/dagrun-execution.md#testing-a-dag-defined-elsewhere), or pass explicit
 identifiers.

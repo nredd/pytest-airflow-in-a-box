@@ -69,10 +69,10 @@ reachable only on this rung ([the fidelity ladder](ladder.md) says why).
   `get_dagrun_state`, `get_dr_count`) resolve to `None`, which the SDK then dereferences --
   expect an `AttributeError`, not a clean `None`
 
-When an assertion needs any of those, climb to [`dag_maker.run_ti`](task-execution.md).
+When an assertion needs any of those, climb to [`dag_maker.run_ti`](single-task-execution.md).
 
 On Airflow 2.x all three fixtures fail with an actionable error -- the Task SDK in-process
-runner is a 3.x thing; use [`dag_maker.run_ti`](task-execution.md#single-task-execution) there.
+runner is a 3.x thing; use [`dag_maker.run_ti`](single-task-execution.md) there.
 
 ## Operators without a Dag
 
