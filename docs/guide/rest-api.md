@@ -1,4 +1,4 @@
-# Talking to a live Airflow API
+# REST API
 
 The job here is *your* code that resolves an Airflow endpoint -- a hook, an operator, a
 callback that posts back to the API server. Airflow ships no default for `api.base_url`, so in

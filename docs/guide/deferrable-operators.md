@@ -1,4 +1,4 @@
-# Deferred tasks and your own triggers
+# Deferred tasks
 
 Rename a key in your trigger's `TriggerEvent` payload and an ordinary suite stays green:
 

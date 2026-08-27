@@ -55,9 +55,9 @@ nav:
   - What do we test?:
       - Whose fail is it anyway?: guide/testing-scope.md
       - The Fidelity Ladder: guide/ladder.md
-      - Deferred tasks and your own triggers: guide/deferrable-operators.md
-      - Talking to a live Airflow API: guide/rest-api.md
-      - Custom Airflow components:
+      - Deferred tasks: guide/deferrable-operators.md
+      - REST API: guide/rest-api.md
+      - Custom components:
           - check_component: guide/custom-components.md
           - Execution: guide/custom-components-execution.md
           - Observability: guide/custom-components-observability.md
