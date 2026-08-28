@@ -1,29 +1,40 @@
 # GitHub Actions and reports
 
-Your CI job needs an Airflow that actually resolves. Installing `apache-airflow==3.3.0` with
-plain `pip` picks whatever transitive versions today's index happens to offer, so a job that
-passed last week fails this week on a dependency you never named.
-
-`nredd/pytest-airflow-in-a-box/action@v0` is a composite action that provisions the same
-constraints-pinned `uv` environment this repo's own compat matrix uses, then stops. It never
-invokes `pytest` -- you always write the invocation.
+Use `nredd/pytest-airflow-in-a-box/action@v0` to create a reproducible Airflow test
+environment from Apache Airflow's published constraints. The action provisions the
+environment; your workflow still runs pytest and uploads its reports.
 
 ```yaml
-- uses: actions/checkout@v5
-- uses: nredd/pytest-airflow-in-a-box/action@v0
-  id: airflow-env
-  with:
-    airflow-version: "3.3.0"
-    python-version: "3.12"
-- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
+name: Airflow tests
+
+on: [pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: nredd/pytest-airflow-in-a-box/action@v0
+        id: airflow-env
+        with:
+          airflow-version: "3.3.1"
+          python-version: "3.13"
+      - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
 ```
 
-The action does not put its venv on `PATH`. Drive it through the `python-path` output, as
-above.
+Always invoke pytest through `python-path`; the action does not add its virtual environment
+to `PATH`. It also does not run tests, cache packages, upload artifacts, or start Docker.
+
+The action targets POSIX runners. Use GitHub-hosted Linux or macOS, or a self-hosted runner
+with Bash, `curl`, and network access to GitHub, PyPI, and `astral.sh`. Native Windows is not
+supported.
 
 ## Across a version matrix
 
-One step with scalar inputs, so it drops straight into `strategy.matrix`:
+Put each exact Airflow and Python pair in the matrix and pass both values to the action:
 
 ```yaml
 jobs:
@@ -31,11 +42,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        airflow-version: ["3.2.2", "3.3.0", "3.3.1"]
-        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - airflow-version: "3.2.2"
+            python-version: "3.12"
+          - airflow-version: "3.3.1"
+            python-version: "3.13"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: nredd/pytest-airflow-in-a-box/action@v0
         id: airflow-env
         with:
@@ -44,136 +58,112 @@ jobs:
       - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
 ```
 
-Which pairs are legal is under
+Choose pairs from
 [Compatibility and certification](../../internals/compat-layer.md#what-ci-actually-exercises).
-The action does not validate the pair against the support matrix -- it only rejects
-malformed inputs.
+The action validates input syntax, not whether Airflow publishes constraints for the pair. An
+unsupported pair therefore fails while downloading constraints or resolving dependencies.
 
 ## Inputs
 
 | Input | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `airflow-version` | yes | -- | Exact Airflow release to install. Must be `X.Y.Z`, e.g. `3.3.0`. Also selects the `constraints-<version>` branch pulled from `apache/airflow`. |
-| `python-version` | yes | -- | Python to provision. Must be `X.Y`, e.g. `3.12`. Also selects `constraints-<python-version>.txt`. |
-| `extra` | no | `airflow3` | Which plugin extra to install: `airflow3` or `airflow2`. Anything else fails the step. |
-| `plugin-version` | no | latest on PyPI | Exact `pytest-airflow-in-a-box` version, pinned as `==<version>`. |
-| `uv-version` | no | `0.12.2` | `uv` release installed from `astral.sh` into `RUNNER_TEMP`. |
-| `working-directory` | no | `.` | Where the venv is created and `requirements-file` is resolved from. |
-| `requirements-file` | no | (none) | Path, relative to `working-directory`, to a requirements file installed *after* the primary install -- your own operators, hooks, and providers. Not constrained. |
-| `report-dir` | no | (none) | Directory for `pytest.log` and `pytest.xml`. Relative to `working-directory`, or absolute. See [report artifacts](#report-artifacts). |
+| `airflow-version` | yes | -- | Installs an exact `X.Y.Z` release and selects its `constraints-<version>` branch. |
+| `python-version` | yes | -- | Provisions an `X.Y` interpreter and selects `constraints-<python-version>.txt`. |
+| `extra` | no | `airflow3` | Selects the plugin's `airflow3` or `airflow2` extra. Other values fail validation. |
+| `plugin-version` | no | latest on PyPI | Pins `pytest-airflow-in-a-box` to an exact version. |
+| `uv-version` | no | `0.12.2` | Selects the `uv` release installed into `RUNNER_TEMP`. |
+| `working-directory` | no | `.` | Directory containing the virtual environment and resolving `requirements-file`. It must already exist. |
+| `requirements-file` | no | (none) | Installs additional operators, providers, and test dependencies after the constrained environment. The path is relative to `working-directory`. |
+| `report-dir` | no | (none) | Creates a report directory and configures pytest to write `pytest.log` and `pytest.xml`. Relative paths resolve from `working-directory`. |
 
-`airflow-version`, `python-version`, and `extra` are validated in the first step, before
-anything is installed, so a typo fails in seconds with a `::error::` annotation rather than
-after a five-minute resolve.
+`airflow-version`, `python-version`, and `extra` are checked before installation. Invalid
+syntax produces a GitHub `::error::` annotation immediately.
 
 ## Outputs
 
 | Output | What it holds |
 | --- | --- |
-| `python-path` | Absolute path to the provisioned venv's `python`. This is how you invoke `pytest`. |
-| `venv-path` | Absolute path to the venv directory, for console scripts: `${{ steps.airflow-env.outputs.venv-path }}/bin/airflow-migration-diff`. |
-| `report-dir` | Absolute path to the report directory. Empty string when the `report-dir` input was not set. |
+| `python-path` | Absolute path to the environment's Python interpreter. Use it for pytest. |
+| `venv-path` | Absolute path to the virtual environment. Use it to reach installed console scripts. |
+| `report-dir` | Absolute report-directory path, or an empty string when `report-dir` was not set. |
 
 ## What gets installed
 
-The venv is `.venv-airflow-in-a-box`, inside `working-directory`. Constraints come from
-`https://github.com/apache/airflow/raw/constraints-<airflow-version>/constraints-<python-version>.txt`.
+The action creates `<working-directory>/.venv-airflow-in-a-box` and downloads the constraints
+file for the requested Airflow and Python versions.
 
-On `extra: airflow3`, one constrained install of three specs together:
+For `extra: airflow3`, one constrained transaction installs the plugin, the exact
+`apache-airflow-core` release, and `apache-airflow-providers-sqlite>=4.1,<5`. Installing core
+instead of the `apache-airflow` meta-package avoids the default provider set while retaining
+the SQLite provider required by the default metadata backend.
 
-- `pytest-airflow-in-a-box[airflow3]`
-- `apache-airflow-core==<airflow-version>`
-- `apache-airflow-providers-sqlite>=4.1,<5`
+For `extra: airflow2`, Airflow is installed under its constraints first. The plugin and
+`pytest>=8,<9` are then installed without those constraints because Airflow 2 constraints can
+pin pytest below the plugin's pytest 8 floor.
 
-`apache-airflow-core`, *not* `apache-airflow`: the meta-package drags in the full default
-provider set, which a Dag-testing job does not need. The sqlite provider is then named
-explicitly because the default metadata DB backend needs it and the core package does not
-pull it.
+The optional `requirements-file` is installed last and unconstrained. Use it for your Dag
+repository's providers and test tools, but pin it deliberately: its requirements can replace
+versions chosen by the Airflow constraints.
 
-On `extra: airflow2`, two passes instead of one, and the reason is not obvious:
-
-1. `apache-airflow==<airflow-version>` under constraints
-2. `pytest-airflow-in-a-box[airflow2]` and `pytest>=8,<9`, *unconstrained*
-
-Airflow 2.x constraints pin `pytest` as low as `7.4.4`, below this plugin's `pytest>=8`
-floor. A single constrained pass is unsatisfiable. The second pass therefore drops the
-constraint file and gives `pytest` an explicit ceiling instead. This mirrors what
-`compat.yml` does for the repo's own 2.x legs.
-
-`requirements-file`, when set, installs last and unconstrained, so it can override anything
-the constrained pass resolved.
+The action's `extra` input accepts only an Airflow family. To run with xdist or the disposable
+Postgres backend, install their dependencies through `requirements-file`, then invoke pytest
+with `-n auto --dist loadgroup` or `--airflow-db-backend=postgres`. Postgres also requires an
+available Docker daemon. See
+[Dependencies and extras](../../reference/dependencies.md).
 
 ## Report artifacts
 
-Setting `report-dir` creates the directory and appends
-`--airflow-report-dir='<abs path>'` to `PYTEST_ADDOPTS`, so a plain `pytest` invocation picks
-it up with no change to your command. The absolute path comes back as the `report-dir`
-output:
+Set `report-dir` to append `--airflow-report-dir=<absolute path>` to `PYTEST_ADDOPTS`. Upload
+that directory in a separate `always()` step:
 
 ```yaml
-- uses: nredd/pytest-airflow-in-a-box/action@v0
-  id: airflow-env
-  with:
-    airflow-version: "3.3.0"
-    python-version: "3.12"
-    report-dir: reports
-- run: ${{ steps.airflow-env.outputs.python-path }} -m pytest --airflow-smoke
-- if: always()
-  uses: actions/upload-artifact@v7
-  with:
-    name: reports
-    path: ${{ steps.airflow-env.outputs.report-dir }}
+      - uses: nredd/pytest-airflow-in-a-box/action@v0
+        id: airflow-env
+        with:
+          airflow-version: "3.3.1"
+          python-version: "3.13"
+          report-dir: ${{ github.workspace }}/reports
+      - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest --airflow-smoke
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: airflow-test-reports
+          path: ${{ github.workspace }}/reports
+          if-no-files-found: warn
 ```
 
-The upload step stays yours, because the action never runs pytest.
+Use the same literal report path for upload. If provisioning fails, the action never sets its
+`report-dir` output; passing that empty output to `upload-artifact` can obscure the original
+failure.
 
-Two behaviors worth knowing:
+The plugin writes `pytest.log` at `DEBUG` and `pytest.xml` in xunit2 format. Explicit
+`--log-file`, log-level, or `--junit-xml` settings take precedence. Under xdist, each worker
+writes a suffixed log such as `pytest.gw0.log`, while the controller writes JUnit XML.
+`airflow_isolated` children suffix both artifacts so they cannot overwrite the parent files.
+When `COVERAGE_FILE` is set, isolated children also receive suffixed coverage filenames unless
+`pytest-cov` is loaded and already owns them.
 
-- A `plugin-version` older than the release that added `--airflow-report-dir` is detected. The
-  action probes `pytest --help` and, on a miss, emits a `::warning::` and leaves
-  `PYTEST_ADDOPTS` alone rather than poisoning every run with an unparseable flag. The same
-  warning fires if the probe itself cannot run
-- On a provisioning failure the `report-dir` output is empty, and `upload-artifact` fails on
-  an empty `path`, burying the real error. Use a literal path in the upload step if you want
-  the original failure to stay legible
+An older `plugin-version` may not support `--airflow-report-dir`. The action probes
+`pytest --help`; if the option is absent or the probe fails, it emits a warning and leaves
+`PYTEST_ADDOPTS` unchanged.
 
-`--airflow-report-dir` derives `pytest.log` at `DEBUG` and `pytest.xml` in xunit2 format. An
-explicit `--log-file`, log level, or `--junit-xml` always wins, so mixing the convenience flag
-with project-specific pytest options is safe.
+!!! note "DEBUG logging can change `caplog`"
 
-Under xdist, pytest's own log-file handling lets every worker open the same path. The plugin
-scopes it to `pytest.gw0.log`, `pytest.gw1.log`, and so on. JUnit XML is controller-only under
-xdist, but an [`airflow_isolated`](../custom-components-wiring.md#isolated-entry-point-discovery)
-child is a separate serial pytest process; its XML and log files receive the same identity
-suffix so they cannot overwrite the parent's artifacts.
-
-When `COVERAGE_FILE` is set externally, isolated children receive scoped coverage filenames as
-well. That behavior is disabled when `pytest-cov` is loaded because it already owns worker data
-files.
-
-!!! note "The derived DEBUG level affects caplog"
-
-    pytest implements `--log-file-level` by lowering the root logger for the session. A test
-    asserting an exact number of `caplog` records may therefore see more records when
-    `--airflow-report-dir` is enabled. Set an explicit `--log-file-level` or `--log-level` to
-    keep the previous threshold.
+    Pytest implements `--log-file-level` through the session's root logger. Tests that assert
+    exact `caplog` counts may capture more records with report generation enabled. Set an
+    explicit `--log-file-level` or `--log-level` when the threshold is part of the test.
 
 ## Migration runs
 
-The `venv-path` output is what makes the Airflow 2 to 3 tooling reachable -- the
-`airflow-migration-diff` console script lives in the venv's `bin/`, and `pytest --airflow-record`
-/ `--airflow-baseline` run through `python-path` like any other invocation. Wiring for both
-families in one workflow is on
+Use `venv-path` for the installed `airflow-migration-diff` script. Migration recording and
+comparison flags run through `python-path` like any other pytest invocation. See
 [Running both families in CI](../migration.md#running-both-families-in-ci).
 
 ## Pinning
 
-`@v0` is the pin to use. `release.yml` moves a `v<major>` tag to the newest published stable
-release on that major line after each release (`v0` while pre-1.0, `v1` once `1.0.0` ships),
-and refuses to move it for a prerelease or when the tag being released is not the newest
-stable tag on that major. So `@v0` tracks the latest 0.x and never crosses a major bump.
+Use `@v0` to follow the newest stable 0.x action release without crossing a major version.
+Use a full tag such as `@v0.11.1` for an immutable release pin. Moving major tags advance only
+after a stable release is published; prereleases do not move them.
 
-Pin a full release tag -- `@v0.11.1` -- when you want an exact, non-moving reference.
-
-The action is a *published interface*: its inputs and outputs follow the same major-version
-promise as the plugin's Python API.
+The action's inputs and outputs are a published interface and follow the plugin's
+major-version compatibility promise.
