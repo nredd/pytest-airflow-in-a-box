@@ -3,7 +3,7 @@
 Your Dag files import. Your task callables pass. Production still breaks.
 
 !!! question ""
-    Well, you never really __verified__ the `DAG`.
+    Did you __verify__ the `DAG`?
 
 Import and callable tests do not exercise trigger rules, branch skips, rendered templates,
 connection resolution, or operator serialization. `pytest-airflow-in-a-box` tests those seams
