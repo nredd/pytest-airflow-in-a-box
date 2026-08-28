@@ -8,6 +8,50 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.13.0] - 2026-08-28
+
+### Changed
+
+- Default `airflow_forbid_catchup` and `airflow_forbid_unbounded_expand` to `false`. Both are
+  now opt-in, like the bundled catalog's other policy checks, instead of binding every consumer
+  to a stance on `catchup`/`expand()` conventions their team may not share.
+- Restore the original manifesto wording on the `why/` docs page, drop the internal
+  `vision.md` design doc now that the restructure it planned has shipped, and fix
+  genuinely broken or obtuse sentences across the docs site.
+- Restructure the docs navigation into browser-height form: merge the `DagBag` gap, why-not,
+  compatibility, corpus, and environment pages into their canonical homes; add
+  `guide/migration.md`, `reference/ini-options.md`, `reference/dependencies.md`,
+  `reference/migration.md`, `reference/smoke.md`, and `internals/test-environments.md`; and run
+  per-page editorial passes for scope, duplication, and voice.
+
+### Removed
+
+- Remove the `test_no_duplicate_dag_ids` and `test_dag_parse_budget` bundled `--airflow-smoke`
+  checks. Both duplicated data `test_dag_bag_integrity` already reports -- a duplicate `dag_id`
+  collision already surfaces as an ordinary import error, and the parse-budget threshold
+  re-walked the same per-file parse durations as the existing slowpoke-ratio warning.
+
+### Fixed
+
+- Stop per-Dag and per-seed cleanup deleting another xdist worker's rows. `dag_run.id`,
+  `variable.id`, and `connection.id` are plain `Integer` primary keys with no
+  `sqlite_autoincrement`, so SQLite reuses the value once the highest row is deleted, and
+  every worker shares one metadata database -- an id a fixture owned could name a stranger's
+  live row by teardown. Cleanup now re-checks `dag_id` on every `DagRun` it deletes and
+  matches seeded rows on their natural key as well as their id.
+  ([#325](https://github.com/nredd/pytest-airflow-in-a-box/issues/325)).
+- Give the bundled smoke catalog a plugin-owned fallback `xdist_group` under `--dist loadgroup` when no `dag_corpus`/`dag_bag` consumer is available to anchor it, so a smoke-only run no longer retains one full serialized DagCorpus per worker. A smoke-only `-n auto --dist loadgroup` run now executes the whole catalog on a single worker instead of spreading it in parallel, trading some wall-clock time for the bounded memory.
+  ([#327](https://github.com/nredd/pytest-airflow-in-a-box/issues/327)).
+- Shorten the `action.yml` `description` below GitHub Marketplace's 125-character listing
+  limit, which was silently blocking the "Publish this Action" eligibility check.
+
+### Security
+
+- Document in `SECURITY.md` that Dependabot alerts against the `airflow2` extra's
+  EOL `apache-airflow==2.11.2` resolution (and its unpatchable `flask`/`flask-appbuilder`/
+  `apache-airflow-providers-fab` pins) are dismissed as tolerable risk, since this plugin
+  only runs Airflow's webserver as an ephemeral local test harness.
+
 ## [0.12.0] - 2026-08-26
 
 ### Added
