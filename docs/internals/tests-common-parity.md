@@ -18,6 +18,37 @@ plugin available to every Airflow project. This page maps calls that work unchan
 need a one-line rewrite, and deliberate differences. For ordinary Dag tests, start with
 [a whole `DagRun`, real state](../guide/ladder.md#a-whole-dagrun-real-state).
 
+## The `tests_common` stand-in experiment
+
+[Issue #227](https://github.com/nredd/pytest-airflow-in-a-box/issues/227) asked a deliberately
+adversarial question: how much of Airflow's own core test suite would survive if
+`pytest-airflow-in-a-box` replaced its private `tests_common` pytest plugin? Selected model,
+serialization, and timetable tests ran two ways. The **hybrid** kept upstream's fixtures but
+disabled its database initialization, leaving this plugin to own `AIRFLOW_HOME` and the metadata
+database. The **stand-in** replaced upstream's plugin registration with a marker-only shim, so
+every missing fixture and behavioral difference became a measurable failure.
+
+Three rounds compared those runs with the stock harness, repeated the stand-in across Airflow
+2.9.3 through 3.4.0.dev, implemented the highest-value gaps, and reran the matrix to measure the
+change. The
+[permanent record](https://github.com/nredd/pytest-airflow-in-a-box/discussions/245) contains the
+method, result tables, reproduction patches, and raw logs. The durable findings were:
+
+- **The foundation held.** The plugin bootstrapped every tested release without a compatibility
+  failure, including the uncertified development release through live probing. In the hybrid
+  serial experiment, replacing Airflow's database bootstrap while retaining its fixtures
+  preserved the baseline outcomes and reduced wall time by 10–40%.
+- **The gaps were concentrated contracts, not broad incompatibility.** Failures clustered around
+  a small fixture surface and `dag_maker` semantics. Successive rounds directly produced the
+  upstream keyword routing, one-call factories, scheduler handles, run defaults, borrowed-session
+  teardown, and Dag-scoped cleanup documented below.
+- **Parity has a boundary.** Assertions tied to Airflow's repository paths or plugin directory
+  were harness assumptions, not compatibility failures. Upstream-only fixtures such as
+  `testing_team` and `mock_supervisor_comms` remain intentionally unsupported until they serve a
+  downstream use case; the [scope decision](https://github.com/nredd/pytest-airflow-in-a-box/discussions/283)
+  records the alternatives. The parallel experiments also drove the worker-environment drift
+  policy and the explicit xdist collision guidance elsewhere in this guide.
+
 ## Upstream harness keywords
 
 `dag_maker(...)` forwards unknown keywords to the authoring `DAG` constructor. Three
