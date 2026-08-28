@@ -1,16 +1,59 @@
-# Upstream tests_common parity
+# Upstream `tests_common` parity
 
-For a suite porting off Airflow's internal `tests_common` harness. This page is the call-site
-parity contract: which keywords route where, which upstream calls need a one-line rewrite, and
-every place this plugin deliberately differs. Everyday Dag testing does not need it -- start at
-[Real DagRuns and real state](../guide/task-execution.md).
+`tests_common` is Apache Airflow's shared internal test-support package. It lives in the
+repository's [`devel-common`](https://github.com/apache/airflow/tree/main/devel-common)
+workspace, whose
+[`apache-airflow-devel-common` package](https://github.com/apache/airflow/blob/main/devel-common/pyproject.toml)
+is explicitly private and not published to PyPI. Its live
+[`pytest_plugin.py`](https://github.com/apache/airflow/blob/main/devel-common/src/tests_common/pytest_plugin.py)
+provides the fixtures and lifecycle machinery used by Airflow's own pytest suites, including
+tests run through [Breeze](https://github.com/apache/airflow/tree/main/dev/breeze), Airflow's
+Docker Compose development and CI environment.
+
+This plugin descended from `devel-common`'s `tests_common` plugin circa 2025, during an Airflow
+2-to-3 migration and the release-candidate phase of Airflow 3. Airflow's own Breeze-driven tests
+proved the approach;
+`pytest-airflow-in-a-box` turns that internal pattern into a supported, compatibility-tested
+plugin available to every Airflow project. This page maps calls that work unchanged, calls that
+need a one-line rewrite, and deliberate differences. For ordinary Dag tests, start with
+[a whole `DagRun`, real state](../guide/ladder.md#a-whole-dagrun-real-state).
+
+## The `tests_common` stand-in experiment
+
+[Issue #227](https://github.com/nredd/pytest-airflow-in-a-box/issues/227) asked a deliberately
+adversarial question: how much of Airflow's own core test suite would survive if
+`pytest-airflow-in-a-box` replaced its private `tests_common` pytest plugin? Selected model,
+serialization, and timetable tests ran two ways. The **hybrid** kept upstream's fixtures but
+disabled its database initialization, leaving this plugin to own `AIRFLOW_HOME` and the metadata
+database. The **stand-in** replaced upstream's plugin registration with a marker-only shim, so
+every missing fixture and behavioral difference became a measurable failure.
+
+Three rounds compared those runs with the stock harness, repeated the stand-in across Airflow
+2.9.3 through 3.4.0.dev, implemented the highest-value gaps, and reran the matrix to measure the
+change. The
+[permanent record](https://github.com/nredd/pytest-airflow-in-a-box/discussions/245) contains the
+method, result tables, reproduction patches, and raw logs. The durable findings were:
+
+- **The foundation held.** The plugin bootstrapped every tested release without a compatibility
+  failure, including the uncertified development release through live probing. In the hybrid
+  serial experiment, replacing Airflow's database bootstrap while retaining its fixtures
+  preserved the baseline outcomes and reduced wall time by 10-40%.
+- **The gaps were concentrated contracts, not broad incompatibility.** Failures clustered around
+  a small fixture surface and `dag_maker` semantics. Successive rounds directly produced the
+  upstream keyword routing, one-call factories, scheduler handles, run defaults, borrowed-session
+  teardown, and Dag-scoped cleanup documented below.
+- **Parity has a boundary.** Assertions tied to Airflow's repository paths or plugin directory
+  were harness assumptions, not compatibility failures. Upstream-only fixtures such as
+  `testing_team` and `mock_supervisor_comms` remain intentionally unsupported until they serve a
+  downstream use case; the [scope decision](https://github.com/nredd/pytest-airflow-in-a-box/discussions/283)
+  records the alternatives. The parallel experiments also drove the worker-environment drift
+  policy and the explicit xdist collision guidance elsewhere in this guide.
 
 ## Upstream harness keywords
 
-`dag_maker(...)` forwards unknown keyword arguments to the authoring `DAG` constructor, with
-three exceptions mirroring upstream's harness contract: `session`, `bundle_name`, and
-`bundle_version` route to the persistence layer instead of the constructor. Those call sites
-stay unchanged:
+`dag_maker(...)` forwards unknown keywords to the authoring `DAG` constructor. Three
+upstream-compatible keywords instead configure persistence: `session`, `bundle_name`, and
+`bundle_version`. Calls using them need no rewrite:
 
 ```python
 from airflow.models.dag import DagModel
@@ -29,22 +72,21 @@ def test_upstream_style(dag_maker, session):
     assert session.get(DagModel, "upstream_style") is not None
 ```
 
-- `session=` supplies the metadata session used for every write the context makes
-  (persistence, `create_dagrun`, `create_ti`), and `dag_maker.session` returns it. The fixture
-  never closes a supplied session; teardown cleanup opens its own. Persistence *commits* on it,
-  which narrows what the rollback-isolated `session` fixture guarantees -- see
-  [Sessions](../guide/database.md#sessions)
-- `bundle_name=` overrides the derived per-Dag bundle row name. The derived name is unique per
-  Dag on purpose -- it is the mitigation for cross-worker bundle-row contention under
-  `pytest-xdist` -- so supplying your own opts out of that isolation. A shared row is still
-  cleaned up once the last Dag referencing it is gone
-- `bundle_version=` is recorded on the persisted 3.x metadata rows (`dag`, `dag_version`). Both
-  bundle keywords are accepted and ignored on the certified 2.x family, which predates bundles
+- `session=` supplies the session for persistence, `create_dagrun`, and `create_ti`;
+  `dag_maker.session` returns it. The fixture never closes a supplied session, and cleanup uses
+  a separate one. Persistence commits the supplied session, including other staged changes, so
+  it narrows the rollback guarantee described under
+  [the disposable database](test-environments.md#the-disposable-metadata-database).
+- `bundle_name=` replaces the generated per-Dag bundle name. Generated names isolate workers
+  from bundle-row contention; an override gives up that protection. A shared bundle row is
+  removed after its final Dag reference.
+- `bundle_version=` is written to the 3.x `dag` and `dag_version` metadata. Both bundle
+  keywords are accepted but ignored on the certified 2.x family, which has no Dag bundles.
 
 ## Scheduler-side handles
 
-The context always yields the mutable *authoring* Dag; scheduler-side state is exposed through
-opt-in handles on the factory instead (the design decision is recorded in
+The context always yields the mutable *authoring* Dag. Scheduler-side state lives on explicit
+factory handles instead (the design decision is recorded in
 [ADR 0002](../adr/0002-authoring-yield-with-scheduler-handles.md)):
 
 ```python
@@ -61,30 +103,24 @@ def test_scheduler_state(dag_maker):
     assert sorted(reloaded.task_ids) == ["added", "original"]
 ```
 
-- `serialized_dag` returns the persisted scheduler representation after every successful
-  context exit. Every Dag serializes as part of persistence, so the `serialized=` keyword and
-  the `need_serialized_dag` marker are accepted for upstream compatibility but no longer change
-  behavior
-- `dag_model` returns the live `DagModel` ORM row on `dag_maker.session` (typed as the
-  structural `DagModelRow` protocol). Reads observe committed scheduler metadata --
-  `is_paused`, the `next_dagrun*` columns -- and mutations are visible to Airflow
-- `sync_dagbag_to_db()` mirrors upstream's mutate-then-resync shape: re-persists the current
-  authoring Dag, refreshes `serialized_dag`, and returns it. It commits the metadata session
-  (on a borrowed `session=` that includes anything the caller had staged, exactly like
-  persistence at context exit). On 3.x a resync may record a new DagVersion; DagRuns created
-  before the resync keep their original version. Works on the certified 2.x family too, through
-  that family's writers
-- `timetable` returns the persisted scheduler Dag's timetable (typed as the structural
-  `SchedulerTimetable` protocol) -- the exact object `create_dagrun` infers `data_interval`
-  through. On Airflow 3.2+ the *authoring* Dag's timetable lost the scheduling methods, so
-  `dag.timetable.infer_manual_data_interval(...)` raises `AttributeError` on the yielded Dag;
-  this handle carries the method on every certified release
+- `serialized_dag` is the persisted scheduler representation after each successful context
+  exit. Persistence always serializes, so the upstream `serialized=` keyword and
+  `need_serialized_dag` marker are accepted but do not change behavior.
+- `dag_model` is the live `DagModel` row on `dag_maker.session`, typed as the structural
+  `DagModelRow` protocol. It exposes committed scheduler metadata such as `is_paused` and
+  `next_dagrun*`; mutations are visible to Airflow.
+- `sync_dagbag_to_db()` re-persists the current authoring Dag, refreshes `serialized_dag`, and
+  returns it. It commits the session, including other staged changes in a supplied `session=`.
+  On 3.x, a resync may create a `DagVersion`; existing `DagRun`s retain their original version.
+  The method also works on the certified 2.x family.
+- `timetable` is the persisted scheduler Dag's timetable, typed as `SchedulerTimetable`. It is
+  the object `create_dagrun` uses to infer `data_interval`. On Airflow 3.2+, the authoring
+  timetable no longer exposes scheduler methods; this handle does on every certified release.
 
 ### Migrating scheduler-side Dag calls
 
-Upstream's `dag_maker` yields a proxy over the serialized Dag, so upstream tests call
-scheduler-side methods directly on the yield. This plugin's context always yields the authoring
-Dag (ADR 0002), so those call sites move to a factory handle -- each is a one-line rewrite:
+Upstream's `dag_maker` yields a serialized-Dag proxy. This plugin yields the authoring Dag, so
+move scheduler-side calls to a factory handle:
 
 | Upstream pattern on the yield | Migration target |
 | --- | --- |
@@ -94,21 +130,20 @@ Dag (ADR 0002), so those call sites move to a factory handle -- each is a one-li
 | `dag.partial_subset(...)` | `dag_maker.serialized_dag.partial_subset(...)` |
 | `dag.set_task_instance_state(...)` | `dag_maker.serialized_dag.set_task_instance_state(..., session=dag_maker.session)` |
 
-`serialized_dag` is the installed release's real scheduler Dag object, so everything on that
-class is reachable -- the rows above are the patterns upstream suites actually hit. Signatures
-beyond `infer_manual_data_interval` follow the installed Airflow release (e.g.
-`partial_subset(exclude_original=...)` exists only where upstream added it); private attributes
-such as `_time_restriction` are deliberately not part of any plugin contract.
-`create_dagrun_after` has no equivalent -- deliberately deferred in
+`serialized_dag` is the installed release's real scheduler Dag, so its public methods remain
+reachable. Their signatures follow that Airflow release; for example,
+`partial_subset(exclude_original=...)` exists only where Airflow provides it. Private
+attributes such as `_time_restriction` are outside the plugin contract.
+
+`create_dagrun_after` has no equivalent. It is deferred in
 [#261](https://github.com/nredd/pytest-airflow-in-a-box/issues/261) until consumer demand
-justifies its per-version run-info machinery (see ADR 0002's amendment).
+justifies its version-specific run-info handling.
 
 ## Upstream one-call factories
 
-`create_task_instance` and `create_dummy_dag` mirror upstream Airflow's
-`tests_common.pytest_plugin` fixtures of the same names -- same parameters and defaults -- so
-upstream-style tests call them the same way, and they double as the shortest path to "give me a
-task instance" when the Dag's content does not matter:
+`create_task_instance` and `create_dummy_dag` match the parameters and defaults of the same
+fixtures in `tests_common.pytest_plugin`. Upstream-style calls therefore work unchanged. They
+are also the shortest path to a task instance when Dag content is irrelevant:
 
 ```python
 def test_one_call(create_task_instance):
@@ -118,46 +153,41 @@ def test_one_call(create_task_instance):
     assert ti.pool == "default_pool"
 ```
 
-Both are composition over `dag_maker`: the Dag, DagRun, and task-instance rows are owned and
-cleaned up exactly as `dag_maker`'s are, and `**dag_kwargs` (including `serialized=`) route to
-`dag_maker` unchanged. `testing_dag_bundle` registers the shared `testing` Dag bundle row
-upstream core tests bulk-write metadata against (Airflow 3.x only).
+Both compose `dag_maker`, which owns and cleans up their Dag, `DagRun`, and task-instance rows.
+They pass `**dag_kwargs`, including `serialized=`, through unchanged. On Airflow 3,
+`testing_dag_bundle` registers the shared `testing` bundle row used by upstream bulk metadata
+writes.
 
 ## Deliberate deviations
 
-All nine are rooted in this plugin's own persistence machinery rather than upstream's:
+These differences come from the plugin's persistence and xdist guarantees:
 
-- `create_task_instance` returns the plain ORM `TaskInstance` with `ti.task` carrying the
-  *authoring* operator -- there is no `ti.run()` wrapper; execute through `dag_maker.run_ti` or
-  `run_task` instead
+- `create_task_instance` returns a plain ORM `TaskInstance`; `ti.task` is the authoring
+  operator. It adds no `ti.run()` wrapper. Execute with `dag_maker.run_ti` or `run_task`.
 - `testing_dag_bundle` never deletes the shared row at teardown: a conditional delete would
   race another `pytest-xdist` worker's in-flight `DagModel.bundle_name` reference, and the
-  per-run metadata database is disposable anyway
-- An explicit `start_date=None` to `dag_maker(...)` opts out of the default-`start_date`
-  injection entirely; upstream silently replaces it with `DEFAULT_DATE`
-- A non-manual run whose timetable schedules nothing (`schedule=None`) degrades its default
-  `logical_date` to the Dag's `start_date` and then the current UTC date; upstream crashes on
-  the `None` run info there
-- Likewise a non-manual run on a trigger-style or custom timetable degrades whitelist-refused
-  automated `data_interval` inference to the manual shape every timetable implements
+  per-run metadata database is disposable anyway.
+- `dag_maker(start_date=None)` disables the default start date. Upstream replaces `None` with
+  `DEFAULT_DATE`.
+- For a non-manual run with `schedule=None`, the default `logical_date` falls back to the Dag's
+  `start_date`, then the current UTC date. Upstream crashes on the missing run information.
+- When Airflow's automated interval inference rejects a trigger-style or custom timetable, the
+  plugin uses the manual interval shape that every timetable implements.
 - On a serial run, reusing one `dag_id` across factory calls -- in the same test, or after a
   previous test in the same process leaked its cleanup -- replaces the earlier metadata,
   matching upstream's silent re-sync. `ValueError` remains for a `dag_id` whose metadata this
   process never persisted (foreign rows, another worker's live registration) and for any
   collision on a `pytest-xdist` worker, where a leftover is indistinguishable from another
-  worker's in-flight row
-- `run_after` on the Airflow 2.x family raises `ValueError` instead of upstream's silent drop,
-  matching `dag_maker.create_dagrun`
-- `create_task_instance(execution_date=...)` -- the Airflow 2 spelling 2.x-era upstream suites
-  use -- is accepted on both families and mapped onto `logical_date` with a
-  `DeprecationWarning`, exactly as upstream preserves it; passing both spellings raises
-  `ValueError`. `dag_maker.create_dagrun` deliberately does *not* grow the alias:
-  `dag_run_kwargs={"execution_date": ...}` keeps its loud rejection, whose message names the
-  `logical_date` remedy
-- `dag_maker`-routed keywords upstream supports (`session=`, `bundle_name=`, `bundle_version=`)
-  follow whatever `dag_maker(...)` itself accepts
+  worker's in-flight row.
+- On Airflow 2, `run_after` raises `ValueError` instead of being silently discarded, matching
+  `dag_maker.create_dagrun`.
+- `create_task_instance(execution_date=...)`, the spelling used by Airflow 2 suites, works on
+  both families. It maps to `logical_date` with a `DeprecationWarning`; passing both spellings
+  raises `ValueError`. `dag_maker.create_dagrun` does not accept the alias:
+  `dag_run_kwargs={"execution_date": ...}` is rejected with a message naming `logical_date`.
+- Keywords routed to `dag_maker` -- `session=`, `bundle_name=`, and `bundle_version=` -- follow
+  `dag_maker(...)`'s accepted values.
 
-Upstream's `dag_id="dag"` default is kept verbatim, so two concurrent tests relying on it
-contend on the shared metadata database exactly like any repeated `dag_id` -- see
-[the xdist caveat](../guide/task-execution.md#testing-a-dag-defined-elsewhere), or pass explicit
-identifiers.
+The upstream `dag_id="dag"` default is unchanged. Concurrent tests that rely on it contend on
+the shared metadata database like any repeated `dag_id`; pass explicit identifiers or follow
+[the xdist guidance](../guide/ladder.md#testing-a-dag-defined-elsewhere).

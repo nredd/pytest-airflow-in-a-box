@@ -88,7 +88,7 @@ def test_ingest_strands_a_retrying_load_visibly(dag_maker: DagMaker) -> None:
 
     `dag_maker.run()` attempts every task instance exactly once -- there is no scheduler
     loop behind it to re-queue a retry, so `load` stays stranded rather than eventually
-    succeeding. See `docs/guide/task-execution.md` and the sibling
+    succeeding. See `docs/guide/ladder.md` and the sibling
     `test_run_strands_a_retrying_task_visibly` in `test_dag_run_result.py`.
     """
 

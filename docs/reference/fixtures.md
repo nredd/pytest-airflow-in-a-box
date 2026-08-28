@@ -1,59 +1,70 @@
 # Fixtures
 
-Every public fixture the plugin registers, in one place. "DB" means requesting the fixture
-triggers lazy metadata-database initialization; fixtures marked "DB" are the members of
-`fixtures.DATABASE_FIXTURE_NAMES`. DB-free fixtures never import Airflow's ORM or run a
-migration. "3.x only" fixtures fail on the Airflow 2.x tier with an actionable error naming
-the 2.x alternative.
+The `pytest11` entry point registers every fixture below. Scope is pytest scope; under xdist,
+each worker has its own session fixtures. Cost describes activation:
+
+- **DB** initializes the disposable metadata database for tests containing the fixture.
+- **API** starts one server per pytest process and always includes **DB**.
+- **Conditional DB** applies only to `dag_corpus`: it needs the database when parse-time
+  secrets use the metastore.
+
+Fixtures marked **3.x only** fail on Airflow 2 with an actionable alternative.
 
 ## Running Dags and tasks
 
-| Fixture | Scope | DB | Airflow | Returns |
-| ------- | ----- | -- | ------- | ------- |
-| `dag_bag` | session | yes | 2.x + 3.x | The `DagBag` parsed once per worker process from the configured Dag directory ([Task execution](../guide/task-execution.md#testing-a-dag-defined-elsewhere)) |
-| `dag_corpus` | session | conditional | 2.x + 3.x | The portable, fan-out-eligible `DagCorpus` parsed once per worker process from the configured Dag directory -- read-only metadata, not live Airflow objects; shared with the bundled `--airflow-smoke` catalog's own corpus-wide checks ([The `dag_corpus` fixture](../internals/dag-corpus.md#the-dag_corpus-fixture)) |
-| `dag_maker` | function | yes | 2.x + 3.x | A factory building and persisting a Dag authored in the test, with `run()` / `run_ti()` execution; accepts upstream `tests_common`'s `session`/`bundle_name`/`bundle_version` harness keywords and exposes the scheduler-side `serialized_dag`/`dag_model`/`timetable`/`sync_dagbag_to_db()` handles ([Scheduler-side handles](../internals/tests-common-parity.md#scheduler-side-handles)) |
-| `create_task_instance` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a `TaskInstance` with its Dag and DagRun rows, composed over `dag_maker`. Returns the plain ORM instance -- no `ti.run()` wrapper ([Upstream one-call factories](../internals/tests-common-parity.md#upstream-one-call-factories)) |
-| `create_dummy_dag` | function | yes | 2.x + 3.x | An upstream-parity one-call factory: a persisted single-`EmptyOperator` Dag plus, by default, a scheduled DagRun ([Upstream one-call factories](../internals/tests-common-parity.md#upstream-one-call-factories)) |
-| `run_dag` | function | yes | 2.x + 3.x | A runner for externally-authored Dags, e.g. ones pulled from `dag_bag`. `executor=` drives the run through a real executor instead of in-process, 3.x only ([Task execution](../guide/task-execution.md#executor-driven-runs)) |
-| `run_task` | function | no | 3.x only | A DB-free in-process Task SDK runner for a single operator or standalone `@task` ([DB-free task execution](../guide/db-free-execution.md)) |
-| `render_task` | function | no | 3.x only | A DB-free in-process renderer for an operator's `template_fields`, without calling `execute()` ([DB-free task execution](../guide/db-free-execution.md)) |
-| `task_context` | function | no | 3.x only | A DB-free in-process Task SDK template-context factory for hand-driven `execute()` calls ([DB-free task execution](../guide/db-free-execution.md)) |
+| Fixture | Scope / Airflow | Cost | Use and return |
+| --- | --- | --- | --- |
+| `dag_bag` | session · 2.x + 3.x | DB | Live `DagBag` parsed once per worker. Select repository Dags from it for [`run_dag`](../guide/ladder.md#testing-a-dag-defined-elsewhere). |
+| `dag_corpus` | session · 2.x + 3.x | Conditional DB | Read-only, process-portable `DagCorpus` for repository-wide checks. Requesting it serializes every Dag; see [custom corpus checks](../guide/smoke-tests.md#writing-your-own-corpus-check). |
+| `dag_maker` | function · 2.x + 3.x | DB | `DagMaker` authors, persists, and runs test-defined Dags. See its [scheduler handles and upstream keywords](../internals/tests-common-parity.md#scheduler-side-handles). |
+| `create_task_instance` | function · 2.x + 3.x | DB | `CreateTaskInstance` returns one ORM `TaskInstance` with its Dag and `DagRun`; it adds no `ti.run()` wrapper. See [one-call factories](../internals/tests-common-parity.md#upstream-one-call-factories). |
+| `create_dummy_dag` | function · 2.x + 3.x | DB | `CreateDummyDag`, an upstream-compatible factory returning `(dag, empty_operator)`. It creates a scheduled `DagRun` by default; pass `with_dagrun_type=None` to omit it. |
+| `run_dag` | function · 2.x + 3.x | DB; API with `executor=` | `RunDag` executes an externally authored Dag and returns `DagRunResult`. [Executor mode](../guide/ladder.md#executor-driven-runs) is 3.x only. |
+| `run_task` | function · 3.x only | none | `RunTask` executes one operator through the in-process Task SDK and returns `TaskRunResult`; no ORM rows or migration. |
+| `render_task` | function · 3.x only | none | `RenderTask` returns a prepared copy with `template_fields` rendered and never calls `execute()`. |
+| `task_context` | function · 3.x only | none | `TaskContext` opens a seeded context for hand-driving the prepared task. The [DB-free rung](../guide/ladder.md#one-operator-no-database) compares these three fixtures. |
 
 ## Database and seeding
 
-| Fixture | Scope | DB | Airflow | Returns |
-| ------- | ----- | -- | ------- | ------- |
-| `session` | function | yes | 2.x + 3.x | An Airflow metadata `Session`, rolled back on teardown ([Database](../guide/database.md)) |
-| `airflow_variables` | function | yes | 2.x + 3.x | A seeder persisting Airflow Variables for one test, deleted on teardown ([Seeding](../guide/seeding.md)) |
-| `airflow_connections` | function | yes | 2.x + 3.x | A seeder persisting Airflow Connections for one test, deleted on teardown ([Seeding](../guide/seeding.md)) |
-| `airflow_parse_secrets` | function | yes | 2.x + 3.x | Nothing -- requesting it resolves top-level `Variable.get` / `Connection.get` lookups in Dag files for the whole test ([Seeding](../guide/seeding.md)) |
-| `testing_dag_bundle` | function | yes | 3.x only | Nothing -- requesting it registers the shared `testing` Dag bundle row upstream core tests bulk-write metadata against. Idempotent, never deleted at teardown -- a conditional delete would race other xdist workers and the per-run database is disposable ([Upstream one-call factories](../internals/tests-common-parity.md#upstream-one-call-factories)) |
+| Fixture | Scope / Airflow | Cost | Use and return |
+| --- | --- | --- | --- |
+| `session` | function · 2.x + 3.x | DB | Airflow metadata `Session`; teardown rolls back uncommitted work and closes it. Explicit commits persist within the disposable database. |
+| `airflow_variables` | function · 2.x + 3.x | DB | `AirflowVariables` callable that commits Variable rows and deletes its rows at teardown. |
+| `airflow_connections` | function · 2.x + 3.x | DB | `AirflowConnections` callable that commits Connection rows and deletes its rows at teardown. |
+| `airflow_parse_secrets` | function · 2.x + 3.x | DB | Activation fixture returning `None`. It enables Variable and Connection resolution outside plugin-owned Dag parses for the test; it is inert on Airflow 2 and with parse-time resolution disabled. |
+| `testing_dag_bundle` | function · 3.x only | DB | Returns `None`; creates the shared `testing` Dag-bundle row for upstream-style metadata tests and leaves it in the disposable database. |
+
+Prefer environment-backed secrets unless testing the metastore. Seeded identifiers are
+database-global under xdist; precedence and collision rules live under
+[Variables and Connections](../internals/test-environments.md#seeding-variables-and-connections).
 
 ## Configuration and paths
 
-| Fixture | Scope | DB | Airflow | Returns |
-| ------- | ----- | -- | ------- | ------- |
-| `airflow_configure` | session | no | 2.x + 3.x | A callable applying `airflow_config` overrides until session teardown ([Airflow configuration](../guide/configuration.md)) |
-| `airflow_components` | function | no | 3.x only | A registry for custom plugins, listeners, policies, secrets backends, executors, and timetables ([Custom components](../guide/custom-components.md)) |
-| `airflow_home` | session | no | 2.x + 3.x | This run's isolated `AIRFLOW_HOME` as a `pathlib.Path` ([Where the run lives](../guide/airflow-home.md)) |
-| `airflow_dags_folder` | session | no | 2.x + 3.x | The Dag directory `dag_bag` parses, as a `pathlib.Path` ([The two Dag folder options](../guide/dag-collection.md#the-two-dag-folder-options)) |
-
-`airflow_home` and `airflow_dags_folder` deliberately share their names with ini options --
-fixtures and ini options live in separate pytest registries. Note the `airflow_home` ini
-option names the *base* directory to provision under; the fixture returns the disposable
-per-run root created below it.
+| Fixture | Scope / Airflow | Cost | Use and return |
+| --- | --- | --- | --- |
+| `airflow_configure` | session · 2.x + 3.x | none | `AirflowConfigure` applies runtime overrides until teardown. Use ini for values that must precede every Dag parse; see [configuration scopes](../internals/test-environments.md#overriding-configuration). |
+| `airflow_components` | function · 3.x only | none | `ComponentRegistry` provides reversible test registration. It does not prove [production discovery](../guide/custom-components-wiring.md#runtime-component-registration). |
+| `airflow_home` | session · 2.x + 3.x | none | `pathlib.Path` for this run's disposable `AIRFLOW_HOME`. The same-named ini option selects its parent directory, not this exact path. |
+| `airflow_dags_folder` | session · 2.x + 3.x | none | `pathlib.Path` that `dag_bag`, `run_dag`, `dag_corpus`, and smoke checks parse. It is distinct from the per-file collection folder; see [the two Dag folder options](../guide/smoke-tests.md#the-two-dag-folder-options). |
 
 ## REST API and logging
 
-| Fixture | Scope | DB | Airflow | Returns |
-| ------- | ----- | -- | ------- | ------- |
-| `api_server_url` | session | yes | 3.x only | The base URL of one isolated Airflow API server started for this process's session ([Live REST API](../guide/rest-api.md)) |
-| `api_client` | session | yes | 3.x only | An authenticated client bound to the isolated API server ([Live REST API](../guide/rest-api.md)) |
-| `api_base_url` | function (autouse) | no | 3.x only when active | The live server URL, published through Airflow configuration for tests marked `api_test`; inert (`None`) everywhere else, so its 2.x failure only reaches `api_test`-marked tests ([Live REST API](../guide/rest-api.md)) |
-| `cap_structlog` | function | no | 3.x only | A capture recording structlog events emitted during the test ([Structlog capture](../guide/structlog.md)) |
+| Fixture | Scope / Airflow | Cost | Use and return |
+| --- | --- | --- | --- |
+| `api_server_url` | session · 3.x only | DB + API | Base URL string for the live, loopback-only Airflow API server. Requesting it also publishes the URL for that test. |
+| `api_client` | session · 3.x only | DB + API | Authenticated `AirflowApiClient` bound to the same server; methods return `ApiResponse(status, body)`. |
+| `api_base_url` | function, autouse · active path 3.x only | none when inert; DB + API when active | Publishes the URL for tests using `api_client`, `api_server_url`, or `api_test`; otherwise returns `None`. Requesting it alone does not activate the server. |
+| `cap_structlog` | function · 3.x only | none | `StructlogCapture` containing Airflow structlog events emitted during the test. On Airflow 2, use pytest's `caplog`. |
 
-Return types are the typed contracts in `pytest_airflow_in_a_box.types` (`DagMaker`,
-`CreateTaskInstance`, `CreateDummyDag`, `RunDag`, `RunTask`, `RenderTask`, `TaskContext`,
-`AirflowVariables`, `AirflowConnections`, `AirflowConfigure`, `ComponentRegistry`, `DagCorpus`), so
-fixture-parameter annotations autocomplete and type-check in consumer suites.
+See the [REST API guide](../guide/rest-api.md) for server behavior and
+[captured logs](../internals/test-environments.md#captured-logs) for `caplog` boundaries.
+
+## Typing and activation
+
+Callable and structural contracts such as `DagMaker`, `RunDag`, `RunTask`, `TaskContext`, and
+`ComponentRegistry` are exported from `pytest_airflow_in_a_box.types`. Other rows return the
+concrete standard-library, SQLAlchemy, Airflow, or API-client type named above.
+
+Fixtures activate resources through pytest's fixture closure; markers cover tests that reach
+the same resources through their own code. See [Markers](markers.md) for `db_test` and
+`api_test`, and [CLI and INI options](ini-options.md) for run-wide configuration.

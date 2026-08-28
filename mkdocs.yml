@@ -23,10 +23,13 @@ theme:
         name: Switch to light mode
   features:
     - content.code.copy
-    - navigation.sections
+    - navigation.indexes
     - navigation.top
     - navigation.tracking
     - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
 
 markdown_extensions:
   - admonition
@@ -44,69 +47,36 @@ plugins:
 
 nav:
   - Home: index.md
+  - Quickstart: quickstart.md
 
-  - Getting started:
-      - Quickstart: quickstart.md
-      - Installing the plugin: install.md
-      - Supported Airflow and Python versions: compatibility.md
+  - Testing your Dags:
+      - Whose fail is it anyway?: guide/testing-scope.md
+      - The Fidelity Ladder: guide/ladder.md
+      - Deferred tasks: guide/deferrable-operators.md
+      - Cookbook: guide/cookbook.md
+      - REST API: guide/rest-api.md
+      - Smoke Tests: guide/smoke-tests.md
 
-  - Why test your Dag code:
-      - The wall you hit at 500 tasks: why/index.md
-      - What a dagbag test and a callable test miss: why/dagbag-callable-gap.md
-      - Why not dag.test(), DebugExecutor, or your own conftest: why/why-not.md
+  - Custom components:
+      - Checking components: guide/custom-components.md
+      - Timetables: guide/custom-timetables.md
+      - Registration and packaging: guide/custom-components-wiring.md
 
-  - What to test:
-      - Deciding which failures are yours: guide/testing-scope.md
-      - Recipes for the seams between tasks: guide/cookbook.md
+  - CI and migration:
+      - GitHub Actions and reports: guide/ci/github-action.md
+      - Airflow 2->3 Migration: guide/migration.md
 
-  - Running a task, rung by rung:
-      - The fidelity ladder: guide/ladder.md
-      - One operator, no database: guide/db-free-execution.md
-      - Real DagRuns and real state: guide/task-execution.md
-      - Deferred tasks and your own triggers: guide/deferrable-operators.md
-      - Talking to a live Airflow API: guide/rest-api.md
-
-  - Giving tests their environment:
-      - Where the run lives: guide/airflow-home.md
-      - The disposable metadata database: guide/database.md
-      - Overriding Airflow configuration: guide/configuration.md
-      - Seeding Variables and Connections: guide/seeding.md
-      - Asserting on what a task logged: guide/structlog.md
-      - Keeping your own airflow_local_settings.py: guide/cluster-policies.md
-
-  - Checking the whole Dag corpus:
-      - Smoke checks over every Dag: guide/smoke-tests.md
-      - One pytest item per Dag file: guide/dag-collection.md
-      - Proving your Dag files are actually executed: guide/dag-coverage.md
-
-  - Running it in CI:
-      - The GitHub Action: guide/ci/github-action.md
-      - Logs and JUnit XML you can trust: guide/reports.md
-
-  - Testing your own Airflow components:
-      - Checking a custom component: guide/custom-components.md
-      - Wiring components into the run: guide/custom-components-wiring.md
-      - Custom timetables: guide/custom-timetables.md
-      - Entry points and packaging: guide/isolated-tests.md
-
-  - What ships in the box:
+  - Plugin reference:
+      - Dependencies and extras: reference/dependencies.md
       - Fixtures: reference/fixtures.md
       - Markers: reference/markers.md
-      - Diagnosing a run: reference/diagnostics.md
-
-  - Migrating from Airflow 2 to 3:
-      - Start here: guide/migration/index.md
-      - Migration-strict mode: guide/migration/strict.md
-      - Pairing migration-strict with ruff's AIR rules: guide/migration/ruff-air-rules.md
-      - Diffing outcomes across the upgrade: guide/migration/outcome-diff.md
-      - Baseline artifact contract: guide/migration/baseline-artifact.md
-      - Driving both families in one run: guide/migration/orchestrator.md
-      - Running both families in CI: guide/migration/orchestrator-in-ci.md
+      - CLI and INI options: reference/ini-options.md
+      - Smoke catalog and corpus mechanics: reference/smoke.md
+      - Migration artifacts: reference/migration.md
+      - Airflow Doctor: reference/diagnostics.md
 
   - Under the hood:
-      - What _compat/ absorbs: internals/compat-layer.md
-      - Who owns AIRFLOW__* (bootstrap and env drift): internals/bootstrap-env-ownership.md
+      - Compatibility and certification: internals/compat-layer.md
+      - Test Environments: internals/test-environments.md
       - Upstream tests_common parity: internals/tests-common-parity.md
-      - Parse-time secret resolution: internals/parse-time-secrets.md
-      - Corpus parsing, parallelism, and dag_corpus: internals/dag-corpus.md
-      - Working on the plugin itself: development.md
+      - Developing this plugin: development.md

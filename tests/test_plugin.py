@@ -404,14 +404,14 @@ def test_missing_anchor_warns_when_every_dag_bag_consumer_is_pre_grouped(
 ) -> None:
     """Warn when every `dag_bag` consumer already carries its own `xdist_group`.
 
-    Regression test for issue #242. `docs/guide/seeding.md` and `_compat/seed.py`
-    actively tell users to hand-write `xdist_group` to avoid metadata-database seed
-    collisions, so a suite where *every* consumer is pre-grouped is a realistic
-    outcome of following the documentation -- and it leaves the catalog with no
-    eligible anchor. The pre-existing behavior was to return silently, costing one
-    extra full Dag parse with no signal at all; the catalog now also falls back to
-    grouping with itself (`SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, issue #327), so it
-    stays on one worker even though it lost its `dag_bag` anchor.
+    Regression test for issue #242. `docs/internals/test-environments.md` and
+    `_compat/seed.py` actively tell users to hand-write `xdist_group` to avoid
+    metadata-database seed collisions, so a suite where *every* consumer is pre-grouped
+    is a realistic outcome of following the documentation -- and it leaves the catalog
+    with no eligible anchor. The pre-existing behavior was to return silently, costing
+    one extra full Dag parse with no signal at all; the catalog now also falls back to
+    grouping with itself (`SMOKE_CATALOG_FALLBACK_XDIST_GROUP`, issue #327), so it stays
+    on one worker even though it lost its `dag_bag` anchor.
 
     Parameters:
         pytester: pytest.Pytester running the generated suite in a subprocess.

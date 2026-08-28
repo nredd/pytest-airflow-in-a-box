@@ -1,88 +1,161 @@
 # The fidelity ladder
 
-Deciding how to run one unit of your Dag code is a cost question, not a taste question. Each
-rung buys a class of assertion the rung below structurally cannot make, and charges for it in
-setup, runtime, and blast radius.
+Choose the lowest rung that exposes the state your assertion needs. Climb only when the test
+requires persisted metadata, relationships between tasks, or a worker-process boundary.
 
-The climbing rule, one sentence: **stand on the lowest rung that can still fail for the reason
-you care about.** If the test would fail identically one rung down, you are paying for fidelity
-you are not asserting on.
+| Rung | Use case | Database | What it proves | Primary cost or limit |
+| --- | --- | --- | --- | --- |
+| 0 | Render or inspect one task | No | Rendering or hand-driven `execute()` in a Task SDK context | No task lifecycle or persisted state |
+| 1 | Run one task | No | One operator through the in-process Task SDK lifecycle | No real ORM state or other tasks |
+| 2 | Persist one task | Yes | One real `TaskInstance`, including XCom, mapping, and persisted deferral | No ordering or whole-run settlement |
+| 3 | Run a whole Dag | Yes | A whole `DagRun`, task relationships, final states, and execution order | No automatic retries or process re-import |
+| 4 | Cross the worker boundary | Yes + API | The same run after workers re-import the Dag and execute through a real executor | Serial dispatch; no executor-concurrency coverage |
 
-| Rung | Surface | Metadata DB | Page |
-| --- | --- | --- | --- |
-| 0 | `render_task` | no | [One operator, no database](db-free-execution.md) |
-| 1 | `run_task` / `task_context` | no | [One operator, no database](db-free-execution.md) |
-| 2 | `dag_maker` + `run_ti` | yes | [Real DagRuns and real state](task-execution.md) |
-| 3 | `dag_maker.run()` / `run_dag` | yes | [Real DagRuns and real state](task-execution.md) |
-| 4 | `run_dag(..., executor=...)` | yes | [Real DagRuns and real state](task-execution.md) |
+In practice: use rungs 0-1 for operator logic, rung 2 for one task's Airflow metadata, rung 3
+for Dag behavior, and rung 4 only for executor or worker-boundary behavior.
 
-## Rung 0 -- `render_task`
+## One operator, no database
 
-Proves: your `template_fields` resolve to the string you expect.
+Airflow 3's Task SDK can prepare and execute an operator without a metadata database. The
+three DB-free fixtures share one in-process runner and stop at different points:
 
-Costs: nothing. No DB, no `execute()`, no Airflow ORM import.
+- `render_task(operator, ...)` returns a prepared copy with `template_fields` resolved; it
+  never calls `execute()`.
+- `task_context(operator, ...)` yields the prepared task, runtime task instance, context,
+  supervisor messages, and captured XComs for a test that calls `execute()` itself.
+- `run_task(operator, ...)` completes the lifecycle and returns a `TaskRunResult` containing
+  state, error, XComs, and supervisor messages. Set `run_callbacks=True` when callbacks or
+  listeners are part of the assertion.
 
-Cannot prove: anything about the operator body -- `render_task` never calls `execute()`.
+Seed `params`, XComs, Variables, Connections, `map_index`, and `try_number` directly instead of
+creating ORM rows. An unbound operator is bound in place to a deterministic synthetic Dag, so
+construct unbound operators inside the test.
 
-## Rung 1 -- `run_task` / `task_context`
+### Rendering template fields without running
 
-Proves: your `execute()` runs against a real `RuntimeTaskInstance`, with real template
-rendering and a real `airflow.sdk.get_current_context()`. Retry *classification* is reachable
-only here, via `try_number=` plus the operator's own `retries`.
+Always assert against the copy returned by `render_task`, not the original operator:
 
-Costs: the Task SDK in-process runner. Airflow 3.x only.
+```python
+rendered_operator = render_task(operator, params={"value": "42"})
 
-Cannot prove: anything involving a second task. XCom is keyed by key alone, with no
-`task_ids`/`run_id`/`map_index` scoping, so a passing pull does not prove data flowed from A to
-B. Asset inlet/outlet validation is rubber-stamped.
+assert rendered_operator.query == "SELECT 42"
+```
 
-## Rung 2 -- `dag_maker` + `run_ti`
+Use `context_overrides` for context keys outside the dedicated seed arguments. Use
+`task_context(..., render=False)` when the operator renders inside `execute()`, and always call
+the prepared `handle.task` rather than the original operator.
 
-Proves: one task instance against real metadata -- real DagRun row, real XCom table, real
-mapped expansion at a given `map_index`, real deferral through a persisted `Trigger` row.
+### Where this rung stops
 
-Costs: a lazy DB migration on first request, plus an authored Dag in the test body.
+The fake supervisor implements the Task SDK message loop; it does not create ORM rows. These
+fixtures cannot prove cross-task XCom, asset persistence, dependencies, deferral persistence,
+or scheduler decisions. An unsupported supervisor request may return `None` and fail when the
+SDK uses it. Move to `dag_maker.run_ti` when the assertion needs real metadata.
 
-Cannot prove: ordering, or how a run settles. One instance is one instance.
+All three fixtures are Airflow 3.x only. On Airflow 2.x, use `dag_maker.run_ti`.
 
-## Rung 3 -- `dag_maker.run()` / `run_dag`
+## One task, real state
 
-Proves: `result.order` (what actually executed, not graph topology), `result.states` including
-`upstream_failed` propagation, and mid-run mapped expansion. `run_dag` additionally proves your
-*real* file in `dags/` does this, under its real `dag_id`.
+`dag_maker.run_ti` executes one task instance against the metadata database. Use it when the
+assertion needs a persisted `DagRun`, ORM `TaskInstance`, real XCom rows, a selected mapped
+instance, or a persisted `Trigger` row.
 
-Costs: with `run_dag` the real `dag_id` becomes a shared metadata key, so two `pytest-xdist`
-workers running the same Dag can tear each other's metadata down. See
-[the xdist caveat](task-execution.md#testing-a-dag-defined-elsewhere).
+Pass `run_triggerer=True` to fire and resume one persisted custom trigger. Pass an existing
+`DagRun` when logical dates or relationships between runs matter. This rung still executes
+only the selected instance: it cannot prove task ordering or how downstream states settle.
 
-Cannot prove: retries. Every instance is attempted exactly once, so a retry-configured task
-that fails strands at `up_for_retry`.
+## A whole DagRun, real state
 
-## Rung 4 -- `executor=`
+Use `dag_maker.run()` for a Dag authored inside the test. Use `run_dag()` for a Dag loaded from
+the repository with `dag_bag`. Both persist and execute a real `DagRun`, then return the same
+inert `DagRunResult` with:
 
-Proves: your task body survives re-import in a subprocess, and your executor round-trips
-through a live Task Execution API. `dag.test(use_executor=True)` cannot reach this rung
-([apache/airflow#59074](https://github.com/apache/airflow/issues/59074)).
+- final run `state` and `success`;
+- per-task states, XComs, errors, and ORM task instances;
+- `order`, the sequence of task instances actually executed;
+- `dag_run` and `result[task_id]` access.
 
-Costs: the Dag must be a file in your Dag folder, `result.errors` degrades to best-effort, and
-each instance carries a timeout.
+Mapped instances use keys such as `double[0]`. A raising task is recorded in `errors`, blocked
+downstream tasks settle through Airflow's trigger-rule semantics, and `success` follows
+Airflow's leaf-task rule. Assert `not result.errors` when the contract is specifically that no
+task body raised.
 
-Cannot prove: an executor's own concurrency. Instances are dispatched one at a time to keep
-`result.order` meaningful.
+Outcome matchers keep a complete run contract compact:
+
+```python
+from pytest_airflow_in_a_box.matchers import failed, succeeded, upstream_failed
+
+assert result == {
+    "produce": succeeded(21),
+    "boom": failed(ValueError),
+    "consume": upstream_failed(),
+}
+```
+
+The mapping must cover every task instance. `skipped()`, `deferred()`, and `not_run()` are also
+available.
+
+### Whole-DagRun execution
+
+Each task instance receives at most one attempt. A retry-configured failure settles
+`up_for_retry`, is not requeued, and leaves the run non-terminal. Use the
+[retry recipe](cookbook.md#retry-behavior) to drive another attempt explicitly, or seed
+`try_number` with `run_task` when only attempt-dependent logic matters.
+
+`dag_maker` supplies deterministic defaults, including a UTC start date and `run_id="test"`.
+Give multi-run tests distinct run IDs and logical dates. See [Fixtures](../reference/fixtures.md)
+for the full signatures and return contracts.
+
+The lower-level helpers in `pytest_airflow_in_a_box.taskinstance` expose four public failures:
+`DagRunDriveError` is the driver base class, `TaskResolutionError` means a runnable task could
+not be resolved, `TriggerExecutionError` means a persisted trigger failed, and
+`ExecutorRunError` means executor startup, dispatch, or settlement failed.
+
+### Testing a Dag defined elsewhere
+
+Load the repository once with `dag_bag`, then pass the selected Dag to `run_dag`:
+
+```python
+def test_orders_dag(dag_bag, run_dag):
+    result = run_dag(dag_bag.dags["orders"])
+
+    assert result.success
+    assert result.order == ["extract", "load"]
+```
+
+`run_dag` persists the Dag under its real `dag_id`. Tests that run the same ID concurrently on
+different xdist workers can collide, surfacing later as `DagPersistenceError`,
+`DagRunCreationError`, or a task-resolution failure. Group them with
+`pytest.mark.xdist_group` and use `--dist loadgroup`. The marker has no effect under plain
+`-n auto`. Serial execution is safe because teardown completes before the next test starts.
+
+## Executor-driven runs
+
+Pass `executor=` only when the test must prove that workers can re-import the Dag and round-trip
+workloads through Airflow's Task Execution API:
+
+```python
+result = run_dag(dag, executor="my_company.executors.MyExecutor")
+```
+
+The value may be a registered alias, dotted path, executor class, or instance. The plugin
+starts the API server lazily and dispatches instances one at a time in dependency order.
+
+Keep these boundaries explicit:
+
+- The Dag must come from a file inside the configured Dag folder. A `dag_maker` Dag defined in
+  the test cannot be re-imported by a worker.
+- `result.states` is authoritative. `result.errors` is best-effort because worker exceptions
+  live primarily in the retained task logs.
+- Serial dispatch does not exercise the executor's concurrency.
+
+`run_triggerer=` and `executor=` cannot be combined. The per-instance timeout defaults to 300
+seconds and is configured with `--airflow-executor-timeout`. Executor-driven runs require
+Airflow 3.x.
 
 ## Off the ladder
 
-Two surfaces are not fidelity increments:
-
-- [`run_trigger`](deferrable-operators.md) -- defer, fire, resume. Spans rungs 1 and 2. It is
-  single-shot: the first event only, one resume. A poll-loop trigger is not modeled
-- [The live REST API](rest-api.md) -- a different surface entirely, for code *you* wrote that
-  resolves `conf.get("api", "base_url")` or calls `/api/v2`
-
-## Corpus checking is a different axis
-
-The ladder varies fidelity over one unit of code. [Smoke checks](smoke-tests.md),
-[per-file collection](dag-collection.md), and [Dag coverage](dag-coverage.md) vary *breadth*
-over every unit at fixed parse-only fidelity, and assert properties of the whole set that no
-single-Dag test can phrase at any rung: duplicate `dag_id`s across files, a per-file parse
-budget, `catchup=True` anywhere, an unbounded `.expand()`.
+[`run_trigger`](deferrable-operators.md) executes one trigger without a database;
+`run_triggerer=True` resumes a persisted deferred task. The [REST API](rest-api.md) is a
+separate axis for code that calls a live Airflow endpoint. [Smoke Tests](smoke-tests.md) expand
+breadth rather than fidelity by checking the entire Dag corpus at parse time.

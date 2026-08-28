@@ -1,73 +1,57 @@
 # pytest-airflow-in-a-box
 
-Your Dag files import cleanly and your callables pass. That doesn't prove the *seams*
-between them work.
+Your Dag files import. Your task callables pass. Production still breaks.
 
-Trigger rules, branch skips, rendered templates, `conn_id` resolution, serialization of your
-own operator's constructor args -- those failures are DagRun-shaped, so they surface at 03:00
-on a scheduler you cannot attach a debugger to. This plugin moves them into `pytest`, in your
-repo's own CI, with no scheduler, no webserver, and no `~/airflow`.
+!!! question ""
+    Did you *verify* the `DAG`?
 
-Who this is for:
+Import and callable tests do not exercise trigger rules, branch skips, rendered templates,
+connection resolution, or operator serialization. `pytest-airflow-in-a-box` tests those seams
+in `pytest`, before deployment -- no scheduler, webserver, or live Airflow environment required.
 
-- A team owning a `dags/` repo on Airflow 3, deployed by someone else -- MWAA, Composer,
-  Astro, self-hosted. You do not run the scheduler
-- You write your own `BaseOperator` subclasses, hooks, sensors, `@task` decorators, and
-  connection types. That is the load-bearing qualifier. A repo that is 100% stock operators
-  does not need this
+## Who is this for?
 
-Already have a dagbag import test and `dag.test()`? See
-[what they miss](why/dagbag-callable-gap.md) and
-[why not `dag.test()`, `DebugExecutor`, or your own `conftest.py`](why/why-not.md).
+Use this plugin when your team owns Airflow behavior that must work before deployment:
 
-## One green test
+- Run and inspect Dags from your repository.
+- Exercise custom operators, hooks, sensors, TaskFlow decorators, or connection types.
+- Validate timetables, listeners, executors, policies, providers, and other extensions.
+- Test code against a live Airflow REST API.
+- Keep one test suite working while migrating from Airflow 2 to 3.
 
-A branch skip is invisible to both halves of the usual suite: the file parses, every callable
-returns the right value, and `load` still runs when it should not have.
-
-```python
-from airflow.sdk import task
-
-from pytest_airflow_in_a_box.matchers import skipped
-
-
-def test_branch_skips_the_unselected_path(dag_maker):
-    with dag_maker(dag_id="branching"):
-
-        @task.branch
-        def choose() -> str:
-            return "chosen"
-
-        @task
-        def chosen() -> None: ...
-
-        @task
-        def rejected() -> None: ...
-
-        choose() >> [chosen(), rejected()]
-
-    result = dag_maker.run()
-
-    assert result.success
-    assert result.order == ["choose", "chosen"]
-    assert result["rejected"] == skipped()
-```
-
-`result.order` is what *actually* executed, not graph topology. `dag.test()` cannot phrase
-either assertion: it clears task instances and swallows task exceptions, so the call itself
-never fails and you are left fishing state out of the returned `DagRun` -- see [why not
-`dag.test()`](why/why-not.md).
+!!! tip ""
+    If your repo is 100% stock operators, `dag.test()` plus a `DagBag` import test is
+    enough. Use this plugin when the interesting Airflow behavior is yours.
 
 ## Start here
 
-- [Quickstart](quickstart.md) -- three rungs, one page
-- [Installing the plugin](install.md), then
-  [supported versions](compatibility.md)
-- [The fidelity ladder](guide/ladder.md) -- how much realism a test needs, and what each rung
-  costs
-- [Deciding which failures are yours](guide/testing-scope.md) -- where the line falls
-- [Fixtures](reference/fixtures.md) and [diagnosing a run](reference/diagnostics.md)
-- Upgrading off Airflow 2? [Start here](guide/migration/index.md)
+- [Install the plugin and run your first Dag](quickstart.md).
+- [Decide which failures belong in your suite](guide/testing-scope.md).
+- [Choose the least expensive runner that proves your claim](guide/ladder.md).
+- [Look up fixtures](reference/fixtures.md) or [diagnose an environment](reference/diagnostics.md).
+- [Migrate a suite from Airflow 2 to 3](guide/migration.md).
+
+## Supported versions
+
+The plugin supports Apache Airflow 3.1 or newer below 4, plus the certified Airflow 2 migration
+tier, on CPython 3.10-3.14 with pytest 8 or newer. See
+[Compatibility and certification](internals/compat-layer.md#supported-and-certified) for the
+exact combinations exercised in CI, or run
+[`pytest --airflow-doctor`](reference/diagnostics.md) to verify your environment.
+
+
+## Manifesto
+
+In 2024, I learned that my team was abandoning Jenkins for our nightly regressions. A
+righteous tear rolled down my cheek when I heard the replacement was Airflow: a
+Python-native workflow platform. As a lover of all things slick and hyper-engineered, I was
+overjoyed to rewrite all those DISGUSTING unversioned shell scripts into a beautiful
+library of documented, statically-analyzed, and unit-tested code. Fast forward a few
+months--I have some crazy 500+ task DAG templates underway (for convoluted semiconductor
+design methodologies) that were IMPOSSIBLE to fully verify outside of a live Airflow
+instance. I yearned for a far-off land where I could develop alone in my teched-out Python
+cave, talk to absolutely no one, and ship complete Methodologies without a whisper in the
+night. This plugin is the closest thing we have 🫡
 
 ## License
 

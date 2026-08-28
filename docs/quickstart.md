@@ -1,12 +1,34 @@
 # Quickstart
 
-You have a `dags/` folder, custom operators, and CI on Airflow 3. This gets you a real DagRun
-in your suite in one file and one flag.
+Install the plugin, point pytest at your `dags/` folder, and verify a real `DagRun` in one
+test.
 
-Install first if you have not:
-[Installing the plugin](install.md).
+## Install
 
-## Run a Dag from your own `dags/` folder
+With `uv`:
+
+```console
+uv add --dev "pytest-airflow-in-a-box[airflow3]"
+```
+
+With `pip`:
+
+```console
+pip install "pytest-airflow-in-a-box[airflow3]"
+```
+
+The `pytest11` entry point registers the plugin automatically. Confirm the installation:
+
+```console
+pytest --airflow-doctor
+```
+
+If your project already pins Airflow, install the plugin without an Airflow extra. For Airflow
+2, Postgres, parallel testing, and common extra combinations, see
+[Dependencies and extras](reference/dependencies.md). Linux and macOS are supported; on
+Windows, use WSL2 or the devcontainer.
+
+## Run a Dag from your repository
 
 <!-- --8<-- [start:quickstart] -->
 ```python
@@ -24,17 +46,13 @@ pytest --dag-folder=dags
 ```
 <!-- --8<-- [end:quickstart] -->
 
-`dag_bag` parses that folder once per worker process. `--dag-folder` has an ini twin,
-`airflow_dags_folder`, so you set it once instead of on every invocation -- see
-[Where the run lives](guide/airflow-home.md).
+`dag_bag` parses the folder once per worker process. `run_dag` executes the selected Dag under
+its real `dag_id`; `result.order` records execution order, not graph topology. Set
+`airflow_dags_folder` in pytest's ini configuration when `dags/` is your repository default.
 
-`run_dag` proves your *real file*, under its real `dag_id`, actually settles the way you
-think. `result.order` is the executed order, not graph topology.
+## Author a Dag in the test
 
-## Author the Dag in the test instead
-
-`dag_maker` builds and persists a Dag written in the test body, so nothing has to exist on
-disk:
+Use `dag_maker` when the Dag belongs in the test rather than a repository file:
 
 ```python
 from airflow.sdk import task
@@ -60,14 +78,8 @@ def test_dag(dag_maker):
     assert result.order == ["produce", "consume"]
 ```
 
-```console
-pytest
-```
-
-`run_dag()` and `dag_maker.run()` return the same inert `DagRunResult` snapshot: `states`,
-`xcoms`, `errors`, `order`, and per-task access via `result["task_id"]`. One task at a time is
-`dag_maker.run_ti("produce")`. `pytest_airflow_in_a_box.matchers` collapses the whole snapshot
-into one expression:
+`run_dag()` and `dag_maker.run()` return the same inert `DagRunResult` snapshot. Outcome
+matchers keep whole-run assertions concise:
 
 ```python
 from pytest_airflow_in_a_box.matchers import succeeded
@@ -75,12 +87,45 @@ from pytest_airflow_in_a_box.matchers import succeeded
 assert result == {"produce": succeeded(21), "consume": succeeded(42)}
 ```
 
-Full surface: [Real DagRuns and real state](guide/task-execution.md).
+## Verify branching behavior
 
-## Run one operator with no database at all
+Parsing a Dag and calling its Python functions cannot prove which branch runs or which tasks
+Airflow skips:
 
-`run_task` executes a single operator in process through the Task SDK runner. No metadata DB,
-no DagRun, no migration. Airflow 3.x only:
+```python
+from airflow.sdk import task
+
+from pytest_airflow_in_a_box.matchers import skipped
+
+
+def test_branch_skips_the_unselected_path(dag_maker):
+    with dag_maker(dag_id="branching"):
+
+        @task.branch
+        def choose() -> str:
+            return "chosen"
+
+        @task
+        def chosen() -> None: ...
+
+        @task
+        def rejected() -> None: ...
+
+        choose() >> [chosen(), rejected()]
+
+    result = dag_maker.run()
+
+    assert result.order == ["choose", "chosen"]
+    assert result["rejected"] == skipped()
+```
+
+This test verifies the branch choice, skip state, and execution order together. See
+[Whose fail is it anyway?](guide/testing-scope.md) for the boundary around worthwhile tests.
+
+## Run one operator without a database
+
+On Airflow 3, `run_task` executes one operator through the Task SDK without a metadata
+database, `DagRun`, or migration:
 
 ```python
 from airflow.sdk import task
@@ -97,20 +142,15 @@ def test_add(run_task):
     assert result.xcoms["return_value"] == 3
 ```
 
-Same family, different jobs: `render_task` resolves `template_fields` without calling
-`execute()`, and `task_context` hands you a real Task SDK context for a hand-driven
-`execute()`. See [One operator, no database](guide/db-free-execution.md).
+`render_task` and `task_context` stop earlier on the same machinery. The
+[fidelity ladder](guide/ladder.md) compares the runners and their limits.
 
-## Which rung do I want
+## Where next?
 
-Stand on the lowest rung that can still fail for the reason you care about. The full cost and
-capability of each -- and what each one structurally *cannot* prove -- is
-[The fidelity ladder](guide/ladder.md).
+- [The fidelity ladder](guide/ladder.md) chooses the cheapest sufficient runner.
+- [Cookbook](guide/cookbook.md) covers assets, hooks, templates, and retries.
+- [Smoke Tests](guide/smoke-tests.md) check properties of the whole Dag corpus.
+- [GitHub Actions and reports](guide/ci/github-action.md) puts the suite into CI.
 
-Next:
-
-- [Deciding which failures are yours](guide/testing-scope.md)
-- [Recipes for the seams between tasks](guide/cookbook.md)
-- [Smoke checks over every Dag](guide/smoke-tests.md) -- properties of the whole corpus, not
-  one Dag
-- [The GitHub Action](guide/ci/github-action.md)
+Disable the plugin for one run with `pytest -p no:pytest_airflow_in_a_box`. Airflow import and
+database migration remain lazy, so unrelated tests do not pay either cost.

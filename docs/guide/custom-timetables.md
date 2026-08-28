@@ -1,124 +1,119 @@
-# Custom timetables
+# Timetables
 
-Upstream's timetable documentation says a custom timetable "must be a subclass of
-`Timetable`, and be registered as a part of a plugin" -- and offers zero testing
-guidance. This page splits the problem the way it actually splits: the timetable's
-LOGIC needs nothing from this plugin, while registration -- the part that normally only
-breaks inside a running scheduler -- is one line.
+Test a custom timetable as three separate contracts:
+
+| Contract | Test |
+| --- | --- |
+| Scheduling behavior | Call the timetable directly |
+| Serialized state | Round-trip one instance with `airflow_components` |
+| Production discovery | Test the package or plugin that registers the class |
+
+Keeping those boundaries separate makes failures specific: logic tests need no Airflow
+registration, while a discovery test should not also be your scheduling algorithm test.
 
 ## The logic needs no plugin
 
-`next_dagrun_info` and `infer_manual_data_interval` are pure functions of a
-`DataInterval` and a `TimeRestriction`. Call them directly -- no registration, no
-fixture, no metadata database, not even this plugin:
+Call `next_dagrun_info` and `infer_manual_data_interval` on the timetable instance you
+constructed. These methods need no fixture, metadata database, or registration:
 
 ```python
 import pendulum
 from airflow.timetables.base import DataInterval, TimeRestriction
 
 
-def test_next_run_lands_on_the_next_workday():
+def test_workday_intervals():
     timetable = WorkdayTimetable()
-    info = timetable.next_dagrun_info(
+    monday = pendulum.datetime(2026, 1, 5, tz="UTC")
+    tuesday = pendulum.datetime(2026, 1, 6, tz="UTC")
+    expected = DataInterval(start=monday, end=tuesday)
+
+    automatic = timetable.next_dagrun_info(
         last_automated_data_interval=DataInterval(
             start=pendulum.datetime(2026, 1, 2, tz="UTC"),
             end=pendulum.datetime(2026, 1, 3, tz="UTC"),
         ),
         restriction=TimeRestriction(earliest=None, latest=None, catchup=True),
     )
-    assert info.run_after == pendulum.datetime(2026, 1, 6, tz="UTC")
+    manual = timetable.infer_manual_data_interval(run_after=tuesday)
+
+    assert automatic is not None
+    assert automatic.data_interval == expected
+    assert automatic.run_after == tuesday
+    assert manual == expected
 ```
 
-Test the scheduling behavior this way first. It is fast, deterministic, and covers the
-part of a timetable that actually contains decisions.
+Cover the boundary conditions your timetable owns: first run, catchup on and off, earliest and
+latest limits, daylight-saving transitions, and an empty schedule. Assert the complete
+`DataInterval`, not only `run_after`.
+
+On Airflow 3.2 and newer, the authoring Dag's timetable does not expose scheduler methods. Call
+your concrete timetable directly for logic tests. After `dag_maker` persists a Dag, use
+`dag_maker.timetable` when the assertion specifically needs the scheduler-side object.
 
 ## What registration is actually for
 
-Serialization. Airflow persists a Dag by encoding its timetable to a qualified class
-name and reconstructs it by looking that name up through the plugins manager --
-`encode_timetable` refuses an unregistered custom timetable outright on Airflow 3.1,
-and `decode_timetable` raises `TimetableNotRegistered` on every release. In production
-that lookup works because your deployment ships an `AirflowPlugin` listing the class in
-its `timetables` attribute; in a test process nothing has loaded any such plugin.
-
-The [`airflow_components`](custom-components-wiring.md#runtime-component-registration)
-registry closes that gap without you writing a plugin at all -- it synthesizes a
-throwaway `AirflowPlugin` carrying the class, registers it into the live plugins
-manager, and reverts everything when the test finishes:
+Airflow serializes a custom timetable as a qualified class name plus the mapping returned by
+`serialize()`. Deserialization must find the registered class and reconstruct the same state.
+Test that contract in one call:
 
 ```python
 def test_timetable_round_trips(airflow_components):
     airflow_components.serialization_round_trip(WorkdayTimetable(hours=2))
 ```
 
-That single call registers the class, runs the timetable conformance checks (see
-[Timetable checks](custom-components.md#timetable-checks)), and asserts
-`decode_timetable(encode_timetable(...))` reconstructs the instance -- catching "not
-registered", serialize/deserialize asymmetry, and (when the class defines its own
-`__eq__`) equality problems in one shot. To register without the round-trip assertion,
-call `airflow_components.timetable(WorkdayTimetable)` instead.
+This registers the class for the test, encodes and decodes the instance, and rejects a changed
+class or payload. If the class defines `__eq__`, equality must survive too. Pass an instance,
+not a class; the encoder needs state to serialize. To register a class without asserting a
+round trip, use `airflow_components.timetable(WorkdayTimetable)`.
+
+Define registered timetable classes at module scope. Airflow resolves them by qualified name,
+so a class defined inside a test function cannot be reconstructed.
+
+## Static shape checks
+
+Run `check_component(MyTimetable).raise_for_problems()` as an earlier preflight. The canonical
+list of timetable checks and their limits lives under
+[Checking components](custom-components.md#timetables); this page does not repeat it. A clean
+report proves shape, not scheduling behavior, state preservation, or production discovery.
 
 ## dag_maker registers for you
 
-Passing a custom timetable instance straight to `dag_maker(schedule=...)` registers it
-automatically before serialization -- the round trip through `SerializedDagModel` just
-works, without the test touching `airflow_components` or knowing plugins are involved:
+For a Dag authored in the test, pass a custom timetable instance through `schedule=`.
+`dag_maker` registers it before persistence and exposes the reconstructed scheduler timetable:
 
 ```python
-@pytest.mark.need_serialized_dag
-def test_dag_scheduled_by_my_timetable(dag_maker):
+def test_dag_uses_my_timetable(dag_maker):
     with dag_maker(schedule=WorkdayTimetable(hours=2)):
         EmptyOperator(task_id="scheduled")
-    assert dag_maker.serialized_dag.timetable.hours == 2
+
+    assert type(dag_maker.timetable) is WorkdayTimetable
+    assert dag_maker.timetable.hours == 2
 ```
 
-Core timetables -- everything under `airflow.timetables.`, which is exactly the set
-Airflow's own serializer imports directly -- never trigger registration, and a test
-passing one pays no sandbox cost at all. Everything else registers, including
-airflow-namespaced classes OUTSIDE that prefix (Airflow's shipped example
-`AfterWorkdayTimetable` lives in `airflow.example_dags.plugins.workday`, and provider
-timetables resolve through the same registered lookup). The one core wrapper that
-CARRIES a custom timetable is handled too: `AssetOrTimeSchedule(timetable=MyTimetable(),
-assets=[...])` serializes its inner timetable through the registry lookup, so
-`dag_maker` registers the nested instance. Passing a custom timetable CLASS instead of
-an instance raises a `TypeError` naming the fix up front -- Airflow itself would accept
-it and only fail much later, inside metadata sync, with a bare `KeyError`.
+The same automatic path handles a custom timetable nested inside `AssetOrTimeSchedule`.
+Built-in timetables under `airflow.timetables` need no registration, and a class already
+registered by the test environment is left alone. Passing a custom timetable class instead of
+an instance raises an immediate `TypeError` naming the fix.
 
-Two scope notes. A class the registered lookup ALREADY resolves -- deployed the
-supported way, through the run's plugins folder or a venv entry point -- is left
-entirely alone. And the transparent path's conformance gate is registration-scoped:
-only `timetable-local-qualname` (registration would be futile) hard-fails; every other
-[timetable check](custom-components.md#timetable-checks) finding is logged as a warning,
-since upstream's own default `deserialize` handles a stateless serialize-only timetable
-fine. The explicit `airflow_components.timetable()` call keeps the full gate.
+Automatic registration is limited to `dag_maker` on Airflow 3. `dag_bag` and `run_dag` do not
+register timetables from repository files. Register the class explicitly before `run_dag`
+persists it, or load the real plugin or package for a production-shaped discovery test.
 
-Transparent registration is a `dag_maker` feature. `run_dag` and `dag_bag` persist
-externally-authored Dags through the same serializer without it -- for those, call
-`airflow_components.timetable(MyTimetable)` yourself before persisting.
+## Production discovery
 
-## Priority weight strategies
+The `dag_maker` and `airflow_components` paths use a reversible test-only plugin. They prove
+that Airflow can serialize the class once registered, not that your deployment will discover
+it.
 
-The same registration story applies to `PriorityWeightStrategy` subclasses: Dag
-serialization refuses an operator's custom `weight_rule` unless the class is
-registered, and decoding re-instantiates it with no arguments (state must live on the
-class -- upstream's documented contract):
-
-```python
-def test_operator_uses_my_weight_strategy(airflow_components, dag_maker):
-    airflow_components.priority_weight_strategy(FixedWeightStrategy)
-    with dag_maker():
-        EmptyOperator(task_id="weighted", weight_rule=FixedWeightStrategy())
-```
+Ship the timetable through an `AirflowPlugin`, then test that packaging boundary with the
+session `airflow_plugins_folder` setting or an
+[`airflow_isolated`](custom-components-wiring.md#isolated-entry-point-discovery) test. The
+[Registration and packaging](custom-components-wiring.md) page explains when to use each
+channel.
 
 ## Caveats
 
-- Only a module-scope class can register: Airflow matches a custom timetable by
-  qualified name, so a class defined inside a test function can never resolve -- the
-  `timetable-local-qualname` conformance check refuses it up front with an explanation
-  instead of letting `TimetableNotRegistered` surface later
-- Registration (like all of `airflow_components`) requires Airflow 3.x; on the 2.x
-  family `dag_maker` behaves exactly as before and custom-timetable serialization is
-  unsupported
-- Registering the same class twice, or both calling `timetable()` and passing an
-  instance to `dag_maker(schedule=...)`, is harmless -- the lookup mapping is keyed by
-  qualified name and deduplicates
+- Direct timetable logic and `check_component` work on Airflow 2 and 3.
+- `airflow_components` and `dag_maker` automatic registration require Airflow 3. On Airflow 2,
+  custom-timetable serialization remains unsupported by these fixtures.
+- Registering the same class twice is harmless; Airflow's lookup is keyed by qualified name.
