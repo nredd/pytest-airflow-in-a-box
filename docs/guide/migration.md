@@ -1,31 +1,30 @@
 # Airflow 2->3 Migration
 
-You are on Airflow 2, you have to be on 3, and the question is *what breaks*. Answer it in four
-layers, cheapest first:
+Move the suite in four passes, from static checks to a real cross-family comparison:
 
-1. Ruff finds removed or moved symbols in every line it can parse.
-2. Migration-strict turns executed Airflow deprecations into test failures on 2.x.
-3. Outcome recording compares the same suite across real 2.x and 3.x environments.
-4. `airflow-migration-diff` provisions both environments and runs that comparison for you.
+1. Find removed imports and symbols with Ruff.
+2. Turn executed Airflow 2 deprecations into failures.
+3. Record the passing 2.x contract and compare it on 3.x.
+4. Automate both environments with `airflow-migration-diff`.
 
-Each layer is blind on a different axis; run all four during the migration, then delete the
-bridge after cutover.
+Keep both families green while you migrate. Remove the family gates, baseline artifacts, and
+migration-only assertions after cutover.
 
 ## Start with ruff
 
-Enable hard Airflow 3 removals immediately:
+Enable rules for APIs removed from Airflow 3:
 
 ```toml
 [tool.ruff.lint]
 extend-select = ["AIR301", "AIR302"]
 ```
 
-Ruff sees unexecuted source that a test run cannot. It does not see provider-issued runtime
-deprecations or symbols hidden behind dynamic imports.
+Ruff finds removed APIs in source that tests never execute. It cannot find runtime deprecations
+from Airflow or providers.
 
-Delay `AIR311` and `AIR312` until the 3.x cutover. Their suggested imports do not exist on 2.x,
-and `AIR311` includes safe autofixes that a normal `ruff check --fix` will apply. If you want an
-inventory before cutover, make the suggestions visible but unfixable in a non-gating job:
+Delay `AIR311` and `AIR312` until cutover: their replacements may not import on Airflow 2, and
+`AIR311` has safe fixes that `ruff check --fix` will apply. To inventory those findings without
+rewriting the dual-family branch, run them in a non-gating job and disable their fixes:
 
 ```toml
 [tool.ruff.lint]
@@ -33,22 +32,22 @@ extend-select = ["AIR301", "AIR302", "AIR311", "AIR312"]
 unfixable = ["AIR311", "AIR312"]
 ```
 
-Family markers gate test execution, not Python import. They cannot rescue a Dag or test module
-whose import was rewritten to a 3.x-only path.
+Family markers control whether a test runs; they cannot protect a module whose import already
+uses a 3.x-only path.
 
 ## Migration-strict mode
 
-On the Airflow 2.x leg:
+Run the Airflow 2 leg with:
 
 ```console
 pytest --airflow-migration-strict
 ```
 
-The flag promotes `RemovedInAirflow3Warning` and `AirflowProviderDeprecationWarning` during the
-runtest phase only. Collection remains nonfatal because Airflow itself emits those categories
-while importing on 2.x. Plain `DeprecationWarning` remains excluded.
+This turns `RemovedInAirflow3Warning` and `AirflowProviderDeprecationWarning` raised during tests
+into failures. Collection warnings remain nonfatal because Airflow 2 emits the same categories
+while importing. Plain `DeprecationWarning` is not promoted.
 
-Allowlist a known warning with pytest's normal later-wins filter precedence:
+Use pytest's normal warning filters for a migration you have deliberately deferred:
 
 ```ini
 [pytest]
@@ -56,89 +55,80 @@ filterwarnings =
     ignore:known message:airflow.exceptions.RemovedInAirflow3Warning
 ```
 
-On Airflow 3 or without Airflow, the flag is a visible no-op: configure emits
-`MigrationStrictNoOpWarning`, and `--airflow-doctor` reports the state.
+The option is a reported no-op on Airflow 3 or when Airflow is absent. Prefer Airflow 2.11 for
+this pass because it contains the final 2.x deprecation signals.
 
 ## Diffing outcomes across the upgrade
 
-Record the current 2.x behavior:
+First record the current 2.x suite:
 
 ```console
 pytest --airflow-record=baseline.json
 ```
 
-Then compare in the 3.x environment and preserve the live side:
+Then run the same suite on 3.x, compare it with the baseline, and retain the new recording:
 
 ```console
 pytest --airflow-baseline=baseline.json --airflow-record=live.json
 ```
 
-The summary sorts node IDs into `still-passing`, `broken-on-both`, `gated`, `regression`,
-`fixed`, `new`, and `missing`. Exact matching is intentional; pin parametrized `ids=` when a
-version-dependent ID would otherwise appear as a new/missing pair.
+The comparison distinguishes regressions from failures that already existed, fixes, family-
+gated tests, and added or missing node IDs. Node IDs match exactly, so give parametrized tests
+stable `ids=` values.
 
-A same-family comparison, such as Airflow 3.1 against 3.3, is valid too. It emits a warning so
-the report cannot be mistaken for the 2-to-3 workflow, but it does not fail merely because the
-families match. The categories and exit behavior stay identical.
+Use `--airflow-baseline-select=passing` for the normal repair loop: it runs only tests that
+passed in the baseline, where every failure is a possible regression. If migration CI must stay
+green temporarily, add `--airflow-baseline-xfail=prior-live.json`; known regressions become
+non-strict xfails and repaired tests surface as XPASS. A test's own xfail marker still wins.
 
-Use `--airflow-baseline-select=passing` for the migration iteration loop: every possible
-regression starts from a passing baseline. `failing` selects fix candidates and `new` selects
-node IDs absent from the baseline.
-
-To keep migration CI green while regressions are worked, pass a prior live recording through
-`--airflow-baseline-xfail`. Known regressions become non-strict xfails; fixes surface as XPASS
-until the artifact is recorded again. A test's own xfail marker always wins.
-
-The [migration artifact reference](../reference/migration.md) defines categories, schema,
-outcome folding, and incomplete-artifact behavior.
+Commit or retain the baseline where both environments can read it. Do not trust an interrupted
+recording by default: incomplete artifacts are rejected unless you opt in explicitly. The
+[migration artifact reference](../reference/migration.md) defines the file schema, comparison
+categories, selectors, and incomplete-artifact controls.
 
 ## Driving both families in one run
 
-One environment cannot contain both Airflow families. The console script provisions two
-constraints-correct scratch venvs and drives the record/compare workflow:
+One environment cannot install both Airflow families. Use the console script to provision two
+disposable, constraints-correct environments and run the record/compare sequence:
 
 ```console
 uv tool install pytest-airflow-in-a-box
 airflow-migration-diff --project-dir . -- -k "not slow"
 ```
 
-Arguments after `--` reach both pytest runs. Family-gated tests never become false regressions.
+Arguments after `--` reach both pytest runs. Tests marked `requires_airflow2` or
+`requires_airflow3` are classified as gated rather than regressions.
 
-The script handles three traps that hand-built jobs commonly miss:
+Provisioning requires `uv`, network access, and two fresh Airflow installations. The script
+handles the mutually exclusive family extras, Airflow 2's two-pass pytest installation, and
+each 2.x release's Python ceiling. It exits `0` when no regressions remain, `1` when regressions
+exist, and `2` when provisioning, execution, or artifact loading fails. Ordinary test failures
+are comparison data, not orchestration failures.
 
-- The `airflow2` and `airflow3` extras are mutually exclusive.
-- Airflow 2 constraints pin pytest below this plugin's floor, so installation needs a second,
-  unconstrained pass with `pytest>=8,<9`.
-- Each Airflow 2 release has its own Python ceiling; the requested interpreter is clamped to
-  that exact release's supported range.
-
-Exit codes are `0` for no regressions, `1` for regressions, and `2` when orchestration itself
-failed. Ordinary test failures are data for the comparison, not an orchestration error.
-Provisioning is real and requires a network connection; this is an on-demand or nightly job,
-not an edit-test loop.
-
-The default `--plugin-spec` is the installed plugin version. For an unreleased checkout, pass a
-released version, VCS reference, or local path explicitly. All options are in the
-[migration artifact reference](../reference/migration.md#orchestrator-options).
+The default `--plugin-spec` is the plugin version that installed the script. For an unreleased
+checkout, pass a released version, VCS reference, or local path explicitly. See
+[orchestrator options](../reference/migration.md#orchestrator-options) to pin releases,
+interpreters, artifact paths, or the scratch directory.
 
 ## Running both families in CI
 
-The bundled action installs `uv` and exposes the console script through `venv-path`:
+The bundled action provides `uv` and exposes `airflow-migration-diff` through `venv-path`:
 
 ```yaml
+- uses: actions/checkout@v7
 - uses: nredd/pytest-airflow-in-a-box/action@v0
   id: airflow-env
   with:
-    airflow-version: "3.3.0"
-    python-version: "3.12"
+    airflow-version: "3.3.1"
+    python-version: "3.13"
 
 - run: ${{ steps.airflow-env.outputs.venv-path }}/bin/airflow-migration-diff --project-dir .
 ```
 
-The action's Airflow version only hosts the script; the compared releases come from
-`--airflow2-version` and `--airflow3-version`. Without the action, install the tool with `uv`
-and run the same command.
+The action's Airflow version hosts the script; `--airflow2-version` and
+`--airflow3-version` select the two releases being compared. Without the action, install the
+tool with `uv` and run the same command.
 
-Budget two fresh Airflow installations per invocation. Ruff and migration-strict belong in the
-per-push gate; the real two-family diff belongs in a nightly or on-demand job. See
-[GitHub Actions and reports](ci/github-action.md) for the environment and artifact setup.
+Run Ruff and migration-strict on every push. Schedule the two-family diff nightly or on demand,
+because it creates both environments from scratch. See
+[GitHub Actions and reports](ci/github-action.md) for action inputs and report artifacts.
