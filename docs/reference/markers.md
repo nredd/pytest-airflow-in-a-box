@@ -1,27 +1,37 @@
 # Markers
 
-Every marker here is a *gate*: it decides whether a test runs at all, and what the run has
-to pay for before it does. `pytest --markers` prints the same names with none of that, so
-this page is the vocabulary and the ordering.
+The plugin registers ten markers. Three gate execution, two activate resources, one creates an
+isolated child process, three are selection labels, and one is an upstream-compatible no-op.
+Use `pytest --markers` for the short descriptions; this page records their costs and behavior.
 
-Gate precedence, the order the plugin applies them in `pytest_runtest_setup`:
+| Marker | Apply it when | Effect |
+| --- | --- | --- |
+| `requires_airflow2` | The test is valid only on Airflow 2 | Import-free family gate; skips on Airflow 3 or without Airflow. |
+| `requires_airflow3` | The test is valid only on Airflow 3 | Import-free family gate; skips on Airflow 2 or without Airflow. |
+| `environment(name)` | The test needs an external environment represented by a sentinel path | Skips when the configured sentinel is absent; malformed or unknown names are errors. |
+| `db_test` | Your code reaches the metadata database without requesting a database fixture | Triggers lazy database initialization. |
+| `api_test` | Your code discovers the REST API through Airflow configuration instead of an API fixture | Triggers the database and API server, then publishes `api.base_url` for that test. Airflow 3 only. |
+| `airflow_isolated(...)` | Airflow must discover synthetic entry points or read different `AIRFLOW__*` values before import | Runs the test in a one-shot child pytest process. |
+| `postgres` | The test belongs in a Postgres-selected run | Label only; it neither selects Postgres nor checks Docker. |
+| `compat` | The test exercises the public consumer contract across certified runtimes | Label only; used by this repository's compatibility matrix. |
+| `smoke` | The item is one of the plugin's generated corpus checks | Label added automatically; the smoke option controls collection. |
+| `need_serialized_dag([enabled])` | An upstream-derived test carries this compatibility marker | Validated no-op; every persisted Dag already serializes. |
 
-1. Family -- `requires_airflow2` / `requires_airflow3`
-2. Environment -- `environment(name)`
-3. Isolation refusal -- `airflow_isolated` under xdist
-4. Database -- `db_test` / `api_test`
+## Gate order
 
-The order is the point. Family and environment gates run *before* the database check, so a
-test that is going to skip never pays the Airflow import or the metadata migration. The same
-ordering runs a second time at the end of collection: `_requires_database_at_collection`
-applies the family and environment gates to each database-marked item, and if every one of
-them would skip, the run initializes no database at all.
+Before a marked test runs, the plugin applies gates in this order:
+
+1. `requires_airflow2` / `requires_airflow3`
+2. `environment(name)`
+3. the `airflow_isolated` refusal under xdist
+4. `db_test` / `api_test` database initialization
+
+Family and environment gates therefore skip before an Airflow import or database migration.
+At the end of collection, the plugin makes the same prediction for database-using items; a
+serial run initializes no database when every such item will be gated out. Xdist workers
+initialize on their first surviving database test instead.
 
 ## Family gates: `requires_airflow2`, `requires_airflow3`
-
-Run this test only on the named Airflow family, auto-skip elsewhere. This is the marker pair
-that lets one suite stay green on both sides of a 2 -> 3 upgrade -- see
-[Migrating from Airflow 2 to 3](../guide/migration.md#migration-strict-mode).
 
 ```python
 import pytest
@@ -32,31 +42,21 @@ def test_asset_scheduling(dag_maker) -> None: ...
 
 
 @pytest.mark.requires_airflow2
-def test_legacy_smart_sensor() -> None: ...
+def test_legacy_behavior() -> None: ...
 ```
 
-Classification comes from `installed_family()`, an import-free probe keyed on the *core*
-distribution: `apache-airflow-core` present means the 3.x family, and only when it is absent
-does the probe fall back to `apache-airflow`'s major version. The obvious hand-rolled
-version -- `skipif(metadata.version("apache-airflow") < "3", ...)` -- raises
-`PackageNotFoundError` on a core-only Airflow 3 install, so it classifies a perfectly good
-3.x environment as "no Airflow" and silently skips the tests you wrote for it. An
-Airflow-free environment skips *both* directions, since neither requirement can hold.
+Use both markers without arguments. Classification inspects installed distribution metadata
+without importing Airflow: `apache-airflow-core` identifies Airflow 3; otherwise the
+`apache-airflow` major version identifies Airflow 2. An Airflow-free environment skips both
+markers. This also lets the [migration outcome diff](../guide/migration.md#diffing-outcomes-across-the-upgrade)
+classify these skips as `gated` rather than regressions.
 
-The probe never imports Airflow, so gating costs nothing.
-
-`would_family_gate()` recomputes the same condition semantically -- it does not parse a skip
-reason -- so the [migration outcome diff](../guide/migration.md#diffing-outcomes-across-the-upgrade)'s
-`--airflow-record` can tag an outcome `gated` and never mistake an environment-caused skip
-on a family-marked test for a family gate.
+Use these markers for a dual-family suite. Do not hand-roll a version check against only the
+`apache-airflow` distribution: a core-only Airflow 3 installation may not provide it.
 
 ## Environment gate: `environment(name)`
 
-Run this test only where a named sentinel path exists. The use case is a test that needs
-something the repo cannot provision: a mounted share, a VPN-reachable warehouse, a
-credentials file that only lives on the lab box.
-
-Declare the names and their sentinels once, as an `airflow_environments` ini line list:
+Declare sentinel paths in `airflow_environments`, then name exactly one:
 
 ```ini
 [pytest]
@@ -65,93 +65,81 @@ airflow_environments =
     warehouse = fixtures/warehouse/.ready
 ```
 
-Grammar, each line:
-
-- `name = path`. A line missing the `=`, the name, or the path is a `pytest.UsageError`
-- Relative paths resolve against the pytest rootpath, absolute paths are taken as-is
-- A duplicated name is a `pytest.UsageError`
-
-Then mark the test with exactly one of those names:
-
 ```python
 @pytest.mark.environment("lab")
 def test_reads_the_lab_share() -> None: ...
 ```
 
-Behavior:
-
-- Sentinel exists -> the test runs
-- Sentinel missing -> skipped, with the reason naming the path it looked for
-- Name not in `airflow_environments` -> `pytest.UsageError` listing the configured names.
-  A typo is an error, *not* a silent skip
-- Zero or more than one argument, a keyword argument, or a non-string name ->
-  `pytest.UsageError`
-
-Nothing checks *what* the sentinel is. Existence is the whole contract, so a directory, a
-marker file, or a mount point all work.
+Relative paths resolve from pytest's root path. A missing sentinel skips the test; the
+sentinel may be a file, directory, or mount point because only existence is checked. A
+duplicate configuration name, unknown marker name, keyword argument, non-string name, or
+anything other than one positional name is a `pytest.UsageError`. See the
+[`airflow_environments` option](ini-options.md#core) for its exact grammar.
 
 ## Database gates: `db_test`, `api_test`
 
-These are cost gates, not capability declarations. The metadata database is migrated lazily,
-once, and only because something asked for it -- these markers are one of the two things
-that ask. The other is a database fixture in the test's closure (`dag_maker`, `run_dag`,
-`session`, `api_client`, and friends), which the plugin detects without any marker at all.
+`db_test` asks for the disposable metadata database without adding a fixture to the test.
+Most tests do not need it explicitly: fixtures such as `dag_maker`, `run_dag`, `dag_bag`, and
+`session` already trigger database initialization through their fixture closure. Use the
+marker when your own helper reaches the ORM directly. See the
+[database lifecycle](../internals/test-environments.md#the-disposable-metadata-database).
 
-- `db_test`: require the isolated metadata database. Marking it triggers the lazy
-  initialization -- see [the disposable metadata database](../internals/test-environments.md#the-disposable-metadata-database)
-- `api_test`: additionally start the isolated REST API server and publish its URL as
-  `AIRFLOW__API__BASE_URL` for the duration of the test, so code under test resolves it
-  through `conf.get("api", "base_url")` -- see [talking to a live Airflow
-  API](../guide/rest-api.md). Requesting the `api_client` or `api_server_url` fixture does
-  the same thing; the marker is for tests that never touch the fixture and reach the server
-  through configuration instead
-
-You rarely need `db_test` by hand. Reach for it when a test drives the ORM through your own
-helper rather than a plugin fixture, so the closure carries no evidence that a database is
-coming.
+`api_test` includes the database cost and starts one REST API server per pytest process. For
+the marked test, the autouse `api_base_url` fixture publishes the server URL as
+`AIRFLOW__API__BASE_URL` and restores the environment afterward. Requesting `api_client` or
+`api_server_url` activates the same path without the marker. The API path is Airflow 3 only;
+the [REST API guide](../guide/rest-api.md) covers authentication, scopes, and xdist ports.
 
 ## Isolation: `airflow_isolated`
 
+Use isolation when entry-point discovery or import-time Airflow configuration is the subject:
+
 ```python
 @pytest.mark.airflow_isolated(
-    entry_points={"airflow.plugins": ("my_plugin = my_pkg.plugin:MyPlugin",)},
+    entry_points={"airflow.plugins": "my_plugin = my_pkg.plugin:MyPlugin"},
     environment={"AIRFLOW__CORE__PARALLELISM": "1"},
     name="my-dist",
-    timeout=120.0,
+    timeout=120,
 )
 def test_plugin_is_discovered() -> None: ...
 ```
 
-Runs the test in a one-shot child pytest process with a synthetic entry-point distribution on
-`PYTHONPATH` and `AIRFLOW__*` overrides applied before the first Airflow import. Every
-keyword is optional. Tests sharing a payload share one child process, so cost scales with
-distinct isolation environments, not with tests. See [entry points and
-packaging](../guide/custom-components-wiring.md#isolated-entry-point-discovery).
+Every argument is a keyword. Supply `entry_points`, `environment`, or both; a bare marker is
+an error.
 
-Note the collision: this marker's `environment=` keyword is `AIRFLOW__*` variables for the
-child, unrelated to the `environment(name)` sentinel gate above. Every override name must
-start with `AIRFLOW__`, and a name bootstrap already owns (`AIRFLOW__CORE__DAGS_FOLDER`,
-`AIRFLOW__CORE__UNIT_TEST_MODE`, and the rest of the bootstrap-owned names) is a
-`pytest.UsageError` -- configure those through the plugin's ini options instead.
+| Keyword | Contract |
+| --- | --- |
+| `entry_points` | Mapping of group names to one string or a list/tuple of `name = module:attr` strings. The child sees a synthetic `0.0.0` distribution on `PYTHONPATH`. |
+| `environment` | Mapping of `AIRFLOW__*` names to string values. Bootstrap-owned names are rejected; use the corresponding plugin option instead. This keyword is unrelated to the `environment(name)` gate. |
+| `name` | Optional valid distribution name; normalized like a Python package name. A stable payload-derived name is used otherwise. |
+| `timeout` | Positive child-process timeout in seconds; default `300`. |
 
-The marker is refused on an xdist worker with a `pytest.UsageError`: an isolated child
-spawned from a worker would race its siblings on batch scratch directories. Run those tests
-serially, or gate them out. A *family- or environment-gated* isolated test skips first and
-never trips the refusal, so it behaves the same under `-n auto` as it does serially.
+After deselection, tests in the same module with identical normalized payloads share one child
+pytest invocation. Outcomes are replayed into the outer session. Malformed payloads fail the
+session before tests begin.
+
+`airflow_isolated` is refused on an xdist worker because nested children would race on shared
+batch scratch paths. Run these tests serially. Family and environment gates still run first,
+so a gated isolated test skips instead of raising the xdist refusal. See
+[isolated entry-point discovery](../guide/custom-components-wiring.md#isolated-entry-point-discovery).
 
 ## Selection labels
 
-No gating behavior. These exist so `-m` can select or exclude a group.
+- `postgres` is only a `-m` label. To actually use Postgres, install the
+  [`postgres` extra](dependencies.md#extras) and pass `--airflow-db-backend=postgres`; Docker
+  must be available. CI can then select the labeled subset with `-m postgres` or include it in
+  a larger expression.
+- `compat` labels this repository's consumer-contract tests for the
+  [certified runtime matrix](../internals/compat-layer.md#what-ci-actually-exercises). It has no
+  runtime behavior and is rarely useful in a downstream suite.
+- `smoke` is added to generated catalog items. Enable their collection with
+  `--airflow-smoke` or `airflow_smoke = true`, then use normal `-m smoke` selection. See
+  [Smoke Tests](../guide/smoke-tests.md) and the [catalog mechanics](smoke.md).
 
-- `postgres`: this test needs a provisioned Postgres metadata database (the `postgres`
-  extra plus Docker). Nothing skips it for you -- select it, or deselect it with
-  `-m "not postgres"`. See [the disposable metadata database](../internals/test-environments.md#the-disposable-metadata-database)
-- `compat`: exercises the public plugin surface across certified runtimes. Used by this
-  repo's own matrix -- see
-  [Compatibility and certification](../internals/compat-layer.md#what-ci-actually-exercises)
-- `smoke`: carried by the bundled zero-boilerplate corpus checks, which are collected only
-  when `--airflow-smoke` / `airflow_smoke` is on. See [smoke checks over every
-  Dag](../guide/smoke-tests.md)
-- `need_serialized_dag([enabled])`: accepted for upstream compatibility and does nothing.
-  Every Dag serializes at persistence, so `dag_maker.serialized_dag` no longer needs it. The
-  argument is still validated, so a malformed marker fails loudly rather than lying
+## Upstream compatibility: `need_serialized_dag([enabled])`
+
+This marker accepts zero arguments or one positional boolean. Keyword, multiple, or non-boolean
+arguments are usage errors. It deliberately changes nothing: every Dag persisted by
+`dag_maker` already serializes, so `dag_maker.serialized_dag` is always available. Keep it
+while porting upstream tests; omit it in new tests. See
+[`tests_common` parity](../internals/tests-common-parity.md#scheduler-side-handles).
