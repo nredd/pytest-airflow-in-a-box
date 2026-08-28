@@ -7,3 +7,12 @@
   font-family: var(--md-code-font-family);
   font-size: 0.9em;
 }
+
+/* Reference tables put identifiers in the first column. Keep those code tokens intact;
+   Material's table wrapper supplies horizontal scrolling when the viewport is too narrow. */
+.md-typeset table th:first-child code,
+.md-typeset table td:first-child code {
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: normal;
+}
