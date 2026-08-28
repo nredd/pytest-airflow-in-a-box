@@ -1,68 +1,94 @@
 # Smoke catalog and corpus mechanics
 
-The [Smoke Tests guide](../guide/smoke-tests.md) chooses among catalog checks, per-file
-collection, and coverage. This page records the exact catalog and its scaling behavior.
+The [Smoke Tests guide](../guide/smoke-tests.md) helps you choose between the catalog,
+per-file collection, and coverage. This page defines every generated item and the shared
+`DagCorpus` that makes corpus-wide checks portable.
 
 ## Catalog
 
-Enabled by `--airflow-smoke` or `airflow_smoke = true`:
+Enable the catalog with `--airflow-smoke` or `airflow_smoke = true`. Each enabled check is a
+separate `::smoke::<item>` node carrying the `smoke` and `timeout` markers:
 
-| Item | Contract |
-| --- | --- |
-| `test_dag_bag_integrity` | No import errors, duplicate IDs, or per-file parse timeout; slow files warn and are logged slowest-first |
-| `test_dag_serialization_roundtrip` | Every selected Dag survives scheduler serialization |
-| `test_schedule_sanity` | Every selected scheduled Dag computes its next run |
-| `test_pool_references_exist` | Every task pool exists; custom pools come from `airflow_pools = name = slots` lines |
-| `test_no_top_level_variable_access` | AST and runtime interception find no Variable or Connection lookup during import |
-| `test_no_top_level_io` | Statically resolvable calls into configured network/database modules do not run at import |
+| Item | Enabled when | Contract |
+| --- | --- | --- |
+| `test_dag_bag_integrity` | Always | Import succeeds, `dag_id`s are unique, and every file stays within the parse timeout. Files above the slowpoke threshold warn; all timings are logged slowest-first. |
+| `test_dag_serialization_roundtrip` | Always | Every selected Dag serializes and deserializes through the installed scheduler representation. |
+| `test_schedule_sanity` | Always | Every selected, scheduled Dag can compute its first automated run after deserialization. |
+| `test_pool_references_exist` | Always | Every task names an existing pool. `airflow_pools` can seed additional `name = slots` rows. |
+| `test_no_top_level_variable_access` | `airflow_forbid_top_level_variable_access = true` (default) | AST and runtime interception find no Variable or Connection lookup during import. |
+| `test_no_top_level_io` | `airflow_forbid_top_level_io = true` (default) | Statically resolvable calls into configured I/O modules do not run during import. |
+| `test_forbid_catchup` | `airflow_forbid_catchup = true` | No scheduled Dag enables catchup. |
+| `test_no_unbounded_expand` | `airflow_forbid_unbounded_expand = true` | A task mapped over runtime data sets `max_active_tis_per_dag`; literal expansions are already bounded. |
+| `test_dag_id_pattern` | `airflow_dag_id_pattern` is set | Every `dag_id` matches the configured regular expression. |
+| `test_required_dag_tags` | `airflow_required_dag_tags` is nonempty | Every Dag carries every required tag. |
+| `test_forbid_default_owner` | `airflow_forbid_default_owner = true` | No task uses Airflow's stock `airflow` owner. |
+| `test_dag_serialization_snapshot` | `airflow_dag_snapshot_dir` is set | Every selected Dag's normalized serialization matches its committed JSON snapshot. |
 
-Optional items appear only when their ini option is configured:
+`test_dag_bag_integrity` and `test_pool_references_exist` also carry `db_test`. More broadly,
+the corpus parse can initialize the metadata database when parse-time secret resolution uses
+the metastore. No catalog item starts the REST API.
 
-| Option | Item / contract |
-| --- | --- |
-| `airflow_forbid_catchup` | Scheduled Dags do not enable catchup |
-| `airflow_forbid_unbounded_expand` | Runtime-mapped tasks set `max_active_tis_per_dag` |
-| `airflow_dag_id_pattern` | Every `dag_id` matches the regex |
-| `airflow_required_dag_tags` | Every Dag carries every required tag |
-| `airflow_forbid_default_owner` | No task uses the stock `airflow` owner |
-| `airflow_dag_snapshot_dir` | Serialized structure matches committed snapshots; update with `--airflow-smoke-update` |
+The top-level secrets check combines an AST pass with lookups intercepted during parsing, so it
+can find calls hidden behind helpers. If the corpus reuses a `DagBag` parsed without
+instrumentation, it logs that runtime findings are unavailable and retains the AST results.
+The I/O check is intentionally conservative: it reports only calls that resolve through the
+file's top-level imports to a configured module. `airflow_top_level_io_modules` replaces the
+built-in module list instead of extending it.
 
-The top-level I/O check is deliberately conservative: it flags a call only when the callee
-resolves through the file's top-level imports to a listed module. Aliased indirection may escape
-rather than create false positives. `airflow_top_level_io_modules` replaces the built-in list.
+Exact option types, defaults, and validation rules live in
+[CLI and INI options](ini-options.md#smoke-catalog).
 
 ## Selection and configuration
 
-Every catalog item carries `smoke` and `timeout`; database-backed items also carry `db_test`.
-`-m smoke`, `-m "not smoke"`, `-k`, and `--deselect ::smoke::<name>` work normally.
+Normal pytest selection applies after the synthetic catalog is added: `-m smoke`, `-m "not
+smoke"`, `-k`, and `--deselect ::smoke::<item>` all work. A bare run, directory positional,
+or `testpaths` run includes the catalog. An explicit test file or node ID excludes it unless a
+`-m` expression explicitly mentions `smoke` and can select a real smoke item.
 
-An explicit test file or node ID suppresses the synthetic catalog. A directory positional,
-bare run, or `testpaths` run keeps it. An explicit `-m` expression mentioning `smoke` overrides
-file/node scoping; unrelated marker expressions do not.
+`airflow_smoke_disable` removes exact item names before construction. Unknown names are usage
+errors, even when file selection would otherwise exclude the catalog. When the catalog remains
+in scope, each disabled check's own configuration is still validated. Disabling every
+serialization consumer—the round-trip and schedule checks, plus snapshots when
+configured—skips serialization entirely.
 
-`airflow_smoke_disable` removes named items before construction. When all serialization-backed
-items are disabled, the builder skips serialization entirely. A sample size of zero means every
-Dag, not none.
+The catalog and `dag_corpus` resolve their folder in this order:
 
-Exact defaults and types are in [INI options](ini-options.md#smoke-catalog).
+1. `--dag-folder` (a relative path uses the invocation directory)
+2. `airflow_dags_folder` (a relative path uses pytest's root)
+3. the isolated `AIRFLOW_HOME/dags` scratch folder
+
+Per-file collection uses the separate `--collect-dag-folder` /
+`airflow_collect_dags_folder` channel described below.
 
 ## Serialization cost
 
-The round-trip, schedule, and snapshot checks share one serialized-Dag cache.
-`airflow_serialization_sample_size` selects a deterministic sample by hashing `dag_id` with
-`airflow_serialization_sample_seed`; `0` selects all Dags. Sampling is incompatible with
-`--airflow-smoke-update`, which must regenerate every snapshot.
+The round-trip, schedule, and snapshot checks share one serialization cache.
+`airflow_serialization_sample_size` selects Dags by a deterministic SHA-256 rank of the seed
+and `dag_id`; `0` or a size at least as large as the corpus selects every Dag. The final sample
+is ordered by `dag_id`.
 
-`--log-cli-level=INFO` streams progress for an expensive serialization pass. Captured logs do
-not survive an outer process kill.
+Sampling applies only to a smoke-only corpus. If any surviving test requests `dag_corpus`, the
+builder serializes every Dag because it cannot predict which fields that test will inspect.
+For an enabled snapshot check, update mode is rejected when a nonzero sample is active: a
+partial update could leave the committed set inconsistent.
+
+Set `airflow_dag_snapshot_dir` to compare one `<dag_id>.json` file per selected Dag. Relative
+paths resolve from pytest's root. `--airflow-smoke-update` rewrites those snapshots after
+removing run-dependent file-location fields; it does not enable the catalog or snapshot check
+by itself. Missing snapshots, serialization failures, and unified diffs fail the snapshot item.
+
+Use `--log-cli-level=INFO` to stream parse and serialization progress. Captured output cannot
+survive an outer process kill.
 
 ## Dag-file collection contract
 
-`--collect-dag-folder` walks `.py` files recursively, skips names beginning with `_`, and adds a
-`db_test`-marked `dag-import` item. Files that pytest's normal Python collector also owns are
-deduplicated after collection.
+`--collect-dag-folder` (or `airflow_collect_dags_folder`) recursively collects each `.py` file
+whose name does not begin with `_`. Every file gets a `dag-import` item; import errors and files
+declaring no Dags fail independently. Each item carries `db_test`, not `smoke`. When pytest's
+normal Python collector also owns a file below this folder, its duplicate items are removed.
 
-A module-level literal can create pinned parameter items:
+A module-level literal adds pinned parameter cases without importing the module during
+collection:
 
 ```python
 PYTEST_DAG_CASES = {
@@ -71,32 +97,45 @@ PYTEST_DAG_CASES = {
 }
 ```
 
-The literal is parsed without importing the module. Unknown parameter names and schema-invalid
-values fail against every Dag declared by that file.
+Each case becomes `dag-params[<name>]` and validates its mapping against every Dag in that file.
+A malformed declaration is a collection error; import failures, unknown parameter names, and
+schema-invalid values fail the generated item. This collection path is independent of the
+catalog and parses files again when both are enabled.
 
 ## Performance and parallelism
 
-`DagCorpus` stores read-only portable metadata, import errors, parse timings, intercepted
-lookups, and serialized records. Within a process, an existing `dag_bag` parse is reused. Under
-xdist, the first consumer takes a file lock, parses once, and publishes a versioned JSON
-artifact; other workers decode it instead of reparsing.
+`DagCorpus` is the read-mostly, JSON-portable result shared by the catalog and the public
+`dag_corpus` fixture:
 
-Under `--dist loadgroup`, the plugin co-locates the catalog with every surviving `dag_corpus`
-consumer, otherwise one eligible `dag_bag` anchor, otherwise the catalog itself. Explicit user
-groups are never overwritten. Plain `-n auto` uses `load`, where `xdist_group` is inert; a
-`SmokeColocationWarning` identifies avoidable extra decoding or parsing.
+| Field | Contents |
+| --- | --- |
+| `dags` | Read-only mapping of `dag_id` to tags, task metadata, scheduling flags, file location, and optional serialization outcome |
+| `import_errors` | Read-only mapping of file path to import failure |
+| `dagbag_stats` | Immutable per-file duration, Dag-count, and task-count records |
+| `runtime_lookups` | Intercepted secret lookups; `None` means interception was unavailable, while `()` means none occurred |
+| `producer_pid`, `producer_worker` | Process that built the shared artifact |
 
-For thousands of files, enable subprocess fan-out:
+Treat each Dag's nested `serialized` dictionary as read-only. Use `dags_under(corpus,
+dag_folder, subdir)` for a read-only subtree view without reparsing.
 
-```ini
-[pytest]
-airflow_dag_bag_fanout = true
-```
+Within one process, the builder reuses an existing live `dag_bag` parse. Under xdist, the first
+consumer takes a file lock and publishes a versioned JSON artifact inside the run root; other
+workers decode it. With `--dist loadgroup`, the plugin co-locates the catalog with surviving
+`dag_corpus` consumers, otherwise with one eligible `dag_bag` consumer, otherwise with itself.
+It never replaces an explicit user `xdist_group`. Other distribution modes cannot honor this
+grouping and may emit `SmokeColocationWarning` for avoidable decoding or parsing.
 
-The builder walks once, shards files across workers, and merges portable results. Fan-out skips
-below `airflow_dag_bag_fanout_min_files` (default 200) and falls back to serial parsing after
-spawn, timeout, crash, or decode failure. It is incompatible with a nonzero serialization
-sample because a shard lacks the complete `dag_id` set.
+For very large repositories, `--airflow-dag-bag-fanout` /
+`airflow_dag_bag_fanout = true` shards one Airflow-aware file listing across subprocesses and
+merges their portable results, including duplicate-ID detection and parse timings. Fan-out:
 
-Fan-out cannot produce the real `DagBag` promised by `dag_bag`; it applies only to the portable
-corpus. Prefer `dag_corpus` whenever static metadata is sufficient.
+- skips below `airflow_dag_bag_fanout_min_files` (default `200`);
+- uses the configured worker count, or a CPU-based count bounded by the file count;
+- falls back to one serial parse after a spawn failure, timeout, child crash, or invalid output;
+- is skipped for a smoke-only nonzero serialization sample, because a shard cannot see the
+  complete `dag_id` set; and
+- never backs the live `dag_bag` fixture, whose return value must remain a real Airflow
+  `DagBag`.
+
+The [canonical option rows](ini-options.md#smoke-catalog) define the fan-out timeout, worker,
+threshold, sampling, and parse-time defaults.
