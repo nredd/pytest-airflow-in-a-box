@@ -82,11 +82,11 @@ dev = [
     "prek==0.4.14",
     "pytest-cov==7.1.0",
     "pytest-xdist==3.8.0",
-    "ruff==0.16.3",
+    "ruff==0.16.4",
     "towncrier==25.8.0",
-    "ty==0.0.73",
-    "uv==0.12.5",
-    "uv-build==0.12.5",
+    "ty==0.0.74",
+    "uv==0.12.6",
+    "uv-build==0.12.6",
 ]
 docs = [
     "mkdocs==1.6.1",
