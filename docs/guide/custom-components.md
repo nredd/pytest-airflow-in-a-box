@@ -1,11 +1,8 @@
 # Checking components
 
-You wrote a timetable, listener, or executor; the class imported and the suite stayed green.
-That proves remarkably little. Many Airflow extension points are protocols, pluggy hooks, or
-base classes whose defaults fail only when the scheduler finally calls them.
-
-`check_component` checks the static contract without a database, cache mutation, or Airflow
-bootstrap:
+Airflow validates many extension points only when the scheduler, worker, or Dag processor
+discovers them. Run `check_component` first to catch contract errors against the installed
+Airflow release without starting a database or mutating Airflow's live registries:
 
 ```python
 from pytest_airflow_in_a_box.components import check_component
@@ -15,14 +12,32 @@ def test_my_timetable_conforms():
     check_component(MyTimetable).raise_for_problems()
 ```
 
-It covers the ten pluggable kinds Airflow discovers by configuration or registration. Your own
-operator, hook, sensor, or `@task` decorator is not one of them; execute that code through the
-[fidelity ladder](ladder.md).
+Use this check for timetables, listeners, executors, XCom backends, priority-weight strategies,
+notifiers, secrets backends, policies, plugins, and providers. Test operators, hooks, sensors,
+and `@task` decorators through the [fidelity ladder](ladder.md) instead.
+
+## Choose the component kind
+
+`check_component` normally detects the kind from inheritance, Airflow's pluggy markers, plugin
+shape, or a callable named `get_provider_info`. Pass a class or an existing instance; the
+checker never constructs a class, so required and side-effectful constructors are safe.
+
+Force the kind when the component is intentionally duck-typed or still incomplete:
+
+```python
+from pytest_airflow_in_a_box.components import ComponentKind, check_component
+
+report = check_component(MyListener, kind=ComponentKind.LISTENER)
+```
+
+This matters because an unrecognized component returns a clean report: no applicable checks is
+not the same as a validated contract. `ComponentKind` contains `TIMETABLE`, `LISTENER`,
+`EXECUTOR`, `XCOM`, `WEIGHT_STRATEGY`, `NOTIFIER`, `SECRETS_BACKEND`, `POLICY`, `PLUGIN`, and
+`PROVIDER`.
 
 ## The report
 
-Pass a class or an instance. The checker never constructs a class, so required or side-effectful
-constructors are safe:
+Checks accumulate every finding instead of stopping at the first one:
 
 ```python
 report = check_component(MyExecutor)
@@ -33,90 +48,62 @@ report.certification     # CertificationTier | None
 report.raise_for_problems()
 ```
 
-Each problem has `code`, `message`, and `hint`. Checks accumulate findings without raising;
-only `raise_for_problems()` or your own assertion turns them into a failure. On an uncertified
-Airflow release, live probes still run and `report.certification` is `PROBED`.
+Each `ComponentProblem` has a machine-readable `code`, a specific `message`, and a corrective
+`hint`. `raise_for_problems()` raises `ComponentContractError` with the complete summary;
+otherwise a report never fails the test by itself.
 
-Pass `kind=ComponentKind.<NAME>` to force classification. Without it, an unknown component
-returns a clean empty report. Every kind except timetable requires Airflow 3.x and reports no
-problems on 2.x.
+On an uncertified Airflow release, available checks still run against live capabilities and
+`report.certification` is `PROBED`. Timetable checks work on both Airflow families. The other
+kinds are Airflow 3 checks and produce no findings on Airflow 2.
 
 ## What gets checked
 
-| Kind | Detection | Problems |
-| --- | --- | --- |
-| Timetable | `Timetable` inheritance | Local qualname; missing protocol methods; incomplete serialization pair; non-JSON state |
-| Listener | At least one `@hookimpl` method | Unknown hook or argument; hook available to only one listener manager |
-| Executor | `BaseExecutor` subclass | Missing overrides; stale attributes; release-specific sentry flag type |
-| XCom backend | `BaseXCom` subclass | Removed ORM deserializer; wrong static method or call signature |
-| Weight strategy | `PriorityWeightStrategy` subclass | Abstract methods; inherited or missing hash implementation |
-| Notifier | `BaseNotifier` subclass | Missing `notify`; unresolvable template field |
-| Secrets backend | `BaseSecretsBackend` subclass | A lookup return annotation that does not admit `None` |
-| Policy | `airflow.policies.hookimpl` method | Unknown hook or argument mismatch against the installed hookspec |
-| Plugin | Airflow's name-and-module MRO check | Missing plugin name |
-| Provider | Callable named `get_provider_info` | Invalid schema, package mismatch, or missing entry point |
-
 ### Timetables
 
-- `timetable-local-qualname`: a class defined inside a function contains `<locals>` and cannot
-  be found by Airflow's qualified-name lookup.
-- `timetable-missing-protocol-method`: `infer_manual_data_interval` or `next_dagrun_info` still
-  has the raising default.
-- `timetable-serialize-pair-incomplete`: only one of `serialize` and `deserialize` is
-  overridden, so state is silently lost.
-- `timetable-serialize-not-json`: an instance returns state Airflow cannot JSON-encode.
-
-The worked logic and registration flow live on [Timetables](custom-timetables.md).
+Timetable checks catch local classes that Airflow cannot resolve, required scheduling methods
+left on their raising defaults, incomplete `serialize`/`deserialize` pairs, and non-JSON state
+returned by an instance. The [Timetables](custom-timetables.md) page covers logic tests,
+serialization round trips, and automatic registration through `dag_maker`.
 
 ### Execution components
 
-- `executor-missing-override`: `sync`, `_process_workloads`, or `end` retains an inert or
-  raising default.
-- `executor-stale-attribute`: the class sets one of the 2.x-era attributes Airflow 3 ignores.
-- `executor-flag-wrong-type`: the sentry capability uses the wrong release-specific name or
-  type.
-- `xcom-orm-deserialize-removed`: `orm_deserialize_value` is silently dead on Airflow 3.
-- `xcom-backend-signature`: serialization methods cannot accept the base class's real call
-  shape or lost their `@staticmethod` behavior.
-- `weight-strategy-abstract` and `weight-strategy-hash-of-none`: the strategy cannot be built or
-  cannot behave correctly as a set/dict key.
+- **Executors:** required lifecycle overrides, ignored 2.x-era attributes, and the installed
+  release's sentry capability name and type.
+- **XCom backends:** the removed ORM deserializer and serialization methods that no longer
+  accept the base class's real call shape.
+- **Priority-weight strategies:** abstract implementations and classes that cannot serve as
+  set or dictionary keys.
 
-To prove an executor actually runs a workload, use
-[`run_dag(..., executor=...)`](ladder.md#executor-driven-runs). A complete serial executor is in
-the [Cookbook](cookbook.md#a-minimal-serial-executor).
+A clean report does not run a workload. Exercise an executor through
+[`run_dag(..., executor=...)`](ladder.md#executor-driven-runs); the
+[Cookbook](cookbook.md#a-minimal-serial-executor) contains a complete serial example.
 
 ### Observability components
 
-- `listener-no-matching-hookspec` and `listener-unknown-argument`: pluggy would ignore the hook
-  or reject it at registration.
-- `listener-core-manager-only` and `listener-sdk-manager-only`: the hook exists on only one of
-  Airflow's two listener managers.
-- `notifier-missing-notify`: only `async_notify` was implemented, while callback paths call
-  synchronous `notify`.
-- `notifier-template-fields-unresolvable`: an instance names an attribute it does not carry.
-- `policy-unknown-hookspec` and `policy-argument-name-mismatch`: the hook cannot register
-  against the installed release.
+- **Listeners and policies:** hook names and arguments against the installed hookspecs;
+  listeners also report hooks available through only one listener manager.
+- **Notifiers:** a missing synchronous `notify`; on an instance, unresolved `template_fields`.
 
-Plain functions loaded through `airflow_local_settings.py` use an older policy mechanism and
-are not classified as policy components.
+Plain functions loaded through `airflow_local_settings.py` use the older policy mechanism and
+are not policy components.
 
 ### Distribution components
 
-- `secrets-backend-raises-on-miss`: an override's declared return type does not allow `None`.
-  The checker does not call a real backend or fabricate credentials.
-- `plugin-name-missing`: discovery would reject an `AirflowPlugin` with no name.
-- `provider-info-schema`: `get_provider_info()` raises or violates the installed Airflow
-  package's schema.
-- `provider-package-name-mismatch` and `provider-no-entry-point`: distribution metadata does
-  not agree with or expose the provider callable.
+- **Secrets backends:** declared lookup return types that exclude `None`. The checker never
+  calls a backend or fabricates credentials, so an unannotated lookup produces no finding.
+- **Plugins:** a missing plugin name.
+- **Providers:** the installed provider-info schema, package-name agreement, and the
+  `apache_airflow_provider` entry point.
 
-Pass the `get_provider_info` callable, not its result. Distribution checks that cannot
-attribute a callable to an installed package are skipped. To prove the entry point itself
-resolves, use the isolated process described in
+Pass the provider's `get_provider_info` callable, not its result. The schema check invokes it
+because `ProvidersManager` does too. Package and entry-point checks are skipped when the
+callable cannot be attributed to an installed distribution. Use an isolated process to prove
+the entry point itself resolves; see
 [Registration and packaging](custom-components-wiring.md#isolated-entry-point-discovery).
 
 ## Shape is not registration
 
-A clean report proves only the component's contract. Production still loads it through a
-plugin, configuration value, or distribution entry point. The next step is
-[Registration and packaging](custom-components-wiring.md).
+A clean report proves that the checked shape matches the installed release. It does not prove
+that production can discover the component or that the component behaves correctly. Continue
+with [Registration and packaging](custom-components-wiring.md), then exercise the behavior at
+the appropriate rung of the [fidelity ladder](ladder.md).
