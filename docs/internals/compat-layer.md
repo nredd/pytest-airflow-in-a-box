@@ -1,190 +1,144 @@
 # Compatibility and certification
 
-Two ways you get here. Either you are deciding whether this plugin survives your next Airflow
-bump, or a run just died with:
+Use this page to answer two questions: whether an Airflow version is certified, and what the
+plugin does when Airflow changes an internal interface.
 
-```console
-ERROR: Apache Airflow compatibility validation failed for installed version '3.4.0' while
-resolving required Airflow symbol `airflow.sdk.execution_time.task_runner.run`: ...
-```
-
-Both questions have the same answer: `_compat/` is the *only* place in this package that
-touches Airflow, every symbol it touches is probed before use, and a symbol that moved fails
-at resolve time with the module path in the message rather than three frames deep inside a
-fixture.
+The short answer is that every private Airflow dependency belongs in `_compat/`. Before a
+fixture uses one, the compatibility layer resolves the installed Airflow family, probes the
+interfaces it needs, and rejects an incompatible installation with the failing symbol in the
+error message.
 
 ## Supported and certified
 
-- All major Apache Airflow versions
-- CPython 3.10 through 3.14
-- pytest 8 or newer
-- Linux or macOS; use WSL2 or the devcontainer on Windows
+The plugin supports all major Apache Airflow versions. Certification is more specific: it
+records the exact Airflow releases and Python combinations exercised by this repository.
 
-Certified releases carry a byte-verified capability row. A newer or skipped release whose
-family meets its structural floor resolves by live probing instead: the suite continues, one
-`UncertifiedAirflowWarning` names the last certified release, and `--airflow-doctor` reports a
-degraded tier. A release below its family's structural floor fails.
+- The package supports CPython 3.10–3.14 and pytest 8 or newer.
+- Linux and macOS are supported. On Windows, use WSL2 or the devcontainer.
+- Airflow 3 releases at or above 3.1.0 can resolve through the compatibility layer. Releases
+  with a checked-in contract row are **certified**; other 3.x releases are **probed**.
+- Airflow 2 is a closed certification tier: only 2.7.3, 2.8.4, 2.9.3, 2.10.5, and 2.11.2
+  resolve. The first two support Python through 3.11; the others support Python through 3.12.
+
+Run [`pytest --airflow-doctor`](../reference/diagnostics.md) in the environment you intend to
+use. It reports the installed versions, certification tier, and resolved capabilities.
 
 ### What CI actually exercises
 
-The compatibility matrix samples every supported Python version across Airflow 3.1–3.3 rather
-than running every Cartesian pair. It includes pytest's supported floor, macOS, ARM, musl, a
-serial reference leg, and a real-Docker Postgres job. Airflow 3 legs run the whole suite under
-`-n auto --dist loadgroup`.
+The compatibility workflow uses representative pairs rather than every Cartesian combination:
+
+- Airflow 3.1–3.3 across CPython 3.10–3.14, including the pytest 8.0 floor;
+- Linux, macOS, ARM Linux, and Alpine/musl;
+- parallel runs under `-n auto --dist loadgroup`, plus one serial reference leg; and
+- SQLite throughout the matrix, with a separate real-Docker Postgres job.
+
+Airflow 3 legs run the complete suite. Airflow 2 legs run the consumer contract in
+`tests/enduser/`, including one xdist leg, on Linux and SQLite. See
+[GitHub Actions and reports](../guide/ci/github-action.md) for reproducing these environments.
 
 ### Airflow 2.x is a migration bridge, not a second home
 
-Certified 2.x releases exist so one consumer suite can stay green across a cutover: 2.7.3 and
-2.8.4 through Python 3.11, and 2.9.3, 2.10.5, and 2.11.2 through Python 3.12. The 2.x legs run
-only `tests/enduser` on Linux/SQLite.
+The certified Airflow 2 tier exists so one consumer suite can remain green during a 2-to-3
+migration. The shared surface includes `dag_maker`, `run_ti`, `dag_bag`, `run_dag`, cleanup,
+seeding, configuration, and smoke checks.
 
-`dag_maker`, `run_ti`, `dag_bag`, `run_dag`, cleanup, seeding, configuration, and smoke checks
-work on both families. Task SDK runners, structlog capture, the REST API, component sandbox, and
-executor-driven runs fail on 2.x with an actionable alternative. The
+Task SDK runners, structlog capture, the REST API, component sandbox, and executor-driven runs
+are Airflow 3 only. They fail on Airflow 2 with an alternative where one exists. The
 [Fixtures](../reference/fixtures.md) table is the per-feature source of truth.
 
 ## The surface it stands on
 
-Airflow 3 has no supported testing API for what this plugin does. Driving a real
-`RuntimeTaskInstance`, persisting a `DagRun` with a `DagVersion` and a `DagBundleModel`,
-clearing the metadata DB table-group by table-group, evaluating an asset condition -- all of it
-runs through modules Airflow does not document as public and does not promise across minors.
+Airflow does not expose a public testing API for the work this plugin performs. Creating
+scheduler metadata, running a `RuntimeTaskInstance`, clearing related ORM tables, and evaluating
+asset schedules all require private interfaces that can move between releases.
 
-Measured on this tree:
-
-- 17 modules, 12,547 lines under `src/pytest_airflow_in_a_box/_compat/`
-- 94 distinct `airflow.*` module paths referenced. A handful are public (`airflow.sdk`,
-  `airflow.providers.standard.operators.empty`); the bulk are not -- `airflow.models.*` ORM
-  tables, `airflow.sdk.execution_time.*`, `airflow.sdk.api.datamodels._generated`,
-  `airflow._shared.*`, `airflow.serialization.*`, `airflow.executors.*`, `airflow.policies`
-- Certified across Airflow 2 and 3 releases listed above
-
-The version drift is not hypothetical. `DagBag` moved from `airflow.models.dagbag` to
-`airflow.dag_processing.dagbag`. `SerializedDAG` moved out of
-`airflow.serialization.serialized_objects` into `airflow.serialization.definitions.dag` in 3.2,
-and asset condition evaluation moved with it. 3.2 deleted `airflow.plugins_manager`'s
-module-global cache outright and replaced it with independent `functools.cache` functions, then
-gave the Task SDK a second, structurally identical copy that 3.1 does not have at all. 3.3 added
-a `dag_run` parameter to the `task_instance_mutation_hook` hookspec. Each of those is one field
-on one dataclass here, and nothing above `_compat/` knows any of it happened.
+That movement is expected. Across recent releases, `DagBag`, `SerializedDAG`, asset evaluation,
+plugin-manager caches, the Task SDK runner, and executor and listener contracts have all changed
+location or shape. The compatibility layer turns each variation into one capability; fixtures
+consume that capability instead of branching on an Airflow version.
 
 ## One seam, and it is enforced
 
-The rule is absolute: **any use of Airflow internals goes behind `_compat/`.** Outside that
-package, the only `airflow` imports anywhere in `src/` are `TYPE_CHECKING`-only annotations in
-`types.py`, `fixtures/dag.py`, and `fixtures/upstream.py` -- three imports that never execute.
+Any runtime use of Airflow internals must live under `src/pytest_airflow_in_a_box/_compat/`.
+Outside that package, Airflow imports in shipped source are type-checking-only annotations.
 
-`tests/compat/test_seam.py` is what makes that a fact instead of an intention. It walks the
-shipped source with `ast` and fails on any runtime `airflow` import outside `_compat/` --
-statements in function bodies and `except` handlers included, plus dynamic
-`import_module("airflow...")` / `__import__` calls with a literal target. Its known-leak
-allowlist is `frozenset()`, and the assertion exact-matches it, so the list can only ever
-shrink.
-
-Consequence, and the reason this is core rather than housekeeping: a new Airflow release lands
-in one package. `plugin.py`, the fixtures, `db.py`, and `smoke.py` do not get a version branch.
+`tests/compat/test_seam.py` enforces the boundary with an AST scan. It catches ordinary imports,
+imports inside functions or exception handlers, and literal dynamic imports. The accepted-leak
+set is empty. As a result, a new Airflow release should change the compatibility package and its
+contract tests—not scatter version branches through fixtures, collection, or database code.
 
 ## How a probe works
 
-A probe is a live observation of the installed Airflow, not a version comparison. Four
-primitives in `_compat/capabilities.py`:
+A probe observes the installed code; it does not compare version strings. The capability layer
+uses four patterns:
 
-- `_resolve_symbol(module, name, version)` -- import and `getattr`, wrapping any failure in
-  `AirflowCompatibilityError` naming the module path
-- `_signature_has_parameter(...)` -- `inspect.signature` over a constructor or method, e.g.
-  does `DagBag.__init__` still take `include_examples`
-- `_model_has_field(...)` -- Pydantic `model_fields` membership, e.g. does
-  `airflow.sdk.execution_time.comms.StartupDetails` carry `sentry_integration`
-- `_probe_*` -- try the newer location, fall back to the older, return the enum member naming
-  which one answered
+- resolve a required module attribute and wrap failure in `AirflowCompatibilityError`;
+- inspect whether a callable accepts a parameter;
+- inspect whether a Pydantic model exposes a field; or
+- try the known locations or shapes and return a member of a closed enum.
 
-The fallback shape, verbatim in spirit from `_probe_dag_bag`:
+The results form one immutable `AirflowCapabilities` value, cached once per process. Resolution
+is lazy, so loading pytest without using an Airflow feature does not import Airflow.
 
-```python
-try:
-    module = import_module("airflow.dag_processing.dagbag")
-    dag_bag = module.DagBag
-except (ImportError, AttributeError):
-    return DagBagLocation.MODELS, _resolve_symbol("airflow.models.dagbag", "DagBag", version)
-return DagBagLocation.DAG_PROCESSING, dag_bag
-```
-
-Every location a probe can return is a member of a closed `Enum` (`DagBagLocation`,
-`TaskInstanceRunner`, `ParamsLocation`, `SecretsResolution`, `ExecutorContract`, ...). An
-unrecognized third answer is not a new enum value, it is a failure.
-
-The probes fold into one frozen `AirflowCapabilities` dataclass -- 25 fields -- resolved once
-per process and cached by `resolve_capabilities()`. Nothing imports Airflow until that call,
-which is why the plugin stays inert for non-Airflow test runs.
+Closed enums matter: if an interface has a third, unknown shape, resolution fails instead of
+guessing. The error names the symbol or contract that moved. `--airflow-doctor` prints the same
+resolved fields in a diagnostic report.
 
 ## Certified, then verified
 
-Probing alone would let a maintainer's assumption pass silently. So every certified release also
-has a hand-written row in `_CERTIFIED_CAPABILITIES`, and `_verify_contract` compares *every*
-field of the observed contract against it, iterating `dataclasses.fields` so a newly added field
-is compared without touching the comparison function. A mismatch fails the session.
+A certified release has a hand-maintained row in `_CERTIFIED_CAPABILITIES`. Runtime probes are
+compared with that row, including the canonical `SerializedDAG` location. A mismatch aborts the
+session.
 
-The module is honest about what that proves, and so is this page. Only the ten fields in
-`_PROBED_FIELD_LABELS` (plus the `SerializedDAG` location) are real runtime observations that
-can contradict the certified row -- `DagBag` location, task-instance runner, the executor
-attribute contract, the SDK listener manager, and so on. The family-derived fields
-(`has_task_sdk`, `uses_structlog`, `dagrun_interface`, `api_surface`, `timezone_location`,
-`secrets_resolution`, ...) are computed from the same family on both sides, so their comparison
-is a self-consistency guard, not a probe.
+Certification combines two kinds of checks:
 
-The real floor under those is `_REQUIRED_SYMBOLS_BY_FAMILY`: a flat table of module/symbol
-pairs that must import, 31 of them on Airflow 3.x and 17 on 2.x, resolved on every session
-regardless of tier. Upstream moving `airflow.sdk.execution_time.context._get_variable` -- which
-apache/airflow#61630 announces it intends to -- becomes a loud failure here instead of a shim
-that silently stops shimming.
+- Probes verify interface locations, callable parameters, model fields, and other structural
+  differences that can be observed directly.
+- `_REQUIRED_SYMBOLS_BY_FAMILY` imports every additional private symbol the plugin depends on.
+  A moved or removed symbol fails even when it is not represented by a capability field.
+
+Family-derived fields are consistency checks, not independent observations. The distinction is
+intentional: a certified row documents the expected contract, while probes and required-symbol
+checks enforce the portions that can be verified mechanically.
 
 ## When your Airflow is newer than the certified set
 
-A 3.x release at or above the certified floor with no certified row does not brick the plugin.
-It resolves on the `PROBED` tier: every probe and every required-symbol resolution still runs
-and still hard-fails on a missing symbol, but `_verify_contract` is skipped because there is
-nothing to verify against.
+An uncertified Airflow 3 release at or above the supported floor resolves on the `PROBED` tier.
+All capability probes and required-symbol checks still run, but no certified row exists for the
+final comparison.
 
-What you see, once per session:
+Pytest emits one `UncertifiedAirflowWarning`, `--airflow-doctor` reports `DEGRADED`, and the
+component sandbox uses generic snapshot and restore. Tests may continue, but the plugin has not
+yet certified that release's private interfaces. Pin a certified release when you require that
+assurance.
 
-```console
-UncertifiedAirflowWarning: Apache Airflow '3.4.0' has no certified contract row in this version
-of `pytest-airflow-in-a-box` (last certified release: '3.3.1'): capabilities were resolved by
-live probing and the component sandbox degrades to generic snapshot/restore. ...
-```
-
-`pytest --airflow-doctor` prints every capability field plus a `DEGRADED:` bullet explaining the
-tier. See [diagnosing a run](../reference/diagnostics.md).
-
-The policy itself -- degrade above the certified set, hard-fail below the floor, weekly canary
--- is stated under [Supported and certified](#supported-and-certified).
+The weekly Airflow canary installs the newest matching upstream release, runs the compatibility
+suite, and deliberately fails its certification probe for an uncertified release. That failure
+files an issue with the resolved environment and reports so certification work begins before a
+routine upgrade reaches users.
 
 ## `tests/enduser/` is the consumer contract
 
-Unit tests of `_compat/` prove the shims behave. They do not prove a *user's* test still passes
-after a version bump. `tests/enduser/` does that: 32 modules marked `compat`, written against
-the public fixtures only, exercising operators, sensors, TaskFlow, triggers, assets,
-callbacks, hooks, the REST API, `dag_corpus`, structlog capture, and executor runs.
+Compatibility-unit tests prove individual shims. `tests/enduser/` proves that public fixtures
+still behave as a consumer expects. Its dual-family tests cover whole-Dag runs, operators,
+sensors, TaskFlow, mapping, triggers, callbacks, hooks, providers, configuration, corpus checks,
+and migration behavior. Airflow 3-only modules add assets, REST API, structlog, and executor
+coverage.
 
-It runs on the whole compat matrix -- 3.1.0 through 3.3.1 across CPython 3.10-3.14, plus macOS,
-arm, musl, and pytest-floor legs. The Airflow 2.x legs run `tests/enduser` and *only*
-`tests/enduser`: the inner unit suite imports 3.x-only modules at module scope and cannot
-collect on 2.x, so the consumer contract is the whole 2.x signal.
-`tests/enduser/conftest.py` drops the four 3.x-only modules by `collect_ignore` and
-authors everything else dynamically through `tests/enduser/_authoring.py`, marking its 3.x-only
-tests `requires_airflow3` so they are collected and skipped rather than never seen.
+The complete directory runs on every Airflow 3 compatibility leg. Airflow 2 legs run only this
+directory; four modules that import 3-only surfaces are excluded, while individual 3-only tests
+are collected and skipped through `requires_airflow3`.
 
-Adding a probe without adding an end-user test proves a symbol exists. It does not prove your
-test survives.
+A probe can prove that a symbol exists. An end-user test proves that the public workflow built
+on it still works.
 
 ## Adapted upstream code
 
-`_compat/taskrun.py::run_task_instance` is adapted from Airflow's own
-`devel-common/src/tests_common/test_utils/taskinstance.py`, and `_compat/asset_schedule.py`
-from the scheduler's asset-triggered `DagRun` creation. Both carry exact upstream commits in
-`PROVENANCE.md`, along with every Airflow source file the certified contract was read against.
-That file is the audit trail for what "certified" means on any given release.
+Some compatibility implementations follow upstream Airflow behavior closely enough to require
+an audit trail. [`PROVENANCE.md`](https://github.com/nredd/pytest-airflow-in-a-box/blob/main/PROVENANCE.md)
+records the upstream files and exact commits used by the adapted task-instance and asset-schedule
+code, along with the sources consulted for certified contracts.
 
-For where `_compat/` sits relative to the rest of the plugin: bootstrap owns the environment
-before Airflow is imported, and parse-time secret resolution is one of the private pieces this
-layer holds. Both are documented in [Test Environments](test-environments.md).
+For the surrounding runtime boundary, see [Test Environments](test-environments.md): bootstrap
+owns configuration before Airflow imports, and `_compat/` supplies the private mechanics after
+that boundary.

@@ -1,243 +1,184 @@
 # Test Environments
 
-Every session runs inside an environment the plugin builds and throws away: an isolated
-`AIRFLOW_HOME`, a disposable metadata database, configuration applied as environment
-variables, and a generated `airflow_local_settings.py`. This page covers the mechanisms.
-The per-fixture and per-option detail lives in [Fixtures](../reference/fixtures.md) and
-[INI options](../reference/ini-options.md).
+Before Airflow imports, the plugin creates an isolated `AIRFLOW_HOME`, configures a disposable
+metadata database, and installs the run's configuration. Most users only need to choose where
+the run lives, whether it uses SQLite or Postgres, and which configuration scope fits the test.
+See [Fixtures](../reference/fixtures.md) and
+[CLI and INI options](../reference/ini-options.md) for the complete interfaces.
 
 ## The isolated `AIRFLOW_HOME`
 
-Your own `~/airflow` is never touched. The plugin points `AIRFLOW_HOME` at a fresh
-throwaway directory before any consumer `conftest.py` is imported and before Airflow is
-imported at all, so no test run migrates your dev metadata database, seeds your Variables,
-or reads a stale `airflow.cfg`. The directory holds `airflow.cfg`, `dags/`, `logs/`,
-`plugins/`, `config/airflow_local_settings.py`, the SimpleAuthManager password file, and --
-on the default backend -- the SQLite metadata database. The session header names it,
-along with the storage rung and backend:
+The plugin never uses your `~/airflow`. It creates a unique `pytest-airflow-in-a-box-*`
+directory before importing consumer conftests or Airflow, then points `AIRFLOW_HOME` at it.
+That directory contains the generated configuration, Dags, plugins, logs, authentication
+files, and—on SQLite—the metadata database. The session header reports its location:
 
 ```console
 pytest-airflow-in-a-box: AIRFLOW_HOME=/dev/shm/pytest-airflow-in-a-box-8f2a1c (storage: shared-memory, db: sqlite)
 ```
 
-Under `xdist` only the controller prints; workers inherit the controller's directory.
+Under xdist, workers share the controller's run directory and only the controller prints the
+header. The `storage:` value identifies the selected base:
 
-The base directory comes off a five-rung ladder, and the header's `storage:` field names
-the rung that won:
-
-| Rung | Base | When |
+| Rung | Base | Selected when |
 | --- | --- | --- |
-| `explicit` | `--airflow-home=PATH` or the `airflow_home` ini option | Always, when supplied |
-| `caller-temp` | `--basetemp`'s parent, else `$TMPDIR` | The caller already picked a temp base |
-| `shared-memory` | `/dev/shm` | Linux, tmpfs, and at least 512 MiB free |
-| `system-temp` | `tempfile.gettempdir()` | The ordinary fallback |
-| `writable-fallback` | A writable network or unknown-filesystem base | Nothing local was writable; warns loudly |
+| `explicit` | `--airflow-home=PATH` or `airflow_home` | You supplied a base |
+| `caller-temp` | `--basetemp`'s parent, otherwise `$TMPDIR` | The caller selected a local temporary base |
+| `shared-memory` | `/dev/shm` | Linux tmpfs has at least 512 MiB free |
+| `system-temp` | `tempfile.gettempdir()` | The ordinary local fallback |
+| `writable-fallback` | A writable network or unknown filesystem | No verified local base is writable; emits a warning |
 
-`shared-memory` is the surprising one: on most Linux hosts it wins, which makes runs fast
-and puts your logs in RAM -- gone at reboot. Pass `--airflow-home=PATH` to pin the run on
-durable storage. The explicit base is never removed; only the unique
-`pytest-airflow-in-a-box-*` child inside it is. A network or otherwise unclassifiable
-explicit base is rejected unless you pass `--allow-network-airflow-home`, because SQLite on
-a network filesystem corrupts under lock contention rather than failing cleanly.
+On most Linux hosts, `/dev/shm` wins, so retained logs live in RAM and disappear at reboot.
+Use `--airflow-home=PATH` for durable artifacts. The plugin removes only the unique child it
+creates, never the explicit base itself. It rejects an explicit network or unknown filesystem
+unless `--allow-network-airflow-home` acknowledges SQLite's locking risk.
 
-Retention mirrors pytest's `tmp_path_retention_policy`: `--airflow-home-retention` /
-`airflow_home_retention_policy` takes `all`, `failed` (default -- any non-passing exit
-counts, crashes included), or `none`, bounded to the `--airflow-home-retention-count` /
-`airflow_home_retention_count` most recent roots (default `3`). A kept directory is
-announced at the end of the run, never silently. Retention never leaks a database server --
-the Postgres container stops on every policy. One known gap: pytest raises the exit status
-to `MAX_WARNINGS_ERROR` *after* every `pytest_sessionfinish` hook, so a run failing only on
-`--max-warnings` reads as clean and the default `failed` policy removes its directory --
-pass `--airflow-home-retention=all` to inspect one. See
-[INI options](../reference/ini-options.md) for the full flag/option matrix, and
-[Fixtures](../reference/fixtures.md) for the `airflow_home` / `airflow_dags_folder`
-fixtures that hand a test these paths as `pathlib.Path`.
+Retention defaults to `failed`: keep the run directory after any non-passing exit, including a
+crash. Choose `all` or `none` with `--airflow-home-retention`, and set the number of retained
+roots with `--airflow-home-retention-count` (default `3`). A retained directory is always
+reported. Postgres containers stop regardless of retention.
 
-[`--airflow-doctor`](../reference/diagnostics.md) prints the resolved root, storage rung,
-and backend without collecting anything -- for its own diagnostic run directory, not a
-previous session's.
+One pytest edge remains: a run that fails only because of `--max-warnings` receives that status
+after session-finish hooks run, so `failed` retention may remove its directory. Use
+`--airflow-home-retention=all` while investigating. The `airflow_home` and
+`airflow_dags_folder` fixtures expose the resolved paths; `--airflow-doctor` reports the path,
+storage rung, and backend for its own diagnostic run.
 
 ## The disposable metadata database
 
-Nothing a test writes survives it. The metadata database is created inside this run's
-`AIRFLOW_HOME`, migrated lazily the first time a test needs it, and thrown away with the
-run directory. Two mechanisms keep tests from leaking into each other inside the run: the
-`session` fixture rolls back on teardown, and `dag_maker` deletes the rows it created at
-teardown, on every test.
+Database setup is lazy: tests that do not request a database-backed fixture never migrate one.
+The default backend is one SQLite file for the run, tuned with WAL journaling,
+`synchronous = OFF`, and an in-memory temporary store. It is fast, but serializes writers and
+cannot reproduce row locks or concurrent-write behavior.
 
-The default backend is a per-run SQLite file tuned for disposable test data (WAL journal,
-`synchronous = OFF`, memory temp store). SQLite serializes writers, so it cannot reproduce
-real deployment concurrency (row-level locking, `SELECT ... FOR UPDATE`, multiple
-concurrent writers). When your own code issues SQL against the metadata database, or a
-suite deadlocks, opt into the Postgres backend:
+Use Postgres when your code issues metadata SQL or when SQLite's locking model hides or creates
+a failure:
 
 ```console
 pytest --airflow-db-backend=postgres
 ```
 
-or persistently via the `airflow_db_backend` ini option. It provisions one
-[testcontainers](https://testcontainers.com/) container per session; every `xdist` worker
-shares that one database, mirroring production topology. It **requires a running Docker
-daemon** and the `postgres` extra, and fails loudly with a `pytest.UsageError` when either
-is missing -- a misconfigured Postgres run can never pass as a SQLite run. The two backends
-are not behaviorally equivalent, and that divergence is the point.
+This provisions one testcontainers Postgres instance shared by all xdist workers. It requires
+Docker and the [`postgres` extra](../reference/dependencies.md#extras); missing either is a
+usage error, never a silent fallback to SQLite.
 
-For resetting state beyond what `dag_maker` owns, `clear_db` /
-`pytest_airflow_in_a_box.db.TableGroup` truncate registry-defined table groups in a single
-foreign-key-safe order -- serial contexts only, since every xdist worker shares the
-database. See [Fixtures](../reference/fixtures.md) for `session`, `dag_maker`, and the
-`clear_db` contract, including the borrowed-session commit/rollback semantics.
+Within either backend, the `session` fixture rolls back uncommitted work and `dag_maker`
+removes rows it owns. Fixtures that seed committed state clean up their own rows. For broader
+serial-only cleanup, `clear_db(tables={...})` accepts `TableGroup` members and clears dependent
+groups in foreign-key-safe order. Do not call `clear_db` while xdist workers share the database.
 
 ## Overriding configuration
 
-Every override is an environment variable (`AIRFLOW__SECTION__KEY`) and only an
-environment variable -- nothing lands in the generated `airflow.cfg`. The environment
-outranks every file on each `conf.get()` on both Airflow families, and every configuration
-parser in the process reads it, including the second parser Airflow 3.2 added at
-`airflow.sdk.configuration.conf`.
+All three configuration channels write `AIRFLOW__SECTION__KEY` environment variables; they do
+not modify the generated `airflow.cfg`. Environment values take precedence for both Airflow
+configuration parsers.
 
-Three channels, by scope:
+Choose the channel by required lifetime:
 
-- The `airflow_config` **ini option** is applied from `pytest_load_initial_conftests`,
-  before any consumer conftest is imported -- the only channel early enough for options that
-  must precede the first Dag parse (`core.dagbag_import_timeout`,
-  `core.dag_ignore_file_syntax`). Options the plugin's own bootstrap owns
-  (`database.sql_alchemy_conn`, `core.dags_folder`, ...) are rejected with a message
-  naming the supported knob rather than silently fought; the denied set is derived from
-  bootstrap's own name list so it cannot go stale. One option is rejected only
-  *conditionally*: `core.dagbag_import_timeout` is fine on an ordinary run but an error
-  with the smoke catalog enabled, because the catalog pins that variable from
-  `airflow_dag_parse_timeout`. Grammar and the full denylist:
-  [INI options](../reference/ini-options.md)
-- `airflow_config()` is also a **context manager and decorator** for one test:
+- Use the **`airflow_config` ini option** for session constants and anything that must exist
+  before consumer conftests or the first Dag parse. Bootstrap-owned settings such as the
+  database URL and Dags folder are rejected in favor of their dedicated plugin options.
+- Use the **`airflow_config()` context manager or decorator** for one test. It validates the
+  complete batch before assignment and restores every name exactly. A `None` value removes the
+  variable so Airflow falls back to its normal source; `refresh_settings=True` also recomputes
+  cached `airflow.settings` globals.
+- Use the session-scoped **`airflow_configure` fixture** for values produced by fixtures, such
+  as a temporary path, port, or credential. Its batches unwind in reverse order at teardown.
+  It cannot change a Dag already parsed by an earlier session fixture.
 
-    ```python
-    from pytest_airflow_in_a_box.config import airflow_config
+```python
+from pytest_airflow_in_a_box.config import airflow_config
 
 
-    def test_with_overrides():
-        with airflow_config({("core", "unit_test_mode"): "False"}, env={"MY_FLAG": "1"}):
-            ...
+def test_with_overrides():
+    with airflow_config({("core", "unit_test_mode"): "False"}, env={"MY_FLAG": "1"}):
+        ...
 
 
-    @airflow_config({("core", "dagbag_import_timeout"): "120"})
-    def test_decorated(): ...
-    ```
+@airflow_config({("core", "dagbag_import_timeout"): "120"})
+def test_decorated(): ...
+```
 
-    A thin wrapper over `monkeypatch.setenv` buying exact restore, `(section, key)` pairs,
-    and validation of both mappings before anything is assigned. A `None` value makes a
-    name absent so Airflow falls back to its default. `refresh_settings=True` recomputes
-    the `airflow.settings` globals (`DAGS_FOLDER`, `PLUGINS_FOLDER`, ...) that a plain
-    environment assignment cannot reach. Never wrap the first use of
-    `api_client`/`api_server_url` -- the server subprocess inherits the environment live at
-    startup and the override outlives the context inside it
-
-- The `airflow_configure` **fixture** applies session-scoped batches from your own session
-  fixture, for values a config file cannot hold (a `tmp_path_factory` path, a minted
-  credential). Batches unwind last-in-first-out at session teardown. It cannot beat a Dag
-  parse a test outside its conftest scope already won -- use the ini option for anything
-  that must precede the first parse unconditionally
-
-A retained `AIRFLOW_HOME` inspected with `airflow config list` outside the pytest process
-will not show these overrides; [`--airflow-doctor`](../reference/diagnostics.md) echoes
-them back, redacting credential-shaped values. Full argument reference:
-[Fixtures](../reference/fixtures.md); display defaults and warning-filter defaults the
-plugin applies with zero ini: [INI options](../reference/ini-options.md).
+Do not wrap the first request for `api_client` or `api_server_url` in a temporary override: the
+session-scoped server keeps the environment it inherited at startup. Retained configuration
+files do not contain these overrides; `--airflow-doctor` reports them with credential-shaped
+values redacted. See [CLI and INI options](../reference/ini-options.md#core) for grammar,
+bootstrap-owned settings, and defaults.
 
 ## Seeding Variables and Connections
 
-For most tests the environment backend wins and is less machinery:
+Prefer Airflow's environment secrets backend when the metastore is not the subject:
 
 ```python
 def test_hook(monkeypatch):
     monkeypatch.setenv("AIRFLOW_CONN_DB", '{"conn_type": "postgres", "host": "example.com"}')
 ```
 
-Airflow's default secrets search path is the environment backend and *then* the metastore,
-so `AIRFLOW_VAR_*` / `AIRFLOW_CONN_*` outranks anything the fixtures commit. Reach for
-`airflow_variables` / `airflow_connections` when the *metastore* backend is the subject:
-they commit encrypted rows exactly as a deployment would read them, delete every inserted
-row on teardown, and refuse to seed an identifier whose environment name is already set.
+`AIRFLOW_VAR_*` and `AIRFLOW_CONN_*` take precedence over metastore rows. Use
+`airflow_variables` or `airflow_connections` when the test must exercise the metastore path;
+they commit encrypted rows and remove the rows they created at teardown. A fixture refuses to
+seed a name already provided by the environment.
 
-**Seeded names are database-global, not test-local.** Every `xdist` worker shares one
-metadata database and a `conn_id` cannot be renamed per worker, so two tests seeding the
-same name concurrently collide. Give each test unique identifiers, or group colliding
-tests with `@pytest.mark.xdist_group`. Teardown is safe under distinct names: `variable.id` /
-`connection.id` are plain `Integer` keys SQLite reuses after deletes, so cleanup matches the
-`key`/`conn_id` as well as the id -- a reused primary key misses instead of deleting another
-worker's row. Field shapes and error behavior:
-[Fixtures](../reference/fixtures.md). Parse-time `Variable.get()` resolution:
-[Parse-time secret resolution](#parse-time-secret-resolution).
+Seeded names are database-global under xdist. Give concurrent tests distinct keys and
+connection IDs, or group collisions with `@pytest.mark.xdist_group` and run with
+`--dist loadgroup`. See [Fixtures](../reference/fixtures.md#database-and-seeding) for accepted
+field shapes and [parse-time resolution](#parse-time-secret-resolution) for Dag-file lookups.
 
 ## Captured logs
 
-On Airflow 3, `caplog` sees no task logs -- it comes back **empty**, silently, because
-Airflow 3 emits through structlog and never hands records to a stdlib logger, so
-log-absence assertions pass vacuously. The `cap_structlog` fixture captures the structlog
-events instead, surviving Airflow's own mid-test `structlog.configure` calls and passing
-events through so normal output still renders. Membership, `.text`, and `.entries` views:
-[Fixtures](../reference/fixtures.md).
+On Airflow 3, task logs use structlog and do not reach pytest's `caplog`; an empty `caplog` can
+therefore make a negative assertion pass vacuously. Use `cap_structlog` for task events. It
+survives Airflow reconfiguration while allowing normal output to continue. On Airflow 2, use
+`caplog`. See [Fixtures](../reference/fixtures.md#rest-api-and-logging) for the capture views.
 
 ## Cluster policies and `airflow_local_settings.py`
 
-Airflow supports exactly one `airflow_local_settings` module process-wide, and the plugin
-generates one at `AIRFLOW_HOME/config/airflow_local_settings.py` to install the SQLite
-engine tuning. A foreign `airflow_local_settings.py` at your repo root would win the import
-silently -- pytest inserts your project root at the *front* of `sys.path` while Airflow
-appends `AIRFLOW_HOME/config` at the end -- so a collision guard in `pytest_configure`
-aborts the session with a `pytest.UsageError` naming both paths instead.
+The plugin generates `AIRFLOW_HOME/config/airflow_local_settings.py` for its database setup.
+Because pytest puts the project root ahead of that directory on `sys.path`, a repository-level
+file with the same module name would silently win. The plugin detects that collision and stops
+with both paths in the error.
 
-The fix is the `airflow_local_settings` ini option, taking a **dotted module path** (a
-file path is rejected on shape alone):
+Compose your module into the generated file through a dotted import path:
 
 ```ini
 [pytest]
 airflow_local_settings = myproject.cluster_policies
 ```
 
-Your module's public names (its `__all__`, else every non-dunder attribute) are composed
-into the generated file rather than replacing it, and the plugin's own names win a tie --
-so the engine tuning survives regardless of what your module exports. You never edit
-`config/airflow_local_settings.py`; it is regenerated deterministically every run. For a
-policy scoped to one test, `airflow_components.policy(task_policy=...)` registers it
-directly without touching the settings module. Failure modes and option grammar:
-[INI options](../reference/ini-options.md); per-test registration:
-[Custom components](../guide/custom-components-wiring.md#runtime-component-registration).
+The plugin copies the module's `__all__`, or all non-dunder names when `__all__` is absent, and
+keeps its own value on a name collision. Do not edit the generated file; every run recreates
+it. For one-test policies, use `airflow_components.policy(...)` instead. See
+[Registration and packaging](../guide/custom-components-wiring.md#runtime-component-registration).
 
 ## pytest-xdist and environment ownership
 
-Bootstrap owns `AIRFLOW__*` until `pytest_load_initial_conftests` finishes. Pytest imports
-consumer conftests afterward; anything they import may mutate the environment, but it cannot
-precede bootstrap. The plugin refuses to start if Airflow was already imported.
+Bootstrap installs its `AIRFLOW__*` values before consumer conftests load and refuses to start
+if Airflow was already imported. Each xdist worker or isolated child receives the controller's
+bootstrap state and verifies every owned variable. Drift usually means a conftest or another
+plugin changed Airflow configuration at import time; the default policy raises an error before
+the worker continues with a mismatched Dags folder, database, or secret.
 
-An xdist worker or isolated child inherits the controller's serialized `BootstrapState` and
-cross-checks every owned variable before continuing. Drift usually means a conftest or another
-plugin wrote `AIRFLOW__*` at module scope. The default policy is an error because the Dag
-folder, Fernet key, auth manager, or database may no longer belong to this run.
-
-When the foreign write cannot be removed:
+If that write cannot be removed, opt into repair:
 
 ```ini
 [pytest]
 airflow_worker_env_drift = repair
 ```
 
-`repair` reinstalls the inherited state and warns. It makes a worker match the serial process
-at the same lifecycle point; it cannot prevent the foreign conftest from writing again later.
-`--airflow-doctor` prints the active policy. At teardown, ini overrides unwind first and
-bootstrap restores the original pre-run environment.
+`repair` restores the controller's values and warns, but cannot prevent a later mutation.
+`--airflow-doctor` reports the active policy. At teardown, ini overrides unwind before the
+plugin restores the pre-run environment.
 
 ## Parse-time secret resolution
 
-Airflow 3 normally routes Variable and Connection lookups through a Task SDK supervisor. A Dag
-parse has no supervisor, so 3.1 raises and 3.2+ may quietly miss. During every plugin-owned
-parse, a compatibility shim answers from the environment and metadata backends instead.
+On Airflow 3, Variable and Connection lookups normally use a Task SDK supervisor, which does
+not exist while a Dag file is being parsed. The plugin supplies environment and metastore
+resolution during every parse it owns.
 
 Prefer `AIRFLOW_VAR_*` and `AIRFLOW_CONN_*` for simple parse-time values. Metastore values must
-be seeded at session scope before the first `dag_bag`, collection item, or smoke item parses the
-folder; a function-scoped fixture is too late. For a lookup in a test body rather than a file
-parse, seed with `airflow_variables` or `airflow_connections`, then request
+be seeded at session scope before `dag_bag`, collection, or smoke parsing begins. For a lookup
+in a test body, seed with `airflow_variables` or `airflow_connections`, then request
 `airflow_parse_secrets`.
 
-Set `--airflow-parse-secrets=off` (or the ini equivalent) when unmodified Airflow resolution is
-the subject. The setting is a no-op on Airflow 2, which reads the metastore directly.
+Pass `--airflow-parse-secrets=off` when unmodified Airflow behavior is the subject. The option
+is inert on Airflow 2, where lookups already read the metastore directly.

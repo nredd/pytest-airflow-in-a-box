@@ -78,5 +78,5 @@ nav:
   - Under the hood:
       - Compatibility and certification: internals/compat-layer.md
       - Test Environments: internals/test-environments.md
-      - Us vs Them: internals/tests-common-parity.md
-      - Developing the plugin: development.md
+      - Upstream tests_common parity: internals/tests-common-parity.md
+      - Developing this plugin: development.md

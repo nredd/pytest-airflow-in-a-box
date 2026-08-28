@@ -113,7 +113,7 @@ one deep link per stage:
 
 Contributing, the local gate, and running CI with `act`:
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and
-[Developing the plugin](https://nredd.github.io/pytest-airflow-in-a-box/development/).
+[Developing this plugin](https://nredd.github.io/pytest-airflow-in-a-box/development/).
 
 ## License
 
