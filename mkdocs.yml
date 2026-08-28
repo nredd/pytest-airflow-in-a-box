@@ -70,7 +70,7 @@ nav:
       - Dependencies and extras: reference/dependencies.md
       - Fixtures: reference/fixtures.md
       - Markers: reference/markers.md
-      - INI options: reference/ini-options.md
+      - CLI and INI options: reference/ini-options.md
       - Smoke catalog and corpus mechanics: reference/smoke.md
       - Migration artifacts: reference/migration.md
       - Airflow Doctor: reference/diagnostics.md
