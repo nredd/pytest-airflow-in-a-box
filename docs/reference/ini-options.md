@@ -57,8 +57,8 @@ All read only when the catalog is enabled (`airflow_smoke` / `--airflow-smoke`);
 | `airflow_forbid_top_level_variable_access` | bool | `True` | Fail Dag files that fetch Variables or Connections at import time | -- |
 | `airflow_forbid_top_level_io` | bool | `True` | Fail Dag files that call into known I/O modules at import time | -- |
 | `airflow_top_level_io_modules` | linelist | `[]` | Module prefixes the top-level I/O check flags; *replaces* the built-in list | -- |
-| `airflow_forbid_catchup` | bool | `True` | Fail Dags that enable catchup | -- |
-| `airflow_forbid_unbounded_expand` | bool | `True` | Fail mapped tasks expanding over runtime data without `max_active_tis_per_dag` | -- |
+| `airflow_forbid_catchup` | bool | `False` | Fail Dags that enable catchup | -- |
+| `airflow_forbid_unbounded_expand` | bool | `False` | Fail mapped tasks expanding over runtime data without `max_active_tis_per_dag` | -- |
 | `airflow_dag_snapshot_dir` | string | `""` | Directory of committed Dag serialization snapshots the catalog diffs against (regenerate with `--airflow-smoke-update`) | -- |
 | `airflow_serialization_sample_size` | string | `0` | Number of Dags the serialization checks cover; `0` covers every Dag | -- |
 | `airflow_serialization_sample_seed` | string | `0` | Seed for deterministic selection of the serialization sample | -- |

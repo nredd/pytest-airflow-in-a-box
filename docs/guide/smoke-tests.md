@@ -1,8 +1,7 @@
 # Smoke Tests
 
 One-Dag tests cannot detect failures that belong to the *set*: duplicate IDs, import-time I/O,
-or an unbounded mapped task. The plugin offers three corpus-level tools, each answering a
-different question.
+or an unbounded mapped task. Choose the corpus-wide tool by the result you need:
 
 | Tool | Question | Enable |
 | --- | --- | --- |
@@ -10,8 +9,8 @@ different question.
 | Dag-file collection | Which individual file fails to import? | `--collect-dag-folder=dags/` |
 | `pytest-cov` | Which Dag lines did the suite execute? | `--cov=dags` |
 
-All plugin-owned checks share a portable `DagCorpus`; the implementation and exact catalog are
-in [Smoke catalog and corpus mechanics](../reference/smoke.md).
+The catalog shares one portable `DagCorpus` across its checks. See the
+[catalog reference](../reference/smoke.md) for every check, option, and scaling control.
 
 ## Turn on the catalog
 
@@ -19,18 +18,19 @@ in [Smoke catalog and corpus mechanics](../reference/smoke.md).
 pytest --airflow-smoke --dag-folder=dags/
 ```
 
-Or set `airflow_smoke = true`. The default catalog checks imports, serialization, scheduling,
-pool references, top-level Variable/Connection access, and top-level I/O. Optional policies
-cover catchup, unbounded expansion, IDs, tags, owners, and serialization snapshots.
+For a repository default, set `airflow_smoke = true` and `airflow_dags_folder = dags/`.
+The catalog checks imports and duplicate IDs, serialization, scheduling, pools, and top-level
+secrets or I/O. Opt-in policies cover catchup, unbounded expansion, IDs, tags, owners, and
+serialization snapshots. Disable policies your repository does not share.
 
-These checks remain inside the boundary from [Whose fail is it anyway?](testing-scope.md): the
-subject is your schedule, constructor arguments, and import behavior—not whether stock Airflow
-works. Disable any policy your repository does not share.
+Each enabled check is a separate `::smoke::<check-name>` test and JUnit row. The default
+catalog initializes the metadata database lazily for its integrity and pool checks; it never
+starts the REST API.
 
-Every item carries the `smoke` marker. Explicit file or node-ID selection drops the catalog
-unless the `-m` expression itself names `smoke`; ordinary directory or bare runs retain it.
-See the [selection reference](../reference/smoke.md#selection-and-configuration) for exact
-precedence and disabling.
+Every item carries the `smoke` marker. Bare and directory runs include the catalog; file and
+node-ID runs exclude it unless `-m` selects `smoke`. The
+[selection reference](../reference/smoke.md#selection-and-configuration) covers filtering and
+disabling.
 
 ## One item per Dag file
 
@@ -38,19 +38,18 @@ precedence and disabling.
 pytest --collect-dag-folder=dags/
 ```
 
-Every `*.py` file below the folder becomes a named `dag-import` item. A file that imports but
-declares no Dags fails too. That produces one selectable `-k` target and one JUnit row per file
-instead of collapsing fifty broken files into one `DagBag.import_errors` assertion.
+Every non-underscore `*.py` file below the folder becomes a `dag-import` item. Import errors and
+files that declare no Dags fail separately, giving each file a selectable target and JUnit row.
+These items initialize the metadata database lazily; they do not start the API.
 
 Use collection when per-file reporting matters; use the catalog for corpus-wide policy. Using
 both parses the folder twice, so do it only when you need both report shapes.
 
 ### Pinned param cases
 
-`PYTEST_DAG_CASES` may pin named parameter dictionaries inside a Dag file. The collector reads
-the literal by AST and creates one `dag-params[name]` item per case, validating names and values
-against every Dag in that file. It is intentionally test metadata in production code; skip it
-when your repository forbids that tradeoff.
+`PYTEST_DAG_CASES` pins named parameter dictionaries inside a Dag file. The collector reads the
+literal without importing the module, then validates each `dag-params[name]` case against every
+Dag in that file. Use it only when production Dag files may contain test metadata.
 
 ### The two Dag folder options
 
@@ -67,16 +66,15 @@ Two options sound alike because they feed different consumers:
 pytest --cov=dags --cov=src --cov-report=term-missing
 ```
 
-No plugin machinery is needed. Airflow changes imported module names, but coverage attributes
-executed lines by their real filenames. In-process task runners measure task bodies too.
+Coverage needs no plugin machinery. It attributes executed lines to their real filenames, and
+in-process runners measure task bodies too.
 
 The exception is `run_dag(..., executor=...)`: its worker subprocess is outside the plugin's
 coverage setup. Cover the body through an in-process rung and keep the executor test for what it
 uniquely proves—re-import and Task Execution API transport.
 
-The classic false green is `--cov=src` alone: Dag files never enter the report, so 100% measured
-nothing under `dags/`. `pytest --airflow-doctor` detects a configured Dag folder outside every
-coverage source and prints the fix.
+The classic false green is `--cov=src` alone: 100% then measures nothing under `dags/`.
+`pytest --airflow-doctor` detects a configured Dag folder outside every coverage source.
 
 ## Writing your own corpus check
 
@@ -88,10 +86,11 @@ def test_every_dag_has_an_owner_tag(dag_corpus):
         assert dag.tags, f"{dag_id} has no tags"
 ```
 
-Use it for tags, task shape, schedules, or serialized structure. Use `dag_bag` only when the
-test needs live Airflow objects. `dags_under(dag_corpus, airflow_dags_folder, "team_a")` narrows
-the mapping to one subtree without reparsing.
+Use it for repository-specific rules over tags, task shape, schedules, or serialized structure;
+use `dag_bag` when the test needs live Airflow objects. To filter one subtree without reparsing,
+import `dags_under` from `pytest_airflow_in_a_box.dagcorpus`.
 
-Requesting `dag_corpus` serializes every Dag because the builder cannot predict which fields a
-test will inspect. Large repositories can sample catalog serialization or fan the parse across
-subprocesses; see [performance and parallelism](../reference/smoke.md#performance-and-parallelism).
+Requesting `dag_corpus` serializes every Dag because the builder cannot predict which fields the
+test will inspect. Under xdist, prefer `-n auto --dist loadgroup` so corpus consumers share one
+worker. Large repositories can sample catalog serialization or fan out parsing; see
+[performance and parallelism](../reference/smoke.md#performance-and-parallelism).
