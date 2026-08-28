@@ -1,37 +1,54 @@
 # Registration and packaging
 
-A clean [`check_component`](custom-components.md) report proves shape, not discovery.
-Production loads components through configuration, plugins, or package metadata. Tests have
-three matching channels: session configuration, reversible per-test registration, and an
-isolated process for real entry-point discovery.
+Test that Airflow can discover your component through the same channel your deployment uses. A
+clean [`check_component`](custom-components.md) report proves shape; this page proves that
+Airflow can find the component.
+
+| Production channel | Test with | Scope |
+| --- | --- | --- |
+| Airflow configuration | The matching pytest ini option | Session |
+| Airflow plugins folder | `airflow_plugins_folder` | Session |
+| Installed distribution metadata | The installed package, or `airflow_isolated` while developing it | Isolated process |
+| Temporary registry entry | `airflow_components` | One test; not a production-discovery test |
 
 ## Session configuration
 
-Five ini options establish the substrate before the first Airflow import:
+Configure components that production selects through `airflow.cfg` before Airflow's first
+import:
 
-| Option | Writes |
+| Option | Production setting |
 | --- | --- |
-| `airflow_plugins_folder` | Entries symlinked into the run's generated `plugins/` directory |
 | `airflow_executor` | `[core] executor` |
 | `airflow_xcom_backend` | `[core] xcom_backend` |
 | `airflow_secrets_backend` | `[secrets] backend` |
-| `airflow_secrets_backend_kwargs` | `[secrets] backend_kwargs` when a backend is configured |
+| `airflow_secrets_backend_kwargs` | `[secrets] backend_kwargs` |
 
 ```ini
 [pytest]
-airflow_plugins_folder = plugins
 airflow_executor = tests.support.executors.FakeExecutor
 airflow_xcom_backend = tests.support.xcom.RecordingXCom
 ```
 
-These are ini-only because they are project facts, not per-invocation switches. The timing is
-essential for XCom backends: the Task SDK resolves that setting at module import. The full
-option contract is in [INI options](../reference/ini-options.md).
+These settings must precede Airflow's first import. XCom backends are especially strict: the
+Task SDK resolves one when its module loads. The
+[INI reference](../reference/ini-options.md) defines every option.
+
+For file-based `AirflowPlugin` discovery, point `airflow_plugins_folder` at the same directory
+layout your deployment receives:
+
+```ini
+[pytest]
+airflow_plugins_folder = plugins
+```
+
+A relative path resolves from pytest's root. Each source entry is symlinked into the isolated
+`AIRFLOW_HOME/plugins`, so edits remain live. A missing or non-directory path stops the
+session with a usage error.
 
 ## Runtime component registration
 
-`airflow_components` overlays one test on the session substrate, then restores the exact prior
-process-global registries:
+Use `airflow_components` when the test needs a component registered temporarily, not when the
+claim is that production will discover it:
 
 ```python
 def test_my_listener_fires(airflow_components, dag_maker):
@@ -40,99 +57,79 @@ def test_my_listener_fires(airflow_components, dag_maker):
         ...
 
     dag_maker.run()
+
     assert MyListener.calls
 ```
 
-Every method calls `check_component` first. A bad component raises `ComponentContractError`; a
-registration failure raises `ComponentSandboxError`.
+It registers plugins, listeners, policies, secrets backends, executors, timetables, and
+priority-weight strategies. Use the named method when scope matters; `round_trip()` detects an
+unambiguous bare component. Timetable state uses `serialization_round_trip()`; see
+[Timetables](custom-timetables.md).
 
-| Method | Registers |
-| --- | --- |
-| `plugin(component)` | Every plugins-manager half available on the installed release |
-| `listener(component, *, core=True, task=True)` | Core and/or Task SDK listener managers |
-| `policy(**hooks)` | A temporary policy plugin from hookspec-named callables |
-| `secrets_backend(component, *, first=True)` | The secrets backend search path |
-| `executor(component, *, alias="test")` | An importable executor class and returns its alias |
-| `timetable(component)` | A timetable class through a synthetic plugin |
-| `priority_weight_strategy(component)` | A strategy class through a synthetic plugin |
-| `serialization_round_trip(instance)` | Timetable registration plus encode/decode assertion |
-| `round_trip(component)` | Auto-detects and registers one supported bare component |
+Every registration runs `check_component` first. Contract failures raise
+`ComponentContractError`; registry failures raise `ComponentSandboxError`. Executor and
+timetable classes must be importable at module scope. Airflow 3.1 has no Task SDK listener
+manager, so a core-only listener must use `listener(..., task=False)`.
 
-Executor classes and registered timetable classes must be importable at module scope. A policy
-uses explicit `policy(task_policy=..., dag_policy=..., ...)` hooks because it has no useful bare
-component form. On Airflow 3.1, request `task=False` for a listener intentionally limited to the
-core manager.
+It does not install XCom backends, notifiers, or providers. Configure XCom for the session,
+reference notifiers from Dag code, and test provider metadata in an isolated process.
 
-No Airflow configuration option can select a per-test executor alias: configuration is read
-before the alias exists. Pass the alias directly to
-[`run_dag(..., executor=alias)`](ladder.md#executor-driven-runs).
-
-The fixture is unavailable on Airflow 2.x. On an uncertified 3.x release it degrades to live
-capability probing, warns once, and still restores state exactly; `--airflow-doctor` reports the
-degraded tier.
+The fixture is Airflow 3 only. On an uncertified 3.x release it probes the available registry
+surfaces, warns once, and still restores them after the test.
 
 ## How the channels compose
 
-The ini options are fixed session substrate. `airflow_components` snapshots that state, adds a
-per-test overlay, and restores the snapshot—not an empty registry. `airflow_config` environment
-overrides sit between them in precedence: they change what `conf.get()` reads but do not mutate
-the registries.
+Session configuration and plugins-folder discovery form the baseline. `airflow_components`
+adds a test overlay, then restores that baseline—not an empty registry.
 
-If both `airflow_executor` and an `airflow_config` line for `core.executor` exist, the
-environment-backed `airflow_config` value wins. Prefer one source.
+`airflow_config` changes `conf.get()` but not live registries. If it and `airflow_executor`
+both set `core.executor`, the environment-backed `airflow_config` value wins. Prefer one.
+
+Configuration cannot select an alias registered later in one test. Pass the alias from
+`airflow_components.executor()` to
+[`run_dag(..., executor=alias)`](ladder.md#executor-driven-runs).
 
 ## Isolated entry-point discovery
 
-Anything discovered through installed distribution metadata—`airflow.plugins`,
-`apache_airflow_provider`, or `airflow.policy`—cannot be honestly fabricated in the current
-process. Metadata discovery is cached, and XCom backends bind at import time.
+Install a real package into the test environment and assert that Airflow's manager finds it.
+Only this path verifies the entry points in the built package.
 
-For a package you ship, the most faithful test is to install it editable and assert its real
-entry points. Use `airflow_isolated` when the suite needs mutually exclusive registrations or
-the component is not packaged yet:
+Before packaging—or for mutually exclusive distributions—use `airflow_isolated` to create
+synthetic distribution metadata in a one-shot child:
 
 ```python
 import pytest
 
 
 @pytest.mark.airflow_isolated(
-    entry_points={"airflow.plugins": "my_plugin = my_pkg.plugin:MyPlugin"}
+    entry_points={
+        "apache_airflow_provider": "provider_info = my_pkg.provider:get_provider_info"
+    },
+    name="my-provider",
 )
-def test_my_plugin_is_discovered():
-    from airflow.plugins_manager import get_plugin_info
+def test_provider_is_discovered():
+    from airflow.providers_manager import ProvidersManager
 
-    assert "my_plugin" in [info["name"] for info in get_plugin_info()]
+    assert "my-provider" in ProvidersManager().providers
 ```
 
-The marker starts a one-shot child pytest process with a real synthetic `dist-info` directory
-on `PYTHONPATH`. The child inherits the isolated `AIRFLOW_HOME`, database, and secrets; its
-outcomes and tracebacks replay as the parent's own.
+Use it for Airflow groups such as `airflow.plugins`, `apache_airflow_provider`, and
+`airflow.policy`. It proves that the declaration resolves through the installed Airflow; its
+synthetic metadata cannot prove that `pyproject.toml` contains the declaration.
 
-Marker keywords:
-
-- `entry_points`: group to one `name = module:attr` line or a list of lines.
-- `environment`: `AIRFLOW__*` overrides applied before import. Bootstrap-owned names are
-  rejected.
-- `name`: synthetic distribution name, needed when provider package identity matters.
-- `timeout`: child deadline in seconds, default 300.
-
-Tests in one module with an identical payload share a child. The child loads conftests and
-fixtures but clears command-line-only selection, xdist, coverage, and report destinations.
-The marker is rejected on an xdist worker, so run isolated tests in a separate serial
-invocation.
-
-Reserve this mechanism for discovery. Component logic is directly callable, and
-`check_component` plus `airflow_components` cover shape and reversible registration without a
-subprocess.
+The child inherits the isolated `AIRFLOW_HOME`, database, and secrets; outcomes and tracebacks
+replay in the parent. Same-module tests with identical payloads share a child, so a timeout or
+crash fails the batch. Run them serially: xdist workers reject the marker. See the
+[`airflow_isolated` reference](../reference/markers.md#isolation-airflow_isolated).
 
 ## Sandbox edges
 
-- Secrets teardown restores the exact prior backend instances, including their accumulated
-  state.
-- Clearing plugin caches can reload plugins-folder modules; compare objects by name across
-  tests, not identity.
-- Each sandboxed test may rescan the plugins folder at construction and teardown.
-- An ini-seeded listener survives teardown because it is part of the snapshot.
-
-Those costs are why session configuration is preferable when every test needs the same
-component, and the per-test sandbox is preferable when isolation is the point.
+- Sandboxed teardown restores the exact prior registry objects, including stateful secrets
+  backend instances.
+- Plugin-cache resets can reload plugins-folder modules. Compare components by stable names,
+  not class or object identity, across tests.
+- The sandbox may rescan the plugins folder. Prefer session configuration when every test
+  needs the component.
+- Session configuration and plugins-folder discovery work on Airflow 2 and 3. The component
+  sandbox requires Airflow 3. Entry-point tests exercise whichever groups the installed
+  Airflow family supports.
