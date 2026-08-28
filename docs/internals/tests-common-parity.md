@@ -37,7 +37,7 @@ method, result tables, reproduction patches, and raw logs. The durable findings 
 - **The foundation held.** The plugin bootstrapped every tested release without a compatibility
   failure, including the uncertified development release through live probing. In the hybrid
   serial experiment, replacing Airflow's database bootstrap while retaining its fixtures
-  preserved the baseline outcomes and reduced wall time by 10–40%.
+  preserved the baseline outcomes and reduced wall time by 10-40%.
 - **The gaps were concentrated contracts, not broad incompatibility.** Failures clustered around
   a small fixture surface and `dag_maker` semantics. Successive rounds directly produced the
   upstream keyword routing, one-call factories, scheduler handles, run defaults, borrowed-session
@@ -173,8 +173,8 @@ These differences come from the plugin's persistence and xdist guarantees:
   `start_date`, then the current UTC date. Upstream crashes on the missing run information.
 - When Airflow's automated interval inference rejects a trigger-style or custom timetable, the
   plugin uses the manual interval shape that every timetable implements.
-- On a serial run, reusing one `dag_id` across factory calls—in the same test, or after a
-  previous test in the same process leaked its cleanup—replaces the earlier metadata,
+- On a serial run, reusing one `dag_id` across factory calls -- in the same test, or after a
+  previous test in the same process leaked its cleanup -- replaces the earlier metadata,
   matching upstream's silent re-sync. `ValueError` remains for a `dag_id` whose metadata this
   process never persisted (foreign rows, another worker's live registration) and for any
   collision on a `pytest-xdist` worker, where a leftover is indistinguishable from another
@@ -185,7 +185,7 @@ These differences come from the plugin's persistence and xdist guarantees:
   both families. It maps to `logical_date` with a `DeprecationWarning`; passing both spellings
   raises `ValueError`. `dag_maker.create_dagrun` does not accept the alias:
   `dag_run_kwargs={"execution_date": ...}` is rejected with a message naming `logical_date`.
-- Keywords routed to `dag_maker`—`session=`, `bundle_name=`, and `bundle_version=`—follow
+- Keywords routed to `dag_maker` -- `session=`, `bundle_name=`, and `bundle_version=` -- follow
   `dag_maker(...)`'s accepted values.
 
 The upstream `dag_id="dag"` default is unchanged. Concurrent tests that rely on it contend on

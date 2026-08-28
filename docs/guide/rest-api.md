@@ -35,7 +35,7 @@ context: the session-scoped server inherits its environment when it starts.
 
 ## Assert through the API
 
-`api_client` carries a SimpleAuthManager bearer token and exposes `get`, `post`, `patch`, and
+`api_client` carries a `SimpleAuthManager` bearer token and exposes `get`, `post`, `patch`, and
 `delete`. Use it to inspect state your code or fixtures produced, rather than retesting stock
 endpoints:
 

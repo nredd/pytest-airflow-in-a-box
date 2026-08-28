@@ -55,8 +55,8 @@ filterwarnings =
     ignore:known message:airflow.exceptions.RemovedInAirflow3Warning
 ```
 
-The option is a reported no-op on Airflow 3 or when Airflow is absent. Prefer Airflow 2.11 for
-this pass because it contains the final 2.x deprecation signals.
+The option emits `MigrationStrictNoOpWarning` when it is a no-op on Airflow 3 or when Airflow is
+absent. Prefer Airflow 2.11 for this pass because it contains the final 2.x deprecation signals.
 
 ## Diffing outcomes across the upgrade
 

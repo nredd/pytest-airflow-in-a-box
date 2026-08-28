@@ -3,11 +3,11 @@
 Your Dag files import. Your task callables pass. Production still breaks.
 
 !!! question ""
-    Did you __verify__ the `DAG`?
+    Did you *verify* the `DAG`?
 
 Import and callable tests do not exercise trigger rules, branch skips, rendered templates,
 connection resolution, or operator serialization. `pytest-airflow-in-a-box` tests those seams
-in `pytest`, before deployment—no scheduler, webserver, or live Airflow environment required.
+in `pytest`, before deployment -- no scheduler, webserver, or live Airflow environment required.
 
 ## Who is this for?
 
@@ -33,8 +33,8 @@ Use this plugin when your team owns Airflow behavior that must work before deplo
 
 ## Supported versions
 
-The plugin supports all major Apache Airflow versions on CPython 3.10–3.14 with pytest 8 or
-newer, on Linux and macOS. See
+The plugin supports Apache Airflow 3.1 or newer below 4, plus the certified Airflow 2 migration
+tier, on CPython 3.10-3.14 with pytest 8 or newer. See
 [Compatibility and certification](internals/compat-layer.md#supported-and-certified) for the
 exact combinations exercised in CI, or run
 [`pytest --airflow-doctor`](reference/diagnostics.md) to verify your environment.

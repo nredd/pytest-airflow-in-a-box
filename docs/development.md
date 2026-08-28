@@ -62,8 +62,8 @@ discovery failure modes statically -- see
 
 ## Concurrent local runs
 
-Running two suites from this repository at once—two worktrees, or a gate alongside a scratch
-run—can rarely end a session with a nonzero exit code even though every test passed:
+Running two suites from this repository at once -- two worktrees, or a gate alongside a scratch
+run -- can rarely end a session with a nonzero exit code even though every test passed:
 
 ```
 FileNotFoundError: .../pytest-current
@@ -71,7 +71,7 @@ FileNotFoundError: .../pytest-current
 
 The race is pytest's cleanup of the dangling `pytest-current` symlink in the shared
 `pytest-of-<user>/` root. This plugin's zero-ini
-`tmp_path_retention_policy = "failed"` default—pytest's own is `"all"`—makes the race more
+`tmp_path_retention_policy = "failed"` default -- pytest's own is `"all"` -- makes the race more
 likely than in a bare pytest installation. The isolated `AIRFLOW_HOME` is not involved; it is
 a per-session `mkdtemp` outside `pytest-of-<user>/`.
 

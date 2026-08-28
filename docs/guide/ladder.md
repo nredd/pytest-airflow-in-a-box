@@ -11,7 +11,7 @@ requires persisted metadata, relationships between tasks, or a worker-process bo
 | 3 | Run a whole Dag | Yes | A whole `DagRun`, task relationships, final states, and execution order | No automatic retries or process re-import |
 | 4 | Cross the worker boundary | Yes + API | The same run after workers re-import the Dag and execute through a real executor | Serial dispatch; no executor-concurrency coverage |
 
-In practice: use rungs 0–1 for operator logic, rung 2 for one task's Airflow metadata, rung 3
+In practice: use rungs 0-1 for operator logic, rung 2 for one task's Airflow metadata, rung 3
 for Dag behavior, and rung 4 only for executor or worker-boundary behavior.
 
 ## One operator, no database
@@ -106,6 +106,11 @@ Each task instance receives at most one attempt. A retry-configured failure sett
 Give multi-run tests distinct run IDs and logical dates. See [Fixtures](../reference/fixtures.md)
 for the full signatures and return contracts.
 
+The lower-level helpers in `pytest_airflow_in_a_box.taskinstance` expose four public failures:
+`DagRunDriveError` is the driver base class, `TaskResolutionError` means a runnable task could
+not be resolved, `TriggerExecutionError` means a persisted trigger failed, and
+`ExecutorRunError` means executor startup, dispatch, or settlement failed.
+
 ### Testing a Dag defined elsewhere
 
 Load the repository once with `dag_bag`, then pass the selected Dag to `run_dag`:
@@ -119,9 +124,10 @@ def test_orders_dag(dag_bag, run_dag):
 ```
 
 `run_dag` persists the Dag under its real `dag_id`. Tests that run the same ID concurrently on
-different xdist workers can collide; group them with `pytest.mark.xdist_group` and use
-`--dist loadgroup`. The marker has no effect under plain `-n auto`. Serial execution is safe
-because teardown completes before the next test starts.
+different xdist workers can collide, surfacing later as `DagPersistenceError`,
+`DagRunCreationError`, or a task-resolution failure. Group them with
+`pytest.mark.xdist_group` and use `--dist loadgroup`. The marker has no effect under plain
+`-n auto`. Serial execution is safe because teardown completes before the next test starts.
 
 ## Executor-driven runs
 

@@ -42,9 +42,9 @@ Checks accumulate every finding instead of stopping at the first one:
 ```python
 report = check_component(MyExecutor)
 report.ok
-report.problems          # tuple[ComponentProblem, ...]
+report.problems  # tuple[ComponentProblem, ...]
 report.summary()
-report.certification     # CertificationTier | None
+report.certification  # CertificationTier | None
 report.raise_for_problems()
 ```
 
@@ -57,6 +57,21 @@ On an uncertified Airflow release, available checks still run against live capab
 kinds are Airflow 3 checks and produce no findings on Airflow 2.
 
 ## What gets checked
+
+Every `ComponentProblem.code` value is part of the diagnostic contract:
+
+| Kind | Problem codes |
+| --- | --- |
+| Timetable | `timetable-local-qualname`, `timetable-missing-protocol-method`, `timetable-serialize-pair-incomplete`, `timetable-serialize-not-json`, `timetable-round-trip-mismatch` |
+| Listener | `listener-no-matching-hookspec`, `listener-unknown-argument`, `listener-core-manager-only`, `listener-sdk-manager-only` |
+| Executor | `executor-missing-override`, `executor-stale-attribute`, `executor-flag-wrong-type` |
+| XCom backend | `xcom-orm-deserialize-removed`, `xcom-backend-signature` |
+| Priority-weight strategy | `weight-strategy-abstract`, `weight-strategy-hash-of-none` |
+| Notifier | `notifier-missing-notify`, `notifier-template-fields-unresolvable` |
+| Secrets backend | `secrets-backend-raises-on-miss` |
+| Policy | `policy-unknown-hookspec`, `policy-argument-name-mismatch` |
+| Plugin | `plugin-name-missing` |
+| Provider | `provider-info-schema`, `provider-package-name-mismatch`, `provider-no-entry-point` |
 
 ### Timetables
 

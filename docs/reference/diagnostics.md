@@ -2,7 +2,7 @@
 
 Use `pytest --airflow-doctor` to inspect the environment this plugin actually bootstrapped. It
 is a one-shot preflight for storage, Airflow compatibility, executor configuration, migration
-settings, and Dag coverage—not a test run or a replacement for the smoke catalog.
+settings, and Dag coverage -- not a test run or a replacement for the smoke catalog.
 
 The most valuable check catches false-green coverage. A repository can report 100% for `src/`
 while never measuring its `dags/` folder; neither pytest nor `pytest-cov` treats those absent
@@ -98,7 +98,7 @@ field under `Versions and capabilities`.
   snapshot/restore. Upgrade once that release is certified, or pin a certified release.
 - `INCOMPATIBLE` under **Executor** is specific to Airflow 2 with SQLite and a primary executor
   other than `SequentialExecutor` or `DebugExecutor`. Restore a single-threaded executor,
-  select Postgres, or—only for an executor known to be single-threaded—set Airflow's exact
+  select Postgres, or -- only for an executor known to be single-threaded -- set Airflow's exact
   `_AIRFLOW__SKIP_DATABASE_EXECUTOR_COMPATIBILITY_CHECK=1` escape hatch. Executor resolution
   failures are reported as `could not resolve` without hiding the other sections.
 

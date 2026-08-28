@@ -68,7 +68,7 @@ Task Execution API those workers report to. The plugin's
 
 ## Why not `DebugExecutor`?
 
-It does not exist on Airflow 3. The equivalent of “run one task in process under a debugger” is
+It does not exist on Airflow 3. The equivalent of "run one task in process under a debugger" is
 [`run_task`](ladder.md#one-operator-no-database); for a whole Dag, use
 [`run_dag`](ladder.md#a-whole-dagrun-real-state).
 

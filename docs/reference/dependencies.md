@@ -23,8 +23,9 @@ plugin bare instead of asking a second requirement to choose the Airflow version
 - CPython 3.10 through 3.14 and pytest 8 or newer.
 - Linux or macOS. On Windows, use WSL2 or the devcontainer; Airflow has no native Windows
   support.
-- All major Apache Airflow versions. Airflow 2 releases have narrower Python ceilings: the
-  certified 2.7 and 2.8 releases stop at Python 3.11, while the certified 2.9–2.11 releases
+- Apache Airflow 3.1 or newer below 4, or a certified Airflow 2 migration release. Airflow 2
+  releases have narrower Python ceilings: the certified 2.7 and 2.8 releases stop at Python
+  3.11, while the certified 2.9-2.11 releases
   stop at Python 3.12. See
   [Compatibility and certification](../internals/compat-layer.md#supported-and-certified) for
   the exact release matrix.

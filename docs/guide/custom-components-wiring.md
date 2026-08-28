@@ -80,7 +80,7 @@ surfaces, warns once, and still restores them after the test.
 ## How the channels compose
 
 Session configuration and plugins-folder discovery form the baseline. `airflow_components`
-adds a test overlay, then restores that baseline—not an empty registry.
+adds a test overlay, then restores that baseline -- not an empty registry.
 
 `airflow_config` changes `conf.get()` but not live registries. If it and `airflow_executor`
 both set `core.executor`, the environment-backed `airflow_config` value wins. Prefer one.
@@ -94,7 +94,7 @@ Configuration cannot select an alias registered later in one test. Pass the alia
 Install a real package into the test environment and assert that Airflow's manager finds it.
 Only this path verifies the entry points in the built package.
 
-Before packaging—or for mutually exclusive distributions—use `airflow_isolated` to create
+Before packaging -- or for mutually exclusive distributions -- use `airflow_isolated` to create
 synthetic distribution metadata in a one-shot child:
 
 ```python
@@ -102,9 +102,7 @@ import pytest
 
 
 @pytest.mark.airflow_isolated(
-    entry_points={
-        "apache_airflow_provider": "provider_info = my_pkg.provider:get_provider_info"
-    },
+    entry_points={"apache_airflow_provider": "provider_info = my_pkg.provider:get_provider_info"},
     name="my-provider",
 )
 def test_provider_is_discovered():

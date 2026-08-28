@@ -59,7 +59,7 @@ are listed under [Orchestrator options](migration.md#orchestrator-options); argu
 
 Types use pytest's ini grammar: `string` is a scalar, `bool` is a boolean, and `linelist` is
 one entry per line (an array of strings in `pyproject.toml`). Empty strings and empty lists mean
-“not configured.”
+"not configured."
 
 ### Core
 

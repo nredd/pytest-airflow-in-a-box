@@ -14,10 +14,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
+from pytest_airflow_in_a_box import bootstrap, certification, migration_strict, smoke, taskinstance
+from pytest_airflow_in_a_box import components as components_module
 from pytest_airflow_in_a_box import fixtures as fixtures_module
+from pytest_airflow_in_a_box._compat import components as compat_components
+from pytest_airflow_in_a_box.components import ComponentKind
 from pytest_airflow_in_a_box.markers import MARKER_DESCRIPTIONS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -25,9 +30,47 @@ README = REPO_ROOT / "README.md"
 FIXTURES_PAGE = REPO_ROOT / "docs" / "reference" / "fixtures.md"
 MARKERS_PAGE = REPO_ROOT / "docs" / "reference" / "markers.md"
 QUICKSTART_PAGE = REPO_ROOT / "docs" / "quickstart.md"
+COMPONENTS_PAGE = REPO_ROOT / "docs" / "guide" / "custom-components.md"
+
+PUBLIC_DIAGNOSTIC_MODULES: tuple[ModuleType, ...] = (
+    bootstrap,
+    certification,
+    components_module,
+    migration_strict,
+    smoke,
+    taskinstance,
+)
 
 SNIPPET_START = "<!-- --8<-- [start:quickstart] -->"
 SNIPPET_END = "<!-- --8<-- [end:quickstart] -->"
+
+
+def component_problem_codes() -> frozenset[str]:
+    """Return every machine-readable component problem code defined in source.
+
+    Returns:
+        frozenset of str problem codes emitted through `ComponentProblem.code`.
+    """
+    prefixes = tuple(f"{kind.value}-" for kind in ComponentKind)
+    return frozenset(
+        value
+        for name, value in vars(compat_components).items()
+        if name.isupper() and isinstance(value, str) and value.startswith(prefixes)
+    )
+
+
+def public_diagnostic_names() -> frozenset[str]:
+    """Return exported warning and error class names from public diagnostic modules.
+
+    Returns:
+        frozenset of str public class names ending in `Warning` or `Error`.
+    """
+    return frozenset(
+        name
+        for module in PUBLIC_DIAGNOSTIC_MODULES
+        for name in module.__all__
+        if name.endswith(("Warning", "Error"))
+    )
 
 
 def backticked_names(text: str) -> set[str]:
@@ -107,6 +150,32 @@ def test_every_registered_marker_is_documented(description: str) -> None:
     assert documented, (
         f"marker `{name}` is registered but absent from {MARKERS_PAGE.relative_to(REPO_ROOT)}"
     )
+
+
+@pytest.mark.parametrize("code", sorted(component_problem_codes()))
+def test_every_component_problem_code_is_documented(code: str) -> None:
+    """Every machine-readable component problem code appears in the component guide.
+
+    Parameters:
+        code: str machine-readable `ComponentProblem.code` value.
+    """
+    page = COMPONENTS_PAGE.read_text(encoding="utf-8")
+    assert f"`{code}`" in page, (
+        f"component problem code `{code}` is absent from {COMPONENTS_PAGE.relative_to(REPO_ROOT)}"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(public_diagnostic_names()))
+def test_every_public_diagnostic_class_is_documented(name: str) -> None:
+    """Every exported warning and error class is named somewhere in the guide.
+
+    Parameters:
+        name: str public warning or error class name.
+    """
+    guide = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "docs").rglob("*.md"))
+    )
+    assert f"`{name}`" in guide, f"public diagnostic class `{name}` is absent from docs/"
 
 
 def test_readme_quickstart_matches_the_canonical_snippet() -> None:

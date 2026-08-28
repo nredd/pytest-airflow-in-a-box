@@ -71,7 +71,7 @@ in-process runners measure task bodies too.
 
 The exception is `run_dag(..., executor=...)`: its worker subprocess is outside the plugin's
 coverage setup. Cover the body through an in-process rung and keep the executor test for what it
-uniquely proves—re-import and Task Execution API transport.
+uniquely proves -- re-import and Task Execution API transport.
 
 The classic false green is `--cov=src` alone: 100% then measures nothing under `dags/`.
 `pytest --airflow-doctor` detects a configured Dag folder outside every coverage source.

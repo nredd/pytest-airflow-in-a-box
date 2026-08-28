@@ -142,7 +142,7 @@ def test_hook_is_mocked(run_task):
 ## Asserting rendered templates
 
 To verify persisted rendered fields, run the task and query
-`RenderedTaskInstanceFields`—not XCom or the original operator. `MyOperator` must include
+`RenderedTaskInstanceFields` -- not XCom or the original operator. `MyOperator` must include
 `query` in `template_fields` and `".sql"` in `template_ext`:
 
 ```python
@@ -175,7 +175,7 @@ wait and requeue it. On Airflow 3, drive the next attempt against the same `DagR
    the scheduler's bookkeeping.
 2. Assert the first failure, state, retry deadline, and callback.
 3. Increment and commit again, then call `run_ti(..., ignore_ti_state=True,
-   ignore_task_deps=True)` to bypass the existing state and “Not In Retry Period” dependency.
+   ignore_task_deps=True)` to bypass the existing state and "Not In Retry Period" dependency.
 
 This recipe is 3.x-only; earlier Airflow 2 releases expose `try_number` as a read-only derived
 property.
@@ -233,7 +233,7 @@ DB-free [`run_task`](ladder.md#one-operator-no-database) fixture.
 ## A minimal serial executor
 
 Airflow 3 removed `SequentialExecutor` from core. This executor runs workloads serially across
-Airflow 3.1–3.3:
+Airflow 3.1-3.3:
 
 ```python
 from typing import Any
@@ -291,7 +291,7 @@ class SerialExecutor(BaseExecutor):
         """No workload is left to kill."""
 ```
 
-Key on `workload.ti.key`, not `workload.key`, for compatibility across Airflow 3.1–3.3. The
+Key on `workload.ti.key`, not `workload.key`, for compatibility across Airflow 3.1-3.3. The
 fallback calls the older Task SDK supervisor when `BaseExecutor.run_workload` is unavailable.
 Validate the class with [`check_component`](custom-components.md#execution-components), then
 exercise it through [`run_dag(..., executor=...)`](ladder.md#executor-driven-runs).

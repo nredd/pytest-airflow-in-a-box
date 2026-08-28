@@ -1,13 +1,3 @@
-/* Render the `check_component` nav entry as code -- MkDocs nav titles are plain text,
-   so the monospace styling has to come from CSS keyed off the page URL. */
-.md-nav__link[href$="custom-components/"] .md-ellipsis,
-.md-tabs__link[href$="custom-components/"],
-.md-nav__link[href$="bootstrap-env-ownership/"] .md-ellipsis,
-.md-tabs__link[href$="bootstrap-env-ownership/"] {
-  font-family: var(--md-code-font-family);
-  font-size: 0.9em;
-}
-
 /* Reference tables put identifiers in the first column. Keep those code tokens intact;
    Material's table wrapper supplies horizontal scrolling when the viewport is too narrow. */
 .md-typeset table th:first-child code,

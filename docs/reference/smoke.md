@@ -11,7 +11,7 @@ separate `::smoke::<item>` node carrying the `smoke` and `timeout` markers:
 
 | Item | Enabled when | Contract |
 | --- | --- | --- |
-| `test_dag_bag_integrity` | Always | Import succeeds, `dag_id`s are unique, and every file stays within the parse timeout. Files above the slowpoke threshold warn; all timings are logged slowest-first. |
+| `test_dag_bag_integrity` | Always | Import succeeds, `dag_id`s are unique, and every file stays within the parse timeout. Files above the slowpoke threshold emit `SlowDagParseWarning`; all timings are logged slowest-first. |
 | `test_dag_serialization_roundtrip` | Always | Every selected Dag serializes and deserializes through the installed scheduler representation. |
 | `test_schedule_sanity` | Always | Every selected, scheduled Dag can compute its first automated run after deserialization. |
 | `test_pool_references_exist` | Always | Every task names an existing pool. `airflow_pools` can seed additional `name = slots` rows. |
@@ -48,8 +48,8 @@ or `testpaths` run includes the catalog. An explicit test file or node ID exclud
 `airflow_smoke_disable` removes exact item names before construction. Unknown names are usage
 errors, even when file selection would otherwise exclude the catalog. When the catalog remains
 in scope, each disabled check's own configuration is still validated. Disabling every
-serialization consumer—the round-trip and schedule checks, plus snapshots when
-configured—skips serialization entirely.
+serialization consumer -- the round-trip and schedule checks, plus snapshots when
+configured -- skips serialization entirely.
 
 The catalog and `dag_corpus` resolve their folder in this order:
 

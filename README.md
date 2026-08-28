@@ -10,7 +10,7 @@
 
 Your Dag files import. Your task callables pass. Production still breaks.
 
-> Well, you never really __verified__ the `DAG`
+> Well, you never really *verified* the `DAG`
 
 Trigger rules, branch skips, rendered templates, connection resolution, and operator
 serialization remain untested until deployment. This plugin runs those seams in `pytest`, in
@@ -68,7 +68,7 @@ see [The GitHub Action](https://nredd.github.io/pytest-airflow-in-a-box/guide/ci
 ## Requirements
 
 - CPython 3.10 through 3.14, pytest 8 or newer
-- All major Apache Airflow versions
+- Apache Airflow 3.1 or newer, below 4; or a certified Airflow 2 release from 2.7 through 2.11
 - Linux or macOS. Airflow has no native Windows support -- use WSL2 or the devcontainer
 
 Which Airflow and Python combinations are actually exercised in CI, and what the 2.x tier does

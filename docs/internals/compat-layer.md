@@ -10,10 +10,10 @@ error message.
 
 ## Supported and certified
 
-The plugin supports all major Apache Airflow versions. Certification is more specific: it
-records the exact Airflow releases and Python combinations exercised by this repository.
+The plugin supports Apache Airflow 3.1 or newer below 4. Certification records the exact
+Airflow releases and Python combinations exercised by this repository.
 
-- The package supports CPython 3.10–3.14 and pytest 8 or newer.
+- The package supports CPython 3.10-3.14 and pytest 8 or newer.
 - Linux and macOS are supported. On Windows, use WSL2 or the devcontainer.
 - Airflow 3 releases at or above 3.1.0 can resolve through the compatibility layer. Releases
   with a checked-in contract row are **certified**; other 3.x releases are **probed**.
@@ -27,7 +27,7 @@ use. It reports the installed versions, certification tier, and resolved capabil
 
 The compatibility workflow uses representative pairs rather than every Cartesian combination:
 
-- Airflow 3.1–3.3 across CPython 3.10–3.14, including the pytest 8.0 floor;
+- Airflow 3.1-3.3 across CPython 3.10-3.14, including the pytest 8.0 floor;
 - Linux, macOS, ARM Linux, and Alpine/musl;
 - parallel runs under `-n auto --dist loadgroup`, plus one serial reference leg; and
 - SQLite throughout the matrix, with a separate real-Docker Postgres job.
@@ -65,7 +65,7 @@ Outside that package, Airflow imports in shipped source are type-checking-only a
 `tests/compat/test_seam.py` enforces the boundary with an AST scan. It catches ordinary imports,
 imports inside functions or exception handlers, and literal dynamic imports. The accepted-leak
 set is empty. As a result, a new Airflow release should change the compatibility package and its
-contract tests—not scatter version branches through fixtures, collection, or database code.
+contract tests -- not scatter version branches through fixtures, collection, or database code.
 
 ## How a probe works
 

@@ -11,7 +11,7 @@ See [Fixtures](../reference/fixtures.md) and
 The plugin never uses your `~/airflow`. It creates a unique `pytest-airflow-in-a-box-*`
 directory before importing consumer conftests or Airflow, then points `AIRFLOW_HOME` at it.
 That directory contains the generated configuration, Dags, plugins, logs, authentication
-files, and—on SQLite—the metadata database. The session header reports its location:
+files, and -- on SQLite -- the metadata database. The session header reports its location:
 
 ```console
 pytest-airflow-in-a-box: AIRFLOW_HOME=/dev/shm/pytest-airflow-in-a-box-8f2a1c (storage: shared-memory, db: sqlite)
@@ -165,9 +165,9 @@ If that write cannot be removed, opt into repair:
 airflow_worker_env_drift = repair
 ```
 
-`repair` restores the controller's values and warns, but cannot prevent a later mutation.
-`--airflow-doctor` reports the active policy. At teardown, ini overrides unwind before the
-plugin restores the pre-run environment.
+`repair` restores the controller's values and emits `WorkerEnvironmentDriftWarning`, but cannot
+prevent a later mutation. `--airflow-doctor` reports the active policy. At teardown, ini
+overrides unwind before the plugin restores the pre-run environment.
 
 ## Parse-time secret resolution
 

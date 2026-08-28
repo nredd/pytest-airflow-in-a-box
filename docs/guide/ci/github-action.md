@@ -162,7 +162,7 @@ comparison flags run through `python-path` like any other pytest invocation. See
 ## Pinning
 
 Use `@v0` to follow the newest stable 0.x action release without crossing a major version.
-Use a full tag such as `@v0.11.1` for an immutable release pin. Moving major tags advance only
+Use a full tag such as `@v0.12.0` for an immutable release pin. Moving major tags advance only
 after a stable release is published; prereleases do not move them.
 
 The action's inputs and outputs are a published interface and follow the plugin's

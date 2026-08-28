@@ -109,10 +109,10 @@ jobs:
       # The one place a matrix entry turns into pytest arguments. A 3.x leg runs the whole
       # outer suite under `-n auto --dist loadgroup`; `loadgroup` rather than xdist's
       # default `load` because `pytest.mark.xdist_group` is inert under every other dist
-      # mode, and that marker is the mitigation `docs/guide/seeding.md` and
-      # `docs/guide/task-execution.md` hand contributors for same-`dag_id` and seeded-name
-      # contention. It is also what `plugin.py::_colocate_smoke_catalog_with_dag_bag`
-      # gates on. A 2.x leg runs the consumer contract serially, because
+      # mode, and that marker is the mitigation `docs/internals/test-environments.md` and
+      # `docs/guide/ladder.md` hand contributors for same-`dag_id` and seeded-name contention.
+      # It is also what `plugin.py::_colocate_smoke_catalog_with_dag_bag` gates on. A 2.x leg
+      # runs the consumer contract serially, because
       # those legs finish in 1-2m where a per-worker Airflow bootstrap costs more than the
       # fan-out returns. `dist:` overrides that family default -- `serial` for no fan-out,
       # or a literal flag like `-n 2`. Deriving here rather than restating per leg keeps a
