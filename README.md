@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nredd/pytest-airflow-in-a-box/main/assets/piab.png" alt="pytest-airflow-in-a-box logo" width="160">
+</p>
+
 # pytest-airflow-in-a-box
 
 [![CI](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml/badge.svg)](https://github.com/nredd/pytest-airflow-in-a-box/actions/workflows/ci.yml)
