@@ -22,7 +22,7 @@ jobs:
   cut:
     name: Bump, tag, and push
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 110
     if: github.actor == 'nredd'
     environment: release
     steps:
@@ -56,7 +56,11 @@ jobs:
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           echo "Waiting for ci.yml to complete for $sha..."
-          for _ in $(seq 1 80); do
+          # The 24-leg compat matrix + coverage-combine has been observed taking 20-68
+          # minutes end-to-end on shared runners; a 40-minute budget here failed 2 of the
+          # last 3 release cuts even though CI went on to succeed. 200 * 30s = 100 minutes
+          # gives headroom above the observed max.
+          for _ in $(seq 1 200); do
             conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed" \
               --jq '.workflow_runs[0].conclusion // "missing"')"
             if [ "$conclusion" = "success" ]; then
