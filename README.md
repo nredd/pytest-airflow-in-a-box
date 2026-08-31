@@ -12,18 +12,19 @@
 [![Docs](https://img.shields.io/badge/docs-mkdocs-blue?logo=materialformkdocs&logoColor=white)](https://nredd.github.io/pytest-airflow-in-a-box/)
 [![Airflow](https://img.shields.io/badge/airflow-3.1--3.3%20%7C%202.7--2.11-017CEE?logo=apacheairflow&logoColor=white)](https://nredd.github.io/pytest-airflow-in-a-box/#supported-versions)
 
+<!-- readme-sync:start:pitch -->
 Your Dag files import. Your task callables pass. Production still breaks.
 
-> Well, you never really *verified* the `DAG`
+> Did you *verify* the `DAG`?
 
-Trigger rules, branch skips, rendered templates, connection resolution, and operator
-serialization remain untested until deployment. This plugin runs those seams in `pytest`, in
-your repo's own CI, with no scheduler, webserver, or `~/airflow`.
+Import and callable tests do not exercise trigger rules, branch skips, rendered templates,
+connection resolution, or operator serialization. `pytest-airflow-in-a-box` tests those seams
+in `pytest`, before deployment -- no scheduler, webserver, or live Airflow environment required.
+<!-- readme-sync:end:pitch -->
 
-For a team owning a `dags/` repo on Airflow 3 that writes its own operators, hooks,
-sensors, and connection types -- deployed by someone else (MWAA, Composer, Astro,
-self-hosted). If your repo is 100% stock operators, `dag.test()` plus a `DagBag` import
-test is enough; the full list is on the
+For teams that own Airflow behavior: Dags in a repository, custom operators, hooks, sensors,
+connection types, live REST API integrations, or an Airflow 2-to-3 migration. If your repo is
+100% stock operators, `dag.test()` plus a `DagBag` import test is enough; the full list is on the
 [documentation site](https://nredd.github.io/pytest-airflow-in-a-box/).
 
 Already have a `DagBag` import test and a pile of `task.function(...)` calls? Here is
@@ -66,8 +67,37 @@ Airflow's published constraints files -- install the plugin bare. Every extra an
 combination is listed under
 [Dependencies and extras](https://nredd.github.io/pytest-airflow-in-a-box/reference/dependencies/).
 
-In CI, `nredd/pytest-airflow-in-a-box/action@v0` provisions a constraints-pinned environment --
-see [The GitHub Action](https://nredd.github.io/pytest-airflow-in-a-box/guide/ci/github-action/).
+## GitHub Action
+
+`nredd/pytest-airflow-in-a-box/action@v0` provisions a constraints-pinned Airflow environment;
+your workflow still runs pytest.
+
+<!-- readme-sync:start:action-example -->
+```yaml
+name: Airflow tests
+
+on: [pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: nredd/pytest-airflow-in-a-box/action@v0
+        id: airflow-env
+        with:
+          airflow-version: "3.3.1"
+          python-version: "3.13"
+      - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
+```
+<!-- readme-sync:end:action-example -->
+
+The action does not run tests, cache packages, upload artifacts, or start Docker. See
+[GitHub Actions and reports](https://nredd.github.io/pytest-airflow-in-a-box/guide/ci/github-action/)
+for every input and output, report uploads, version matrices, and pinning.
 
 ## Requirements
 

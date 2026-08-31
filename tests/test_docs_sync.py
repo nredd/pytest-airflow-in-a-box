@@ -15,8 +15,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from types import ModuleType
+from urllib.parse import unquote, urlparse
 
 import pytest
+import yaml
 
 from pytest_airflow_in_a_box import bootstrap, certification, migration_strict, smoke, taskinstance
 from pytest_airflow_in_a_box import components as components_module
@@ -27,6 +29,9 @@ from pytest_airflow_in_a_box.markers import MARKER_DESCRIPTIONS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
+ACTION_METADATA = REPO_ROOT / "action.yml"
+DOCS_HOME = REPO_ROOT / "docs" / "index.md"
+ACTION_GUIDE = REPO_ROOT / "docs" / "guide" / "ci" / "github-action.md"
 FIXTURES_PAGE = REPO_ROOT / "docs" / "reference" / "fixtures.md"
 MARKERS_PAGE = REPO_ROOT / "docs" / "reference" / "markers.md"
 QUICKSTART_PAGE = REPO_ROOT / "docs" / "quickstart.md"
@@ -43,6 +48,11 @@ PUBLIC_DIAGNOSTIC_MODULES: tuple[ModuleType, ...] = (
 
 SNIPPET_START = "<!-- --8<-- [start:quickstart] -->"
 SNIPPET_END = "<!-- --8<-- [end:quickstart] -->"
+PITCH_START = "<!-- readme-sync:start:pitch -->"
+PITCH_END = "<!-- readme-sync:end:pitch -->"
+ACTION_START = "<!-- readme-sync:start:action-example -->"
+ACTION_END = "<!-- readme-sync:end:action-example -->"
+DOCS_BASE_URL = "https://nredd.github.io/pytest-airflow-in-a-box/"
 
 
 def component_problem_codes() -> frozenset[str]:
@@ -83,6 +93,63 @@ def backticked_names(text: str) -> set[str]:
         set of str identifiers found between single backticks.
     """
     return set(re.findall(r"`([a-z_][a-z0-9_]*)`", text))
+
+
+def marked_block(path: Path, start: str, end: str) -> str:
+    """Return the Markdown between a named pair of synchronization markers.
+
+    Parameters:
+        path: Path to the Markdown file containing the markers.
+        start: str opening marker.
+        end: str closing marker.
+
+    Returns:
+        str stripped content between the markers.
+
+    Raises:
+        AssertionError: either marker is missing.
+    """
+    text = path.read_text(encoding="utf-8")
+    relative = path.relative_to(REPO_ROOT)
+    assert start in text, f"{relative} lost its {start!r} marker"
+    assert end in text, f"{relative} lost its {end!r} marker"
+    return text.split(start, 1)[1].split(end, 1)[0].strip()
+
+
+def visible_pitch(path: Path) -> str:
+    """Return normalized visible prose from a marked README pitch block.
+
+    Parameters:
+        path: Path to the README or docs homepage.
+
+    Returns:
+        str visible pitch copy with renderer-specific quote markup removed.
+    """
+    block = marked_block(path, PITCH_START, PITCH_END)
+    visible_lines = []
+    for line in block.splitlines():
+        if line == '!!! question ""':
+            continue
+        visible_lines.append(line.removeprefix("    ").removeprefix("> "))
+    return " ".join(" ".join(visible_lines).split())
+
+
+def heading_anchors(path: Path) -> set[str]:
+    """Return MkDocs-style anchors for the headings in one Markdown file.
+
+    Parameters:
+        path: Path to the Markdown source.
+
+    Returns:
+        set of str heading anchors.
+    """
+    anchors = set()
+    for heading in re.findall(r"^#{1,6} (.+?)\s*#*$", path.read_text(encoding="utf-8"), re.M):
+        heading = re.sub(r"\[([^]]+)]\([^)]*\)", r"\1", heading)
+        heading = re.sub(r"[`*_]", "", heading)
+        anchor = re.sub(r"[-\s]+", "-", re.sub(r"[^\w\s-]", "", heading).strip().lower())
+        anchors.add(anchor)
+    return anchors
 
 
 def readme_what_ships_table() -> str:
@@ -197,6 +264,41 @@ def test_readme_quickstart_matches_the_canonical_snippet() -> None:
     assert mirrored == canonical, (
         "README's Quickstart has drifted from `docs/quickstart.md`'s snippet block"
     )
+
+
+def test_readme_pitch_matches_the_docs_homepage() -> None:
+    """Keep the README and PyPI pitch aligned with the docs homepage."""
+    assert visible_pitch(README) == visible_pitch(DOCS_HOME)
+
+
+def test_readme_action_example_matches_the_canonical_guide() -> None:
+    """Keep the Marketplace-facing workflow identical to the Action guide."""
+    assert marked_block(README, ACTION_START, ACTION_END) == marked_block(
+        ACTION_GUIDE, ACTION_START, ACTION_END
+    )
+
+
+def test_readme_documentation_links_resolve_to_sources() -> None:
+    """Every published-docs link in the README names a real page and heading."""
+    readme = README.read_text(encoding="utf-8")
+    urls = re.findall(rf"{re.escape(DOCS_BASE_URL)}[^)\s]*", readme)
+    assert urls, "README no longer links to the documentation site"
+    for url in urls:
+        parsed = urlparse(url)
+        relative_url = parsed.path.removeprefix("/pytest-airflow-in-a-box/").rstrip("/")
+        source = DOCS_HOME if not relative_url else REPO_ROOT / "docs" / f"{relative_url}.md"
+        assert source.is_file(), f"{url} does not map to a docs source file"
+        if parsed.fragment:
+            fragment = unquote(parsed.fragment)
+            assert fragment in heading_anchors(source), f"{url} names no heading in {source}"
+
+
+def test_action_metadata_is_marketplace_ready() -> None:
+    """Pin the Marketplace identity, description limit, and badge branding."""
+    metadata = yaml.safe_load(ACTION_METADATA.read_text(encoding="utf-8"))
+    assert metadata["name"] == "pytest-airflow-in-a-box"
+    assert len(metadata["description"]) <= 125
+    assert metadata["branding"] == {"icon": "box", "color": "blue"}
 
 
 def test_structlog_capture_is_a_public_typed_contract() -> None:

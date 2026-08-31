@@ -4,6 +4,7 @@ Use `nredd/pytest-airflow-in-a-box/action@v0` to create a reproducible Airflow t
 environment from Apache Airflow's published constraints. The action provisions the
 environment; your workflow still runs pytest and uploads its reports.
 
+<!-- readme-sync:start:action-example -->
 ```yaml
 name: Airflow tests
 
@@ -24,6 +25,7 @@ jobs:
           python-version: "3.13"
       - run: ${{ steps.airflow-env.outputs.python-path }} -m pytest
 ```
+<!-- readme-sync:end:action-example -->
 
 Always invoke pytest through `python-path`; the action does not add its virtual environment
 to `PATH`. It also does not run tests, cache packages, upload artifacts, or start Docker.
