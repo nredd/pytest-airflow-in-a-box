@@ -44,16 +44,31 @@ jobs:
             exit 1
           fi
       - name: Verify CI is green for this commit
+        # `cut-release.yml` already waits for `ci.yml` before creating the GitHub release,
+        # but this job is triggered independently by `release: published` and re-checks
+        # from scratch -- a manually-created release, or API/indexing lag on gh's side,
+        # can land here before `ci.yml`'s run for this SHA is visible as completed. Poll
+        # instead of checking once. Same 100-minute budget as cut-release.yml's wait.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed" \
-            --jq '.workflow_runs[0].conclusion // "missing"')"
-          if [ "$conclusion" != "success" ]; then
-            echo "CI has no successful completed run for ${GITHUB_SHA} (found: $conclusion); refusing to release" >&2
-            exit 1
-          fi
+          echo "Waiting for ci.yml to complete for ${GITHUB_SHA}..."
+          for _ in $(seq 1 200); do
+            conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed" \
+              --jq '.workflow_runs[0].conclusion // "missing"')"
+            if [ "$conclusion" = "success" ]; then
+              echo "CI succeeded for ${GITHUB_SHA}"
+              exit 0
+            fi
+            if [ "$conclusion" != "missing" ]; then
+              echo "CI has no successful completed run for ${GITHUB_SHA} (found: $conclusion); refusing to release" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for CI to complete for ${GITHUB_SHA}" >&2
+          exit 1
       - name: Build distributions
         run: uv run python -m build --installer uv
       - name: Validate distributions
