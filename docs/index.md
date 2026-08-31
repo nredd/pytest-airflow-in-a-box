@@ -1,5 +1,6 @@
 # pytest-airflow-in-a-box
 
+<!-- readme-sync:start:pitch -->
 Your Dag files import. Your task callables pass. Production still breaks.
 
 !!! question ""
@@ -8,6 +9,7 @@ Your Dag files import. Your task callables pass. Production still breaks.
 Import and callable tests do not exercise trigger rules, branch skips, rendered templates,
 connection resolution, or operator serialization. `pytest-airflow-in-a-box` tests those seams
 in `pytest`, before deployment -- no scheduler, webserver, or live Airflow environment required.
+<!-- readme-sync:end:pitch -->
 
 ## Who is this for?
 

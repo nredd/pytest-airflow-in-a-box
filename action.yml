@@ -4,6 +4,10 @@ description: >-
   pytest-airflow-in-a-box from PyPI, for a Dag repo's own CI.
 author: nredd
 
+branding:
+  icon: box
+  color: blue
+
 inputs:
   airflow-version:
     description: Exact Apache Airflow version to install (e.g. "3.3.0").
