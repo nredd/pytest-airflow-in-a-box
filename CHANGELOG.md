@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file. The format 
 
 <!-- towncrier release notes start -->
 
+## [0.13.1] - 2026-08-31
+
+### Fixed
+
+- Keep the README, PyPI project description, documentation pitch, and GitHub Action example synchronized.
+  ([#337](https://github.com/nredd/pytest-airflow-in-a-box/issues/337)).
+- `cut-release.yml`'s wait for CI to go green no longer times out before the compat matrix finishes on a busy runner queue.
+
 ## [0.13.0] - 2026-08-28
 
 ### Changed
