@@ -187,7 +187,7 @@ def test_smoke_items_share_one_parse_and_one_worker(
         "smoke",
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     import_records = [
         json.loads(path.read_text(encoding="utf-8")) for path in record_dir.glob("import-*.json")
     ]
@@ -195,7 +195,7 @@ def test_smoke_items_share_one_parse_and_one_worker(
         json.loads(path.read_text(encoding="utf-8")) for path in record_dir.glob("item-*.json")
     ]
     assert len(import_records) == 1
-    assert len(item_records) == 6
+    assert len(item_records) == 7
     assert len({record["worker"] for record in item_records}) == 1
 
 
@@ -288,10 +288,10 @@ def test_smoke_catalog_and_dag_bag_consumer_share_one_worker_and_parse(
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     assert counter.read_text(encoding="utf-8").count("x") == 1
     records = [json.loads(path.read_text(encoding="utf-8")) for path in record_dir.iterdir()]
-    assert len(records) == 7
+    assert len(records) == 8
     assert len({record["worker"] for record in records}) == 1
 
 
@@ -316,7 +316,7 @@ def test_smoke_and_dag_folder_collection_are_xdist_consistent(
         str(CORPUS),
     )
 
-    result.assert_outcomes(passed=13, failed=2)
+    result.assert_outcomes(passed=14, failed=2)
     assert "Different tests were collected" not in result.stdout.str()
     result.stdout.fnmatch_lines(["*dag-import*"])
 
@@ -382,7 +382,7 @@ def test_warns_that_loadgroup_would_colocate_the_catalog(pytester: pytest.Pytest
         "-q", "-n", "2", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" in output
     assert "Pass `--dist loadgroup` to avoid it" in output
@@ -417,7 +417,7 @@ def test_loadgroup_advice_is_silent_without_a_dag_bag_consumer(
         "-q", "-n", "2", "--airflow-smoke", "--dag-folder", str(dag_folder)
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     output = result.stdout.str() + result.stderr.str()
     assert "SmokeColocationWarning" not in output
 
@@ -460,7 +460,7 @@ def test_missing_anchor_warning_is_recorded_once_across_workers(
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     output = result.stdout.str() + result.stderr.str()
     assert "carries an explicit `xdist_group` marker" in output
     assert output.count("SmokeColocationWarning:") == 1
@@ -506,7 +506,7 @@ def test_missing_dag_corpus_anchor_warning_is_recorded_once_across_workers(
         str(dag_folder),
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     output = result.stdout.str() + result.stderr.str()
     assert "carries an explicit `xdist_group` marker" in output
     assert output.count("SmokeColocationWarning:") == 1

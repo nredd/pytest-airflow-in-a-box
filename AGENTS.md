@@ -63,9 +63,9 @@ zero-ini defaults on purpose.
   `make release` / `release.yml` hard-fail on mismatch; `scripts/cut_release.py` is the one
   place that *writes* both, kept in sync by construction. Bump both, plus `CHANGELOG.md`
   (Keep a Changelog + SemVer, link issue/PR numbers)
-- Upstream-derived code must be recorded in `PROVENANCE.md` (currently only
-  `_compat/taskrun.py::run_task_instance`, adapted from Apache Airflow). Never add
-  proprietary source, credentials, hostnames, or internal paths
+- Upstream-derived code must be recorded in `PROVENANCE.md` (e.g.
+  `_compat/taskrun.py::run_task_instance` and `versioninflation.py`, both adapted from
+  Apache Airflow). Never add proprietary source, credentials, hostnames, or internal paths
 
 ## Layout
 
