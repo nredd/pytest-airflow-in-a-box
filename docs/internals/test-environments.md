@@ -87,7 +87,7 @@ Choose the channel by required lifetime:
   It cannot change a Dag already parsed by an earlier session fixture.
 
 ```python
-from pytest_airflow_in_a_box.config import airflow_config
+from piab.config import airflow_config
 
 
 def test_with_overrides():

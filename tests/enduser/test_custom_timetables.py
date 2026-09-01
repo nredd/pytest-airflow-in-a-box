@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 if TYPE_CHECKING:
-    from pytest_airflow_in_a_box.types import ComponentRegistry, DagMaker
+    from piab.types import ComponentRegistry, DagMaker
 
 pytestmark = pytest.mark.compat
 

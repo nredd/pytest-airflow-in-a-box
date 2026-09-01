@@ -19,7 +19,7 @@ import pytest
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.utils.state import TaskInstanceState
 
-from pytest_airflow_in_a_box.types import AirflowConnections, DagMaker, RunTask
+from piab.types import AirflowConnections, DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
 

@@ -90,6 +90,12 @@ zero-ini defaults on purpose.
 - `storage/` -- storage-ladder selection, SQLite tuning, Postgres provisioning
 - `_compat/` -- private Airflow-version shims, each guarded by `capabilities.py` probes
 
+`src/piab/` is the alias mirror package (attrs-style, shipped in the same wheel): one thin
+star-import shim per public module so `from piab.matchers import succeeded` resolves the
+real objects. `tests/test_piab.py` enforces mirror set == public module set, equal
+`__all__`, identical objects -- adding a public module means adding its shim. `_compat/`
+and underscore-prefixed modules get no mirror.
+
 `tests/` mirrors `src/` (`tests/test_<module>.py` plus `bootstrap/`, `compat/`,
 `fixtures/`, `storage/`, `enduser/`). `tests/dags/` is a Dag corpus -- data, not test
 modules (`broken.py` is intentionally broken). Many tests drive the plugin through

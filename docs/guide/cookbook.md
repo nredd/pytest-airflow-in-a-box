@@ -16,7 +16,7 @@ from airflow.sdk import Asset
 from airflow.utils.state import DagRunState
 from airflow.utils.types import DagRunType
 
-from pytest_airflow_in_a_box.assets import evaluate_asset_schedules
+from piab.assets import evaluate_asset_schedules
 
 
 def test_consumer_dagrun_is_created(dag_maker):

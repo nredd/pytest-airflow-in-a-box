@@ -99,5 +99,8 @@ def main() -> int:
     return _EXIT_OK
 
 
+__all__ = ("main",)
+
+
 if __name__ == "__main__":
     sys.exit(main())

@@ -23,7 +23,7 @@ from airflow.models.taskreschedule import TaskReschedule
 from airflow.utils.state import TaskInstanceState
 from sqlalchemy import select
 
-from pytest_airflow_in_a_box.types import DagMaker, RunTask
+from piab.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
 

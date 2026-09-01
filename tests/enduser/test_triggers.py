@@ -19,8 +19,8 @@ import pytest
 from airflow.triggers.base import BaseTrigger, TriggerEvent
 from airflow.utils.state import TaskInstanceState
 
-from pytest_airflow_in_a_box.taskinstance import TriggerExecutionError, run_trigger
-from pytest_airflow_in_a_box.types import DagMaker
+from piab.taskinstance import TriggerExecutionError, run_trigger
+from piab.types import DagMaker
 
 pytestmark = pytest.mark.compat
 

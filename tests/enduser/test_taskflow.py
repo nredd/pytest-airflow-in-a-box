@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from airflow.utils.state import DagRunState, TaskInstanceState
 
-from pytest_airflow_in_a_box.types import DagMaker, RunTask
+from piab.types import DagMaker, RunTask
 
 pytestmark = pytest.mark.compat
 

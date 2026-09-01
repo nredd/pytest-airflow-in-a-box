@@ -15,8 +15,8 @@ from typing import Any
 import pytest
 from airflow.utils.state import TaskInstanceState
 
-from pytest_airflow_in_a_box.components import check_component
-from pytest_airflow_in_a_box.types import RunTask
+from piab.components import check_component
+from piab.types import RunTask
 
 pytestmark = pytest.mark.compat
 

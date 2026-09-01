@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box.types import AirflowConfigure
+from piab.types import AirflowConfigure
 
 pytestmark = pytest.mark.compat
 

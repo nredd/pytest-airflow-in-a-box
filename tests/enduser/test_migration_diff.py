@@ -17,7 +17,7 @@ from textwrap import dedent
 
 import pytest
 
-from pytest_airflow_in_a_box import artifact
+from piab import artifact
 
 
 def _suite(*, pass_body: str = "assert True") -> str:

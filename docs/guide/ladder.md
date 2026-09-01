@@ -83,7 +83,7 @@ task body raised.
 Outcome matchers keep a complete run contract compact:
 
 ```python
-from pytest_airflow_in_a_box.matchers import failed, succeeded, upstream_failed
+from piab.matchers import failed, succeeded, upstream_failed
 
 assert result == {
     "produce": succeeded(21),

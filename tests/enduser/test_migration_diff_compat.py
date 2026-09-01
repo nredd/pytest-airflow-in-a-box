@@ -18,7 +18,7 @@ from importlib import metadata
 
 import pytest
 
-from pytest_airflow_in_a_box import __version__, artifact
+from piab import __version__, artifact
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, installed_family
 
 pytestmark = pytest.mark.compat

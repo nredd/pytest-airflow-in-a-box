@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from pytest_airflow_in_a_box.storage.postgres import require_postgres_available
+from piab.storage.postgres import require_postgres_available
 
 pytestmark = pytest.mark.compat
 

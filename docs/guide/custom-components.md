@@ -5,7 +5,7 @@ discovers them. Run `check_component` first to catch contract errors against the
 Airflow release without starting a database or mutating Airflow's live registries:
 
 ```python
-from pytest_airflow_in_a_box.components import check_component
+from piab.components import check_component
 
 
 def test_my_timetable_conforms():
@@ -25,7 +25,7 @@ checker never constructs a class, so required and side-effectful constructors ar
 Force the kind when the component is intentionally duck-typed or still incomplete:
 
 ```python
-from pytest_airflow_in_a_box.components import ComponentKind, check_component
+from piab.components import ComponentKind, check_component
 
 report = check_component(MyListener, kind=ComponentKind.LISTENER)
 ```
