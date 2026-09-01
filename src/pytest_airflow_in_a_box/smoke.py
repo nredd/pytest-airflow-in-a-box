@@ -46,6 +46,7 @@ from pytest_airflow_in_a_box.dagcorpus import (
     get_dag_corpus,
 )
 from pytest_airflow_in_a_box.fixtures.dagbag import _dag_folder
+from pytest_airflow_in_a_box.versioninflation import find_runtime_varying_dag_args
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -257,6 +258,13 @@ def register_options(parser: pytest.Parser) -> None:
     parser.addini(
         "airflow_forbid_top_level_io",
         "Fail Dag files that call into known I/O modules at import time.",
+        type="bool",
+        default=True,
+    )
+    parser.addini(
+        "airflow_forbid_runtime_varying_dag_args",
+        "Fail Dag files passing runtime-varying values (datetime.now, uuid4, ...) to Dag or "
+        "task constructors.",
         type="bool",
         default=True,
     )
@@ -657,6 +665,23 @@ def _forbid_top_level_io(config: pytest.Config) -> bool:
     """
 
     return _bool_ini(config, "airflow_forbid_top_level_io")
+
+
+def _forbid_runtime_varying_dag_args(config: pytest.Config) -> bool:
+    """Read whether runtime-varying Dag/task constructor arguments should fail.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_forbid_runtime_varying_dag_args``
+            ini value.
+
+    Returns:
+        bool indicating whether the check is active.
+
+    Raises:
+        pytest.UsageError: The ini value is not a boolean.
+    """
+
+    return _bool_ini(config, "airflow_forbid_runtime_varying_dag_args")
 
 
 def _top_level_io_modules(config: pytest.Config) -> tuple[str, ...]:
@@ -1530,6 +1555,50 @@ def _run_top_level_io(context: SmokeContext, io_modules: tuple[str, ...]) -> Non
         raise SmokeCheckFailure("\n\n".join(failures))
 
 
+def _enable_runtime_varying_dag_args(config: pytest.Config) -> bool | None:
+    """Report whether the runtime-varying Dag/task argument check is enabled.
+
+    Parameters:
+        config: pytest.Config containing the ``airflow_forbid_runtime_varying_dag_args``
+            ini value.
+
+    Returns:
+        bool | None containing ``True`` when the policy is active, else ``None``.
+    """
+
+    return True if _forbid_runtime_varying_dag_args(config) else None
+
+
+def _run_runtime_varying_dag_args(context: SmokeContext, _enabled: bool) -> None:
+    """Scan every parsed Dag file for runtime-varying Dag/task constructor arguments.
+
+    Parameters:
+        context: SmokeContext bundling the session and config this check runs against.
+        _enabled: bool, unused; `test_no_runtime_varying_dag_args` takes no payload.
+
+    Raises:
+        SmokeCheckFailure: Any Dag file passes a runtime-varying value to a Dag or task
+            constructor.
+    """
+
+    corpus = context.corpus
+    folder = context.dag_folder
+    failures: list[str] = []
+    for display, path in _corpus_source_files(corpus, folder):
+        parsed = parse_dag_module(path)
+        if parsed is None:
+            continue
+        for finding in find_runtime_varying_dag_args(*parsed):
+            failures.append(
+                f"Dag file '{display}' line {finding.line} passes runtime-varying "
+                f"`{finding.snippet}` to {finding.context}; the serialized Dag changes on "
+                f"every parse, creating a new Dag version each time -- compute the value "
+                f"inside the task or use a static value"
+            )
+    if failures:
+        raise SmokeCheckFailure("\n\n".join(failures))
+
+
 def _enable_forbid_catchup(config: pytest.Config) -> bool | None:
     """Report whether the catchup check is enabled.
 
@@ -1850,6 +1919,12 @@ SMOKE_CATALOG: tuple[SmokeCheck[Any], ...] = (
         enable=_enable_dag_serialization_snapshot,
         marks=frozenset(),
         run=_run_dag_serialization_snapshot,
+    ),
+    SmokeCheck(
+        name="test_no_runtime_varying_dag_args",
+        enable=_enable_runtime_varying_dag_args,
+        marks=frozenset(),
+        run=_run_runtime_varying_dag_args,
     ),
 )
 

@@ -36,6 +36,7 @@ def _config(
     io_modules: object = (),
     forbid_catchup: object = False,
     forbid_unbounded_expand: object = False,
+    forbid_runtime_varying: object = True,
     disable: object = (),
     fanout: object = None,
     ini_fanout: object = False,
@@ -66,6 +67,8 @@ def _config(
         forbid_catchup: object containing the ``airflow_forbid_catchup`` ini value.
         forbid_unbounded_expand: object containing the ``airflow_forbid_unbounded_expand``
             ini value.
+        forbid_runtime_varying: object containing the
+            ``airflow_forbid_runtime_varying_dag_args`` ini value.
         disable: object containing the ``airflow_smoke_disable`` ini value.
         fanout: object containing the parsed ``--airflow-dag-bag-fanout`` option value.
         ini_fanout: object containing the ``airflow_dag_bag_fanout`` ini value.
@@ -98,6 +101,7 @@ def _config(
         else io_modules,
         "airflow_forbid_catchup": forbid_catchup,
         "airflow_forbid_unbounded_expand": forbid_unbounded_expand,
+        "airflow_forbid_runtime_varying_dag_args": forbid_runtime_varying,
         "airflow_smoke_disable": list(disable) if isinstance(disable, (list, tuple)) else disable,
         # Parse-time secrets resolution has its own end-to-end coverage in
         # `tests/enduser/test_parse_time_secrets.py`; the corpus builder is under test
@@ -522,6 +526,10 @@ def test_forbid_default_owner_rejects_non_boolean() -> None:
             lambda value: _config(forbid_variable_access=value),
         ),
         (smoke._forbid_top_level_io, lambda value: _config(forbid_io=value)),
+        (
+            smoke._forbid_runtime_varying_dag_args,
+            lambda value: _config(forbid_runtime_varying=value),
+        ),
     ],
 )
 def test_antipattern_boolean_readers_default_on_and_read_the_ini(
@@ -1686,6 +1694,42 @@ def test_io_item_skips_unresolved_and_unlisted_calls(tmp_path: Path) -> None:
     smoke._run_top_level_io(context, ("requests",))
 
 
+def test_runtime_varying_enable_reflects_the_ini_toggle() -> None:
+    """Return a truthy payload by default and ``None`` when the ini disables the check."""
+
+    assert smoke._enable_runtime_varying_dag_args(_config()) is True
+    assert smoke._enable_runtime_varying_dag_args(_config(forbid_runtime_varying=False)) is None
+
+
+def test_runtime_varying_item_reports_findings_with_locations(tmp_path: Path) -> None:
+    """Report a varying Dag constructor argument with its file, line, and snippet."""
+
+    source = (
+        "from airflow import DAG\nfrom datetime import datetime\n"
+        "d = DAG(dag_id='d', start_date=datetime.now())\n"
+    )
+    context = _scan_corpus(tmp_path, {"offender.py": source})
+
+    with pytest.raises(smoke.SmokeCheckFailure, match="runtime-varying") as caught:
+        smoke._run_runtime_varying_dag_args(context, True)
+
+    message = str(caught.value)
+    assert "'/offender.py' line 3" in message
+    assert "datetime.now()" in message
+    assert "the Dag constructor" in message
+
+
+def test_runtime_varying_item_skips_unparsable_files_and_passes_clean_corpora(
+    tmp_path: Path,
+) -> None:
+    """Skip a syntax-error file leniently and pass a corpus with static constructor args."""
+
+    clean = "from airflow import DAG\nd = DAG(dag_id='d', tags=['a'])\n"
+    context = _scan_corpus(tmp_path, {"clean.py": clean, "mangled.py": "def broken(:\n"})
+
+    smoke._run_runtime_varying_dag_args(context, True)
+
+
 def _corpus_dag(dag_id: str, *, catchup: bool, can_be_scheduled: bool) -> dagcorpus.CorpusDag:
     """Create one portable corpus Dag with the given catchup characteristics.
 
@@ -2057,7 +2101,7 @@ def test_airflow_smoke_option_enables_the_catalog(pytester: pytest.Pytester) -> 
 
     result = pytester.runpytest_subprocess("-v", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     result.stdout.fnmatch_lines(
         [
             "*::smoke::test_dag_bag_integrity PASSED*",
@@ -2109,7 +2153,7 @@ with DAG(dag_id="counted_dag", schedule=None, tags=["team-a"]) as dag:
 
     result = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     assert counter.read_text(encoding="utf-8").count("x") == 1
 
 
@@ -2136,7 +2180,7 @@ def test_smoke_integrity_enforces_parse_timeout_after_dag_bag_parses(
 
     result = pytester.runpytest_subprocess("-v", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=6, failed=1)
+    result.assert_outcomes(passed=7, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
     # Distinguishes "the parse itself was hard-killed by the applied timeout" (this
     # message, only possible if AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT was set before
@@ -2153,7 +2197,7 @@ def test_ini_option_enables_the_catalog(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
 
 
 def test_serialization_sampling_bounds_the_catalog(pytester: pytest.Pytester) -> None:
@@ -2167,7 +2211,7 @@ def test_serialization_sampling_bounds_the_catalog(pytester: pytest.Pytester) ->
         "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     result.stdout.fnmatch_lines(["*deterministic sample of 1 of 2 Dags (seed '0')*"])
 
 
@@ -2200,7 +2244,7 @@ def test_smoke_disable_drops_one_item_but_keeps_serializing(pytester: pytest.Pyt
         "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
     )
 
-    result.assert_outcomes(passed=5)
+    result.assert_outcomes(passed=6)
     assert "::smoke::test_schedule_sanity" not in result.stdout.str()
     result.stdout.fnmatch_lines(["*Serialized Dag*"])
 
@@ -2223,7 +2267,7 @@ def test_smoke_disable_every_serialization_item_skips_the_serializer(
         "-q", "--dag-folder=dags", "-m", "smoke", "--log-cli-level=INFO"
     )
 
-    result.assert_outcomes(passed=4)
+    result.assert_outcomes(passed=5)
     assert "::smoke::test_dag_serialization_roundtrip" not in result.stdout.str()
     assert "::smoke::test_schedule_sanity" not in result.stdout.str()
     assert "Serialized Dag" not in result.stdout.str()
@@ -2244,7 +2288,7 @@ def test_smoke_disable_drops_every_non_serialization_item(pytester: pytest.Pytes
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=4)
+    result.assert_outcomes(passed=5)
 
 
 def test_smoke_disable_rejects_unknown_item_name_at_startup(pytester: pytest.Pytester) -> None:
@@ -2345,6 +2389,7 @@ def test_smoke_disable_every_known_item_empties_the_catalog(pytester: pytest.Pyt
         "    test_required_dag_tags\n"
         "    test_forbid_default_owner\n"
         "    test_dag_serialization_snapshot\n"
+        "    test_no_runtime_varying_dag_args\n"
     )
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
@@ -2359,7 +2404,7 @@ def test_broken_dag_fails_integrity_with_traceback(pytester: pytest.Pytester) ->
 
     result = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(
         ["*Dag file import check failed*", "*deliberately broken smoke test Dag*"]
     )
@@ -2377,7 +2422,7 @@ def test_duplicate_dag_ids_fail_integrity(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-v", "--airflow-smoke", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
     # DagBag file-collection order is not stable across platforms, so the message
     # names the colliding pair in either order -- assert both filelocs appear.
@@ -2400,7 +2445,7 @@ def test_slowpoke_warns_without_failing(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     result.stdout.fnmatch_lines(["*SlowDagParseWarning*"])
 
 
@@ -2412,7 +2457,7 @@ def test_timeout_crossing_fails_the_run(pytester: pytest.Pytester) -> None:
 
     result = pytester.runpytest_subprocess("-v", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_dag_bag_integrity FAILED*"])
 
 
@@ -2424,12 +2469,12 @@ def test_pool_seed_option_allows_a_configured_pool_reference(pytester: pytest.Py
     unconfigured = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
-    unconfigured.assert_outcomes(passed=5, failed=1)
+    unconfigured.assert_outcomes(passed=6, failed=1)
     unconfigured.stdout.fnmatch_lines(["*references unknown pool `batch`*"])
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_pools =\n    batch = 4\n")
     configured = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
-    configured.assert_outcomes(passed=6)
+    configured.assert_outcomes(passed=7)
 
 
 def test_pool_seed_option_rejects_malformed_lines(pytester: pytest.Pytester) -> None:
@@ -2452,7 +2497,7 @@ def test_pool_seed_option_rejects_collision_with_existing_pool(pytester: pytest.
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*cannot seed `default_pool`*"])
 
 
@@ -2462,12 +2507,12 @@ def test_dag_id_pattern_policy_appears_only_when_configured(pytester: pytest.Pyt
     _write_dags(pytester, valid=VALID_DAG)
 
     disabled = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
-    disabled.assert_outcomes(passed=6)
+    disabled.assert_outcomes(passed=7)
     assert "test_dag_id_pattern" not in disabled.stdout.str()
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_id_pattern = ^valid_\n")
     enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags")
-    enabled.assert_outcomes(passed=7)
+    enabled.assert_outcomes(passed=8)
     enabled.stdout.fnmatch_lines(["*::smoke::test_dag_id_pattern PASSED*"])
 
 
@@ -2479,7 +2524,7 @@ def test_dag_id_pattern_policy_fails_on_mismatch(pytester: pytest.Pytester) -> N
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=6, failed=1)
+    result.assert_outcomes(passed=7, failed=1)
     result.stdout.fnmatch_lines(["*does not match pattern*"])
 
 
@@ -2493,7 +2538,7 @@ def test_required_dag_tags_policy_appears_only_when_configured(pytester: pytest.
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_required_dag_tags =\n    team-a\n")
     enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags")
-    enabled.assert_outcomes(passed=7)
+    enabled.assert_outcomes(passed=8)
     enabled.stdout.fnmatch_lines(["*::smoke::test_required_dag_tags PASSED*"])
 
 
@@ -2507,7 +2552,7 @@ def test_required_dag_tags_policy_fails_on_missing_tag(pytester: pytest.Pytester
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=6, failed=1)
+    result.assert_outcomes(passed=7, failed=1)
     result.stdout.fnmatch_lines(["*missing required tags*'team-b'*"])
 
 
@@ -2523,7 +2568,7 @@ def test_forbid_default_owner_policy_appears_only_when_configured(
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_forbid_default_owner = true\n")
     enabled = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
-    enabled.assert_outcomes(passed=6, failed=1)
+    enabled.assert_outcomes(passed=7, failed=1)
     enabled.stdout.fnmatch_lines(["*owned by the stock*`airflow`*owner*"])
 
 
@@ -2533,12 +2578,12 @@ def test_dag_snapshot_policy_appears_only_when_configured(pytester: pytest.Pytes
     _write_dags(pytester, valid=VALID_DAG)
 
     disabled = pytester.runpytest_subprocess("-q", "--airflow-smoke", "--dag-folder=dags")
-    disabled.assert_outcomes(passed=6)
+    disabled.assert_outcomes(passed=7)
     assert "test_dag_serialization_snapshot" not in disabled.stdout.str()
 
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
     enabled = pytester.runpytest_subprocess("-v", "--dag-folder=dags", "--airflow-smoke-update")
-    enabled.assert_outcomes(passed=7)
+    enabled.assert_outcomes(passed=8)
     enabled.stdout.fnmatch_lines(["*::smoke::test_dag_serialization_snapshot PASSED*"])
 
 
@@ -2552,7 +2597,7 @@ def test_dag_snapshot_update_flag_writes_snapshot_file(pytester: pytest.Pytester
         "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     snapshot_path = pytester.path / "snapshots" / "valid_dag.json"
     assert snapshot_path.is_file()
     assert '"dag_id": "valid_dag"' in snapshot_path.read_text(encoding="utf-8")
@@ -2565,11 +2610,11 @@ def test_dag_snapshot_second_run_passes_without_update(pytester: pytest.Pytester
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
     pytester.runpytest_subprocess(
         "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
-    ).assert_outcomes(passed=7)
+    ).assert_outcomes(passed=8)
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
 
 
 def test_dag_snapshot_fails_on_drift(pytester: pytest.Pytester) -> None:
@@ -2579,14 +2624,14 @@ def test_dag_snapshot_fails_on_drift(pytester: pytest.Pytester) -> None:
     pytester.makeini("[pytest]\nairflow_smoke = true\nairflow_dag_snapshot_dir = snapshots\n")
     pytester.runpytest_subprocess(
         "-q", "--dag-folder=dags", "--airflow-smoke-update", "-m", "smoke"
-    ).assert_outcomes(passed=7)
+    ).assert_outcomes(passed=8)
 
     (pytester.path / "dags" / "valid.py").write_text(
         VALID_DAG.replace('tags=["team-a"]', 'tags=["team-b"]'), encoding="utf-8"
     )
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=6, failed=1)
+    result.assert_outcomes(passed=7, failed=1)
     result.stdout.fnmatch_lines(["*drifted from its committed snapshot*"])
 
 
@@ -2605,12 +2650,12 @@ def test_smoke_marker_selects_exactly_the_bundled_items(pytester: pytest.Pyteste
     selected = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
-    selected.assert_outcomes(passed=6, deselected=1)
+    selected.assert_outcomes(passed=7, deselected=1)
 
     deselected = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke"
     )
-    deselected.assert_outcomes(passed=1, deselected=6)
+    deselected.assert_outcomes(passed=1, deselected=7)
 
 
 def test_explicit_node_id_and_file_args_exclude_smoke_catalog(
@@ -2662,7 +2707,7 @@ def test_explicit_mark_expression_overrides_positional_exclusion(
     file_selected = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke", "test_regular.py"
     )
-    file_selected.assert_outcomes(passed=6, deselected=1)
+    file_selected.assert_outcomes(passed=7, deselected=1)
 
     node_selected = pytester.runpytest_subprocess(
         "-q",
@@ -2672,7 +2717,7 @@ def test_explicit_mark_expression_overrides_positional_exclusion(
         "smoke",
         "test_regular.py::test_regular",
     )
-    node_selected.assert_outcomes(passed=6, deselected=1)
+    node_selected.assert_outcomes(passed=7, deselected=1)
 
     file_excluded = pytester.runpytest_subprocess(
         "-q", "--airflow-smoke", "--dag-folder=dags", "-m", "not smoke", "test_regular.py"
@@ -2709,7 +2754,7 @@ def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
         "smoke and db_test",
         "test_regular.py",
     )
-    with_db_test.assert_outcomes(passed=2, deselected=5)
+    with_db_test.assert_outcomes(passed=2, deselected=6)
 
     without_db_test = pytester.runpytest_subprocess(
         "-q",
@@ -2719,18 +2764,18 @@ def test_smoke_and_db_test_mark_expression_overrides_positional_exclusion(
         "smoke and not db_test",
         "test_regular.py",
     )
-    without_db_test.assert_outcomes(passed=4, deselected=3)
+    without_db_test.assert_outcomes(passed=5, deselected=3)
 
 
 def test_markexpr_override_reaches_every_conditional_smoke_item(
     pytester: pytest.Pytester,
 ) -> None:
-    """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 6.
+    """Cover `_SMOKE_ITEM_MARK_SETS` against every ini-gated item, not just the bundled 7.
 
     `_SMOKE_ITEM_MARK_SETS` is derived from `SMOKE_CATALOG`'s `marks` fields, not
     hand-maintained -- but this test still pins that the derived sets match the marks a real
     collected item carries at runtime. The other `-m`-override regression tests only enable
-    the six default-enabled checks; enabling all six opt-in ini-gated policies too (every
+    the seven default-enabled checks; enabling all six opt-in ini-gated policies too (every
     item, like every other, carries only `smoke` + `timeout`) would catch a future check
     adding a mark `SMOKE_CATALOG` doesn't declare. The Dag sets an explicit
     non-stock owner so `airflow_forbid_default_owner` passes rather than exercising its
@@ -2764,12 +2809,12 @@ def test_markexpr_override_reaches_every_conditional_smoke_item(
         "smoke and timeout",
         "test_regular.py",
     )
-    every_item.assert_outcomes(passed=12, deselected=1)
+    every_item.assert_outcomes(passed=13, deselected=1)
 
     only_db_test = pytester.runpytest_subprocess(
         "-q", "--dag-folder=dags", "-m", "smoke and db_test", "test_regular.py"
     )
-    only_db_test.assert_outcomes(passed=2, deselected=11)
+    only_db_test.assert_outcomes(passed=2, deselected=12)
 
 
 def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
@@ -2786,7 +2831,7 @@ def test_directory_positional_keeps_smoke_catalog(pytester: pytest.Pytester) -> 
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", ".")
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
 
 
 def test_keyword_expression_deselects_smoke_items(pytester: pytest.Pytester) -> None:
@@ -2806,7 +2851,7 @@ def test_keyword_expression_deselects_smoke_items(pytester: pytest.Pytester) -> 
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-k", "test_regular")
 
-    result.assert_outcomes(passed=1, deselected=6)
+    result.assert_outcomes(passed=1, deselected=7)
 
 
 def test_testpaths_file_glob_keeps_smoke_catalog(pytester: pytest.Pytester) -> None:
@@ -2823,7 +2868,7 @@ def test_testpaths_file_glob_keeps_smoke_catalog(pytester: pytest.Pytester) -> N
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags")
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
 
 
 def test_deselect_prunes_single_smoke_item(pytester: pytest.Pytester) -> None:
@@ -2836,7 +2881,7 @@ def test_deselect_prunes_single_smoke_item(pytester: pytest.Pytester) -> None:
         "-q", "--dag-folder=dags", "--deselect", "::smoke::test_dag_bag_integrity"
     )
 
-    result.assert_outcomes(passed=5, deselected=1)
+    result.assert_outcomes(passed=6, deselected=1)
 
 
 VARIABLE_DAG = """
@@ -2922,6 +2967,23 @@ with DAG(dag_id="bounded_dag", schedule=None) as dag:
     sink.expand(value=source())
 """
 
+INFLATING_DAG = """
+import datetime
+
+from airflow.sdk import DAG, task
+
+with DAG(
+    dag_id="inflating_dag",
+    schedule=None,
+    start_date=datetime.datetime.now() - datetime.timedelta(days=1),
+) as dag:
+    @task
+    def t():
+        pass
+
+    t()
+"""
+
 
 def test_top_level_variable_access_fails_via_ast_and_runtime(
     pytester: pytest.Pytester,
@@ -2934,7 +2996,7 @@ def test_top_level_variable_access_fails_via_ast_and_runtime(
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_no_top_level_variable_access FAILED*"])
     report = result.stdout.str()
     assert 'Variable.get("threshold", default="1")' in report
@@ -2950,9 +3012,27 @@ def test_top_level_io_fails_on_known_module_call(pytester: pytest.Pytester) -> N
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_no_top_level_io FAILED*"])
     assert "socket.gethostname()" in result.stdout.str()
+
+
+def test_runtime_varying_dag_args_fail_on_a_varying_start_date(
+    pytester: pytest.Pytester,
+) -> None:
+    """Fail the runtime-varying item on a `datetime.now()`-derived Dag constructor argument."""
+
+    _write_dags(pytester, offender=INFLATING_DAG)
+
+    result = pytester.runpytest_subprocess(
+        "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
+    )
+
+    result.assert_outcomes(passed=6, failed=1)
+    result.stdout.fnmatch_lines(["*::smoke::test_no_runtime_varying_dag_args FAILED*"])
+    report = result.stdout.str()
+    assert "datetime.datetime.now()" in report
+    assert "the Dag constructor" in report
 
 
 def test_forbid_catchup_fails_a_catchup_dag(pytester: pytest.Pytester) -> None:
@@ -2965,7 +3045,7 @@ def test_forbid_catchup_fails_a_catchup_dag(pytester: pytest.Pytester) -> None:
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=6, failed=1)
+    result.assert_outcomes(passed=7, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_forbid_catchup FAILED*"])
     assert "Dag `catchup_dag`" in result.stdout.str()
 
@@ -2982,7 +3062,7 @@ def test_unbounded_expand_fails_only_the_uncapped_mapped_task(
         "-v", "--airflow-smoke", "--dag-folder=dags", "-m", "smoke"
     )
 
-    result.assert_outcomes(passed=6, failed=1)
+    result.assert_outcomes(passed=7, failed=1)
     result.stdout.fnmatch_lines(["*::smoke::test_no_unbounded_expand FAILED*"])
     report = result.stdout.str()
     assert "Dag `unbounded_dag` task `sink`" in report
@@ -2992,12 +3072,13 @@ def test_unbounded_expand_fails_only_the_uncapped_mapped_task(
 def test_antipattern_checks_disable_via_their_inis(pytester: pytest.Pytester) -> None:
     """Drop every anti-pattern item when its disable ini is set, even on offenders."""
 
-    _write_dags(pytester, variables=VARIABLE_DAG, io=IO_DAG)
+    _write_dags(pytester, variables=VARIABLE_DAG, io=IO_DAG, inflating=INFLATING_DAG)
     pytester.makeini(
         "[pytest]\n"
         "airflow_smoke = true\n"
         "airflow_forbid_top_level_variable_access = false\n"
         "airflow_forbid_top_level_io = false\n"
+        "airflow_forbid_runtime_varying_dag_args = false\n"
     )
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
@@ -3007,6 +3088,7 @@ def test_antipattern_checks_disable_via_their_inis(pytester: pytest.Pytester) ->
     for name in (
         "test_no_top_level_variable_access",
         "test_no_top_level_io",
+        "test_no_runtime_varying_dag_args",
     ):
         assert name not in report
 
@@ -3023,4 +3105,4 @@ def test_top_level_io_modules_ini_replaces_the_builtin_list(
 
     result = pytester.runpytest_subprocess("-q", "--dag-folder=dags", "-m", "smoke")
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
