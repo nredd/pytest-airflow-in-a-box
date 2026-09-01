@@ -6,8 +6,8 @@ import pytest
 import structlog
 from airflow.sdk import task
 
-from pytest_airflow_in_a_box.logging import StructlogCapture
-from pytest_airflow_in_a_box.types import DagMaker
+from piab.logging import StructlogCapture
+from piab.types import DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
 

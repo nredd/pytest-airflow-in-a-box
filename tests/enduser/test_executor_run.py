@@ -173,7 +173,7 @@ def test_a_dag_outside_the_dag_folder_is_refused_before_any_metadata_is_written(
         import pytest
         from airflow.sdk import DAG, task
 
-        from pytest_airflow_in_a_box.taskinstance import ExecutorRunError
+        from piab.taskinstance import ExecutorRunError
 
 
         def _build_dag():

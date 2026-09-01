@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import importlib
 import subprocess
 import sys
 from importlib.metadata import entry_points, version
@@ -356,6 +358,83 @@ def test_component_helpers_do_not_import_airflow() -> None:
     )
 
     subprocess.check_output([sys.executable, "-c", script], text=True)
+
+
+def test_alias_resolves_public_submodules_lazily() -> None:
+    """Resolve `piab.<module>` on demand without breaking the inert bare import.
+
+    The bare `import pytest_airflow_in_a_box` must stay Airflow-free, and the first
+    attribute access must import the submodule via the PEP 562 `__getattr__` -- the
+    subprocess keeps both checks unpolluted by this test module's own imports.
+    """
+    script = (
+        "import sys; import pytest_airflow_in_a_box as piab; "
+        "assert 'pytest_airflow_in_a_box.matchers' not in sys.modules; "
+        "assert 'airflow' not in sys.modules; "
+        "assert piab.matchers.succeeded(21) is not None; "
+        "assert piab.matchers is sys.modules['pytest_airflow_in_a_box.matchers']"
+    )
+
+    subprocess.check_output([sys.executable, "-c", script], text=True)
+
+
+def test_alias_rejects_underscore_prefixed_names() -> None:
+    """Refuse attribute access to private modules and protocol probes.
+
+    Called directly because the module-level `from pytest_airflow_in_a_box import _compat`
+    above already bound the attribute, so plain `getattr` would never reach `__getattr__`.
+    """
+    with pytest.raises(AttributeError, match="has no attribute '_compat'"):
+        pytest_airflow_in_a_box.__getattr__("_compat")
+
+
+def test_alias_rejects_nonexistent_names() -> None:
+    """Refuse attribute access to names that resolve to no submodule."""
+    with pytest.raises(AttributeError, match="has no attribute 'nonexistent'"):
+        _ = pytest_airflow_in_a_box.nonexistent
+
+
+@pytest.mark.parametrize("package_name", ["pytest_airflow_in_a_box", "piab"])
+def test_type_checking_reexports_match_public_modules(package_name: str) -> None:
+    """Keep each package's `TYPE_CHECKING` re-export block synchronized with the source tree.
+
+    The block gives `piab.<module>` attribute access real static types; a public module
+    missing from it silently degrades to `Any` in consumer annotations, so the name set
+    must equal the globbed public modules and subpackages, and every name must resolve
+    at runtime through `__getattr__`.
+
+    Parameters:
+        package_name: str import name of the package under test (canonical or mirror).
+    """
+    package = importlib.import_module(package_name)
+    assert package.__file__ is not None
+    package_root = Path(package.__file__).parent
+    tree = ast.parse(package_root.joinpath("__init__.py").read_text(encoding="utf-8"))
+    guarded = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "TYPE_CHECKING"
+    ]
+    assert len(guarded) == 1
+    declared = {
+        alias.name
+        for statement in guarded[0].body
+        if isinstance(statement, ast.ImportFrom)
+        for alias in statement.names
+    }
+
+    public = {
+        path.stem if path.suffix == ".py" else path.name
+        for path in package_root.iterdir()
+        if not path.name.startswith("_")
+        and (path.suffix == ".py" or path.joinpath("__init__.py").is_file())
+    }
+
+    assert declared == public
+    for name in sorted(declared):
+        assert getattr(package, name) is not None
 
 
 def test_pytest_auto_loads_entry_point(pytester: pytest.Pytester) -> None:

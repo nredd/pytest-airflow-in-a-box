@@ -13,7 +13,7 @@ from airflow.models.asset import AssetEvent, AssetModel
 from airflow.sdk import Asset, BaseOperator
 from sqlalchemy import select
 
-from pytest_airflow_in_a_box.types import DagMaker
+from piab.types import DagMaker
 
 pytestmark = pytest.mark.compat
 

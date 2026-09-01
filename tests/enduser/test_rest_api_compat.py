@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 from airflow.providers.standard.operators.empty import EmptyOperator
 
-from pytest_airflow_in_a_box.fixtures.api import AirflowApiClient
-from pytest_airflow_in_a_box.types import AirflowConnections, DagMaker
+from piab.fixtures.api import AirflowApiClient
+from piab.types import AirflowConnections, DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.api_test, pytest.mark.db_test]
 

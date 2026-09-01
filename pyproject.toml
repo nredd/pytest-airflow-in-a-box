@@ -2,6 +2,10 @@
 requires = ["uv_build>=0.9,<0.13"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+# The wheel ships the canonical package plus the `piab` alias mirror (issue #336).
+module-name = ["pytest_airflow_in_a_box", "piab"]
+
 [project]
 name = "pytest-airflow-in-a-box"
 version = "0.13.1"
@@ -137,6 +141,11 @@ select = [
     "UP",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# The `piab` mirror shims are star-import re-exports by design (issue #336); the sync
+# test in `tests/test_piab.py` guards what the stars actually export.
+"src/piab/**" = ["F403"]
+
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
@@ -196,7 +205,7 @@ showcontent = true
 
 [tool.coverage.run]
 branch = true
-source = ["pytest_airflow_in_a_box"]
+source = ["pytest_airflow_in_a_box", "piab"]
 # Subprocess pytester runs are measured through `coverage.process_startup`
 # (COVERAGE_PROCESS_START + the .pth installed by scripts/install_coverage_pth.py),
 # so every process writes its own suffixed data file and runs end with a combine.
@@ -209,6 +218,11 @@ source = [
     "src/pytest_airflow_in_a_box",
     "*/src/pytest_airflow_in_a_box",
     "*/site-packages/pytest_airflow_in_a_box",
+]
+piab = [
+    "src/piab",
+    "*/src/piab",
+    "*/site-packages/piab",
 ]
 
 [tool.coverage.report]

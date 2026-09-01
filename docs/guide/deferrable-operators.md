@@ -17,7 +17,7 @@ Trigger-only tests cannot catch broken serialization or a mismatched resume payl
 loop. It needs no triggerer job, `DagRun`, or metadata database:
 
 ```python
-from pytest_airflow_in_a_box.taskinstance import run_trigger
+from piab.taskinstance import run_trigger
 
 
 def test_trigger_fires():

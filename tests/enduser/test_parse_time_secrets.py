@@ -55,7 +55,7 @@ def pytest_sessionstart(session):
     from airflow.utils.session import create_session
 
     from pytest_airflow_in_a_box._compat import ensure_database
-    from pytest_airflow_in_a_box.bootstrap import get_bootstrap_state
+    from piab.bootstrap import get_bootstrap_state
 
     ensure_database(get_bootstrap_state(session.config).root)
     with create_session() as db_session:

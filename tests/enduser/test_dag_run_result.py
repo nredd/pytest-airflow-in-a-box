@@ -19,7 +19,7 @@ import pytest
 from airflow.triggers.base import BaseTrigger, TriggerEvent
 from airflow.utils.state import DagRunState, TaskInstanceState
 
-from pytest_airflow_in_a_box.matchers import (
+from piab.matchers import (
     deferred,
     failed,
     not_run,
@@ -27,7 +27,7 @@ from pytest_airflow_in_a_box.matchers import (
     succeeded,
     upstream_failed,
 )
-from pytest_airflow_in_a_box.types import DagMaker
+from piab.types import DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
 

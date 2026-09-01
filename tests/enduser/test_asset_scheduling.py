@@ -17,10 +17,10 @@ import pytest
 from airflow.utils.state import DagRunState
 from airflow.utils.types import DagRunType
 
+from piab.assets import evaluate_asset_schedules
+from piab.types import DagMaker
 from pytest_airflow_in_a_box._compat.asset_schedule import DATASET_CONDITION_REQUIRED_ABOVE
 from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, resolve_capabilities
-from pytest_airflow_in_a_box.assets import evaluate_asset_schedules
-from pytest_airflow_in_a_box.types import DagMaker
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

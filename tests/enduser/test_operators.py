@@ -18,8 +18,8 @@ import pytest
 from airflow.models.renderedtifields import RenderedTaskInstanceFields
 from airflow.utils.state import TaskInstanceState
 
-from pytest_airflow_in_a_box.matchers import rendered
-from pytest_airflow_in_a_box.types import DagMaker, RenderTask, RunTask
+from piab.matchers import rendered
+from piab.types import DagMaker, RenderTask, RunTask
 
 pytestmark = pytest.mark.compat
 
