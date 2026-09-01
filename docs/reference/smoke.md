@@ -17,6 +17,7 @@ separate `::smoke::<item>` node carrying the `smoke` and `timeout` markers:
 | `test_pool_references_exist` | Always | Every task names an existing pool. `airflow_pools` can seed additional `name = slots` rows. |
 | `test_no_top_level_variable_access` | `airflow_forbid_top_level_variable_access = true` (default) | AST and runtime interception find no Variable or Connection lookup during import. |
 | `test_no_top_level_io` | `airflow_forbid_top_level_io = true` (default) | Statically resolvable calls into configured I/O modules do not run during import. |
+| `test_no_runtime_varying_dag_args` | `airflow_forbid_runtime_varying_dag_args = true` (default) | No Dag or task constructor argument statically resolves to a runtime-varying value (`datetime.now`, `uuid4`, `random.*`, `pendulum.now`, ...), which would change the serialized Dag -- and so its Dag version -- on every parse. |
 | `test_forbid_catchup` | `airflow_forbid_catchup = true` | No scheduled Dag enables catchup. |
 | `test_no_unbounded_expand` | `airflow_forbid_unbounded_expand = true` | A task mapped over runtime data sets `max_active_tis_per_dag`; literal expansions are already bounded. |
 | `test_dag_id_pattern` | `airflow_dag_id_pattern` is set | Every `dag_id` matches the configured regular expression. |
@@ -34,6 +35,12 @@ instrumentation, it logs that runtime findings are unavailable and retains the A
 The I/O check is intentionally conservative: it reports only calls that resolve through the
 file's top-level imports to a configured module. `airflow_top_level_io_modules` replaces the
 built-in module list instead of extending it.
+
+The runtime-varying check (adapted from Apache Airflow's Dag version inflation checker, see
+`PROVENANCE.md`) is conservative the same way: values are tracked through top-level imports
+and simple assignments only, so a varying value built through a helper function or a nested
+assignment escapes. Outside a `with DAG` block, a call counts as a task only when it names a
+registered Dag instance as an argument or its callee name ends in `Operator`/`task`/`Sensor`.
 
 Exact option types, defaults, and validation rules live in
 [CLI and INI options](ini-options.md#smoke-catalog).

@@ -40,6 +40,7 @@ def test_my_dag(dag_bag, run_dag):
     result = run_dag(dag)
 
     assert result.success
+    assert result.xcoms["load"] == 42
     assert result.order == ["extract", "load"]
 ```
 
@@ -48,15 +49,15 @@ pytest --dag-folder=dags
 ```
 
 `run_dag` proves your *real file*, under its real `dag_id`, actually finishes in the states
-you expect. `dag_bag` parses the folder once per worker process, and `result.order` records
-execution order rather than graph topology. In-test Dags (`dag_maker`), single operators
-without a database (`run_task`), and matchers are in the
+you expect. `dag_bag` parses the folder once per worker process, `result.xcoms` captures task
+return values, and `result.order` records execution order rather than graph topology. In-test
+Dags (`dag_maker`), single operators without a database (`run_task`), and matchers are in the
 [Quickstart](https://nredd.github.io/pytest-airflow-in-a-box/quickstart/).
 
 ## Installation
 
 ```console
-uv add --dev "pytest-airflow-in-a-box[airflow3]"
+uv add --dev "pytest-airflow-in-a-box[airflow3,xdist]"
 ```
 
 The plugin does not depend on Airflow directly: the Airflow 2.x monolith and the 3.x core both
