@@ -114,6 +114,9 @@ if TYPE_CHECKING:
     from pytest_airflow_in_a_box import (
         types as types,
     )
+    from pytest_airflow_in_a_box import (
+        versioninflation as versioninflation,
+    )
 
 __version__ = "0.13.1"
 

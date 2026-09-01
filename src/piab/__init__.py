@@ -122,6 +122,9 @@ if TYPE_CHECKING:
     from piab import (
         types as types,
     )
+    from piab import (
+        versioninflation as versioninflation,
+    )
 
 __all__ = ("__version__",)
 
