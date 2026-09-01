@@ -111,6 +111,7 @@ snapshots, selection, and fan-out.
 | `airflow_forbid_top_level_variable_access` | bool | `True` | Enables import-time Variable and Connection lookup checks. |
 | `airflow_forbid_top_level_io` | bool | `True` | Enables import-time calls into known I/O-module checks. |
 | `airflow_top_level_io_modules` | linelist | `[]` | Replaces, rather than extends, the built-in module-prefix list. |
+| `airflow_forbid_runtime_varying_dag_args` | bool | `True` | Enables the runtime-varying Dag/task constructor argument check. |
 | `airflow_forbid_catchup` | bool | `False` | Enables the no-catchup policy. |
 | `airflow_forbid_unbounded_expand` | bool | `False` | Requires runtime-mapped tasks to set `max_active_tis_per_dag`. |
 | `airflow_dag_snapshot_dir` | string | `""` | Directory containing committed serialization snapshots. |
