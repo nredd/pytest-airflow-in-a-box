@@ -53,7 +53,7 @@ def test_fanout_matches_serial_and_respects_ancestor_ignore(pytester: pytest.Pyt
         "-q", "--airflow-smoke", f"--dag-folder={CORPUS}", "--airflow-dag-bag-fanout"
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     assert "should_be_ignored" not in result.stdout.str()
 
 
@@ -63,7 +63,7 @@ def test_fanout_disabled_produces_the_same_outcome(pytester: pytest.Pytester) ->
 
     result = pytester.runpytest_subprocess("-q", "--airflow-smoke", f"--dag-folder={CORPUS}")
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     assert "should_be_ignored" not in result.stdout.str()
 
 
@@ -111,7 +111,7 @@ def test_fanout_detects_duplicate_dag_id_spanning_two_shards(pytester: pytest.Py
     # Matches `test_smoke.py::test_duplicate_dag_ids_fail_integrity`'s real, serial-parse
     # outcome shape exactly: `test_dag_bag_integrity` treats a non-empty `import_errors`
     # as a failure, whatever the underlying cause.
-    result.assert_outcomes(passed=5, failed=1)
+    result.assert_outcomes(passed=6, failed=1)
     result.stdout.fnmatch_lines(["*test_dag_bag_integrity*"])
     result.stdout.fnmatch_lines(["*AirflowDagDuplicatedIdException*"])
     assert "also found in" in result.stdout.str()
@@ -151,7 +151,7 @@ def test_fanout_pool_spawns_exactly_once_under_xdist(pytester: pytest.Pytester) 
         "--airflow-home-retention=all",
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     # `--airflow-home` names a base directory; the run root is a generated subdirectory
     # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
     logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
@@ -195,7 +195,7 @@ def test_fanout_pool_spawns_exactly_once_with_dag_corpus_and_smoke_mixed(
         "--airflow-home-retention=all",
     )
 
-    result.assert_outcomes(passed=7)
+    result.assert_outcomes(passed=8)
     # `--airflow-home` names a base directory; the run root is a generated subdirectory
     # of it (`_airflow_home.locate_storage`'s explicit-base behavior).
     logs = sorted(home.glob("*/logs/dagbag-fanout-shard-*.log"))
@@ -390,5 +390,5 @@ def test_fanout_children_inherit_the_parents_sys_path(pytester: pytest.Pytester)
         "-q", "--airflow-smoke", f"--dag-folder={dag_folder}", "--airflow-dag-bag-fanout"
     )
 
-    result.assert_outcomes(passed=6)
+    result.assert_outcomes(passed=7)
     assert "ModuleNotFoundError" not in result.stdout.str()

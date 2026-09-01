@@ -18,6 +18,28 @@ optional task, preserves dependency flags on both execution paths, implements Ai
 `mark_success`, commits before Execution API access, and refreshes the original ORM task instance.
 The ASF license header is retained in that module.
 
+`src/pytest_airflow_in_a_box/versioninflation.py` is adapted from Apache Airflow's Dag version
+inflation static checker, `airflow-core/src/airflow/utils/dag_version_inflation_checker.py`,
+introduced by apache/airflow PR #59430 and pinned at merge commit
+`e7efeedccb6b8731b829707d5ea16f7bf0861b5b`. The ASF license header is retained in that module.
+The detection logic -- `RUNTIME_VARYING_CALLS`, `RuntimeVaryingValueAnalyzer`, `DagTaskDetector`,
+and the visitor traversal -- is kept for behavioral parity, including its known false-negative
+gaps (no recursion into assignment values, first-task-decorator early return, deferred-factory
+promotion only on direct name calls, name-heuristic task detection, and dotted-module-part
+matching for from-imports). Deviations: the check-level machinery
+(`DagVersionInflationCheckLevel`, `DagVersionInflationCheckResult`, `check_dag_file_stability`,
+Airflow-configuration reading, and DagWarning formatting) is removed because the smoke catalog's
+`airflow_forbid_runtime_varying_dag_args` / `airflow_smoke_disable` gating replaces it; findings
+are a sorted list of frozen `RuntimeVaryingFinding` dataclasses instead of a line-keyed warning
+dict, so same-line findings are not dropped and a twice-called factory reports once; the reported
+snippet is the varying sub-expression's source segment, not `ast.unparse` of the whole
+constructor call; the trailing advisory listing of every tainted variable is dropped -- only
+constructor and decorator findings are reported; async function definitions are deferred like
+sync ones (upstream recursed into them as module scope); nested for-loops over a shared target
+untaint without raising; parsing goes through this project's lenient
+`antipatterns.parse_dag_module`; and docstrings, typing, and naming follow this repo's house
+style.
+
 `src/pytest_airflow_in_a_box/_compat/asset_schedule.py::_evaluate_v3_dag` is adapted from the
 DagRun-creation body of Apache Airflow's `SchedulerJobRunner._create_dag_runs_asset_triggered`
 and the readiness evaluation in `DagModel.dags_needing_dagruns`
@@ -394,6 +416,7 @@ may be included in this project.
 - Apache Airflow: https://github.com/apache/airflow
 - Apache Airflow license: https://github.com/apache/airflow/blob/main/LICENSE
 - Adapted task-instance helper: https://github.com/apache/airflow/blob/2d374f71bc81202204ac0208df07b07c280668fa/devel-common/src/tests_common/test_utils/taskinstance.py
+- Adapted Dag version inflation checker: https://github.com/apache/airflow/blob/e7efeedccb6b8731b829707d5ea16f7bf0861b5b/airflow-core/src/airflow/utils/dag_version_inflation_checker.py
 - Adapted asset-triggered scheduling (3.x): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/jobs/scheduler_job_runner.py
 - Adapted asset-triggered readiness evaluation (3.x): https://github.com/apache/airflow/blob/1438ea3587031417cc85d74323235cf087a058fb/airflow-core/src/airflow/models/dag.py
 - Adapted dataset-triggered scheduling (2.x): https://github.com/apache/airflow/blob/b93c3db6b1641b0840bd15ac7d05bc58ff2cccbf/airflow/jobs/scheduler_job_runner.py
