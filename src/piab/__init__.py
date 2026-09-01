@@ -15,8 +15,113 @@ from __future__ import annotations
 import importlib
 import importlib.util
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 from pytest_airflow_in_a_box import __version__
+
+if TYPE_CHECKING:
+    from piab import (
+        airflow_cfg as airflow_cfg,
+    )
+    from piab import (
+        antipatterns as antipatterns,
+    )
+    from piab import (
+        artifact as artifact,
+    )
+    from piab import (
+        assets as assets,
+    )
+    from piab import (
+        baseline as baseline,
+    )
+    from piab import (
+        bootstrap as bootstrap,
+    )
+    from piab import (
+        certification as certification,
+    )
+    from piab import (
+        collection as collection,
+    )
+    from piab import (
+        components as components,
+    )
+    from piab import (
+        config as config,
+    )
+    from piab import (
+        dagcorpus as dagcorpus,
+    )
+    from piab import (
+        db as db,
+    )
+    from piab import (
+        defaults as defaults,
+    )
+    from piab import (
+        doctor as doctor,
+    )
+    from piab import (
+        fixtures as fixtures,
+    )
+    from piab import (
+        ini_config as ini_config,
+    )
+    from piab import (
+        isolated as isolated,
+    )
+    from piab import (
+        isolated_child as isolated_child,
+    )
+    from piab import (
+        logging as logging,
+    )
+    from piab import (
+        markers as markers,
+    )
+    from piab import (
+        matchers as matchers,
+    )
+    from piab import (
+        migration as migration,
+    )
+    from piab import (
+        migration_strict as migration_strict,
+    )
+    from piab import (
+        parallel_dagbag as parallel_dagbag,
+    )
+    from piab import (
+        parallel_dagbag_child as parallel_dagbag_child,
+    )
+    from piab import (
+        parse_secrets as parse_secrets,
+    )
+    from piab import (
+        plugin as plugin,
+    )
+    from piab import (
+        record as record,
+    )
+    from piab import (
+        reporting as reporting,
+    )
+    from piab import (
+        results as results,
+    )
+    from piab import (
+        smoke as smoke,
+    )
+    from piab import (
+        storage as storage,
+    )
+    from piab import (
+        taskinstance as taskinstance,
+    )
+    from piab import (
+        types as types,
+    )
 
 __all__ = ("__version__",)
 

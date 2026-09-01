@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import subprocess
 import sys
 from importlib.metadata import entry_points, version
@@ -393,15 +394,21 @@ def test_alias_rejects_nonexistent_names() -> None:
         _ = pytest_airflow_in_a_box.nonexistent
 
 
-def test_type_checking_reexports_match_public_modules() -> None:
-    """Keep the `TYPE_CHECKING` re-export block synchronized with the source tree.
+@pytest.mark.parametrize("package_name", ["pytest_airflow_in_a_box", "piab"])
+def test_type_checking_reexports_match_public_modules(package_name: str) -> None:
+    """Keep each package's `TYPE_CHECKING` re-export block synchronized with the source tree.
 
     The block gives `piab.<module>` attribute access real static types; a public module
     missing from it silently degrades to `Any` in consumer annotations, so the name set
     must equal the globbed public modules and subpackages, and every name must resolve
     at runtime through `__getattr__`.
+
+    Parameters:
+        package_name: str import name of the package under test (canonical or mirror).
     """
-    package_root = Path(pytest_airflow_in_a_box.__file__).parent
+    package = importlib.import_module(package_name)
+    assert package.__file__ is not None
+    package_root = Path(package.__file__).parent
     tree = ast.parse(package_root.joinpath("__init__.py").read_text(encoding="utf-8"))
     guarded = [
         node
@@ -427,7 +434,7 @@ def test_type_checking_reexports_match_public_modules() -> None:
 
     assert declared == public
     for name in sorted(declared):
-        assert getattr(pytest_airflow_in_a_box, name) is not None
+        assert getattr(package, name) is not None
 
 
 def test_pytest_auto_loads_entry_point(pytester: pytest.Pytester) -> None:

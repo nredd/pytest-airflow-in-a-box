@@ -72,6 +72,42 @@ def test_mirror_reexports_the_real_objects(name: str) -> None:
         assert getattr(mirror, exported) is getattr(real, exported)
 
 
+def test_mirror_subpackages_bind_their_submodules() -> None:
+    """Match the canonical subpackages' attribute surface for nested modules.
+
+    The canonical subpackage `__init__`s bind their submodules as attributes as a side
+    effect of their own imports, so `piab.fixtures.api` must resolve exactly like
+    `pytest_airflow_in_a_box.fixtures.api` -- the shims carry explicit re-export lines
+    for that, and this test keeps them complete. Where the canonical `__init__` rebinds
+    a submodule's name (the `session` fixture shadows the `session` module), the mirror
+    must reproduce that shadowing rather than expose the module.
+    """
+
+    for name in sorted(public_module_names(MIRROR_ROOT)):
+        parent, _, child = name.rpartition(".")
+        if not parent:
+            continue
+        mirror_package = importlib.import_module(f"piab.{parent}")
+        real_package = importlib.import_module(f"pytest_airflow_in_a_box.{parent}")
+        real_attribute = getattr(real_package, child)
+        if real_attribute is importlib.import_module(f"pytest_airflow_in_a_box.{name}"):
+            assert getattr(mirror_package, child) is importlib.import_module(f"piab.{name}")
+        else:
+            assert getattr(mirror_package, child) is real_attribute
+
+
+def test_wheel_config_ships_the_mirror() -> None:
+    """Guard the uv_build module list that actually puts `src/piab` into the wheel.
+
+    The dev environment resolves `piab` through the editable install of `src/`, so every
+    other test would keep passing with the mirror silently dropped from published wheels.
+    """
+
+    pyproject = MIRROR_ROOT.parent.parent.joinpath("pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'module-name = ["pytest_airflow_in_a_box", "piab"]' in pyproject
+
+
 def test_mirror_version_matches_canonical() -> None:
     """Source `piab.__version__` from the canonical package, never a second literal."""
 
@@ -107,7 +143,7 @@ def test_mirror_rejects_underscore_prefixed_names() -> None:
     """Refuse attribute access to private names; the mirror has no `_compat`."""
 
     with pytest.raises(AttributeError, match="has no attribute '_compat'"):
-        piab.__getattr__("_compat")
+        _ = piab._compat
 
 
 def test_mirror_rejects_nonexistent_names() -> None:
