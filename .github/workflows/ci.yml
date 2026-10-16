@@ -80,7 +80,7 @@ jobs:
         # `if-no-files-found: warn` because a run that died before configuration
         # leaves nothing behind, and a second red X would bury the real failure.
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: reports-wheel-smoke
           path: reports
@@ -136,7 +136,7 @@ jobs:
         run: ${{ steps.env.outputs.python-path }} -m pytest -v
       - name: Upload action smoke reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: reports-action-smoke-${{ matrix.airflow-version }}-${{ matrix.extra }}
           # Literal, not `steps.env.outputs.report-dir`: on a provisioning failure
@@ -191,14 +191,14 @@ jobs:
           -m "compat or db_test or postgres"
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: reports-postgres-3.3.0-3.12
           path: reports
           retention-days: 7
           if-no-files-found: warn
       - name: Upload coverage data
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-postgres-3.3.0-3.12
           path: .coverage.*
@@ -239,7 +239,7 @@ jobs:
           uv run coverage xml
           uv run coverage report --fail-under=100 | tee coverage-report.txt
       - name: Upload combined report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-combined
           path: coverage.xml
