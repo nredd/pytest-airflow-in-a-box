@@ -1304,8 +1304,9 @@ def test_settle_dag_run_bounds_states_that_never_stabilize() -> None:
 
 
 @pytest.mark.parametrize("dag_run_refresh", [True, False], ids=["3.3-shape", "3.1-shape"])
+@pytest.mark.parametrize("settled_state", [None, "skipped", "upstream_failed"])
 def test_dependencies_met_refreshes_through_the_certified_signature(
-    monkeypatch: pytest.MonkeyPatch, dag_run_refresh: bool
+    monkeypatch: pytest.MonkeyPatch, dag_run_refresh: bool, settled_state: str | None
 ) -> None:
     """Refresh from the persisted task through whichever signature the release carries.
 
@@ -1316,6 +1317,7 @@ def test_dependencies_met_refreshes_through_the_certified_signature(
     Parameters:
         monkeypatch: pytest.MonkeyPatch replacing the capability probe and the refresh.
         dag_run_refresh: bool selecting the certified refresh signature.
+        settled_state: str | None set by dependency evaluation despite a passing status.
     """
 
     dag_run = object()
@@ -1338,9 +1340,17 @@ def test_dependencies_met_refreshes_through_the_certified_signature(
         lambda *args: refreshes.append(args),
     )
     session: Any = _Session()
-    ti: Any = SimpleNamespace(are_dependencies_met=lambda **_kwargs: True)
+    ti: Any = SimpleNamespace(state=None)
 
-    assert taskrun.dependencies_met(ti, session=session) is True
+    def evaluate_dependencies(**_kwargs: Any) -> bool:
+        """Model older Airflow returning true after a trigger-rule state change."""
+
+        ti.state = settled_state
+        return True
+
+    ti.are_dependencies_met = evaluate_dependencies
+
+    assert taskrun.dependencies_met(ti, session=session) is (settled_state is None)
     assert refreshes == [
         ((ti, scheduler_task, dag_run) if dag_run_refresh else (ti, scheduler_task))
     ]

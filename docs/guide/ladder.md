@@ -78,7 +78,10 @@ inert `DagRunResult` with:
 Mapped instances use keys such as `double[0]`. A raising task is recorded in `errors`, blocked
 downstream tasks settle through Airflow's trigger-rule semantics, and `success` follows
 Airflow's leaf-task rule. Assert `not result.errors` when the contract is specifically that no
-task body raised.
+task body raised. Dependency-only skips and upstream failures never appear in `order`, even
+when an older Airflow dependency evaluator returns a passing status while changing state.
+Both in-process and executor-driven runs recheck that the instance is still pending before
+dispatch.
 
 Outcome matchers keep a complete run contract compact:
 

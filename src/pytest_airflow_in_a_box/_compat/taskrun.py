@@ -584,7 +584,7 @@ def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
         session: sqlalchemy.orm.Session | None owning the persisted metadata.
 
     Returns:
-        bool reporting whether every dependency is currently met.
+        bool reporting whether every dependency is met and the instance remains pending.
 
     Raises:
         TaskResolutionError: Persisted DagRun or task metadata cannot be loaded.
@@ -608,7 +608,11 @@ def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
     if session is not None:
         # `flag_upstream_failed` writes through the session without committing.
         session.commit()
-    return met
+    # Older trigger-rule evaluators can mark an instance skipped while yielding no
+    # failing dependency status (e.g. `none_failed_min_one_success` with all upstreams
+    # skipped). The scheduler also excludes those state-changed instances before
+    # dispatch; a passing dependency result alone does not mean the body should run.
+    return met and instance.state is None
 
 
 def _task_identity(ti: Any) -> tuple[str, int]:
