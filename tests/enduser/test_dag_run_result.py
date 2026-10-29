@@ -27,6 +27,7 @@ from piab.matchers import (
     succeeded,
     upstream_failed,
 )
+from piab.taskinstance import execute_dag_run
 from piab.types import DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
@@ -143,9 +144,11 @@ def test_run_executes_the_whole_dag_and_snapshots(dag_maker: DagMaker) -> None:
 
 
 def test_execute_dag_run_uses_the_attached_session_when_omitted(dag_maker: DagMaker) -> None:
-    """Preserve the optional-session whole-DagRun execution entry point."""
+    """Preserve the optional-session whole-DagRun execution entry point.
 
-    from piab.taskinstance import execute_dag_run
+    Parameters:
+        dag_maker: DagMaker building a DagRun attached to its metadata session.
+    """
 
     _linear_dag(dag_maker, "result_implicit_session")
     dag_run = dag_maker.create_dagrun()
@@ -439,7 +442,11 @@ def test_run_success_follows_airflow_leaf_semantics(dag_maker: DagMaker) -> None
 
 
 def test_run_preserves_errors_below_a_late_upstream_failure(dag_maker: DagMaker) -> None:
-    """Run an absorbing leaf in one pass without losing the original body error."""
+    """Run an absorbing leaf in one pass without losing the original body error.
+
+    Parameters:
+        dag_maker: DagMaker building and running the persisted Dag.
+    """
 
     with dag_maker(dag_id="result_late_upstream_failure"):
 

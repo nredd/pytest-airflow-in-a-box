@@ -957,6 +957,7 @@ def execute_dag_run(
             recorded as a task outcome.
     """
 
+    # Defer SQLAlchemy's import cost until persisted DagRun execution is requested.
     from sqlalchemy.orm import object_session
 
     if session is None:
