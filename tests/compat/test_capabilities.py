@@ -59,6 +59,9 @@ class _LegacyTaskInstance:
     def run(self) -> None:
         """Represent legacy task execution."""
 
+    def _run_raw_task(self) -> None:
+        """Represent legacy execution after the dependency gate."""
+
     def refresh_from_task(self, task: object, pool_override: str | None = None) -> None:
         """Represent the original task refresh signature."""
 
@@ -1591,6 +1594,18 @@ def _restore_legacy_runner(modules: dict[str, SimpleNamespace]) -> None:
     modules["airflow.models.taskinstance"].TaskInstance = _LegacyTaskInstance
 
 
+def _remove_legacy_raw_runner(modules: dict[str, SimpleNamespace]) -> None:
+    """Remove the raw entry point needed to advance attempts after dependency checks.
+
+    Parameters:
+        modules: dict[str, SimpleNamespace] containing the fake Airflow modules.
+    """
+
+    modules["airflow.models.taskinstance"].TaskInstance = type(
+        "LegacyWithoutRawRun", (), {"run": _callable_symbol}
+    )
+
+
 def _remove_dag_run_refresh(modules: dict[str, SimpleNamespace]) -> None:
     """Mutate Airflow 3.3 to remove its DagRun-aware refresh signature."""
 
@@ -1657,6 +1672,7 @@ def _remove_dag_run_from_mutation_hook(modules: dict[str, SimpleNamespace]) -> N
         ((3, 2, 2), _replace_dag_bag_with_old_location, "DagBag canonical location"),
         ((3, 3, 0), _add_include_examples, "DagBag.__init__.include_examples"),
         ((3, 2, 2), _restore_legacy_runner, "TaskInstance task runner"),
+        ((3, 1, 0), _remove_legacy_raw_runner, "TaskInstance._run_raw_task"),
         ((3, 3, 0), _remove_dag_run_refresh, "TaskInstance.refresh_from_task.dag_run"),
         ((3, 2, 2), _remove_sentry_field, "StartupDetails.sentry_integration"),
         ((3, 3, 0), _remove_queue_field, "TaskInstance DTO queue"),

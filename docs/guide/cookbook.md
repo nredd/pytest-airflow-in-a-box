@@ -171,14 +171,15 @@ operators that render from *inside* `execute()`.
 `run()` and `run_ti()` make one attempt. A retryable failure settles `up_for_retry`; they do not
 wait and requeue it. On Airflow 3, drive the next attempt against the same `DagRun`:
 
-1. Increment and commit `try_number` before every attempt, including the first. This mirrors
-   the scheduler's bookkeeping.
-2. Assert the first failure, state, retry deadline, and callback.
-3. Increment and commit again, then call `run_ti(..., ignore_ti_state=True,
-   ignore_task_deps=True)` to bypass the existing state and "Not In Retry Period" dependency.
+1. Execute the first attempt and assert its failure, state, retry deadline, and callback.
+2. Call `run_ti(..., ignore_ti_state=True, ignore_task_deps=True)` to bypass the existing state
+   and "Not In Retry Period" dependency.
 
-This recipe is 3.x-only; earlier Airflow 2 releases expose `try_number` as a read-only derived
-property.
+On Airflow 3, the runner advances `try_number` when a new attempt starts: the first execution
+sees `1`, a genuine retry advances the existing counter, and deferral/resumption or sensor
+rescheduling keeps the same attempt. Creating a DagRun alone leaves its instances at `0`.
+Do not increment counters manually. Already scheduled or queued instances retain the counter
+assigned by their scheduler. Airflow 2 keeps its native attempt bookkeeping.
 
 ```python
 from datetime import timedelta
@@ -205,9 +206,6 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
         flaky()
 
     dag_run = dag_maker.create_dagrun()
-    ti = dag_maker.create_ti("flaky", dag_run)
-    ti.try_number += 1
-    dag_maker.session.commit()
 
     with pytest.raises(ValueError, match="nope"):
         dag_maker.run_ti("flaky", dag_run)
@@ -218,8 +216,6 @@ def test_flaky_task_retries_to_success(dag_maker, tmp_path):
     assert ti.next_retry_datetime() == ti.end_date + timedelta(minutes=5)
     assert retried_marker.exists()  # the user's `on_retry_callback` ran
 
-    ti.try_number += 1
-    dag_maker.session.commit()
     ti = dag_maker.run_ti("flaky", dag_run, ignore_ti_state=True, ignore_task_deps=True)
 
     assert ti.try_number == 2

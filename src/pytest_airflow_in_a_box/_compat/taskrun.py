@@ -37,7 +37,11 @@ import logging
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol
 
-from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
+from pytest_airflow_in_a_box._compat.capabilities import (
+    AirflowFamily,
+    TaskInstanceRunner,
+    resolve_capabilities,
+)
 from pytest_airflow_in_a_box._compat.dag import expand_mapped_task_instances, task_is_mapped
 from pytest_airflow_in_a_box._compat.registry import lookup_authoring_dag
 from pytest_airflow_in_a_box.results import DagRunResult, TaskResult, task_key
@@ -197,7 +201,7 @@ def _run_legacy_task_instance(
     mark_success: bool,
     session: Session | None,
 ) -> TaskInstance:
-    """Execute one task through Airflow 3.1's ``TaskInstance.run``.
+    """Execute one task through Airflow 2's native ``TaskInstance.run``.
 
     Parameters:
         ti: airflow.models.taskinstance.TaskInstance to execute.
@@ -236,7 +240,7 @@ def _run_sdk_task_instance(
     mark_success: bool,
     session: Session | None,
 ) -> TaskInstance:
-    """Execute one task through Airflow 3.2+'s private Task SDK runner.
+    """Execute one task through Airflow 3's dependency gate and raw runner.
 
     Parameters:
         ti: airflow.models.taskinstance.TaskInstance to execute.
@@ -256,7 +260,6 @@ def _run_sdk_task_instance(
     """
 
     from airflow.models.taskinstance import TaskInstance
-    from airflow.sdk.definitions.dag import _run_task
     from airflow.utils.state import TaskInstanceState
     from sqlalchemy import select
     from sqlalchemy.orm import lazyload, object_session
@@ -264,7 +267,7 @@ def _run_sdk_task_instance(
     active_session = session or object_session(ti)
     if active_session is None:
         raise RuntimeError(
-            "Airflow 3.2+ task execution requires a persisted task instance attached to a session"
+            "Airflow 3 task execution requires a persisted task instance attached to a session"
         )
 
     dag_run, scheduler_task = _scheduler_task(ti, active_session)
@@ -276,6 +279,7 @@ def _run_sdk_task_instance(
 
     # The in-process runner serves the Execution API through separate DB sessions.
     active_session.commit()
+    previous_state = ti.state
     should_run = ti.check_and_change_state_before_execution(
         ignore_depends_on_past=ignore_depends_on_past,
         ignore_task_deps=ignore_task_deps,
@@ -294,6 +298,31 @@ def _run_sdk_task_instance(
         finally:
             _refresh_task_instance(ti, active_session)
         return ti
+
+    # The scheduler normally advances this when scheduling a new attempt. This
+    # runner bypasses scheduling, but resumed/deferred/already-scheduled work must
+    # keep its existing attempt number.
+    if not ti.next_method and previous_state not in {
+        TaskInstanceState.SCHEDULED,
+        TaskInstanceState.QUEUED,
+        TaskInstanceState.RUNNING,
+        TaskInstanceState.DEFERRED,
+        TaskInstanceState.UP_FOR_RESCHEDULE,
+    }:
+        ti.try_number += 1
+        active_session.commit()
+
+    if capabilities.task_instance_runner is TaskInstanceRunner.LEGACY_RUN:
+        # Airflow 3.1's `run` combines the gate and raw execution without the
+        # scheduler's attempt increment. Split those steps at the same boundary.
+        try:
+            _refresh_from_task(ti, task)
+            ti._run_raw_task()
+        finally:
+            _refresh_task_instance(ti, active_session)
+        return ti
+
+    from airflow.sdk.definitions.dag import _run_task
 
     # Session handling is a mess in tests; use a fresh ti to run the task. Queried
     # directly rather than through `TaskInstance.get_task_instance`: Airflow 3.2.0
@@ -454,7 +483,7 @@ def run_task_instance(
     Raises:
         TaskResolutionError: No executable task can be resolved.
         TriggerExecutionError: A deferred task's trigger cannot be driven to an event.
-        RuntimeError: Airflow 3.2+ cannot execute a detached instance or returns no result.
+        RuntimeError: Airflow 3 cannot execute a detached instance or returns no result.
         BaseException: Airflow reports the task execution error.
     """
 
@@ -467,10 +496,12 @@ def run_task_instance(
         "mark_success": mark_success,
         "session": session,
     }
-    if capabilities.task_instance_runner is TaskInstanceRunner.LEGACY_RUN:
-        result = _run_legacy_task_instance(ti, resolved_task, **arguments)
-    else:
-        result = _run_sdk_task_instance(ti, resolved_task, **arguments)
+    runner = (
+        _run_legacy_task_instance
+        if capabilities.family is AirflowFamily.V2
+        else _run_sdk_task_instance
+    )
+    result = runner(ti, resolved_task, **arguments)
     if not run_triggerer:
         return result
 
@@ -480,9 +511,7 @@ def run_task_instance(
         return result
     _resume_deferred_task_instance(result, session, trigger_timeout=trigger_timeout)
     arguments["ignore_ti_state"] = True
-    if capabilities.task_instance_runner is TaskInstanceRunner.LEGACY_RUN:
-        return _run_legacy_task_instance(result, resolved_task, **arguments)
-    return _run_sdk_task_instance(result, resolved_task, **arguments)
+    return runner(result, resolved_task, **arguments)
 
 
 def ordered_task_instances(
