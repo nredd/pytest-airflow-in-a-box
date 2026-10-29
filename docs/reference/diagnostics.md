@@ -2,7 +2,8 @@
 
 Use `pytest --airflow-doctor` to inspect the environment this plugin actually bootstrapped. It
 is a one-shot preflight for storage, Airflow compatibility, executor configuration, migration
-settings, and Dag coverage -- not a test run or a replacement for the smoke catalog.
+settings, Dag coverage, and per-test selection risks -- not a test run or a replacement for
+the smoke catalog.
 
 The most valuable check catches false-green coverage. A repository can report 100% for `src/`
 while never measuring its `dags/` folder; neither pytest nor `pytest-cov` treats those absent
@@ -70,6 +71,9 @@ field under `Versions and capabilities`.
 - Collection folder: not configured (`--collect-dag-folder` / `airflow_collect_dags_folder`)
 - NOT COVERED: the Dag folder sits outside every configured `--cov` source, so Dag files are silently missing from the report. Add it: `pytest --cov=/tmp/repo/dags --cov-report=term-missing`
 
+## Per-test selection
+- `pytest-testmon`: not requested (or disabled by `--no-testmon`)
+
 ## API server
 - Not started: this diagnostic run did not request the `api_server_url` fixture.
 ```
@@ -86,6 +90,7 @@ field under `Versions and capabilities`.
 | **Migration-strict** | Whether Airflow 2-to-3 warning promotion is disabled, enabled on Airflow 2, or enabled where it is a no-op. | See [migration-strict mode](../guide/migration.md#migration-strict-mode). |
 | **Worker environment drift** | Whether an xdist worker or isolated child rejects inherited bootstrap-variable drift (`error`) or reinstalls the controller's values and warns (`repair`). | Keep `error` unless a foreign conftest or plugin cannot be changed; `repair` does not prevent a later mutation. See [environment ownership](../internals/test-environments.md#pytest-xdist-and-environment-ownership). |
 | **Dag coverage** | The resolved Dag folder, the independent per-file collection folder, pytest-cov activation, and whether an active source contains the Dag folder. | Use the verdict table below and the [Dag coverage guide](../guide/smoke-tests.md#dag-coverage). |
+| **Per-test selection** | Whether a testmon mode was requested and cached fixtures can invalidate dependency attribution. | Keep corpus consumers out of testmon runs; see [cached fixtures](fixtures.md#per-test-selection-and-cached-fixtures). |
 | **API server** | Always `Not started`: Doctor exits before a fixture can activate the lazy server. | Use the [REST API fixtures](../guide/rest-api.md) in a real test when server behavior is the subject. |
 
 ### Compatibility and executor verdicts
@@ -118,6 +123,27 @@ Doctor evaluates these outcomes in order:
 The collection-folder line is informational because per-file collection and coverage are
 separate mechanisms. A missing or invalid configured collection directory is rendered as
 `MISCONFIGURED` while the coverage diagnosis continues.
+
+## Per-test selection
+
+With testmon installed, pass the same activation flags used by your test run:
+
+```console
+pytest --airflow-doctor --testmon
+```
+
+`--testmon`, `--testmon-noselect`, `--testmon-nocollect`, and `--testmon-forceselect` each
+trigger `SELECTION NOT TRUSTED`; `--no-testmon` suppresses it. The warning applies to projects
+using **any non-function-scoped fixtures**, not only `dag_bag`/`dag_corpus` or projects with a
+configured Dag folder. Recording a baseline with `--testmon-noselect` can preserve the same
+first-consumer attribution problem in later selective runs.
+
+Doctor exits before testmon's runtime plugins initialize or pytest builds a complete fixture
+inventory. It reads parsed activation options and prints conditional guidance, not a claim
+that it inspected all fixture definitions or consumers. It does not import testmon, collect
+tests, execute fixtures, or change selection. Follow the
+[cached-fixture mitigations](fixtures.md#per-test-selection-and-cached-fixtures) rather than
+treating a successful Doctor exit as proof that selection is safe.
 
 ## Where the report's `AIRFLOW_HOME` goes
 
