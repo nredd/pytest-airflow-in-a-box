@@ -191,7 +191,8 @@ jobs:
           if [ -n "${{ matrix.pytest-spec }}" ]; then
             uv pip install --python .venv-ci/bin/python "${{ matrix.pytest-spec }}"
           fi
-          uv pip install --python .venv-ci/bin/python coverage
+          # The nested fan-out measurement contract exercises pytest-cov itself.
+          uv pip install --python .venv-ci/bin/python coverage "pytest-cov==7.1.0"
           .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests
         env:
@@ -247,7 +248,8 @@ jobs:
             --editable ".[xdist]" \
             "apache-airflow-core==${AIRFLOW_VERSION}" \
             "apache-airflow-providers-sqlite>=4.1,<5"
-          uv pip install --python .venv-ci/bin/python coverage
+          # Keep the musl suite's measurement tools identical to the regular legs.
+          uv pip install --python .venv-ci/bin/python coverage "pytest-cov==7.1.0"
           .venv-ci/bin/python scripts/install_coverage_pth.py
       - name: Run tests
         env:
