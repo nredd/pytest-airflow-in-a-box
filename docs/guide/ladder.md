@@ -97,6 +97,11 @@ available.
 
 ### Whole-DagRun execution
 
+Trigger-rule skips and upstream failures propagate before downstream tasks are visited.
+For example, a short-circuit with `ignore_downstream_trigger_rules=False` can skip an
+`all_success` task while its `none_failed` or `all_done` downstream still runs in the same
+call. Dependency-only state changes are absent from `result.order`.
+
 Each task instance receives at most one attempt. A retry-configured failure settles
 `up_for_retry`, is not requeued, and leaves the run non-terminal. Use the
 [retry recipe](cookbook.md#retry-behavior) to drive another attempt explicitly, or seed

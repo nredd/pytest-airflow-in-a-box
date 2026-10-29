@@ -954,6 +954,7 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
         ti.state = "success"
         return ti
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
     result = execute_dag_run(dag_run, dag, session=session)
@@ -995,6 +996,7 @@ def test_execute_dag_run_captures_failures_and_leaves_blocked_instances(
             raise ValueError("nope")
         return ti  # Unmet dependencies: the instance keeps its `None` state.
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
     result = execute_dag_run(dag_run, dag)
@@ -1058,6 +1060,7 @@ def test_execute_dag_run_expands_mapped_placeholders(
         return ti
 
     monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fake_expand)
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
     result = execute_dag_run(dag_run, dag, session=session)
@@ -1119,6 +1122,7 @@ def test_execute_dag_run_waits_for_upstreams_before_expanding(
         del args
         raise AssertionError("expansion must wait for settled upstreams")
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
     monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fail_expand)
 
@@ -1141,6 +1145,7 @@ def test_execute_dag_run_propagates_plugin_contract_failures(
         del ti, task, kwargs
         raise TaskResolutionError("no executable task")
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
 
     with pytest.raises(TaskResolutionError, match="no executable task"):

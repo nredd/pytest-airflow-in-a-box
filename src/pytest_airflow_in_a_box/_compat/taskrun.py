@@ -539,11 +539,10 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
 def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
     """Report whether Airflow's own dependency rules currently allow an instance to run.
 
-    The in-process path never asks this directly: `check_and_change_state_before
-    _execution` both evaluates the rules and moves the instance to ``running``. An
-    executor-driven run needs the answer *without* that transition, because the
-    instance has to reach the executor in ``queued`` instead. This asks Airflow the
-    same question through the same dependency machinery.
+    The shared DagRun walk asks this before either runner dispatches a task, so
+    trigger-rule skips and upstream failures propagate before downstreams are visited.
+    Unlike `check_and_change_state_before_execution`, this does not move a runnable
+    instance to ``running``: executor-driven instances must reach ``queued`` first.
 
     Evaluating dependencies requires the ORM instance to carry its serialized task, so
     this refreshes from the persisted scheduler task first -- the same refresh the
@@ -843,8 +842,9 @@ def drive_dag_run(
 
     Shared by every way this plugin drives a DagRun. Instances are visited in
     topological order, one attempt each; a raising task body is captured and
-    execution continues, scheduler-shaped. Mapped tasks expand mid-run once every
-    direct upstream settled.
+    execution continues, scheduler-shaped. Dependency evaluation propagates skips
+    and upstream failures before dispatch, without counting them as execution.
+    Mapped tasks expand mid-run once every direct upstream settled.
 
     Parameters:
         dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
@@ -889,6 +889,10 @@ def drive_dag_run(
         attempted.add((task_id, map_index))
         key = task_key(task_id, map_index)
         try:
+            if not dependencies_met(ti, session=session):
+                # Propagate scheduler-owned skips/failures before visiting downstreams,
+                # without counting a dependency-only transition as body execution.
+                continue
             settle(ti, dag.get_task(task_id), session=session)
         except DagRunDriveError:
             # Plugin-contract failures are not Dag outcomes; surface them.
