@@ -23,7 +23,8 @@ The catalog checks imports and duplicate IDs, serialization, scheduling, pools, 
 secrets or I/O. Opt-in policies cover catchup, unbounded expansion, IDs, tags, owners, and
 serialization snapshots. Disable policies your repository does not share.
 
-Each enabled check is a separate `::smoke::<check-name>` test and JUnit row. The default
+Each enabled check is a separate `<installed-smoke.py>::smoke::<check-name>` test and JUnit
+row, anchored to the plugin's installed source file for file-fingerprinting plugins. The default
 catalog initializes the metadata database lazily for its integrity and pool checks; it never
 starts the REST API.
 

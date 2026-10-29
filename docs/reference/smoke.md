@@ -7,7 +7,10 @@ per-file collection, and coverage. This page defines every generated item and th
 ## Catalog
 
 Enable the catalog with `--airflow-smoke` or `airflow_smoke = true`. Each enabled check is a
-separate `::smoke::<item>` node carrying the `smoke` and `timeout` markers:
+separate `<installed-smoke.py>::smoke::<item>` node carrying the `smoke` and `timeout`
+markers. The prefix is the absolute path to the plugin's installed Python source, so
+file-fingerprinting plugins such as `pytest-testmon` can read it without treating the
+project root as a source file. No generated file is added to your project:
 
 | Item | Enabled when | Contract |
 | --- | --- | --- |
@@ -48,7 +51,9 @@ Exact option types, defaults, and validation rules live in
 ## Selection and configuration
 
 Normal pytest selection applies after the synthetic catalog is added: `-m smoke`, `-m "not
-smoke"`, `-k`, and `--deselect ::smoke::<item>` all work. A bare run, directory positional,
+smoke"`, `-k`, and `--deselect '<installed-smoke.py>::smoke::<item>'` all work. Copy the
+full node ID from `pytest --collect-only -q --airflow-smoke`, or use
+`airflow_smoke_disable` below to avoid installation-specific paths. A bare run, directory positional,
 or `testpaths` run includes the catalog. An explicit test file or node ID excludes it unless a
 `-m` expression explicitly mentions `smoke` and can select a real smoke item.
 

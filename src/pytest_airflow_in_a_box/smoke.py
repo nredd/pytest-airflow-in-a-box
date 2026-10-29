@@ -1,9 +1,9 @@
 """Collect an opt-in catalog of zero-boilerplate Dag smoke checks.
 
-Every item is synthesized directly on the pytest ``Session`` rather than anchored to a real file
-on disk, so the catalog carries no collection dependency on the user's project layout. Off unless
-``airflow_smoke``/``--airflow-smoke`` is enabled; collection cost is zero when disabled. Explicit
-file or node-ID positionals scope the run to those tests and drop the catalog; directory
+Every item is synthesized directly on the pytest ``Session`` and anchored to this module's
+source file, so the catalog carries no collection dependency on the user's project layout.
+Off unless ``airflow_smoke``/``--airflow-smoke`` is enabled; collection cost is zero when disabled.
+Explicit file or node-ID positionals scope the run to those tests and drop the catalog; directory
 positionals and arg-less runs keep it. An explicit ``-m`` expression that mentions ``smoke``
 and would select a real smoke item overrides that positional scoping.
 
@@ -1844,7 +1844,7 @@ class _CatalogItem(pytest.Item):
             tuple[str, int, str] containing path, line, and title.
         """
 
-        return self.nodeid, 0, self.name
+        return self.nodeid.split("::", 1)[0], 0, self.name
 
 
 SMOKE_CATALOG: tuple[SmokeCheck[Any], ...] = (
@@ -1982,7 +1982,11 @@ def collect_smoke_items(
     if not _smoke_in_scope(config):
         LOGGER.info(f"Skipping smoke catalog: positional selection {config.args} excludes it")
         return
-    collector = SmokeCollector.from_parent(session, name="smoke")
+    source = Path(__file__).resolve()
+    # Keep the session's collection path so consumer conftest hooks still apply.
+    collector = SmokeCollector.from_parent(
+        session, name="smoke", nodeid=f"{source.as_posix()}::smoke"
+    )
     items.extend(collector.collect())
 
 

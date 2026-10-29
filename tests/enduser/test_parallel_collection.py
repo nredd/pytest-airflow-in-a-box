@@ -227,6 +227,7 @@ _COLOCATION_DAG = """
 """
 
 _WORKER_REPORTING_CONFTEST = """
+    import hashlib
     import json
     import os
     from pathlib import Path
@@ -240,7 +241,7 @@ _WORKER_REPORTING_CONFTEST = """
         worker = os.environ.get("PYTEST_XDIST_WORKER")
         if report.when != "call" or worker is None:
             return
-        name = report.nodeid.replace("/", "_").replace("::", "-")
+        name = hashlib.sha256(report.nodeid.encode()).hexdigest()
         record = {{"worker": worker, "nodeid": report.nodeid}}
         (RECORD_DIR / f"{{worker}}-{{name}}.json").write_text(
             json.dumps(record), encoding="utf-8"
