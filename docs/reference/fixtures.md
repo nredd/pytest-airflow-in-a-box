@@ -24,6 +24,27 @@ Fixtures marked **3.x only** fail on Airflow 2 with an actionable alternative.
 | `render_task` | function · 3.x only | none | `RenderTask` returns a prepared copy with `template_fields` rendered and never calls `execute()`. |
 | `task_context` | function · 3.x only | none | `TaskContext` opens a seeded context for hand-driving the prepared task. The [DB-free rung](../guide/ladder.md#one-operator-no-database) compares these three fixtures. |
 
+## Per-test selection and cached fixtures
+
+`dag_bag` and `dag_corpus` parse once per worker, not once per consumer. Per-test execution
+tracking (testmon or `coverage.py` dynamic contexts) can attribute the executed Dag files
+only to the first consumer; later tests reuse the cached result without executing those
+files. Editing a Dag can therefore make testmon select only the first consumer and skip a
+later failing test, producing a false green. This is not specific to Airflow: any
+non-function-scoped fixture (class, module, package, or session) can have this attribution
+problem, including a project fixture that only computes a shared path.
+
+Keep `dag_bag`/`dag_corpus` consumers out of testmon runs entirely and run them without
+per-test selection. Treat changes to `conftest.py` or fixture modules as **selection not
+trusted** and run the full suite without testmon. A fresh `--testmon-noselect` baseline does
+not fix cached-fixture attribution for later selective runs. Comparing serial and xdist
+selected sets does not validate correctness: both can omit the same failing consumers.
+Dynamic-context attribution is likewise not proof that other consumers are independent;
+ordinary aggregate coverage and fixture caching are unchanged by this warning.
+
+[`--airflow-doctor`](diagnostics.md#per-test-selection) reports the risk when a testmon mode
+is requested, without collecting tests or redesigning fixture dependencies.
+
 ## Database and seeding
 
 | Fixture | Scope / Airflow | Cost | Use and return |

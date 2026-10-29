@@ -773,6 +773,74 @@ def test_render_doctor_report_combines_every_section(
     assert not report.endswith("\n\n")
 
 
+@pytest.mark.parametrize(
+    ("options", "warns"),
+    [
+        (("--testmon",), True),
+        (("--testmon-noselect",), True),
+        (("--testmon-nocollect",), True),
+        (("--testmon-forceselect",), True),
+        ((), False),
+        (("--testmon", "--no-testmon"), False),
+    ],
+)
+def test_airflow_doctor_warns_about_cached_fixture_selection(
+    pytester: pytest.Pytester, options: tuple[str, ...], warns: bool
+) -> None:
+    """Warn for every requested testmon mode before collection or fixture execution.
+
+    Parameters:
+        pytester: pytest.Pytester creating an isolated consumer project.
+        options: tuple[str, ...] activating or disabling testmon modes.
+        warns: bool indicating whether a selection warning is expected.
+    """
+
+    pytester.makeconftest('''
+        import pytest
+
+        def pytest_addoption(parser: pytest.Parser) -> None:
+            """Register testmon's public activation options without its dependency.
+
+            Parameters:
+                parser: pytest.Parser accepting the synthetic plugin's options.
+            """
+            names = (
+                "testmon", "testmon-noselect", "testmon-nocollect",
+                "testmon-forceselect", "no-testmon",
+            )
+            for name in names:
+                dest = name if name == "no-testmon" else name.replace("-", "_")
+                parser.addoption("--" + name, action="store_true", dest=dest)
+
+        @pytest.fixture(scope="session")
+        def shared_value() -> str:
+            """Fail if the diagnostic command executes a cached fixture.
+
+            Returns:
+                str never returned by this sentinel fixture.
+
+            Raises:
+                AssertionError: Doctor incorrectly executed a fixture.
+            """
+            raise AssertionError("doctor must not execute fixtures")
+    ''')
+    pytester.makepyfile('raise AssertionError("doctor must not collect tests")')
+
+    result = pytester.runpytest_subprocess("--airflow-doctor", *options)
+
+    assert result.ret == 0
+    output = result.stdout.str()
+    assert ("SELECTION NOT TRUSTED" in output) is warns
+    if warns:
+        assert "non-function-scoped fixtures" in output
+        assert "first consumer" in output
+        assert "conftest.py" in output
+        assert "dag_bag" in output
+        assert "dag_corpus" in output
+    else:
+        assert "not requested (or disabled by `--no-testmon`)" in output
+
+
 def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> None:
     """Print the full report and exit before any test collection or run."""
 
@@ -806,6 +874,7 @@ def test_airflow_doctor_prints_report_and_exits(pytester: pytest.Pytester) -> No
         ]
     )
     assert "test_never_runs" not in result.stdout.str()
+    assert "SELECTION NOT TRUSTED" not in result.stdout.str()
     assert "could not resolve" not in result.stdout.str()
 
 
