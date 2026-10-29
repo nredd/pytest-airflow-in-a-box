@@ -12,7 +12,7 @@ import pytest
 from airflow.utils.state import TaskInstanceState
 
 from pytest_airflow_in_a_box._compat import taskrun
-from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner
+from pytest_airflow_in_a_box._compat.capabilities import AirflowFamily, TaskInstanceRunner
 from pytest_airflow_in_a_box.taskinstance import (
     DEFAULT_TRIGGER_TIMEOUT,
     TaskResolutionError,
@@ -81,6 +81,8 @@ class _TaskInstance:
         self.check_kwargs: dict[str, Any] | None = None
         self.refreshes = 0
         self.state: Any = None
+        self.try_number = 0
+        self.next_method: str | None = None
 
     def refresh_from_task(self, task: Any, **kwargs: Any) -> None:
         """Attach a task while accepting release-specific keywords."""
@@ -195,6 +197,7 @@ def _capabilities(
     """
 
     return SimpleNamespace(
+        family=(AirflowFamily.V2 if runner is TaskInstanceRunner.LEGACY_RUN else AirflowFamily.V3),
         task_instance_runner=runner,
         refresh_from_task_supports_dag_run=dag_run_refresh,
     )
@@ -407,8 +410,81 @@ def test_sdk_runner_checks_dependencies_and_refreshes_original(
         "session": session,
     }
     assert calls == [(ti, task)]
-    assert session.commits == 1
+    assert session.commits == 2
     assert session.expirations == 1
+    assert ti.refreshes == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "next_method"),
+    [
+        (TaskInstanceState.SCHEDULED, None),
+        (TaskInstanceState.QUEUED, None),
+        (TaskInstanceState.RUNNING, None),
+        (TaskInstanceState.DEFERRED, None),
+        (TaskInstanceState.UP_FOR_RESCHEDULE, None),
+        (None, "execute_complete"),
+    ],
+)
+def test_continuing_attempt_preserves_its_counter(
+    monkeypatch: pytest.MonkeyPatch, state: Any, next_method: str | None
+) -> None:
+    """Preserve counters already assigned by scheduling or a prior execution.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing Airflow runner doubles.
+        state: Any containing the instance's pre-execution state.
+        next_method: str | None identifying a deferred continuation.
+    """
+
+    ti: Any = _TaskInstance()
+    ti.state = state
+    ti.next_method = next_method
+    ti.try_number = 4
+    session: Any = _Session()
+    _prepare_sdk_runner(monkeypatch, SimpleNamespace(error=None))
+
+    task: Any = object()
+    run_task_instance(ti, task, session=session)
+
+    assert ti.try_number == 4
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_airflow31_advances_attempt_between_gate_and_raw_execution(
+    monkeypatch: pytest.MonkeyPatch, raises: bool
+) -> None:
+    """Apply scheduler counters before Airflow 3.1's raw entry point too.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing Airflow runner doubles.
+        raises: bool selecting an execution failure to exercise refresh cleanup.
+    """
+
+    ti: Any = _TaskInstance()
+    session: Any = _Session()
+    _prepare_sdk_runner(monkeypatch, SimpleNamespace(error=None))
+    capabilities = _capabilities(TaskInstanceRunner.LEGACY_RUN)
+    capabilities.family = AirflowFamily.V3
+    monkeypatch.setattr(taskrun, "resolve_capabilities", lambda: capabilities)
+    attempts = []
+
+    def raw_run() -> None:
+        """Observe the task-visible counter before optionally failing."""
+
+        attempts.append(ti.try_number)
+        if raises:
+            raise ValueError("raw execution failed")
+
+    ti._run_raw_task = raw_run
+    task: Any = object()
+    if raises:
+        with pytest.raises(ValueError, match="raw execution failed"):
+            run_task_instance(ti, task, session=session)
+    else:
+        assert run_task_instance(ti, task, session=session) is ti
+
+    assert attempts == [1]
     assert ti.refreshes == 1
 
 
@@ -500,6 +576,7 @@ def test_sdk_dependency_rejection_returns_refreshed_original(
 
     assert result is ti
     assert calls == []
+    assert ti.try_number == 0
     assert session.expirations == 1
     assert ti.refreshes == 1
 
