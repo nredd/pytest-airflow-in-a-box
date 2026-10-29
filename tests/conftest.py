@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import pytest
 
@@ -68,6 +69,11 @@ def _isolate_nested_pytest_environment(
 
     if "pytester" not in request.fixturenames:
         return
+    request.getfixturevalue("pytester")
+    # This suite tests our plugin, not AnyIO's independent pytest integration.
+    # AnyIO 4.14 imports deprecated CallSpec2 on pytest 9.2, which otherwise
+    # contaminates exact warning counts and aborts nested `-W error` runs.
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"{os.environ.get('PYTEST_ADDOPTS', '')} -p no:anyio")
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     monkeypatch.delenv(STATE_ENVIRONMENT_VARIABLE, raising=False)
     monkeypatch.delenv(ISOLATED_WORKER_ENVIRONMENT_VARIABLE, raising=False)
