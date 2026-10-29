@@ -1007,10 +1007,16 @@ def _execution_dag(*tasks: SimpleNamespace) -> SimpleNamespace:
     )
 
 
-def test_execute_dag_run_runs_every_instance_and_snapshots(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("with_session", [False, True])
+def test_drive_dag_run_runs_every_instance_and_snapshots(
+    monkeypatch: pytest.MonkeyPatch, with_session: bool
 ) -> None:
-    """Run instances in graph order, settle, and capture states, xcoms, and order."""
+    """Run and snapshot instances with an explicit or Airflow-managed session.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating task-body execution.
+        with_session: bool selecting an explicit transaction-owning session.
+    """
 
     upstream = _ExecutionTaskInstance("produce", xcom=21)
     downstream = _ExecutionTaskInstance("consume", xcom=42)
@@ -1022,7 +1028,7 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
         SimpleNamespace(task_id="produce", is_mapped=False),
         SimpleNamespace(task_id="consume", is_mapped=False),
     )
-    session: Any = _ExecutionSession()
+    session: Any = _ExecutionSession() if with_session else None
     executed: list[str] = []
 
     def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
@@ -1032,9 +1038,8 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
         return ti
 
     monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
-    result = execute_dag_run(dag_run, dag, session=session)
+    result = taskrun.drive_dag_run(dag_run, dag, session, fake_run)
 
     assert result.success
     assert executed == ["produce", "consume"]
@@ -1042,10 +1047,14 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
     assert result.states == {"produce": "success", "consume": "success"}
     assert result.xcoms == {"produce": 21, "consume": 42}
     assert result.errors == {}
-    assert session.expirations == 1
-    assert session.commits == 1
+    if with_session:
+        assert session.expirations == 1
+        assert session.commits == 1
     assert dag_run.update_calls == 1
-    assert upstream.pull_kwargs == {"task_ids": "produce", "session": session}
+    assert upstream.pull_kwargs == {
+        "task_ids": "produce",
+        **({"session": session} if with_session else {}),
+    }
 
 
 def test_execute_dag_run_captures_failures_and_leaves_blocked_instances(
