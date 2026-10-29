@@ -67,6 +67,10 @@ an unreachable server raises `ApiServerError`. Paths must start with `/`, and `g
 - Each pytest process gets one loopback-only server on an ephemeral port. Under xdist, every
   worker gets a different server and port while all workers share the metadata database. A lost
   port-bind race is retried automatically.
+- Each server owns a separate process group. Teardown (including Ctrl-C) terminates that
+  group, then kills any remaining descendants. On Linux, the server also receives `SIGKILL`
+  if its owning worker dies, even when the worker was itself killed with `SIGKILL`. This
+  parent-death protection is Linux-specific; on macOS, normal fixture teardown is required.
 - The server exposes the `core` and `execution` apps. The latter is also the Task Execution API
   used by [executor-driven runs](ladder.md#executor-driven-runs).
 - Airflow 2.x has no `airflow api-server`; requesting these fixtures fails with an actionable

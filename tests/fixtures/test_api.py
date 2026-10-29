@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import email.message
 import os
+import signal
 import subprocess
 import urllib.error
 from pathlib import Path
@@ -154,6 +155,7 @@ class _FakeProcess:
             wait_timeouts: int number of ``wait`` calls that time out first.
         """
 
+        self.pid = 123456789
         self.returncode = returncode
         self.wait_timeouts = wait_timeouts
         self.calls: list[str] = []
@@ -281,6 +283,95 @@ def test_log_tail_reports_unreadable_logs(tmp_path: Path) -> None:
     assert "no server log available" in api._log_tail(tmp_path / "absent.log")
 
 
+@pytest.fixture(autouse=True)
+def fake_process_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep subprocess doubles from signalling real process groups."""
+
+    killpg = os.killpg
+
+    def signal_group(pid: int, sig: int) -> None:
+        """Forward real groups while ignoring the subprocess double's PID."""
+
+        if pid != 123456789:
+            killpg(pid, sig)
+
+    monkeypatch.setattr(api.os, "killpg", signal_group)
+
+
+def test_launch_owns_and_stops_its_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Start a separate session and signal only that server's group."""
+
+    process = _FakeProcess()
+    launches: list[dict[str, Any]] = []
+    signals: list[tuple[int, int]] = []
+
+    def popen(command: list[str], **kwargs: Any) -> _FakeProcess:
+        launches.append(kwargs)
+        assert command[2] == "pytest_airflow_in_a_box._api_server"
+        assert command[3] == str(os.getpid())
+        return process
+
+    monkeypatch.setattr(api.subprocess, "Popen", popen)
+    monkeypatch.setattr(api.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(api, "_server_responds", lambda _url: True)
+    launcher = api._launch_api_server(_fake_state(tmp_path))
+    next(launcher)
+    with pytest.raises(StopIteration):
+        next(launcher)
+
+    assert launches[0]["start_new_session"] is True
+    assert signals == [(process.pid, signal.SIGTERM), (process.pid, signal.SIGKILL)]
+    assert process.calls[-1] == "wait"
+
+
+def test_launch_tolerates_an_already_gone_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reap an exited leader even when neither group signal has a target."""
+
+    process = _FakeProcess(returncode=3)
+
+    def missing_group(pid: int, sig: int) -> None:
+        """Model an already-reaped server group."""
+
+        del pid, sig
+        raise ProcessLookupError
+
+    monkeypatch.setattr(api.subprocess, "Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(api.os, "killpg", missing_group)
+
+    with pytest.raises(ApiServerError, match="exited with code 3"):
+        next(api._launch_api_server(_fake_state(tmp_path)))
+
+    assert process.calls[-2:] == ["wait", "wait"]
+
+
+def test_interrupt_during_startup_stops_the_server_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run teardown when Ctrl-C interrupts the readiness probe."""
+
+    process = _FakeProcess()
+    signals: list[int] = []
+
+    def interrupt(_url: str) -> bool:
+        """Model Ctrl-C during an HTTP probe."""
+
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(api.subprocess, "Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(api.os, "killpg", lambda _pid, sig: signals.append(sig))
+    monkeypatch.setattr(api, "_server_responds", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        next(api._launch_api_server(_fake_state(tmp_path)))
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert process.calls[-1] == "wait"
+
+
 def test_launch_fails_when_the_server_exits_early(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -294,7 +385,7 @@ def test_launch_fails_when_the_server_exits_early(
     with pytest.raises(ApiServerError, match="exited with code 3"):
         next(api._launch_api_server(_fake_state(tmp_path)))
 
-    assert "terminate" in process.calls
+    assert process.calls[-1] == "wait"
 
 
 def test_launch_fails_when_startup_times_out(
@@ -339,8 +430,8 @@ def test_launch_retries_after_losing_a_bind_race(
     processes = iter([losers, winner])
     launched_ports: list[str] = []
 
-    def fake_popen(command: list[str], *, stdout: Any, stderr: Any) -> _FakeProcess:
-        del stderr
+    def fake_popen(command: list[str], *, stdout: Any, **kwargs: Any) -> _FakeProcess:
+        del kwargs
         launched_ports.append(command[command.index("--port") + 1])
         process = next(processes)
         if process is losers:
@@ -359,7 +450,7 @@ def test_launch_retries_after_losing_a_bind_race(
     assert len(set(launched_ports)) == 2
     assert base_url.endswith(launched_ports[1])
     assert losers.calls[:1] == ["poll"]
-    assert "terminate" in losers.calls
+    assert "wait" in losers.calls
 
 
 def test_launch_does_not_trust_a_response_while_its_own_process_is_dead(
@@ -379,8 +470,8 @@ def test_launch_does_not_trust_a_response_while_its_own_process_is_dead(
     winner = _FakeProcess(returncode=None)
     processes = iter([losers, winner])
 
-    def fake_popen(command: Any, *, stdout: Any, stderr: Any) -> _FakeProcess:
-        del command, stderr
+    def fake_popen(command: Any, *, stdout: Any, **kwargs: Any) -> _FakeProcess:
+        del command, kwargs
         process = next(processes)
         if process is losers:
             stdout.write(b"OSError: [Errno 98] Address already in use\n")
@@ -396,7 +487,7 @@ def test_launch_does_not_trust_a_response_while_its_own_process_is_dead(
     base_url = next(launcher)
 
     assert base_url.startswith("http://127.0.0.1:")
-    assert "terminate" in losers.calls
+    assert "wait" in losers.calls
     assert winner.calls[0] == "poll"
 
 
@@ -408,8 +499,8 @@ def test_launch_gives_up_after_exhausting_bind_retries(
 
     monkeypatch.setattr(api, "API_SERVER_BIND_RETRIES", 2)
 
-    def fake_popen(command: Any, *, stdout: Any, stderr: Any) -> _FakeProcess:
-        del command, stderr
+    def fake_popen(command: Any, *, stdout: Any, **kwargs: Any) -> _FakeProcess:
+        del command, kwargs
         stdout.write(b"OSError: [Errno 98] Address already in use\n")
         stdout.flush()
         return _FakeProcess(returncode=1)
@@ -446,9 +537,4 @@ def test_launch_kills_a_server_that_ignores_terminate(
     with pytest.raises(StopIteration):
         next(launcher)
 
-    assert process.calls[-3:] == ["terminate", "wait", "kill"] or process.calls[-4:] == [
-        "terminate",
-        "wait",
-        "kill",
-        "wait",
-    ]
+    assert process.calls[-2:] == ["wait", "wait"]
