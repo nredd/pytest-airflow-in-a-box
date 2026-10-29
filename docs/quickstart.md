@@ -50,7 +50,9 @@ pytest --dag-folder=dags
 `dag_bag` parses the folder once per worker process. `run_dag` executes the selected Dag under
 its real `dag_id`; `result.xcoms` captures task return values, and `result.order` records
 execution order, not graph topology. Set `airflow_dags_folder` in pytest's ini configuration
-when `dags/` is your repository default.
+when `dags/` is your repository default. Cached parses cannot reliably identify every
+consumer for testmon selection; keep `dag_bag`/`dag_corpus` consumers out of testmon runs.
+See [per-test selection and cached fixtures](reference/fixtures.md#per-test-selection-and-cached-fixtures).
 
 ## Author a Dag in the test
 
