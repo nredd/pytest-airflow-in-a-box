@@ -999,13 +999,14 @@ def test_execute_dag_run_captures_failures_and_leaves_blocked_instances(
     monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
-    result = execute_dag_run(dag_run, dag)
+    session: Any = _ExecutionSession()
+    result = execute_dag_run(dag_run, dag, session=session)
 
     assert not result.success
     assert result.order == ["boom"]
     assert result.states == {"boom": "failed", "consume": "upstream_failed"}
     assert isinstance(result.errors["boom"], ValueError)
-    assert consume.pull_kwargs == {"task_ids": "consume"}
+    assert consume.pull_kwargs == {"task_ids": "consume", "session": session}
 
 
 def test_execute_dag_run_never_reruns_presettled_instances(
@@ -1023,7 +1024,8 @@ def test_execute_dag_run_never_reruns_presettled_instances(
 
     monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
 
-    result = execute_dag_run(dag_run, dag)
+    session: Any = _ExecutionSession()
+    result = execute_dag_run(dag_run, dag, session=session)
 
     assert result.order == []
     assert result.states == {"branch_dropped": "skipped"}
@@ -1148,8 +1150,9 @@ def test_execute_dag_run_propagates_plugin_contract_failures(
     monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
 
+    session: Any = _ExecutionSession()
     with pytest.raises(TaskResolutionError, match="no executable task"):
-        execute_dag_run(dag_run, dag)
+        execute_dag_run(dag_run, dag, session=session)
 
 
 def test_try_expand_mapped_task_requires_a_session() -> None:

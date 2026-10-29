@@ -940,7 +940,8 @@ def execute_dag_run(
     Parameters:
         dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
         dag: Any containing the authoring Dag with executable task objects.
-        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata;
+            defaults to the session attached to `dag_run`.
         run_triggerer: bool running persisted trigger events and resuming deferrals.
         trigger_timeout: float seconds allowed for each persisted trigger's first event.
 
@@ -955,6 +956,11 @@ def execute_dag_run(
             to an event; the plugin-contract failure propagates instead of being
             recorded as a task outcome.
     """
+
+    from sqlalchemy.orm import object_session
+
+    if session is None:
+        session = object_session(dag_run)
 
     def settle(ti: TaskInstance, task: Operator, *, session: Session | None) -> None:
         """Run one instance in this process through Airflow's own task entry point.

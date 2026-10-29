@@ -142,6 +142,22 @@ def test_run_executes_the_whole_dag_and_snapshots(dag_maker: DagMaker) -> None:
     assert result == {"produce": succeeded(21), "consume": succeeded(42)}
 
 
+def test_execute_dag_run_uses_the_attached_session_when_omitted(dag_maker: DagMaker) -> None:
+    """Preserve the optional-session whole-DagRun execution entry point."""
+
+    from piab.taskinstance import execute_dag_run
+
+    _linear_dag(dag_maker, "result_implicit_session")
+    dag_run = dag_maker.create_dagrun()
+
+    result = execute_dag_run(dag_run, dag_maker.dag)
+
+    assert result.success, result
+    assert result == {"produce": succeeded(21), "consume": succeeded(42)}
+    assert result.order == ["produce", "consume"]
+    assert result.errors == {}
+
+
 def test_run_repr_renders_the_per_task_table(dag_maker: DagMaker) -> None:
     """Render the header and one aligned row per settled task instance."""
 
