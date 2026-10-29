@@ -546,9 +546,6 @@ def test_run_ti_retries_a_failed_task_instance_to_success(
         flaky()
 
     dag_run = dag_maker.create_dagrun()
-    ti = dag_maker.create_ti("flaky", dag_run)
-    ti.try_number += 1
-    dag_maker.session.commit()
 
     with pytest.raises(ValueError, match="nope"):
         dag_maker.run_ti("flaky", dag_run)
@@ -559,8 +556,6 @@ def test_run_ti_retries_a_failed_task_instance_to_success(
     assert ti.next_retry_datetime() == ti.end_date + timedelta(minutes=5)
     assert retried_marker.exists()
 
-    ti.try_number += 1
-    dag_maker.session.commit()
     ti = dag_maker.run_ti("flaky", dag_run, ignore_ti_state=True, ignore_task_deps=True)
 
     assert ti.try_number == 2
