@@ -12,6 +12,17 @@ import pytest
 from pytest_airflow_in_a_box import parallel_dagbag
 
 
+@pytest.fixture(autouse=True)
+def _unmeasured_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise fan-out decisions independently of this suite's own coverage tracer.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the measurement probe.
+    """
+
+    monkeypatch.setattr(parallel_dagbag, "_measurement_active", lambda: False)
+
+
 def _config(
     *,
     fanout: object = None,
@@ -73,6 +84,18 @@ def test_shard_file_paths_rejects_non_positive_worker_count() -> None:
 
     with pytest.raises(ValueError, match="must be positive"):
         parallel_dagbag.shard_file_paths(["a.py"], worker_count=0)
+
+
+def test_should_fan_out_preserves_active_measurement(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Dag imports in the measured parent even when fan-out is explicitly enabled.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch installing the active measurement probe.
+    """
+
+    monkeypatch.setattr(parallel_dagbag, "_measurement_active", lambda: True)
+
+    assert parallel_dagbag.should_fan_out(1000, _config(fanout=True, min_files="0")) is False
 
 
 def test_should_fan_out_prefers_cli_option_over_ini() -> None:

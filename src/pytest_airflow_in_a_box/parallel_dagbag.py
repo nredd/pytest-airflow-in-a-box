@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -38,6 +39,8 @@ from pytest_airflow_in_a_box._compat.introspection import mapped_expansion
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+LOGGER = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -254,6 +257,25 @@ def _non_negative_int_option(config: pytest.Config, name: str) -> int:
     return parsed
 
 
+def _measurement_active() -> bool:
+    """Detect parent-process tracing without importing an optional coverage dependency.
+
+    Trace callbacks cover testmon, coverage's legacy backends, and debuggers. Coverage
+    can also use `sys.monitoring`, which leaves `sys.gettrace()` empty, so consult its
+    public `Coverage.current()` API when that module is already loaded. Keeping all
+    measured parses in-process is conservative even with subprocess coverage enabled:
+    merging child coverage cannot restore per-test dependency attribution.
+
+    Returns:
+        bool indicating whether parent-process measurement is active.
+    """
+
+    if sys.gettrace() is not None:
+        return True
+    coverage = sys.modules.get("coverage")
+    return coverage is not None and coverage.Coverage.current() is not None
+
+
 def should_fan_out(file_count: int, config: pytest.Config) -> bool:
     """Decide whether a discovered file count should be fanned out.
 
@@ -267,7 +289,15 @@ def should_fan_out(file_count: int, config: pytest.Config) -> bool:
 
     if not fanout_enabled(config):
         return False
-    return file_count >= _non_negative_int_option(config, "airflow_dag_bag_fanout_min_files")
+    if file_count < _non_negative_int_option(config, "airflow_dag_bag_fanout_min_files"):
+        return False
+    if _measurement_active():
+        LOGGER.warning(
+            "Dag bag fan-out disabled while tracing is active; parsing in the parent "
+            "process to preserve coverage and per-test dependency tracking"
+        )
+        return False
+    return True
 
 
 def resolved_worker_count(config: pytest.Config, file_count: int) -> int:
