@@ -98,6 +98,16 @@ parallel run legitimately reports under 100%. To add one:
   raises `AirflowCompatibilityError` on drift, which is what lets the plugin support
   three minor Airflow releases without silently breaking on a fourth.
 
+## Pytest compatibility
+
+Keep pytest's 8.0 floor and fresh resolutions working. Pytest 9.2 uses structured node
+IDs, while xdist 3.8 still writes legacy `_nodeid` grouping suffixes. The private
+`_pytest_compat.py` bridge reconciles those writes after collection hooks; remove it
+when the minimum supported xdist handles structured IDs itself. Regression tests in
+`tests/enduser/test_parallel_collection.py` assert actual worker placement and parse reuse.
+Nested pytester runs disable AnyIO's unrelated pytest plugin so its import-time
+deprecations cannot contaminate exact warning assertions or `-W error` runs.
+
 ## Good first issues
 
 Issues labeled [`good first

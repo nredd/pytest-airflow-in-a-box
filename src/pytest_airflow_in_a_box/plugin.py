@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import warnings
+from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -19,6 +20,7 @@ import pytest
 
 from pytest_airflow_in_a_box import _airflow_home, baseline, dagcorpus, record, smoke
 from pytest_airflow_in_a_box._compat import AirflowCompatibilityError, ensure_database
+from pytest_airflow_in_a_box._pytest_compat import reconcile_xdist_node_ids
 from pytest_airflow_in_a_box.bootstrap import (
     STATE_KEY,
     WORKER_ENV_DRIFT_INI,
@@ -492,6 +494,21 @@ def pytest_collect_file(file_path: Path, parent: pytest.Collector) -> DagFile | 
     """
 
     return collect_dag_file(file_path, parent)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True, specname="pytest_collection_modifyitems")
+def pytest_collection_modifyitems_node_ids(items: list[pytest.Item]) -> Generator[None]:
+    """Reconcile legacy xdist ID writes after all collection-modification hooks.
+
+    Parameters:
+        items: list[pytest.Item] whose grouping suffixes xdist may have changed.
+
+    Returns:
+        Generator[None] wrapping the remaining collection hooks.
+    """
+
+    yield
+    reconcile_xdist_node_ids(items)
 
 
 @pytest.hookimpl(tryfirst=True)
