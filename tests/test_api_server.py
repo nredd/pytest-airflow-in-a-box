@@ -29,7 +29,13 @@ from pytest_airflow_in_a_box import _api_server
 def test_exec_arms_parent_death_before_replacing_process(
     monkeypatch: pytest.MonkeyPatch, platform: str, parent_pid: int
 ) -> None:
-    """Arm Linux SIGKILL before exec and detect a worker lost during startup."""
+    """Arm Linux SIGKILL before exec and detect a worker lost during startup.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing OS and libc boundaries.
+        platform: str selecting Linux protection or the portable exec path.
+        parent_pid: int identifying the expected owning worker.
+    """
 
     calls: list[Any] = []
 
@@ -37,7 +43,14 @@ def test_exec_arms_parent_death_before_replacing_process(
         """Record the Linux system call without signalling the test process."""
 
         def prctl(self, *args: int) -> int:
-            """Accept the signal configuration and record its exact arguments."""
+            """Accept the signal configuration and record its exact arguments.
+
+            Parameters:
+                args: int containing the prctl option and arguments.
+
+            Returns:
+                int containing the successful syscall result.
+            """
 
             calls.append(args)
             return 0
@@ -64,13 +77,24 @@ def test_exec_arms_parent_death_before_replacing_process(
 def test_exec_refuses_to_launch_without_parent_death_protection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Propagate prctl failures rather than silently launching an orphanable server."""
+    """Propagate prctl failures rather than silently launching an orphanable server.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing libc and the platform probe.
+    """
 
     class Libc:
         """Reject the system call as a restricted Linux environment might."""
 
         def prctl(self, *_args: int) -> int:
-            """Return a failing syscall result."""
+            """Return a failing syscall result.
+
+            Parameters:
+                _args: int containing the prctl option and arguments.
+
+            Returns:
+                int containing the syscall failure sentinel.
+            """
 
             return -1
 
@@ -85,7 +109,11 @@ def test_exec_refuses_to_launch_without_parent_death_protection(
 def test_module_entrypoint_passes_parent_and_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parse the worker PID separately from the untouched server argument vector."""
+    """Parse the worker PID separately from the untouched server argument vector.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing arguments, platform, and exec.
+    """
 
     calls: list[Any] = []
     monkeypatch.setattr(sys, "argv", ["wrapper", "100", sys.executable, "-m", "airflow"])
@@ -125,6 +153,9 @@ def test_sigkilled_worker_does_not_leave_its_api_server_or_kill_a_sibling(
 
     The command boundary substitutes a tiny ``airflow`` executable module so
     this regression measures process ownership, not database/bootstrap latency.
+
+    Parameters:
+        tmp_path: Path containing independent worker directories and fake modules.
     """
 
     workers: list[subprocess.Popen[bytes]] = []
@@ -149,19 +180,25 @@ def test_sigkilled_worker_does_not_leave_its_api_server_or_kill_a_sibling(
             (package / "__init__.py").write_text("")
             (package / "__main__.py").write_text(
                 "import os, time\nfrom pathlib import Path\n"
+                "assert os.environ['AIRFLOW__API__SERVER_TYPE'] == 'uvicorn'\n"
                 "Path('ready').write_text(str(os.getpid()))\ntime.sleep(60)\n"
             )
-            worker = subprocess.Popen([sys.executable, "-c", script, str(root)], cwd=root)
+            worker = subprocess.Popen(
+                [sys.executable, "-c", script, str(root)],
+                cwd=root,
+                env=os.environ | {"AIRFLOW__API__SERVER_TYPE": "gunicorn"},
+            )
             workers.append(worker)
             servers.append(_wait_for_pid(root / "ready", worker))
         workers[0].kill()
         workers[0].wait(timeout=10)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if (
-                not psutil.pid_exists(servers[0])
-                or psutil.Process(servers[0]).status() == psutil.STATUS_ZOMBIE
-            ):
+            try:
+                alive = psutil.Process(servers[0]).status() != psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                alive = False
+            if not alive:
                 break
             time.sleep(0.05)
         else:

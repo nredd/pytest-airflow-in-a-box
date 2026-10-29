@@ -366,6 +366,9 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
                 stdout=log_stream,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                # Gunicorn forks even with one worker, and Linux clears the
+                # parent-death signal across fork. Keep serving in the exec'd PID.
+                env=os.environ | {"AIRFLOW__API__SERVER_TYPE": "uvicorn"},
             )
             try:
                 deadline = time.monotonic() + API_SERVER_STARTUP_TIMEOUT_SECONDS

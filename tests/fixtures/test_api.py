@@ -285,12 +285,21 @@ def test_log_tail_reports_unreadable_logs(tmp_path: Path) -> None:
 
 @pytest.fixture(autouse=True)
 def fake_process_groups(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep subprocess doubles from signalling real process groups."""
+    """Keep subprocess doubles from signalling real process groups.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch replacing the OS signal boundary.
+    """
 
     killpg = os.killpg
 
     def signal_group(pid: int, sig: int) -> None:
-        """Forward real groups while ignoring the subprocess double's PID."""
+        """Forward real groups while ignoring the subprocess double's PID.
+
+        Parameters:
+            pid: int identifying the target group.
+            sig: int containing the signal number.
+        """
 
         if pid != 123456789:
             killpg(pid, sig)
@@ -301,13 +310,29 @@ def fake_process_groups(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_launch_owns_and_stops_its_process_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Start a separate session and signal only that server's group."""
+    """Start a separate session and signal only that server's group.
 
+    Parameters:
+        tmp_path: Path containing the fake server logs.
+        monkeypatch: pytest.MonkeyPatch replacing process and network boundaries.
+    """
+
+    monkeypatch.setenv("AIRFLOW__API__SERVER_TYPE", "gunicorn")
     process = _FakeProcess()
     launches: list[dict[str, Any]] = []
     signals: list[tuple[int, int]] = []
 
     def popen(command: list[str], **kwargs: Any) -> _FakeProcess:
+        """Capture server launch arguments without creating a process.
+
+        Parameters:
+            command: list[str] containing the exec wrapper argument vector.
+            kwargs: Any containing subprocess keyword arguments.
+
+        Returns:
+            _FakeProcess modelling the server process.
+        """
+
         launches.append(kwargs)
         assert command[2] == "pytest_airflow_in_a_box._api_server"
         assert command[3] == str(os.getpid())
@@ -322,6 +347,8 @@ def test_launch_owns_and_stops_its_process_group(
         next(launcher)
 
     assert launches[0]["start_new_session"] is True
+    assert launches[0]["env"]["AIRFLOW__API__SERVER_TYPE"] == "uvicorn"
+    assert os.environ["AIRFLOW__API__SERVER_TYPE"] == "gunicorn"
     assert signals == [(process.pid, signal.SIGTERM), (process.pid, signal.SIGKILL)]
     assert process.calls[-1] == "wait"
 
@@ -329,12 +356,25 @@ def test_launch_owns_and_stops_its_process_group(
 def test_launch_tolerates_an_already_gone_process_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reap an exited leader even when neither group signal has a target."""
+    """Reap an exited leader even when neither group signal has a target.
+
+    Parameters:
+        tmp_path: Path containing the fake server logs.
+        monkeypatch: pytest.MonkeyPatch replacing process and OS boundaries.
+    """
 
     process = _FakeProcess(returncode=3)
 
     def missing_group(pid: int, sig: int) -> None:
-        """Model an already-reaped server group."""
+        """Model an already-reaped server group.
+
+        Parameters:
+            pid: int identifying the absent group.
+            sig: int containing the signal number.
+
+        Raises:
+            ProcessLookupError: The group no longer exists.
+        """
 
         del pid, sig
         raise ProcessLookupError
@@ -351,13 +391,28 @@ def test_launch_tolerates_an_already_gone_process_group(
 def test_interrupt_during_startup_stops_the_server_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Run teardown when Ctrl-C interrupts the readiness probe."""
+    """Run teardown when Ctrl-C interrupts the readiness probe.
+
+    Parameters:
+        tmp_path: Path containing the fake server logs.
+        monkeypatch: pytest.MonkeyPatch replacing process and network boundaries.
+    """
 
     process = _FakeProcess()
     signals: list[int] = []
 
     def interrupt(_url: str) -> bool:
-        """Model Ctrl-C during an HTTP probe."""
+        """Model Ctrl-C during an HTTP probe.
+
+        Parameters:
+            _url: str containing the server URL.
+
+        Returns:
+            bool if the probe completes, which this double prevents.
+
+        Raises:
+            KeyboardInterrupt: The user interrupted startup.
+        """
 
         raise KeyboardInterrupt
 
