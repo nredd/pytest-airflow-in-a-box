@@ -22,9 +22,11 @@ References:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -353,7 +355,21 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
         ]
         LOGGER.info(f"Starting isolated Airflow API server on '{base_url}' (attempt {attempt})")
         with log_path.open("wb") as log_stream:
-            process = subprocess.Popen(command, stdout=log_stream, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest_airflow_in_a_box._api_server",
+                    str(os.getpid()),
+                    *command,
+                ],
+                stdout=log_stream,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                # Gunicorn forks even with one worker, and Linux clears the
+                # parent-death signal across fork. Keep serving in the exec'd PID.
+                env=os.environ | {"AIRFLOW__API__SERVER_TYPE": "uvicorn"},
+            )
             try:
                 deadline = time.monotonic() + API_SERVER_STARTUP_TIMEOUT_SECONDS
                 lost_bind_race = False
@@ -391,11 +407,17 @@ def _launch_api_server(state: BootstrapState) -> Iterator[str]:
                 yield base_url
                 return
             finally:
-                process.terminate()
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
                 try:
                     process.wait(timeout=API_SERVER_SHUTDOWN_TIMEOUT_SECONDS)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    pass
+                finally:
+                    # Kill remaining descendants even when the server leader
+                    # exited promptly. Each launch owns a distinct session.
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
 
 
