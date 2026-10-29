@@ -4,7 +4,7 @@
     "dockerfile": "Dockerfile",
     "args": {
       "PYTHON_VERSION": "3.12",
-      "UV_VERSION": "0.12.2"
+      "UV_VERSION": "0.13.6"
     }
   },
   "containerEnv": {
