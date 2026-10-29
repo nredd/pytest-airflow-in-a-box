@@ -754,7 +754,7 @@ def test_notifier_template_fields_unresolvable_flags_a_non_iterable_value() -> N
     from airflow.sdk.bases.notifier import BaseNotifier
 
     class NoneTemplateFields(BaseNotifier):
-        template_fields = None
+        template_fields: Any = None
 
         def notify(self, context: object) -> None:
             del context
@@ -1731,13 +1731,17 @@ def test_notifier_template_fields_unresolvable_reports_a_raising_property() -> N
 
     from airflow.sdk.bases.notifier import BaseNotifier
 
-    class RaisingTemplateFields(BaseNotifier):
-        @property
-        def template_fields(self) -> tuple[str, ...]:
-            raise RuntimeError("not configured yet")
+    def raising_template_fields(self: object) -> tuple[str, ...]:
+        """Emulate a malformed notifier's descriptor failing on access."""
+        del self
+        raise RuntimeError("not configured yet")
 
-        def notify(self, context: Any) -> None:
-            del context
+    # Deliberately violate the writable base attribute contract at a runtime boundary.
+    RaisingTemplateFields = type(
+        "RaisingTemplateFields",
+        (BaseNotifier,),
+        {"template_fields": property(raising_template_fields)},
+    )
 
     (problem,) = compat_components._check_notifier_template_fields_unresolvable(
         RaisingTemplateFields()
@@ -1758,7 +1762,7 @@ def test_notifier_template_fields_unresolvable_reports_a_non_string_entry() -> N
     from airflow.sdk.bases.notifier import BaseNotifier
 
     class BadEntryNotifier(BaseNotifier):
-        template_fields = ("message", None)
+        template_fields: Any = ("message", None)
         message = "hello"
 
         def notify(self, context: Any) -> None:
