@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pytest_airflow_in_a_box._compat.capabilities import TaskInstanceRunner, resolve_capabilities
 from pytest_airflow_in_a_box._compat.dag import expand_mapped_task_instances, task_is_mapped
 from pytest_airflow_in_a_box._compat.registry import lookup_authoring_dag
+from pytest_airflow_in_a_box._process_state import isolated_process_state
 from pytest_airflow_in_a_box.results import DagRunResult, TaskResult, task_key
 
 if TYPE_CHECKING:
@@ -423,6 +424,7 @@ def _resume_deferred_task_instance(
     _refresh_task_instance(ti, session)
 
 
+@isolated_process_state()
 def run_task_instance(
     ti: TaskInstance,
     task: Operator | None = None,

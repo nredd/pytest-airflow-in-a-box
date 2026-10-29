@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
 from pytest_airflow_in_a_box._compat.capabilities import resolve_capabilities
+from pytest_airflow_in_a_box._process_state import isolated_process_state
 
 LOGGER = logging.getLogger(__name__)
 
@@ -475,6 +476,7 @@ def _installed_supervisor_comms(
             task_runner.SUPERVISOR_COMMS = previous_comms
 
 
+@isolated_process_state()
 def run_task_in_process(
     task: Any,
     *,
@@ -782,7 +784,7 @@ def task_context_in_process(
     # Deferred to preserve bootstrap safety and avoid Airflow's module import cost.
     from airflow.sdk.execution_time.context import set_current_context
 
-    with _installed_supervisor_comms(task_runner, comms) as active_comms:
+    with isolated_process_state(), _installed_supervisor_comms(task_runner, comms) as active_comms:
         context = runtime_ti.get_template_context()
         # Mirrors `task_runner._prepare`'s own order: build the context bound to the
         # original task, then swap in the execution-time copy before rendering, same
