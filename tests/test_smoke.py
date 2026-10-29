@@ -2114,6 +2114,37 @@ def test_airflow_smoke_option_enables_the_catalog(pytester: pytest.Pytester) -> 
     )
 
 
+def test_smoke_nodeids_identify_readable_python_source(pytester: pytest.Pytester) -> None:
+    """Give file-fingerprinting plugins a real source file, even without an ini file.
+
+    Parameters:
+        pytester: pytest.Pytester creating an isolated consumer project.
+    """
+
+    _write_dags(pytester, valid=VALID_DAG)
+    pytester.makeconftest(
+        """
+        import ast
+        from pathlib import Path
+
+        def pytest_collection_finish(session):
+            for item in session.items:
+                source = Path(item.nodeid.split("::", 1)[0])
+                assert source.is_file(), item.nodeid
+                ast.parse(source.read_text(encoding="utf-8"))
+                assert item.path == session.path
+                assert (session.config.rootpath / item.location[0]).resolve() == source
+        """
+    )
+
+    result = pytester.runpytest_subprocess(
+        "--collect-only", "-q", "--airflow-smoke", "--dag-folder=dags"
+    )
+
+    assert result.ret == pytest.ExitCode.OK
+    assert len([line for line in result.stdout.lines if "::smoke::test_" in line]) == 7
+
+
 def test_smoke_catalog_reuses_dag_bag_parse(pytester: pytest.Pytester) -> None:
     """Parse the Dag folder once when a `dag_bag` consumer runs with the catalog.
 
@@ -2878,7 +2909,10 @@ def test_deselect_prunes_single_smoke_item(pytester: pytest.Pytester) -> None:
     pytester.makeini("[pytest]\nairflow_smoke = true\n")
 
     result = pytester.runpytest_subprocess(
-        "-q", "--dag-folder=dags", "--deselect", "::smoke::test_dag_bag_integrity"
+        "-q",
+        "--dag-folder=dags",
+        "--deselect",
+        f"{Path(smoke.__file__).resolve().as_posix()}::smoke::test_dag_bag_integrity",
     )
 
     result.assert_outcomes(passed=6, deselected=1)
