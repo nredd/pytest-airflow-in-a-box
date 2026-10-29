@@ -1,4 +1,8 @@
-"""Keep persisted execution attempts consistent with scheduled task contexts."""
+"""Keep persisted execution attempts consistent with scheduled task contexts.
+
+References:
+    https://github.com/nredd/pytest-airflow-in-a-box/issues/353
+"""
 
 from __future__ import annotations
 
