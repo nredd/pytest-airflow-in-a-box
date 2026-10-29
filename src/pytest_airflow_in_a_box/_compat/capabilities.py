@@ -1652,6 +1652,15 @@ def _probe_task_instance_runner(task_instance: object, version: str) -> TaskInst
 
     legacy_run = getattr(task_instance, "run", None)
     if callable(legacy_run):
+        raw_run = getattr(task_instance, "_run_raw_task", None)
+        if not callable(raw_run):
+            error = TypeError("resolved symbol is not callable")
+            _raise_compatibility_error(
+                version,
+                "validating callable Airflow symbol",
+                "airflow.models.taskinstance.TaskInstance._run_raw_task",
+                error,
+            )
         return TaskInstanceRunner.LEGACY_RUN
 
     qualified_name = TaskInstanceRunner.SDK_RUN_TASK.value

@@ -78,7 +78,7 @@ def migration_strict_enabled(config: pytest.Config) -> bool:
         # matching this project's validate-coerce-revalidate guard-clause style.
         try:
             ini_value: object = config.getini("airflow_migration_strict")
-        except ValueError as error:
+        except (ValueError, pytest.UsageError) as error:
             raise pytest.UsageError(
                 f"Ini option `airflow_migration_strict` must be a boolean: {error}"
             ) from error

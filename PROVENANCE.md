@@ -16,7 +16,12 @@ skills/mattpocock`.
 `960973bfd8341040150ac312302cd795bf72bc20`. The local version defers Airflow imports, resolves an
 optional task, preserves dependency flags on both execution paths, implements Airflow 3.2+
 `mark_success`, commits before Execution API access, and refreshes the original ORM task instance.
-The ASF license header is retained in that module.
+The ASF license header is retained in that module. The Airflow 3 path additionally advances
+attempt counters after the dependency gate accepts execution, preserving scheduled and resumed
+attempts. Its Airflow 3.1 gate/raw-run split follows `TaskInstance.run` in
+`airflow-core/src/airflow/models/taskinstance.py` at tag `3.1.0`
+(`54bd5d8cd9f6f477cc83445737614dec81c4323c`), with the scheduler-owned counter transition
+implemented locally rather than mutating newly created DagRuns.
 
 `src/pytest_airflow_in_a_box/versioninflation.py` is adapted from Apache Airflow's Dag version
 inflation static checker, `airflow-core/src/airflow/utils/dag_version_inflation_checker.py`,

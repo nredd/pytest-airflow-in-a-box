@@ -426,6 +426,38 @@ def _coverage_section(config: pytest.Config, state: BootstrapState) -> list[str]
     return lines
 
 
+def _testmon_section(cfg: pytest.Config) -> list[str]:
+    """Flag cached-fixture dependency attribution for requested testmon modes.
+
+    Doctor exits before `pytest_configure` and collection, so testmon's runtime
+    plugins and a complete project fixture inventory do not exist yet. Read parsed
+    activation flags instead, without importing testmon or executing project fixtures.
+    The warning is conditional on non-function-scoped fixture use, not a claim that
+    every project fixture has been inspected.
+
+    Parameters:
+        cfg: pytest.Config containing parsed testmon options when installed.
+
+    Returns:
+        list[str] containing the inactive status or a conditional selection warning.
+    """
+
+    modes = ("testmon", "testmon_noselect", "testmon_nocollect", "testmon_forceselect")
+    if cfg.getoption("no-testmon", default=False) or not any(
+        cfg.getoption(mode, default=False) for mode in modes
+    ):
+        return ["- `pytest-testmon`: not requested (or disabled by `--no-testmon`)"]
+    return [
+        "- SELECTION NOT TRUSTED: testmon is requested. Projects using "
+        "non-function-scoped fixtures (class, module, package, or session), including "
+        "`dag_bag` and `dag_corpus`, can under-select: fixture execution is attributed "
+        "to the first consumer, while later consumers reuse the cached result. Treat "
+        "edits to `conftest.py` and fixture modules as selection not trusted and run "
+        "the full suite without testmon; keep `dag_bag`/`dag_corpus` consumers out of "
+        "testmon runs entirely. Doctor does not collect tests or inventory fixtures."
+    ]
+
+
 def _rendered_override(key: str, value: str) -> str:
     """Render one declared override value, redacting anything that reads as a credential.
 
@@ -507,6 +539,7 @@ def render_doctor_report(config: pytest.Config) -> str:
         ("Migration-strict", _migration_strict_section(config, state)),
         ("Worker environment drift", _worker_env_drift_section(config)),
         ("Dag coverage", _coverage_section(config, state)),
+        ("Per-test selection", _testmon_section(config)),
         ("API server", _api_server_section()),
     )
     lines = [REPORT_TITLE, ""]
