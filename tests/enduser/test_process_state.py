@@ -8,17 +8,24 @@ from __future__ import annotations
 
 import os
 from contextlib import nullcontext
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 import pytest
-from airflow.providers.standard.operators.python import PythonOperator
 
 from pytest_airflow_in_a_box.types import DagMaker, RunTask, TaskContext
 
 pytestmark = pytest.mark.compat
 
+PythonOperator = (
+    import_module("_authoring")
+    ._resolve("airflow.providers.standard.operators.python", "airflow.operators.python")
+    .PythonOperator
+)
 
+
+@pytest.mark.requires_airflow3
 @pytest.mark.parametrize("fails", [False, True])
 def test_run_task_restores_process_state(
     run_task: RunTask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fails: bool
@@ -131,6 +138,7 @@ def test_whole_dag_isolates_neighboring_tasks(dag_maker: DagMaker, tmp_path: Pat
         os.environ.update(env)
 
 
+@pytest.mark.requires_airflow3
 @pytest.mark.parametrize("fails", [False, True])
 def test_task_context_restores_process_state(
     task_context: TaskContext, tmp_path: Path, fails: bool
