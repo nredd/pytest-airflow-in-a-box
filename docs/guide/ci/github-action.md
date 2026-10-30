@@ -73,7 +73,7 @@ unsupported pair therefore fails while downloading constraints or resolving depe
 | `python-version` | yes | -- | Provisions an `X.Y` interpreter and selects `constraints-<python-version>.txt`. |
 | `extra` | no | `airflow3` | Selects the plugin's `airflow3` or `airflow2` extra. Other values fail validation. |
 | `plugin-version` | no | latest on PyPI | Pins `pytest-airflow-in-a-box` to an exact version. |
-| `uv-version` | no | `0.12.2` | Selects the `uv` release installed into `RUNNER_TEMP`. |
+| `uv-version` | no | `0.13.6` | Selects the `uv` release installed into `RUNNER_TEMP`. |
 | `working-directory` | no | `.` | Directory containing the virtual environment and resolving `requirements-file`. It must already exist. |
 | `requirements-file` | no | (none) | Installs additional operators, providers, and test dependencies after the constrained environment. The path is relative to `working-directory`. |
 | `report-dir` | no | (none) | Creates a report directory and configures pytest to write `pytest.log` and `pytest.xml`. Relative paths resolve from `working-directory`. |
