@@ -8,12 +8,12 @@ References:
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 
 @contextmanager
-def isolated_process_state() -> Iterator[None]:
+def isolated_process_state() -> Generator[None]:
     """Restore cwd and environment after execution, including exceptional exits.
 
     A directory descriptor survives a task renaming the original working directory.
