@@ -56,7 +56,7 @@ zero-ini defaults on purpose.
 - Any use of Airflow *internals* goes behind `src/pytest_airflow_in_a_box/_compat/` with
   a capability probe. `tests/enduser/` (marked `compat`) is the consumer contract run
   across the whole matrix
-- Dev tools are exact-pinned and ruff enforces `required-version == 0.16.1`. Do not bump
+- Dev tools are exact-pinned and ruff enforces `required-version == 0.17.3`. Do not bump
   tools ad hoc -- Dependabot does that weekly. `uv.lock` is committed and `uv lock
   --check` runs in CI and as a hook
 - The version lives in BOTH `pyproject.toml` and `__init__.py` `__version__`, and

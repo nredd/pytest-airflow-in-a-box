@@ -125,7 +125,7 @@ class _BrokenExecutor(BaseExecutor):
     # Wrong on every certified contract, not just one: on 3.1 `sentry_integration` is
     # simply the wrong name (3.1 wants `supports_sentry`); on 3.2+ it is the right name
     # holding the wrong type (an int, not `str`).
-    sentry_integration = 123
+    sentry_integration: Any = 123
 
 
 class _CleanXCom(BaseXCom):
