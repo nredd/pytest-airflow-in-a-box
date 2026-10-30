@@ -2242,7 +2242,8 @@ def test_dag_factory_without_the_hook_skips_registration() -> None:
     class _InlineTimetable(Timetable):
         """Reach `build_dag` untouched; the None hook must short-circuit first."""
 
-    factory("no_hook_schedule", schedule=_InlineTimetable())
+    # Intentionally incomplete protocol double; only registration is under test.
+    factory("no_hook_schedule", schedule=cast("Any", _InlineTimetable)())
 
     assert type(factory.dag.timetable) is _InlineTimetable
 
@@ -2330,7 +2331,8 @@ def test_dag_maker_warns_but_registers_a_gate_flagged_timetable(
 
     with (
         caplog.at_level(logging.WARNING, logger="pytest_airflow_in_a_box.fixtures.components"),
-        dag_maker(schedule=_SerializeOnlyTimetable()),
+        # Preserve the missing-method violations this negative conformance test needs.
+        dag_maker(schedule=cast("Any", _SerializeOnlyTimetable)()),
     ):
         EmptyOperator(task_id="lenient")
 
@@ -2349,7 +2351,7 @@ def test_dag_maker_rejects_a_local_scope_timetable(dag_maker: DagMaker) -> None:
         """Fail `timetable-local-qualname` by construction."""
 
     with pytest.raises(ComponentContractError, match="timetable-local-qualname"):
-        dag_maker(schedule=_LocalTimetable())
+        dag_maker(schedule=cast("Any", _LocalTimetable)())
 
 
 @pytest.mark.need_serialized_dag

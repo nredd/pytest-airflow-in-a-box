@@ -36,7 +36,7 @@ References:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -56,7 +56,7 @@ SUPERVISOR_COMMS_ATTRIBUTE = "SUPERVISOR_COMMS"
 
 
 @contextmanager
-def _reported_lookup_failure(subject: str) -> Iterator[None]:
+def _reported_lookup_failure(subject: str) -> Generator[None]:
     """Log any failure raised while resolving one lookup, then re-raise it.
 
     Airflow's own worker secrets backend wraps every supervisor call in a bare
@@ -305,7 +305,7 @@ def _reset_secret_cache() -> None:
 
 
 @contextmanager
-def parse_time_supervision(comms: ParseTimeComms | None) -> Iterator[None]:
+def parse_time_supervision(comms: ParseTimeComms | None) -> Generator[None]:
     """Answer Dag-parse-time Variable and Connection lookups for the enclosed block.
 
     Yields without touching anything when `comms` is None (the consumer opted out), on

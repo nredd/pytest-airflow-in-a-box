@@ -46,7 +46,7 @@ from pytest_airflow_in_a_box.config import airflow_config
 from pytest_airflow_in_a_box.results import task_key
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from airflow.models.dagrun import DagRun
     from airflow.models.taskinstance import TaskInstance
@@ -314,7 +314,7 @@ def executor_runtime(
     dags_folder: Path,
     bundle_name: str,
     timeout: float,
-) -> Iterator[SettleInstance]:
+) -> Generator[SettleInstance]:
     """Stand up everything one executor-driven DagRun needs, and yield its settle step.
 
     On entry: the executor is resolved and started, the Dag file is located inside

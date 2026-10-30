@@ -1091,7 +1091,9 @@ def test_gate_strict_policy_blocks_every_problem(
 
     with pytest.raises(ComponentContractError, match="timetable-serialize-pair-incomplete"):
         fixture_components._gate_and_register_timetable(
-            _PolicySerializeOnlyTimetable(), fixture_components._STRICT_TIMETABLE
+            # Keep the incomplete protocol double that the strict gate must reject.
+            cast("Any", _PolicySerializeOnlyTimetable)(),
+            fixture_components._STRICT_TIMETABLE,
         )
 
     assert recorded_registrations == []
@@ -1103,7 +1105,7 @@ def test_gate_schedule_policy_warns_and_registers_on_a_nonblocking_problem(
 ) -> None:
     """Downgrade every non-futile problem to a warning and still register."""
 
-    timetable = _PolicySerializeOnlyTimetable()
+    timetable = cast("Any", _PolicySerializeOnlyTimetable)()
 
     with caplog.at_level(logging.WARNING, logger="pytest_airflow_in_a_box.fixtures.components"):
         fixture_components._gate_and_register_timetable(
@@ -1125,7 +1127,7 @@ def test_gate_policy_with_warn_nonblocking_off_stays_silent(
     silently dropped, registration proceeds.
     """
 
-    timetable = _PolicySerializeOnlyTimetable()
+    timetable = cast("Any", _PolicySerializeOnlyTimetable)()
     policy = fixture_components._TimetablePolicy(
         blocking=frozenset({sandbox.TIMETABLE_LOCAL_QUALNAME}),
         warn_nonblocking=False,
@@ -1149,7 +1151,7 @@ def test_gate_schedule_policy_blocks_a_local_qualname(
 
     with pytest.raises(ComponentContractError, match="timetable-local-qualname"):
         fixture_components._gate_and_register_timetable(
-            _LocalTimetable(), fixture_components._SCHEDULE_TIMETABLE
+            cast("Any", _LocalTimetable)(), fixture_components._SCHEDULE_TIMETABLE
         )
 
     assert recorded_registrations == []

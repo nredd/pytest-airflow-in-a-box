@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Generator
 
 LOGGER = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ def _recording_wrapper(
 
 
 @contextmanager
-def record_secrets_lookups(dag_folder: Path) -> Iterator[list[SecretsLookup]]:
+def record_secrets_lookups(dag_folder: Path) -> Generator[list[SecretsLookup]]:
     """Record every Variable and Connection lookup made while the body parses Dags.
 
     Every resolvable entry point in `SECRETS_PATCH_TARGETS` is replaced with a recording
@@ -232,7 +232,7 @@ def record_secrets_lookups(dag_folder: Path) -> Iterator[list[SecretsLookup]]:
             attribute each lookup to a file and line.
 
     Returns:
-        Iterator[list[SecretsLookup]] yielding the live recording list; it is fully populated
+        Generator[list[SecretsLookup]] yielding the live recording list; it is fully populated
         once the block exits.
     """
 

@@ -1824,6 +1824,8 @@ def test_restore_settings_keys_preserves_bootstrap_time_attributes() -> None:
 
 # ---------------------------------------------------------------------------
 # Timetable and weight-strategy registration (#114)
+# These serialization-only negative doubles intentionally omit scheduling protocol methods.
+# Cast their constructors at the test boundary, not the production conformance checks.
 # ---------------------------------------------------------------------------
 
 
@@ -1987,7 +1989,7 @@ class _WrongClassTimetable(Timetable):
             _SymmetricTimetable, never `cls`.
         """
 
-        return _SymmetricTimetable(hours=data.get("hours", 1))
+        return cast("Any", _SymmetricTimetable)(hours=data.get("hours", 1))
 
 
 class _NeverEqualTimetable(Timetable):
@@ -2102,7 +2104,7 @@ def test_register_timetable_resolves_through_a_prewarmed_lookup() -> None:
     key = _lookup_qualname(_SymmetricTimetable)
     assert key not in core_module.get_timetables_plugins()
 
-    returned = compat_components.register_timetable(_SymmetricTimetable(hours=2))
+    returned = compat_components.register_timetable(cast("Any", _SymmetricTimetable)(hours=2))
 
     assert returned is _SymmetricTimetable
     assert core_module.get_timetables_plugins()[key] is _SymmetricTimetable
@@ -2194,7 +2196,7 @@ def test_timetable_round_trip_returns_no_problems_for_a_symmetric_pair() -> None
 
     compat_components.register_timetable(_SymmetricTimetable)
 
-    assert compat_components.timetable_round_trip(_SymmetricTimetable(hours=2)) == ()
+    assert compat_components.timetable_round_trip(cast("Any", _SymmetricTimetable)(hours=2)) == ()
 
     compat_components.clear_plugins_manager_caches()
 
@@ -2204,7 +2206,7 @@ def test_timetable_round_trip_compares_equal_under_a_real_dunder_eq() -> None:
 
     compat_components.register_timetable(_EqualityTimetable)
 
-    assert compat_components.timetable_round_trip(_EqualityTimetable(hours=3)) == ()
+    assert compat_components.timetable_round_trip(cast("Any", _EqualityTimetable)(hours=3)) == ()
 
     compat_components.clear_plugins_manager_caches()
 
@@ -2214,7 +2216,9 @@ def test_timetable_round_trip_flags_a_payload_mismatch() -> None:
 
     compat_components.register_timetable(_StateDroppingTimetable)
 
-    problems = compat_components.timetable_round_trip(_StateDroppingTimetable(hours=5))
+    problems = compat_components.timetable_round_trip(
+        cast("Any", _StateDroppingTimetable)(hours=5)
+    )
 
     assert [problem.code for problem in problems] == [
         compat_components.TIMETABLE_ROUND_TRIP_MISMATCH
@@ -2230,7 +2234,7 @@ def test_timetable_round_trip_flags_a_wrong_class_reconstruction() -> None:
     compat_components.register_timetable(_WrongClassTimetable)
     compat_components.register_timetable(_SymmetricTimetable)
 
-    problems = compat_components.timetable_round_trip(_WrongClassTimetable())
+    problems = compat_components.timetable_round_trip(cast("Any", _WrongClassTimetable)())
 
     assert [problem.code for problem in problems] == [
         compat_components.TIMETABLE_ROUND_TRIP_MISMATCH
@@ -2249,7 +2253,7 @@ def test_timetable_round_trip_flags_an_eq_disagreement() -> None:
 
     compat_components.register_timetable(_NeverEqualTimetable)
 
-    problems = compat_components.timetable_round_trip(_NeverEqualTimetable())
+    problems = compat_components.timetable_round_trip(cast("Any", _NeverEqualTimetable)())
 
     assert [problem.code for problem in problems] == [
         compat_components.TIMETABLE_ROUND_TRIP_MISMATCH
