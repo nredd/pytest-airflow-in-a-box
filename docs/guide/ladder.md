@@ -14,6 +14,14 @@ requires persisted metadata, relationships between tasks, or a worker-process bo
 In practice: use rungs 0-1 for operator logic, rung 2 for one task's Airflow metadata, rung 3
 for Dag behavior, and rung 4 only for executor or worker-boundary behavior.
 
+In-process execution restores the caller's working directory and `os.environ` after each
+task, including failed tasks and callbacks. `task_context` restores them when its `with`
+block exits; `render_task` restores them after rendering. A task's changes remain visible
+inside that task, but not to the next task or test. Set environment variables before calling
+a runner to seed a task. This is not a subprocess sandbox: other globals, imported modules,
+files, and background threads are not isolated, and concurrent cwd/environment mutations
+from threads are unsupported.
+
 ## One operator, no database
 
 Airflow 3's Task SDK can prepare and execute an operator without a metadata database. The
