@@ -46,7 +46,7 @@ from __future__ import annotations
 import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 
 import pytest
@@ -221,7 +221,7 @@ def airflow_config(
     *,
     env: EnvOverrides | None = None,
     refresh_settings: bool = False,
-) -> Iterator[None]:
+) -> Generator[None]:
     """Override Airflow configuration options and environment variables for one context.
 
     Usable as a context manager or as a decorator on a test function. Configuration options are
@@ -280,7 +280,7 @@ def airflow_config(
 
 
 @contextmanager
-def conf_vars(overrides: ConfigOverrides) -> Iterator[None]:
+def conf_vars(overrides: ConfigOverrides) -> Generator[None]:
     """Override Airflow configuration options, deprecated in favor of ``airflow_config``.
 
     Provided under the name public Airflow documentation teaches. It delegates to

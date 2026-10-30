@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
@@ -451,7 +451,7 @@ def _build_runtime_task_instance(
 @contextlib.contextmanager
 def _installed_supervisor_comms(
     task_runner: Any, comms: FakeSupervisorComms | None
-) -> Iterator[FakeSupervisorComms]:
+) -> Generator[FakeSupervisorComms]:
     """Install a fake supervisor for one call, then restore whatever was there before.
 
     Parameters:
@@ -716,7 +716,7 @@ def task_context_in_process(
     try_number: int = 1,
     context_overrides: dict[str, Any] | None = None,
     render: bool = True,
-) -> Iterator[InProcessTaskContext]:
+) -> Generator[InProcessTaskContext]:
     """Prepare one operator's template context and yield control with fake supervision.
 
     Stops short of `render_task_in_process`'s rendering step being the end of the

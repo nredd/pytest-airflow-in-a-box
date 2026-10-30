@@ -881,6 +881,7 @@ def test_mapped_expansion_commits_scheduler_instances(
 
 # ---------------------------------------------------------------------------
 # is_custom_timetable_instance (#114)
+# Constructor casts keep identity-only doubles deliberately short of the scheduling protocol.
 # ---------------------------------------------------------------------------
 
 
@@ -892,7 +893,7 @@ def test_custom_timetable_predicate_accepts_a_custom_instance() -> None:
     class _CustomTimetable(Timetable):
         """Minimal custom timetable; only its MRO and module matter here."""
 
-    assert dag_compat.is_custom_timetable_instance(_CustomTimetable())
+    assert dag_compat.is_custom_timetable_instance(cast("Any", _CustomTimetable)())
 
 
 def test_custom_timetable_predicate_rejects_non_timetable_schedules() -> None:
@@ -937,7 +938,7 @@ def test_custom_timetable_predicate_short_circuits_on_the_2x_family(
     class _CustomTimetable(Timetable):
         """Minimal custom timetable; would register on the 3.x family."""
 
-    instance = _CustomTimetable()
+    instance = cast("Any", _CustomTimetable)()
     assert dag_compat.is_custom_timetable_instance(instance)
 
     monkeypatch.setattr(
@@ -957,7 +958,7 @@ def test_custom_schedule_timetables_collects_a_direct_custom_instance() -> None:
     class _CustomTimetable(Timetable):
         """Minimal custom timetable; only its MRO and module matter here."""
 
-    instance = _CustomTimetable()
+    instance = cast("Any", _CustomTimetable)()
 
     assert dag_compat.custom_schedule_timetables(instance) == (instance,)
 
@@ -977,7 +978,7 @@ def test_custom_schedule_timetables_collects_a_nested_custom_instance() -> None:
     class _CustomTimetable(Timetable):
         """Minimal custom timetable; only its MRO and module matter here."""
 
-    inner = _CustomTimetable()
+    inner = cast("Any", _CustomTimetable)()
     # `cast` because `AssetOrTimeSchedule` annotates `assets` with the serialized
     # asset type; the authoring-time SDK `Asset` is converted at runtime.
     wrapper = AssetOrTimeSchedule(
@@ -1042,7 +1043,7 @@ def test_custom_schedule_timetables_short_circuits_on_the_2x_family(
     )
 
     assert dag_compat.custom_schedule_timetables(_CustomTimetable) == ()
-    assert dag_compat.custom_schedule_timetables(_CustomTimetable()) == ()
+    assert dag_compat.custom_schedule_timetables(cast("Any", _CustomTimetable)()) == ()
 
 
 def test_custom_timetable_predicate_matches_upstream_exemption_exactly() -> None:
@@ -1061,8 +1062,8 @@ def test_custom_timetable_predicate_matches_upstream_exemption_exactly() -> None
 
     _ExampleDagsShapedTimetable.__module__ = "airflow.example_dags.plugins.workday"
 
-    assert dag_compat.is_custom_timetable_instance(_ExampleDagsShapedTimetable())
-    assert dag_compat.custom_schedule_timetables(_ExampleDagsShapedTimetable()) != ()
+    assert dag_compat.is_custom_timetable_instance(cast("Any", _ExampleDagsShapedTimetable)())
+    assert dag_compat.custom_schedule_timetables(cast("Any", _ExampleDagsShapedTimetable)()) != ()
 
 
 def test_time_restriction_type_resolves_the_installed_class() -> None:
