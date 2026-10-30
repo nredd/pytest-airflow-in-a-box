@@ -69,9 +69,28 @@ pytest --cov=dags --cov=src --cov-report=term-missing
 Coverage needs no plugin machinery. It attributes executed lines to their real filenames, and
 in-process runners measure task bodies too.
 
+Fan-out parsing (`airflow_dag_bag_fanout`) automatically falls back to a parent-process
+parse while a trace callback or an active `coverage.Coverage` instance is present. This
+includes pytest-cov, pytest-testmon, coverage's `sys.monitoring` backend, and trace-based
+debuggers. A warning explains the fallback. It applies to both the smoke catalog and
+`dag_corpus`, even when subprocess coverage is configured: combining child coverage does
+not restore testmon's per-test dependencies. Unmeasured runs still fan out normally.
+This preserves measurement of the parse, not attribution to every consumer of the cached,
+session-scoped corpus.
+
 The exception is `run_dag(..., executor=...)`: its worker subprocess is outside the plugin's
 coverage setup. Cover the body through an in-process rung and keep the executor test for what it
-uniquely proves -- re-import and Task Execution API transport.
+uniquely proves -- re-import and Task Execution API transport. To measure Python
+subprocesses as well, coverage 7.10+ supports this configuration (also usable by executor
+workers):
+
+```toml
+[tool.coverage.run]
+patch = ["subprocess"]
+```
+
+For `.coveragerc`, use `[run]` with `patch = subprocess`. Subprocess coverage alone does
+not make child imports visible to pytest-testmon.
 
 The classic false green is `--cov=src` alone: 100% then measures nothing under `dags/`.
 `pytest --airflow-doctor` detects a configured Dag folder outside every coverage source.

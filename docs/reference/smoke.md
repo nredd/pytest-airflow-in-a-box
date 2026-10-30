@@ -137,6 +137,8 @@ For very large repositories, `--airflow-dag-bag-fanout` /
 merges their portable results, including duplicate-ID detection and parse timings. Fan-out:
 
 - skips below `airflow_dag_bag_fanout_min_files` (default `200`);
+- skips with a warning while parent-process tracing or coverage is active, preserving
+  [Dag coverage and per-test dependency tracking](../guide/smoke-tests.md#dag-coverage);
 - uses the configured worker count, or a CPU-based count bounded by the file count;
 - falls back to one serial parse after a spawn failure, timeout, child crash, or invalid output;
 - is skipped for a smoke-only nonzero serialization sample, because a shard cannot see the

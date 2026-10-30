@@ -36,6 +36,23 @@ NESTED_RUN_TIMEOUT_SECONDS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _exercise_fanout_under_suite_coverage(pytester: pytest.Pytester) -> None:
+    """Test shard orchestration even while the development gate measures subprocesses.
+
+    The production measurement guard is tested separately in `test_fanout_measurement`.
+    These tests explicitly isolate fan-out mechanics from that eligibility policy.
+
+    Parameters:
+        pytester: pytest.Pytester installing the eligibility probe in nested runs.
+    """
+
+    pytester.makeconftest(
+        "from pytest_airflow_in_a_box import parallel_dagbag\n"
+        "parallel_dagbag._measurement_active = lambda: False\n"
+    )
+
+
 @pytest.mark.timeout(NESTED_RUN_TIMEOUT_SECONDS)
 def test_fanout_matches_serial_and_respects_ancestor_ignore(pytester: pytest.Pytester) -> None:
     """Fan out over `dags_large`, passing every smoke item and never seeing the ignored Dag.
