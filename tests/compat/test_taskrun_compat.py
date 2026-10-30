@@ -1007,10 +1007,16 @@ def _execution_dag(*tasks: SimpleNamespace) -> SimpleNamespace:
     )
 
 
-def test_execute_dag_run_runs_every_instance_and_snapshots(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("with_session", [False, True])
+def test_drive_dag_run_runs_every_instance_and_snapshots(
+    monkeypatch: pytest.MonkeyPatch, with_session: bool
 ) -> None:
-    """Run instances in graph order, settle, and capture states, xcoms, and order."""
+    """Run and snapshot instances with an explicit or Airflow-managed session.
+
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch isolating task-body execution.
+        with_session: bool selecting an explicit transaction-owning session.
+    """
 
     upstream = _ExecutionTaskInstance("produce", xcom=21)
     downstream = _ExecutionTaskInstance("consume", xcom=42)
@@ -1022,7 +1028,7 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
         SimpleNamespace(task_id="produce", is_mapped=False),
         SimpleNamespace(task_id="consume", is_mapped=False),
     )
-    session: Any = _ExecutionSession()
+    session: Any = _ExecutionSession() if with_session else None
     executed: list[str] = []
 
     def fake_run(ti: Any, task: Any, **kwargs: Any) -> Any:
@@ -1031,9 +1037,9 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
         ti.state = "success"
         return ti
 
-    monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
 
-    result = execute_dag_run(dag_run, dag, session=session)
+    result = taskrun.drive_dag_run(dag_run, dag, session, fake_run)
 
     assert result.success
     assert executed == ["produce", "consume"]
@@ -1041,10 +1047,14 @@ def test_execute_dag_run_runs_every_instance_and_snapshots(
     assert result.states == {"produce": "success", "consume": "success"}
     assert result.xcoms == {"produce": 21, "consume": 42}
     assert result.errors == {}
-    assert session.expirations == 1
-    assert session.commits == 1
+    if with_session:
+        assert session.expirations == 1
+        assert session.commits == 1
     assert dag_run.update_calls == 1
-    assert upstream.pull_kwargs == {"task_ids": "produce", "session": session}
+    assert upstream.pull_kwargs == {
+        "task_ids": "produce",
+        **({"session": session} if with_session else {}),
+    }
 
 
 def test_execute_dag_run_captures_failures_and_leaves_blocked_instances(
@@ -1072,15 +1082,17 @@ def test_execute_dag_run_captures_failures_and_leaves_blocked_instances(
             raise ValueError("nope")
         return ti  # Unmet dependencies: the instance keeps its `None` state.
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
-    result = execute_dag_run(dag_run, dag)
+    session: Any = _ExecutionSession()
+    result = execute_dag_run(dag_run, dag, session=session)
 
     assert not result.success
     assert result.order == ["boom"]
     assert result.states == {"boom": "failed", "consume": "upstream_failed"}
     assert isinstance(result.errors["boom"], ValueError)
-    assert consume.pull_kwargs == {"task_ids": "consume"}
+    assert consume.pull_kwargs == {"task_ids": "consume", "session": session}
 
 
 def test_execute_dag_run_never_reruns_presettled_instances(
@@ -1098,7 +1110,8 @@ def test_execute_dag_run_never_reruns_presettled_instances(
 
     monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
 
-    result = execute_dag_run(dag_run, dag)
+    session: Any = _ExecutionSession()
+    result = execute_dag_run(dag_run, dag, session=session)
 
     assert result.order == []
     assert result.states == {"branch_dropped": "skipped"}
@@ -1135,6 +1148,7 @@ def test_execute_dag_run_expands_mapped_placeholders(
         return ti
 
     monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fake_expand)
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
 
     result = execute_dag_run(dag_run, dag, session=session)
@@ -1196,6 +1210,7 @@ def test_execute_dag_run_waits_for_upstreams_before_expanding(
         del args
         raise AssertionError("expansion must wait for settled upstreams")
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fake_run)
     monkeypatch.setattr(taskrun, "_try_expand_mapped_task", fail_expand)
 
@@ -1218,10 +1233,12 @@ def test_execute_dag_run_propagates_plugin_contract_failures(
         del ti, task, kwargs
         raise TaskResolutionError("no executable task")
 
+    monkeypatch.setattr(taskrun, "dependencies_met", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(taskrun, "run_task_instance", fail_run)
 
+    session: Any = _ExecutionSession()
     with pytest.raises(TaskResolutionError, match="no executable task"):
-        execute_dag_run(dag_run, dag)
+        execute_dag_run(dag_run, dag, session=session)
 
 
 def test_try_expand_mapped_task_requires_a_session() -> None:
@@ -1296,8 +1313,9 @@ def test_settle_dag_run_bounds_states_that_never_stabilize() -> None:
 
 
 @pytest.mark.parametrize("dag_run_refresh", [True, False], ids=["3.3-shape", "3.1-shape"])
+@pytest.mark.parametrize("settled_state", [None, "skipped", "upstream_failed"])
 def test_dependencies_met_refreshes_through_the_certified_signature(
-    monkeypatch: pytest.MonkeyPatch, dag_run_refresh: bool
+    monkeypatch: pytest.MonkeyPatch, dag_run_refresh: bool, settled_state: str | None
 ) -> None:
     """Refresh from the persisted task through whichever signature the release carries.
 
@@ -1308,6 +1326,7 @@ def test_dependencies_met_refreshes_through_the_certified_signature(
     Parameters:
         monkeypatch: pytest.MonkeyPatch replacing the capability probe and the refresh.
         dag_run_refresh: bool selecting the certified refresh signature.
+        settled_state: str | None set by dependency evaluation despite a passing status.
     """
 
     dag_run = object()
@@ -1330,9 +1349,17 @@ def test_dependencies_met_refreshes_through_the_certified_signature(
         lambda *args: refreshes.append(args),
     )
     session: Any = _Session()
-    ti: Any = SimpleNamespace(are_dependencies_met=lambda **_kwargs: True)
+    ti: Any = SimpleNamespace(state=None)
 
-    assert taskrun.dependencies_met(ti, session=session) is True
+    def evaluate_dependencies(**_kwargs: Any) -> bool:
+        """Model older Airflow returning true after a trigger-rule state change."""
+
+        ti.state = settled_state
+        return True
+
+    ti.are_dependencies_met = evaluate_dependencies
+
+    assert taskrun.dependencies_met(ti, session=session) is (settled_state is None)
     assert refreshes == [
         ((ti, scheduler_task, dag_run) if dag_run_refresh else (ti, scheduler_task))
     ]

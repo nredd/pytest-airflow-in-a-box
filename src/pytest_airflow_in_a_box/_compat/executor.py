@@ -39,7 +39,6 @@ from typing import TYPE_CHECKING, Any
 
 from pytest_airflow_in_a_box._compat.taskrun import (
     DagRunDriveError,
-    dependencies_met,
     drive_dag_run,
 )
 from pytest_airflow_in_a_box.config import airflow_config
@@ -412,10 +411,6 @@ def _settler(
                 "An executor-driven run needs a metadata session: the task instance has "
                 "to be committed as `queued` before a task worker can pick it up"
             )
-        if not dependencies_met(ti, session=session):
-            # Leaving the state untouched is the documented `SettleInstance` contract
-            # for a blocked instance; `drive_dag_run` reads it as "not executed".
-            return
         _queue(executor, ti, session, dag_rel_path=dag_rel_path, bundle_name=bundle_name)
         _await_settled(executor, ti, session, timeout=timeout)
 

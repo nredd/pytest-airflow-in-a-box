@@ -27,6 +27,7 @@ from piab.matchers import (
     succeeded,
     upstream_failed,
 )
+from piab.taskinstance import execute_dag_run
 from piab.types import DagMaker
 
 pytestmark = [pytest.mark.compat, pytest.mark.db_test]
@@ -140,6 +141,24 @@ def test_run_executes_the_whole_dag_and_snapshots(dag_maker: DagMaker) -> None:
     assert result["consume"].xcom == 42
     assert len(result.tis) == 2
     assert result == {"produce": succeeded(21), "consume": succeeded(42)}
+
+
+def test_execute_dag_run_uses_the_attached_session_when_omitted(dag_maker: DagMaker) -> None:
+    """Preserve the optional-session whole-DagRun execution entry point.
+
+    Parameters:
+        dag_maker: DagMaker building a DagRun attached to its metadata session.
+    """
+
+    _linear_dag(dag_maker, "result_implicit_session")
+    dag_run = dag_maker.create_dagrun()
+
+    result = execute_dag_run(dag_run, dag_maker.dag)
+
+    assert result.success, result
+    assert result == {"produce": succeeded(21), "consume": succeeded(42)}
+    assert result.order == ["produce", "consume"]
+    assert result.errors == {}
 
 
 def test_run_repr_renders_the_per_task_table(dag_maker: DagMaker) -> None:
@@ -259,6 +278,59 @@ def test_run_records_branch_skips_without_executing_them(dag_maker: DagMaker) ->
     assert result["rejected"] == skipped()
 
 
+@pytest.mark.parametrize("middle_rule", ["all_success", "none_failed_min_one_success"])
+@pytest.mark.parametrize("tail_rule", ["none_failed", "all_done"])
+def test_run_settles_downstream_of_late_skip_in_one_pass(
+    dag_maker: DagMaker, middle_rule: str, tail_rule: str
+) -> None:
+    """Propagate trigger-rule skips before evaluating their runnable downstreams.
+
+    Parameters:
+        dag_maker: DagMaker building and running the persisted Dag.
+        middle_rule: str skipping the middle task when all its upstreams skip.
+        tail_rule: str allowing a tail to run after its upstream is skipped.
+    """
+
+    with dag_maker(dag_id=f"result_late_skip_{middle_rule}_{tail_rule}", schedule=None):
+
+        @task.short_circuit(ignore_downstream_trigger_rules=False)
+        def gate() -> bool:
+            return False
+
+        @task
+        def produce() -> int:
+            return 1
+
+        @task(trigger_rule=middle_rule)
+        def middle(value: int) -> int:
+            return value
+
+        @task(trigger_rule=tail_rule)
+        def tail(value: int | None) -> str:
+            return f"tail:{value}"
+
+        first: Any = produce.override(task_id="first")()
+        second: Any = produce.override(task_id="second")()
+        gate() >> [first, second]
+        passed: Any = middle(first)
+        second >> passed
+        tail(passed)
+
+    result = dag_maker.run()
+
+    assert result.success, result
+    assert result.state == DagRunState.SUCCESS
+    assert result == {
+        "gate": succeeded(),
+        "first": skipped(),
+        "second": skipped(),
+        "middle": skipped(),
+        "tail": succeeded("tail:None"),
+    }
+    assert result.errors == {}
+    assert result.order == ["gate", "tail"]
+
+
 def test_run_leaves_a_deferred_task_visible(dag_maker: DagMaker) -> None:
     """Settle a deferring task as `deferred` and keep the DagRun running."""
 
@@ -367,6 +439,41 @@ def test_run_success_follows_airflow_leaf_semantics(dag_maker: DagMaker) -> None
         "cleanup": TaskInstanceState.SUCCESS,
     }
     assert isinstance(result.errors["boom"], ValueError)
+
+
+def test_run_preserves_errors_below_a_late_upstream_failure(dag_maker: DagMaker) -> None:
+    """Run an absorbing leaf in one pass without losing the original body error.
+
+    Parameters:
+        dag_maker: DagMaker building and running the persisted Dag.
+    """
+
+    with dag_maker(dag_id="result_late_upstream_failure"):
+
+        @task
+        def boom() -> None:
+            raise ValueError("original failure")
+
+        @task
+        def blocked() -> None:
+            raise AssertionError("blocked body must not run")
+
+        @task(trigger_rule="all_done")
+        def cleanup() -> str:
+            return "cleaned"
+
+        boom() >> blocked() >> cleanup()
+
+    result = dag_maker.run()
+
+    assert result.success, result
+    assert result == {
+        "boom": failed(ValueError),
+        "blocked": upstream_failed(),
+        "cleanup": succeeded("cleaned"),
+    }
+    assert result.order == ["boom", "cleanup"]
+    assert str(result.errors["boom"]) == "original failure"
 
 
 def test_run_rejects_a_foreign_dag_run(dag_maker: DagMaker) -> None:

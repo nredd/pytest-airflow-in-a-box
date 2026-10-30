@@ -78,7 +78,10 @@ inert `DagRunResult` with:
 Mapped instances use keys such as `double[0]`. A raising task is recorded in `errors`, blocked
 downstream tasks settle through Airflow's trigger-rule semantics, and `success` follows
 Airflow's leaf-task rule. Assert `not result.errors` when the contract is specifically that no
-task body raised.
+task body raised. Dependency-only skips and upstream failures never appear in `order`, even
+when an older Airflow dependency evaluator returns a passing status while changing state.
+Both in-process and executor-driven runs recheck that the instance is still pending before
+dispatch.
 
 Outcome matchers keep a complete run contract compact:
 
@@ -96,6 +99,11 @@ The mapping must cover every task instance. `skipped()`, `deferred()`, and `not_
 available.
 
 ### Whole-DagRun execution
+
+Trigger-rule skips and upstream failures propagate before downstream tasks are visited.
+For example, a short-circuit with `ignore_downstream_trigger_rules=False` can skip an
+`all_success` task while its `none_failed` or `all_done` downstream still runs in the same
+call. Dependency-only state changes are absent from `result.order`.
 
 Each task instance receives at most one attempt. A retry-configured failure settles
 `up_for_retry`, is not requeued, and leaves the run non-terminal. Use the
