@@ -618,6 +618,9 @@ def test_dag_corpus_falls_back_to_serial_parse_when_fanout_fails(
         dagcorpus, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
     )
     monkeypatch.setattr(dagcorpus, "list_dag_file_paths", lambda _folder: ["dags/good.py"])
+    monkeypatch.setattr(
+        "pytest_airflow_in_a_box.parallel_dagbag._measurement_active", lambda: False
+    )
     monkeypatch.setattr(dagcorpus, "fan_out_dag_bag", explode)
     monkeypatch.setattr(dagcorpus, "build_dag_bag", lambda _folder, **_kwargs: dag_bag)
     monkeypatch.setattr(dagcorpus, "record_secrets_lookups", _fake_recorder([]))
@@ -695,6 +698,9 @@ def test_dag_corpus_fanout_not_blocked_by_sample_size_when_dag_corpus_requested(
         dagcorpus, "get_bootstrap_state", lambda _config: SimpleNamespace(root=tmp_path)
     )
     monkeypatch.setattr(dagcorpus, "list_dag_file_paths", lambda _folder: ["dags/good.py"])
+    monkeypatch.setattr(
+        "pytest_airflow_in_a_box.parallel_dagbag._measurement_active", lambda: False
+    )
     monkeypatch.setattr(dagcorpus, "fan_out_dag_bag", fake_fan_out)
     monkeypatch.setattr(dagcorpus, "build_dag_bag", _fail_if_called)
 

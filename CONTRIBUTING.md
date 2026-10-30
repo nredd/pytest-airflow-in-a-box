@@ -48,6 +48,8 @@ act pull_request
 
 `act` cannot reproduce native macOS or Windows behavior, so the `macos`/`arm`/`musl` legs
 of the compat matrix (`.github/workflows/compat.yml`) still need a real PR to exercise.
+The constrained matrix environments install `pytest-cov` alongside `coverage`, matching
+its development pin: the fan-out measurement contract runs a nested `pytest --cov` consumer.
 
 ## The coverage gate
 

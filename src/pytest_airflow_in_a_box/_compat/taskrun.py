@@ -570,11 +570,10 @@ def _refresh_from_task(ti: Any, task: Any, dag_run: Any = None) -> None:
 def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
     """Report whether Airflow's own dependency rules currently allow an instance to run.
 
-    The in-process path never asks this directly: `check_and_change_state_before
-    _execution` both evaluates the rules and moves the instance to ``running``. An
-    executor-driven run needs the answer *without* that transition, because the
-    instance has to reach the executor in ``queued`` instead. This asks Airflow the
-    same question through the same dependency machinery.
+    The shared DagRun walk asks this before either runner dispatches a task, so
+    trigger-rule skips and upstream failures propagate before downstreams are visited.
+    Unlike `check_and_change_state_before_execution`, this does not move a runnable
+    instance to ``running``: executor-driven instances must reach ``queued`` first.
 
     Evaluating dependencies requires the ORM instance to carry its serialized task, so
     this refreshes from the persisted scheduler task first -- the same refresh the
@@ -587,7 +586,7 @@ def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
         session: sqlalchemy.orm.Session | None owning the persisted metadata.
 
     Returns:
-        bool reporting whether every dependency is currently met.
+        bool reporting whether every dependency is met and the instance remains pending.
 
     Raises:
         TaskResolutionError: Persisted DagRun or task metadata cannot be loaded.
@@ -611,7 +610,11 @@ def dependencies_met(ti: TaskInstance, *, session: Session | None) -> bool:
     if session is not None:
         # `flag_upstream_failed` writes through the session without committing.
         session.commit()
-    return met
+    # Older trigger-rule evaluators can mark an instance skipped while yielding no
+    # failing dependency status (e.g. `none_failed_min_one_success` with all upstreams
+    # skipped). The scheduler also excludes those state-changed instances before
+    # dispatch; a passing dependency result alone does not mean the body should run.
+    return met and instance.state is None
 
 
 def _task_identity(ti: Any) -> tuple[str, int]:
@@ -874,8 +877,9 @@ def drive_dag_run(
 
     Shared by every way this plugin drives a DagRun. Instances are visited in
     topological order, one attempt each; a raising task body is captured and
-    execution continues, scheduler-shaped. Mapped tasks expand mid-run once every
-    direct upstream settled.
+    execution continues, scheduler-shaped. Dependency evaluation propagates skips
+    and upstream failures before dispatch, without counting them as execution.
+    Mapped tasks expand mid-run once every direct upstream settled.
 
     Parameters:
         dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
@@ -920,6 +924,10 @@ def drive_dag_run(
         attempted.add((task_id, map_index))
         key = task_key(task_id, map_index)
         try:
+            if not dependencies_met(ti, session=session):
+                # Propagate scheduler-owned skips/failures before visiting downstreams,
+                # without counting a dependency-only transition as body execution.
+                continue
             settle(ti, dag.get_task(task_id), session=session)
         except DagRunDriveError:
             # Plugin-contract failures are not Dag outcomes; surface them.
@@ -967,7 +975,8 @@ def execute_dag_run(
     Parameters:
         dag_run: airflow.models.dagrun.DagRun whose task instances are executed.
         dag: Any containing the authoring Dag with executable task objects.
-        session: sqlalchemy.orm.Session | None owning the persisted metadata.
+        session: sqlalchemy.orm.Session | None owning the persisted metadata;
+            defaults to the session attached to `dag_run`.
         run_triggerer: bool running persisted trigger events and resuming deferrals.
         trigger_timeout: float seconds allowed for each persisted trigger's first event.
 
@@ -982,6 +991,12 @@ def execute_dag_run(
             to an event; the plugin-contract failure propagates instead of being
             recorded as a task outcome.
     """
+
+    # Defer SQLAlchemy's import cost until persisted DagRun execution is requested.
+    from sqlalchemy.orm import object_session
+
+    if session is None:
+        session = object_session(dag_run)
 
     def settle(ti: TaskInstance, task: Operator, *, session: Session | None) -> None:
         """Run one instance in this process through Airflow's own task entry point.
